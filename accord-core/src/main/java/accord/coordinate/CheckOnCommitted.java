@@ -49,6 +49,8 @@ public class CheckOnCommitted extends CheckShardStatus
             case NotWitnessed:
             case PreAccepted:
             case Accepted:
+            case AcceptedInvalidate:
+            case Invalidated:
                 return;
         }
 

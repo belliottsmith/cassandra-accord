@@ -20,12 +20,14 @@ import accord.txn.TxnId;
 
 public class PreAccept extends TxnRequest.WithUnsync
 {
+    public final Key homeKey;
     public final Txn txn;
     public final long maxEpoch;
 
     public PreAccept(Id to, Topologies topologies, TxnId txnId, Txn txn, Key homeKey)
     {
-        super(to, topologies, txn.keys, txnId, homeKey);
+        super(to, topologies, txn.keys, txnId);
+        this.homeKey = homeKey;
         this.txn = txn;
         this.maxEpoch = topologies.currentEpoch();
     }
@@ -33,7 +35,8 @@ public class PreAccept extends TxnRequest.WithUnsync
     @VisibleForTesting
     public PreAccept(Keys scope, long epoch, TxnId txnId, Txn txn, Key homeKey)
     {
-        super(scope, epoch, txnId, homeKey);
+        super(scope, epoch, txnId);
+        this.homeKey = homeKey;
         this.txn = txn;
         this.maxEpoch = epoch;
     }

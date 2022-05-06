@@ -333,6 +333,14 @@ public class TopologyManager implements ConfigurationService.Listener
         return epochState.global().forKey(key);
     }
 
+    public Shard forEpoch(Key key, long epoch)
+    {
+        Shard ifKnown = forEpochIfKnown(key, epoch);
+        if (ifKnown == null)
+            throw new IndexOutOfBoundsException();
+        return ifKnown;
+    }
+
     public boolean hasEpoch(long epoch)
     {
         return epochs.get(epoch) != null;

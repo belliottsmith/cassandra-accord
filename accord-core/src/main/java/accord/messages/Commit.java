@@ -4,6 +4,7 @@ import accord.api.Key;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.topology.Topologies;
+import accord.txn.Keys;
 import accord.txn.Timestamp;
 import accord.txn.Dependencies;
 import accord.txn.Txn;
@@ -46,5 +47,32 @@ public class Commit extends ReadData
                ", deps: " + deps +
                ", read: " + read +
                '}';
+    }
+
+    public static class Invalidate extends TxnRequest
+    {
+        final TxnId txnId;
+        public Invalidate(Id to, Topologies topologies, TxnId txnId, Keys someKeys)
+        {
+            super(to, topologies, someKeys);
+            this.txnId = txnId;
+        }
+
+        public void process(Node node, Id from, ReplyContext replyContext)
+        {
+            node.forEachLocal(scope(), txnId.epoch, instance -> instance.command(txnId).commitInvalidate());
+        }
+
+        @Override
+        public MessageType type()
+        {
+            return MessageType.COMMIT_REQ;
+        }
+
+        @Override
+        public String toString()
+        {
+            return "CommitInvalidate{txnId: " + txnId + '}';
+        }
     }
 }

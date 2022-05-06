@@ -7,6 +7,7 @@ import java.util.function.Consumer;
 import accord.api.Key;
 import accord.api.Result;
 import accord.local.Node.Id;
+import accord.messages.Commit.Invalidate;
 import accord.topology.KeyRanges;
 import accord.txn.Ballot;
 import accord.txn.Dependencies;
@@ -16,9 +17,11 @@ import accord.txn.TxnId;
 import accord.txn.Writes;
 
 import static accord.local.Status.Accepted;
+import static accord.local.Status.AcceptedInvalidate;
 import static accord.local.Status.Applied;
 import static accord.local.Status.Committed;
 import static accord.local.Status.Executed;
+import static accord.local.Status.Invalidated;
 import static accord.local.Status.NotWitnessed;
 import static accord.local.Status.PreAccepted;
 import static accord.local.Status.ReadyToExecute;
@@ -183,6 +186,21 @@ public class Command implements Listener, Consumer<Listener>
         return true;
     }
 
+    public boolean acceptInvalidate(Ballot ballot)
+    {
+        if (this.promised.compareTo(ballot) > 0)
+            return false;
+
+        if (hasBeen(Committed))
+            return false;
+
+        promised = accepted = ballot;
+        status = AcceptedInvalidate;
+
+        listeners.forEach(this);
+        return true;
+    }
+
     // relies on mutual exclusion for each key
     public boolean commit(Txn txn, Key homeKey, Key progressKey, Timestamp executeAt, Dependencies deps)
     {
@@ -213,6 +231,7 @@ public class Command implements Listener, Consumer<Listener>
                     command.txn(depTxn);
                 case PreAccepted:
                 case Accepted:
+                case AcceptedInvalidate:
                     // we don't know when these dependencies will execute, and cannot execute until we do
                     waitingOnCommit.put(id, command);
                     command.addListener(this);
@@ -224,6 +243,7 @@ public class Command implements Listener, Consumer<Listener>
                 case ReadyToExecute:
                 case Executed:
                 case Applied:
+                case Invalidated:
                     command.addListener(this);
                     updatePredecessor(command);
                     break;
@@ -242,6 +262,25 @@ public class Command implements Listener, Consumer<Listener>
         commandStore.progressLog().commit(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
 
         maybeExecute(false);
+        listeners.forEach(this);
+        return true;
+    }
+
+    public boolean commitInvalidate()
+    {
+        if (hasBeen(Committed))
+        {
+            if (!hasBeen(Invalidated))
+                commandStore.agent().onInconsistentTimestamp(this, Timestamp.NONE, executeAt);
+
+            return false;
+        }
+
+        status = Invalidated;
+
+        boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
+        commandStore.progressLog().invalidate(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
+
         listeners.forEach(this);
         return true;
     }
@@ -280,6 +319,15 @@ public class Command implements Listener, Consumer<Listener>
         return true;
     }
 
+    public boolean preAcceptInvalidate(Ballot ballot)
+    {
+        if (this.promised.compareTo(ballot) > 0)
+            return false;
+
+        this.promised = ballot;
+        return true;
+    }
+
     public Command addListener(Listener listener)
     {
         listeners.add(listener);
@@ -300,12 +348,14 @@ public class Command implements Listener, Consumer<Listener>
             case NotWitnessed:
             case PreAccepted:
             case Accepted:
+            case AcceptedInvalidate:
                 break;
 
             case Committed:
             case ReadyToExecute:
             case Executed:
             case Applied:
+            case Invalidated:
                 if (waitingOnApply != null)
                 {
                     updatePredecessor(command);

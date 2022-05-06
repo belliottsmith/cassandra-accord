@@ -79,6 +79,9 @@ public class TopologyUpdate
                     case Accepted:
                         commandStore.command(txnId).accept(Ballot.ZERO, txn, homeKey, progressKey, executeAt, deps);
                         break;
+                    case AcceptedInvalidate:
+                        commandStore.command(txnId).acceptInvalidate(Ballot.ZERO);
+                        break;
                     case Committed:
                     case ReadyToExecute:
                         commandStore.command(txnId).commit(txn, homeKey, progressKey, executeAt, deps);
@@ -87,6 +90,8 @@ public class TopologyUpdate
                     case Applied:
                         commandStore.command(txnId).apply(txn, homeKey, progressKey, executeAt, deps, writes, result);
                         break;
+                    case Invalidated:
+                        commandStore.command(txnId).commitInvalidate();
                     default:
                         throw new IllegalStateException();
                 }

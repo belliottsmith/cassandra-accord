@@ -16,10 +16,10 @@ import accord.local.Node.Id;
 import accord.messages.Commit;
 import accord.messages.ReadData;
 import accord.messages.ReadData.ReadOk;
-import org.apache.cassandra.utils.concurrent.AsyncPromise;
+import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
-class Execute extends AsyncPromise<Result> implements Callback<ReadReply>
+class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
 {
     final Node node;
     final TxnId txnId;
@@ -49,7 +49,7 @@ class Execute extends AsyncPromise<Result> implements Callback<ReadReply>
         // TODO: perhaps compose these different behaviours differently?
         if (agreed.applied != null)
         {
-            setSuccess(agreed.result);
+            trySuccess(agreed.result);
             Persist.persist(node, topologies, txnId, homeKey, txn, executeAt, deps, agreed.applied, agreed.result);
         }
         else
@@ -94,7 +94,7 @@ class Execute extends AsyncPromise<Result> implements Callback<ReadReply>
         if (readTracker.hasCompletedRead())
         {
             Result result = txn.result(data);
-            setSuccess(result);
+            trySuccess(result);
             Persist.persist(node, topologies, txnId, homeKey, txn, executeAt, deps, txn.execute(executeAt, data), result);
         }
     }

@@ -3,6 +3,7 @@ package accord.coordinate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import accord.api.Key;
@@ -24,15 +25,17 @@ import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.WaitOnCommit;
 import accord.messages.WaitOnCommit.WaitOnCommitOk;
 import org.apache.cassandra.utils.concurrent.AsyncPromise;
+import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 import org.apache.cassandra.utils.concurrent.Promise;
 
-import static accord.local.Status.Accepted;
+import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
+import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedOrLater;
 
 // TODO: rename to Recover (verb); rename Recover message to not clash
 class Recover extends Propose implements Callback<RecoverReply>
 {
-    class AwaitCommit extends AsyncPromise<Object> implements Callback<WaitOnCommitOk>
+    class AwaitCommit extends AsyncFuture<Object> implements Callback<WaitOnCommitOk>
     {
         final QuorumTracker tracker;
 
@@ -125,7 +128,23 @@ class Recover extends Propose implements Callback<RecoverReply>
         super(node, ballot, txnId, txn, homeKey);
         assert topologies.oldestEpoch() == topologies.currentEpoch() && topologies.currentEpoch() == txnId.epoch;
         this.tracker = new FastPathTracker<>(topologies, ShardTracker[]::new, ShardTracker::new);
-        node.send(tracker.nodes(), to -> new BeginRecovery(to, topologies, txnId, txn, homeKey, ballot), this);
+    }
+
+    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey)
+    {
+        return recover(node, ballot, txnId, txn, homeKey, node.topology().forEpoch(txn, txnId.epoch));
+    }
+
+    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey, Topologies topologies)
+    {
+        Recover recover = new Recover(node, ballot, txnId, txn, homeKey, topologies);
+        recover.start(topologies.nodes());
+        return recover;
+    }
+
+    void start(Set<Id> nodes)
+    {
+        node.send(nodes, to -> new BeginRecovery(to, tracker.topologies(), txnId, txn, homeKey, ballot), this);
     }
 
     @Override
@@ -152,45 +171,35 @@ class Recover extends Propose implements Callback<RecoverReply>
     private void recover()
     {
         // first look for the most recent Accept; if present, go straight to proposing it again
-        RecoverOk acceptOrCommit; {
-            RecoverOk tmp = null;
-            for (RecoverOk ok : recoverOks)
-            {
-                if (ok.status.compareTo(Accepted) >= 0)
-                {
-                    if (tmp == null) tmp = ok;
-                    else if (tmp.status.compareTo(ok.status) < 0) tmp = ok;
-                    else if (tmp.status == ok.status && tmp.accepted.compareTo(ok.accepted) < 0) tmp = ok;
-                }
-            }
-            acceptOrCommit = tmp;
-        }
-
+        RecoverOk acceptOrCommit = maxAcceptedOrLater(recoverOks);
         if (acceptOrCommit != null)
         {
             switch (acceptOrCommit.status)
             {
+                default: throw new IllegalStateException();
+                case NotWitnessed:
+                case PreAccepted:
+                    throw new IllegalStateException("Should only be possible to have Accepter or later commands");
                 case Accepted:
-                    // TODO: this pattern needs to be given some efficient syntactic sugar
-                    if (node.topology().hasEpoch(acceptOrCommit.executeAt.epoch))
-                    {
-                        Topologies topologies = node.topology().forTxn(txn, txnId.epoch, acceptOrCommit.executeAt.epoch);
+                    node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
+                        Topologies topologies = node.topology().forTxn(txn, txnId, acceptOrCommit.executeAt);
                         startAccept(acceptOrCommit.executeAt, acceptOrCommit.deps, topologies);
-                    }
-                    else
-                    {
-                        node.configService().fetchTopologyForEpoch(acceptOrCommit.executeAt.epoch);
-                        node.topology().awaitEpoch(acceptOrCommit.executeAt.epoch).addListener(() -> {
-                            Topologies topologies = node.topology().forTxn(txn, txnId.epoch, acceptOrCommit.executeAt.epoch);
-                            startAccept(acceptOrCommit.executeAt, acceptOrCommit.deps, topologies);
-                        });
-                    }
+                    });
+                    return;
+                case AcceptedInvalidate:
+                    proposeInvalidate(node, ballot, txnId, homeKey).addCallback((success, fail) -> {
+                        if (fail != null) tryFailure(fail);
+                        else tryFailure(new Invalidated());
+                    });
                     return;
                 case Committed:
                 case ReadyToExecute:
                 case Executed:
                 case Applied:
-                    setSuccess(new Agreed(txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result));
+                    trySuccess(new Agreed(txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result));
+                    return;
+                case Invalidated:
+                    tryFailure(new Invalidated());
                     return;
             }
         }
@@ -229,23 +238,15 @@ class Recover extends Propose implements Callback<RecoverReply>
             executeAt = txnId;
         }
 
-        if (!node.topology().hasEpoch(executeAt.epoch))
-        {
-            node.configService().fetchTopologyForEpoch(executeAt.epoch);
-            node.topology().awaitEpoch(executeAt.epoch).addListener(() -> {
-                startAccept(executeAt, deps, node.topology().forTxn(txn, txnId, executeAt));
-            });
-        }
-        else
-        {
+        node.withEpoch(executeAt.epoch, () -> {
             startAccept(executeAt, deps, node.topology().forTxn(txn, txnId, executeAt));
-        }
+        });
     }
 
     private void retry()
     {
-        new Recover(node, ballot, txnId, txn, homeKey, tracker.topologies()).addCallback((success, failure) -> {
-            if (success != null) setSuccess(success);
+        Recover.recover(node, ballot, txnId, txn, homeKey, tracker.topologies()).addCallback((success, failure) -> {
+            if (success != null) trySuccess(success);
             else tryFailure(failure);
         });
     }

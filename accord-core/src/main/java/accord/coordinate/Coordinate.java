@@ -17,15 +17,7 @@ public class Coordinate
 {
     private static Future<Result> fetchEpochOrExecute(Node node, Agreed agreed)
     {
-        long executeEpoch = agreed.executeAt.epoch;
-        ConfigurationService configService = node.configService();
-        if (executeEpoch > node.topology().epoch())
-        {
-            configService.fetchTopologyForEpoch(executeEpoch);
-            return node.topology().awaitEpoch(executeEpoch).flatMap(v -> fetchEpochOrExecute(node, agreed));
-        }
-
-        return Execute.execute(node, agreed);
+        return node.withEpoch(agreed.executeAt.epoch, () -> Execute.execute(node, agreed));
     }
 
     private static Future<Result> andThenExecute(Node node, Future<Agreed> agree)
@@ -36,11 +28,13 @@ public class Coordinate
     public static Future<Result> execute(Node node, TxnId txnId, Txn txn, Key homeKey)
     {
         Preconditions.checkArgument(node.isReplicaOf(txnId, homeKey));
+        // TODO (now): invoke Execute from Coordinate instead of wrapping this
         return andThenExecute(node, Agree.agree(node, txnId, txn, homeKey));
     }
 
     public static Future<Result> recover(Node node, TxnId txnId, Txn txn, Key homeKey)
     {
-        return andThenExecute(node, new Recover(node, new Ballot(node.uniqueNow()), txnId, txn, homeKey));
+        // TODO (now): invoke Execute from Recover instead of wrapping this
+        return andThenExecute(node, Recover.recover(node, new Ballot(node.uniqueNow()), txnId, txn, homeKey));
     }
 }

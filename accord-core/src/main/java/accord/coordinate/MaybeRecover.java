@@ -72,6 +72,7 @@ public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object,
             case NotWitnessed:
             case PreAccepted:
             case Accepted:
+            case AcceptedInvalidate:
             case Committed:
             case ReadyToExecute:
                 if (hasMadeProgress())
@@ -95,6 +96,10 @@ public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object,
                 }
                 // TODO: apply locally too, in case missing?
                 trySuccess(full);
+                break;
+
+            case Invalidated:
+                trySuccess(max);
         }
     }
 }

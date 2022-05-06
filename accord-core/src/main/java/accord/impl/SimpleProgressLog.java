@@ -365,6 +365,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 case NotWitnessed:
                 case PreAccepted:
                 case Accepted:
+                case AcceptedInvalidate:
                     blockedOn = Status.Committed;
                     progress = Expected;
                     break;
@@ -375,6 +376,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     break;
                 case Executed:
                 case Applied:
+                case Invalidated:
                     throw new IllegalStateException("Should not be recorded as blocked if result already recorded locally");
             }
         }
@@ -430,6 +432,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         break;
                     case PreAccepted:
                     case Accepted:
+                    case AcceptedInvalidate:
                         progress = Expected;
                         break;
                     case Committed:
@@ -439,6 +442,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         break;
                     case Executed:
                     case Applied:
+                    case Invalidated:
                         progress = Done;
                 }
             });
@@ -644,6 +648,20 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 state = ensure(txnId, state);
 
                 if (isHomeShard) state.home().executed(node, state.command);
+                else ensure(txnId).ensureAtLeast(Safe);
+            }
+        }
+
+        @Override
+        public void invalidate(TxnId txnId, boolean isProgressShard, boolean isHomeShard)
+        {
+            State state = recordExecute(txnId);
+
+            if (isProgressShard)
+            {
+                state = ensure(txnId, state);
+
+                if (isHomeShard) state.ensureAtLeast(LocalStatus.Done, Done, node);
                 else ensure(txnId).ensureAtLeast(Safe);
             }
         }

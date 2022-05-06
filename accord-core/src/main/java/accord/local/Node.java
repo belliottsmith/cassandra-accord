@@ -167,6 +167,32 @@ public class Node implements ConfigurationService.Listener
         topology.onEpochSyncComplete(node, epoch);
     }
 
+    public void withEpoch(long epoch, Runnable runnable)
+    {
+        if (topology.hasEpoch(epoch))
+        {
+            runnable.run();
+        }
+        else
+        {
+            configService.fetchTopologyForEpoch(epoch);
+            topology.awaitEpoch(epoch).addListener(runnable);
+        }
+    }
+
+    public <T> Future<T> withEpoch(long epoch, Supplier<Future<T>> supplier)
+    {
+        if (topology.hasEpoch(epoch))
+        {
+            return supplier.get();
+        }
+        else
+        {
+            configService.fetchTopologyForEpoch(epoch);
+            return topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get());
+        }
+    }
+
     public TopologyManager topology()
     {
         return topology;
@@ -229,6 +255,16 @@ public class Node implements ConfigurationService.Listener
     public void forEachLocalSince(Keys keys, long sinceEpoch, Consumer<CommandStore> forEach)
     {
         commandStores.forEach(keys, sinceEpoch, Long.MAX_VALUE, forEach);
+    }
+
+    public <T> T mapReduceLocal(Keys keys, Timestamp at, Function<CommandStore, T> map, BiFunction<T, T, T> reduce)
+    {
+        return commandStores.mapReduce(keys, at.epoch, at.epoch, map, reduce);
+    }
+
+    public <T> T mapReduceLocal(Keys keys, long epoch, Function<CommandStore, T> map, BiFunction<T, T, T> reduce)
+    {
+        return commandStores.mapReduce(keys, epoch, epoch, map, reduce);
     }
 
     public <T> T mapReduceLocal(Keys keys, long minEpoch, long maxEpoch, Function<CommandStore, T> map, BiFunction<T, T, T> reduce)
@@ -337,18 +373,7 @@ public class Node implements ConfigurationService.Listener
         // TODO: The combination of updating the epoch of the next timestamp with epochs we don’t have topologies for,
         //  and requiring preaccept to talk to its topology epoch means that learning of a new epoch via timestamp
         //  (ie not via config service) will halt any new txns from a node until it receives this topology
-        Future<Result> result;
-        if (txnId.epoch > topology().epoch())
-        {
-            configService.fetchTopologyForEpoch(txnId.epoch);
-            result = topology().awaitEpoch(txnId.epoch)
-                               .flatMap(ignore -> initiateCoordination(txnId, txn));
-        }
-        else
-        {
-            result = initiateCoordination(txnId, txn);
-        }
-
+        Future<Result> result = withEpoch(txnId.epoch, () -> initiateCoordination(txnId, txn));
         coordinating.putIfAbsent(txnId, result);
         // TODO: if we fail, nominate another node to try instead
         result.addCallback((success, fail) -> coordinating.remove(txnId, result));
@@ -420,18 +445,7 @@ public class Node implements ConfigurationService.Listener
                 return result;
         }
 
-        Future<Result> result;
-        if (txnId.epoch > topology.epoch())
-        {
-            configService.fetchTopologyForEpoch(txnId.epoch);
-            result = topology().awaitEpoch(txnId.epoch)
-                               .flatMap(ignore -> Coordinate.recover(this, txnId, txn, homeKey));
-        }
-        else
-        {
-            result = Coordinate.recover(this, txnId, txn, homeKey);
-        }
-
+        Future<Result> result = withEpoch(txnId.epoch, () -> Coordinate.recover(this, txnId, txn, homeKey));
         coordinating.putIfAbsent(txnId, result);
         result.addCallback((success, fail) -> {
             coordinating.remove(txnId, result);

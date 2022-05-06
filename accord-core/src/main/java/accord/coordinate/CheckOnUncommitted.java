@@ -48,6 +48,8 @@ public class CheckOnUncommitted extends CheckOnCommitted
         {
             default: throw new IllegalStateException();
             case NotWitnessed:
+            case AcceptedInvalidate:
+            case Invalidated:
                 break;
             case PreAccepted:
             case Accepted:

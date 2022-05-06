@@ -87,6 +87,11 @@ public interface ProgressLog
     void execute(TxnId txnId, boolean isProgressShard, boolean isHomeShard);
 
     /**
+     * The transaction has been durably invalidated
+     */
+    void invalidate(TxnId txnId, boolean isProgressShard, boolean isHomeShard);
+
+    /**
      * The transaction's outcome has been durably recorded (but not necessarily applied) at a quorum of all shards.
      *
      * If this replica has not witnessed the outcome of the transaction, it should poll a majority of the home shard
