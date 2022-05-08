@@ -84,6 +84,7 @@ public abstract class TxnRequest implements EpochRequest
 
     public TxnRequest(Keys scope, long waitForEpoch)
     {
+        Preconditions.checkState(!scope.isEmpty());
         this.scope = scope;
         this.waitForEpoch = waitForEpoch;
     }

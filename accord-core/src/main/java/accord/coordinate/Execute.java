@@ -41,33 +41,23 @@ class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
         this.keys = txn.keys();
         this.deps = agreed.deps;
         this.executeAt = agreed.executeAt;
-        Topologies coordinationTopologies = node.topology().unsyncForTxn(agreed.txn, agreed.executeAt.epoch);
-        Topologies readTopologies = node.topology().preciseEpochs(agreed.txn.read.keys(), agreed.executeAt.epoch);
-        this.readTracker = new ReadTracker(readTopologies);
-        this.topologies = coordinationTopologies;
 
         // TODO: perhaps compose these different behaviours differently?
         if (agreed.applied != null)
         {
+            topologies = null;
+            readTracker = null;
+            Persist.persistAndCommit(node, txnId, homeKey, txn, executeAt, deps, agreed.applied, agreed.result);
             trySuccess(agreed.result);
-            Persist.persist(node, topologies, txnId, homeKey, txn, executeAt, deps, agreed.applied, agreed.result);
         }
         else
         {
+            Topologies executeTopologies = node.topology().forEpoch(txn, executeAt.epoch);
+            Topologies readTopologies = node.topology().forEpoch(txn.read.keys(), executeAt.epoch);
+            topologies = executeTopologies;
+            readTracker = new ReadTracker(readTopologies);
             Set<Id> readSet = readTracker.computeMinimalReadSetAndMarkInflight();
-            for (Node.Id to : coordinationTopologies.nodes())
-            {
-                boolean read = readSet.contains(to);
-                Commit send = new Commit(to, topologies, txnId, txn, homeKey, executeAt, agreed.deps, read);
-                if (read)
-                {
-                    node.send(to, send, this);
-                }
-                else
-                {
-                    node.send(to, send);
-                }
-            }
+            Commit.commitAndRead(node, executeTopologies, txnId, txn, homeKey, executeAt, deps, readSet, this);
         }
     }
 

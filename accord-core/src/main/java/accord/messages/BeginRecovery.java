@@ -1,7 +1,7 @@
 package accord.messages;
 
-import accord.api.ConfigurationService;
 import accord.api.Result;
+import accord.coordinate.Persist;
 import accord.topology.Topologies;
 
 import java.util.List;
@@ -151,17 +151,16 @@ public class BeginRecovery extends TxnRequest
         node.reply(replyToNode, replyContext, reply);
         if (reply instanceof RecoverOk && ((RecoverOk) reply).status == Applied)
         {
-            disseminateApply(node, (RecoverOk) reply);
+            RecoverOk ok = (RecoverOk) reply;
+            Preconditions.checkArgument(ok.status == Applied);
+            node.withEpoch(ok.executeAt.epoch, () -> {
+                Persist.persistAndCommit(node, txnId, homeKey, txn, ok.executeAt, ok.deps, ok.writes, ok.result);
+            });
         }
     }
 
     private void disseminateApply(Node node, RecoverOk ok)
     {
-        Preconditions.checkArgument(ok.status == Applied);
-        node.withEpoch(ok.executeAt.epoch, () -> {
-            Topologies topologies = node.topology().withUnsyncEpochs(txn.keys, ok.executeAt.epoch);
-            node.send(topologies.nodes(), to -> new Apply(to, topologies, txnId, txn, homeKey, ok.executeAt, ok.deps, ok.writes, ok.result));
-        });
     }
     
     @Override

@@ -13,6 +13,7 @@ import accord.local.Node.Id;
 import accord.messages.Apply;
 import accord.messages.Apply.ApplyOk;
 import accord.messages.Callback;
+import accord.messages.Commit;
 import accord.messages.InformOfPersistence;
 import accord.topology.Shard;
 import accord.topology.Topologies;
@@ -38,6 +39,19 @@ public class Persist extends AsyncFuture<Void> implements Callback<ApplyOk>
     {
         Persist persist = new Persist(node, topologies, txnId, homeKey, executeAt);
         node.send(topologies.nodes(), to -> new Apply(to, topologies, txnId, txn, homeKey, executeAt, deps, writes, result), persist);
+        return persist;
+    }
+
+    public static AsyncFuture<Void> persistAndCommit(Node node, TxnId txnId, Key homeKey, Txn txn, Timestamp executeAt, Dependencies deps, Writes writes, Result result)
+    {
+        Topologies persistTo = node.topology().preciseEpochs(txn, executeAt.epoch);
+        Persist persist = new Persist(node, persistTo, txnId, homeKey, executeAt);
+        node.send(persistTo.nodes(), to -> new Apply(to, persistTo, txnId, txn, homeKey, executeAt, deps, writes, result), persist);
+        if (txnId.epoch != executeAt.epoch)
+        {
+            Topologies earlierTopologies = node.topology().preciseEpochs(txn, txnId.epoch, executeAt.epoch - 1);
+            Commit.commit(node, earlierTopologies, persistTo, txnId, txn, homeKey, executeAt, deps);
+        }
         return persist;
     }
 

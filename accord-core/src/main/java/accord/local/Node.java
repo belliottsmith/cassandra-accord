@@ -247,6 +247,11 @@ public class Node implements ConfigurationService.Listener
         commandStores.forEach(keys, minEpoch, maxEpoch, forEach);
     }
 
+    public void forEachLocal(Keys keys, Timestamp minAt, Timestamp maxAt, Consumer<CommandStore> forEach)
+    {
+        commandStores.forEach(keys, minAt.epoch, maxAt.epoch, forEach);
+    }
+
     public void forEachLocalSince(Keys keys, Timestamp since, Consumer<CommandStore> forEach)
     {
         commandStores.forEach(keys, since.epoch, Long.MAX_VALUE, forEach);
@@ -285,6 +290,16 @@ public class Node implements ConfigurationService.Listener
     public <T> T ifLocal(Key key, long epoch, Function<CommandStore, T> ifLocal)
     {
         return commandStores.mapReduce(key, epoch, ifLocal, (a, b) -> { throw new IllegalStateException();} );
+    }
+
+    public <T> T ifLocalSince(Key key, Timestamp since, Function<CommandStore, T> ifLocal)
+    {
+        return ifLocalSince(key, since.epoch, ifLocal);
+    }
+
+    public <T> T ifLocalSince(Key key, long epoch, Function<CommandStore, T> ifLocal)
+    {
+        return commandStores.mapReduceSince(key, epoch, ifLocal, (a, b) -> { throw new IllegalStateException();} );
     }
 
     public <T extends Collection<CommandStore>> T collectLocal(Keys keys, Timestamp at, IntFunction<T> factory)
@@ -439,20 +454,22 @@ public class Node implements ConfigurationService.Listener
     // TODO: encapsulate in Coordinate, so we can request that e.g. commits be re-sent?
     public Future<Result> recover(TxnId txnId, Txn txn, Key homeKey)
     {
-        {
-            Future<Result> result = coordinating.get(txnId);
-            if (result != null)
-                return result;
-        }
+        return withEpoch(txnId.epoch, () -> {
+            {
+                 Future<Result> result = coordinating.get(txnId);
+                 if (result != null)
+                     return result;
+            }
 
-        Future<Result> result = withEpoch(txnId.epoch, () -> Coordinate.recover(this, txnId, txn, homeKey));
-        coordinating.putIfAbsent(txnId, result);
-        result.addCallback((success, fail) -> {
-            coordinating.remove(txnId, result);
-            agent.onRecover(this, success, fail);
-            // TODO: if we fail, nominate another node to try instead
+            Future<Result> result = Coordinate.recover(this, txnId, txn, homeKey);
+            coordinating.putIfAbsent(txnId, result);
+            result.addCallback((success, fail) -> {
+                coordinating.remove(txnId, result);
+                agent.onRecover(this, success, fail);
+                // TODO: if we fail, nominate another node to try instead
+            });
+            return result;
         });
-        return result;
     }
 
     public void receive(Request request, Id from, ReplyContext replyContext)

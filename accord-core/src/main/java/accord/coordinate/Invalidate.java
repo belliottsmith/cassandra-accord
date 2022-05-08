@@ -8,7 +8,6 @@ import java.util.function.BiConsumer;
 import accord.api.Key;
 import accord.api.Result;
 import accord.coordinate.Invalidate.Outcome;
-import accord.coordinate.Invalidate.Outcome.Kind;
 import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -19,33 +18,15 @@ import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.Callback;
 import accord.topology.Shard;
 import accord.txn.Ballot;
-import accord.txn.Txn;
 import accord.txn.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedOrLater;
 
-class Invalidate extends AsyncFuture<Outcome> implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
+public class Invalidate extends AsyncFuture<Outcome> implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
-    public static class Outcome
-    {
-        static final Outcome EXECUTED = new Outcome(Kind.EXECUTED, null, null);
-        static final Outcome INVALIDATED = new Outcome(Kind.INVALIDATED, null, null);
-
-        public enum Kind { PREEMPTED, EXECUTED, INVALIDATED }
-
-        final Kind kind;
-        final Txn txn;
-        final Key homeKey;
-
-        public Outcome(Kind kind, Txn txn, Key homeKey)
-        {
-            this.kind = kind;
-            this.txn = txn;
-            this.homeKey = homeKey;
-        }
-    }
+    public enum Outcome { PREEMPTED, EXECUTED, INVALIDATED }
 
     final Node node;
     final Ballot ballot;
@@ -82,7 +63,24 @@ class Invalidate extends AsyncFuture<Outcome> implements Callback<RecoverReply>,
         if (!response.isOK())
         {
             InvalidateNack nack = (InvalidateNack) response;
-            trySuccess(new Outcome(Kind.PREEMPTED, nack.txn, nack.homeKey));
+            if (nack.homeKey != null && nack.txn != null)
+            {
+                Key progressKey = node.trySelectProgressKey(txnId.epoch, nack.txn.keys, nack.homeKey);
+                // TODO (now): this shouldn't be ifLocalSince - should be range up to the blocked txn only (but consider more)
+                node.ifLocalSince(someKey, txnId, instance -> {
+                    instance.command(txnId).preaccept(nack.txn, nack.homeKey, progressKey);
+                    return null;
+                });
+            }
+            else if (nack.homeKey != null)
+            {
+                // TODO (now): this shouldn't be ifLocalSince - should be range up to the blocked txn only (but consider more)
+                node.ifLocalSince(someKey, txnId, instance -> {
+                    instance.command(txnId).homeKey(nack.homeKey);
+                    return null;
+                });
+            }
+            trySuccess(Outcome.PREEMPTED);
             return;
         }
 

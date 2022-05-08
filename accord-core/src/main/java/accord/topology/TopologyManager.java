@@ -361,12 +361,12 @@ public class TopologyManager implements ConfigurationService.Listener
         return withUnsyncEpochs(txn.keys(), min.epoch, max.epoch);
     }
 
-    public Topologies unsyncForTxn(Txn txn, long epoch)
+    public Topologies preciseEpochs(Txn txn, long epoch)
     {
         return preciseEpochs(txn.keys(), epoch, epoch);
     }
 
-    public Topologies unsyncForTxn(Txn txn, long minEpoch, long maxEpoch)
+    public Topologies preciseEpochs(Txn txn, long minEpoch, long maxEpoch)
     {
         return withUnsyncEpochs(txn.keys(), minEpoch, maxEpoch);
     }

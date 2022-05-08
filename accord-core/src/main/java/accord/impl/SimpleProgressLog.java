@@ -16,6 +16,7 @@ import accord.api.Key;
 import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.coordinate.CheckShardStatus;
+import accord.coordinate.Invalidate;
 import accord.impl.SimpleProgressLog.HomeState.LocalStatus;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -129,6 +130,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         Set<Id> globalNotPersisted;
         GlobalPendingDurable globalPendingDurable;
 
+        Object debugInvestigating;
 
         void ensureAtLeast(LocalStatus newStatus, Progress newProgress, Node node, Command command)
         {
@@ -190,7 +192,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             if (globalNotPersisted == null)
             {
                 assert node != null && command != null;
-                globalNotPersisted = new HashSet<>(node.topology().unsyncForTxn(command.txn(), command.executeAt().epoch).nodes());
+                globalNotPersisted = new HashSet<>(node.topology().preciseEpochs(command.txn(), command.executeAt().epoch).nodes());
                 if (local == LocalStatus.Done)
                     globalNotPersisted.remove(node.id());
             }
@@ -270,42 +272,50 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 case Uncommitted:
                 case ReadyToExecute:
                 {
-                    Key homeKey = command.homeKey();
-                    long homeEpoch = (local.isAtMost(Uncommitted) ? txnId : command.executeAt()).epoch;
-                    Shard homeShard = node.topology().forEpochIfKnown(homeKey, homeEpoch);
-                    if (homeShard == null)
+                    if (local.isAtLeast(Committed) && global.isAtLeast(PendingDurable))
                     {
-                        node.configService().fetchTopologyForEpoch(homeEpoch);
-                        localProgress = Expected;
-                        break;
-                    }
-                    if (global.isAtLeast(PendingDurable))
-                    {
-                        checkOnCommitted(node, txnId, command.txn(), homeKey, homeShard, homeEpoch)
-                        .addCallback((success, fail) -> {
-                            // should have found enough information to apply the result, but in case we did not reset progress
-                            if (localProgress != Done && localProgress == Investigating)
-                                localProgress = Expected;
+                        // must also be committed, as at the time of writing we do not guarantee dissemination of Commit
+                        // records to the home shard, so we only know the executeAt shards will have witnessed this
+                        // if the home shard is at an earlier phase, it must run recovery
+                        Key homeKey = command.homeKey();
+                        long homeEpoch = command.executeAt().epoch;
+
+                        node.withEpoch(homeEpoch, () -> {
+                            Shard homeShard = node.topology().forEpoch(homeKey, homeEpoch);
+                            debugInvestigating = checkOnCommitted(node, txnId, command.txn(), homeKey, homeShard, command.executeAt().epoch)
+                                                 .addCallback((success, fail) -> {
+                                                     // should have found enough information to apply the result, but in case we did not reset progress
+                                                     if (localProgress != Done && localProgress == Investigating)
+                                                         localProgress = Expected;
+                                                 });
                         });
                     }
                     else
                     {
-                        Future<CheckStatusOk> recover = maybeRecover(node, txnId, command.txn(),
-                                                                     homeKey, homeShard, homeEpoch,
-                                                                     maxStatus, maxPromised, maxPromiseHasBeenAccepted);
+                        Key homeKey = command.homeKey();
+                        long homeEpoch = (local.isAtMost(Uncommitted) ? txnId : command.executeAt()).epoch;
 
-                        recover.addCallback((success, fail) -> {
-                            if (local.isAtMost(ReadyToExecute) && localProgress == Investigating)
-                            {
-                                localProgress = Expected;
-                                if (success != null)
+                        node.withEpoch(homeEpoch, () -> {
+                            Shard homeShard = node.topology().forEpoch(homeKey, homeEpoch);
+
+                            Future<CheckStatusOk> recover = maybeRecover(node, txnId, command.txn(),
+                                                                         homeKey, homeShard, homeEpoch,
+                                                                         maxStatus, maxPromised, maxPromiseHasBeenAccepted);
+                            recover.addCallback((success, fail) -> {
+                                if (local.isAtMost(ReadyToExecute) && localProgress == Investigating)
                                 {
-                                    if (success.hasExecutedOnAllShards)
-                                        executedOnAllShards(node, command, null);
-                                    else
-                                        updateMax(success);
+                                    localProgress = Expected;
+                                    if (success != null)
+                                    {
+                                        if (success.hasExecutedOnAllShards)
+                                            executedOnAllShards(node, command, null);
+                                        else
+                                            updateMax(success);
+                                    }
                                 }
-                            }
+                            });
+
+                            debugInvestigating = recover;
                         });
                     }
                 }
@@ -353,12 +363,11 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
     {
         Status blockedOn = Status.NotWitnessed;
         Progress progress = NoneExpected;
-        Key homeKey;
 
-        void recordBlocking(Command blocking, Key homeKey)
+        Object debugInvestigating;
+
+        void recordBlocking(Command blocking, @Nullable Key homeKey)
         {
-            Preconditions.checkState(homeKey != null);
-            this.homeKey = homeKey;
             switch (blocking.status())
             {
                 default: throw new IllegalStateException();
@@ -404,47 +413,60 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             // check status with the only keys we know, if any, then:
             // 1. if we cannot find any primary record of the transaction, then it cannot be a dependency so record this fact
             // 2. otherwise record the homeKey for future reference and set the status based on whether progress has been made
-            Key someKey = command.someKey();
-            Shard someShard = node.topology().forEpochIfKnown(someKey, txnId.epoch);
-            if (someShard == null)
-            {
-                node.configService().fetchTopologyForEpoch(txnId.epoch);
-                progress = Expected;
-                return;
-            }
-            CheckShardStatus check = blockedOn == Executed ? checkOnCommitted(node, txnId, command.txn(), someKey, someShard, txnId.epoch)
-                                                           : checkOnUncommitted(node, txnId, command.txn(), someKey, someShard, txnId.epoch);
+            long onEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
+            node.withEpoch(onEpoch, () -> {
+                Key someKey = command.someKey();
+                Shard someShard = node.topology().forEpoch(someKey, onEpoch);
+                CheckShardStatus check = blockedOn == Executed ? checkOnCommitted(node, txnId, command.txn(), someKey, someShard, onEpoch)
+                                                               : checkOnUncommitted(node, txnId, command.txn(), someKey, someShard, onEpoch);
+                debugInvestigating = check;
+                check.addCallback((success, fail) -> {
+                    if (progress != Investigating)
+                        return;
 
-            check.addCallback((success, fail) -> {
-                if (fail != null)
-                {
-                    if (progress == Investigating)
-                        progress = Expected;
-                    return;
-                }
-                switch (success.status)
-                {
-                    default: throw new IllegalStateException();
-                    case NotWitnessed:
-                        // TODO: this should instead invalidate the transaction on this shard, which invalidates it for all shards,
-                        //       but we need to first support invalidation
-                        inform(node, txnId, command.txn(), homeKey).addListener(() -> progress = Expected);
-                        break;
-                    case PreAccepted:
-                    case Accepted:
-                    case AcceptedInvalidate:
-                        progress = Expected;
-                        break;
-                    case Committed:
-                    case ReadyToExecute:
-                        if (blockedOn == Status.Committed)
-                            progress = NoneExpected;
-                        break;
-                    case Executed:
-                    case Applied:
-                    case Invalidated:
-                        progress = Done;
-                }
+                    progress = Expected;
+                    if (fail != null)
+                        return;
+
+                    switch (success.status)
+                    {
+                        default: throw new IllegalStateException();
+                        case NotWitnessed:
+                            progress = Investigating;
+                            // TODO: this should instead invalidate the transaction on this shard, which invalidates it for all shards,
+                            //       but we need to first support invalidation
+                            debugInvestigating = Invalidate.invalidate(node, new Ballot(node.uniqueNow()), txnId, command.someKey())
+                                      .addCallback((success2, fail2) -> {
+                                          if (fail2 != null) progress = Expected;
+                                          else switch (success2)
+                                          {
+                                              default: throw new IllegalStateException();
+                                              case PREEMPTED:
+                                                  progress = Expected;
+                                                  break;
+                                              case EXECUTED:
+                                              case INVALIDATED:
+                                                  progress = Done;
+                                          }
+                                      });
+                            break;
+                        case PreAccepted:
+                        case Accepted:
+                        case AcceptedInvalidate:
+                            break;
+                        case Committed:
+                        case ReadyToExecute:
+                            Preconditions.checkState(command.hasBeen(Status.Committed));
+                            if (blockedOn == Status.Committed)
+                                progress = NoneExpected;
+                            break;
+                        case Executed:
+                        case Applied:
+                        case Invalidated:
+                            progress = Done;
+                            return;
+                    }
+                });
             });
         }
 
@@ -474,7 +496,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             this.command = command;
         }
 
-        void recordBlocking(Command blockedByCommand, Key homeKey)
+        void recordBlocking(Command blockedByCommand, @Nullable Key homeKey)
         {
             Preconditions.checkArgument(blockedByCommand.txnId().equals(txnId));
             if (blockingState == null)
@@ -704,7 +726,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         static Future<Void> applyAndCheck(Node node, TxnId txnId, Command command, HomeState state)
         {
             CoordinateApplyAndCheck coordinate = new CoordinateApplyAndCheck(txnId, command, state);
-            Topologies topologies = node.topology().unsyncForTxn(command.txn(), command.executeAt().epoch);
+            Topologies topologies = node.topology().preciseEpochs(command.txn(), command.executeAt().epoch);
             state.globalNotPersisted.retainAll(topologies.nodes()); // we might have had some nodes from older shards that are now redundant
             node.send(state.globalNotPersisted, id -> new ApplyAndCheck(id, topologies,
                                                                         command.txnId(), command.txn(), command.homeKey(),

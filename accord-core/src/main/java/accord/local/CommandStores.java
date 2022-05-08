@@ -366,6 +366,11 @@ public abstract class CommandStores
         return mapReduce(ShardedRanges::shard, key, epoch, epoch, map, reduce);
     }
 
+    public <T> T mapReduceSince(Key key, long epoch, Function<CommandStore, T> map, BiFunction<T, T, T> reduce)
+    {
+        return mapReduce(ShardedRanges::shard, key, epoch, Long.MAX_VALUE, map, reduce);
+    }
+
     public <T extends Collection<CommandStore>> T collect(Keys keys, long epoch, IntFunction<T> factory)
     {
         return foldl(ShardedRanges::shards, keys, epoch, epoch, CommandStores::append, null, null, factory);

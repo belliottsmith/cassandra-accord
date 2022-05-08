@@ -1,12 +1,10 @@
 package accord.messages;
 
 import accord.local.Node.Id;
-import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.api.Key;
 import accord.txn.Ballot;
 import accord.local.Node;
-import accord.txn.Keys;
 import accord.txn.Timestamp;
 import accord.local.Command;
 import accord.txn.Dependencies;

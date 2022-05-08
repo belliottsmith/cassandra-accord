@@ -4,11 +4,14 @@ import java.util.function.BiConsumer;
 
 import accord.api.Key;
 import accord.local.Node;
+import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
+import accord.messages.Commit;
 import accord.topology.Shard;
+import accord.topology.Topologies;
 import accord.txn.Ballot;
 import accord.txn.Txn;
 import accord.txn.TxnId;
@@ -91,11 +94,15 @@ public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object,
                 CheckStatusOkFull full = (CheckStatusOkFull) max;
                 if (!max.hasExecutedOnAllShards)
                 {
-                    Persist.persist(node, node.topology().preciseEpochs(txn.keys, full.executeAt.epoch), txnId, key, txn, full.executeAt, full.deps, full.writes, full.result)
+                    Persist.persistAndCommit(node, txnId, key, txn, full.executeAt, full.deps, full.writes, full.result)
                            .addCallback(this);
                 }
-                // TODO: apply locally too, in case missing?
-                trySuccess(full);
+                else
+                {
+                    Commit.commit(node, txnId, txn, full.homeKey, full.executeAt, full.deps);
+                    trySuccess(full);
+                }
+
                 break;
 
             case Invalidated:

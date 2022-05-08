@@ -1,9 +1,6 @@
 package accord.messages;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-
+import accord.api.Key;
 import accord.local.*;
 import accord.local.Node.Id;
 import accord.topology.Topologies;
@@ -12,92 +9,72 @@ import accord.txn.Keys;
 
 public class WaitOnCommit extends TxnRequest
 {
-    static class LocalWait implements Listener
-    {
-        final Node node;
-        final Id replyToNode;
-        final TxnId txnId;
-        final ReplyContext replyContext;
-
-        final AtomicInteger waitingOn = new AtomicInteger();
-
-        LocalWait(Node node, Id replyToNode, TxnId txnId, ReplyContext replyContext)
-        {
-            this.node = node;
-            this.replyToNode = replyToNode;
-            this.txnId = txnId;
-            this.replyContext = replyContext;
-        }
-
-        @Override
-        public synchronized void onChange(Command command)
-        {
-            switch (command.status())
-            {
-                default: throw new IllegalStateException();
-                case NotWitnessed:
-                case PreAccepted:
-                case Accepted:
-                case AcceptedInvalidate:
-                    return;
-
-                case Committed:
-                case Executed:
-                case Applied:
-                case Invalidated:
-                case ReadyToExecute:
-            }
-
-            command.removeListener(this);
-            ack();
-        }
-
-        private void ack()
-        {
-            if (waitingOn.decrementAndGet() == 0)
-                node.reply(replyToNode, replyContext, WaitOnCommitOk.INSTANCE);
-        }
-
-        void setup(CommandStore instance)
-        {
-            Command command = instance.command(txnId);
-            switch (command.status())
-            {
-                case NotWitnessed:
-                case PreAccepted:
-                case Accepted:
-                case AcceptedInvalidate:
-                    command.addListener(this);
-                    break;
-
-                case Committed:
-                case Executed:
-                case Applied:
-                case Invalidated:
-                case ReadyToExecute:
-                    ack();
-            }
-        }
-
-        synchronized void setup(Keys keys)
-        {
-            List<CommandStore> instances = node.collectLocal(keys, txnId, ArrayList::new);
-            waitingOn.set(instances.size());
-            instances.forEach(instance -> instance.processBlocking(this::setup));
-        }
-    }
-
     public final TxnId txnId;
+    public final Key homeKey;
 
-    public WaitOnCommit(Id to, Topologies topologies, TxnId txnId, Keys keys)
+    public WaitOnCommit(Id to, Topologies topologies, TxnId txnId, Keys keys, Key homeKey)
     {
         super(to, topologies, keys);
         this.txnId = txnId;
+        this.homeKey = homeKey;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        new LocalWait(node, replyToNode, txnId, replyContext).setup(scope());
+        Key progressKey = node.selectProgressKey(txnId, scope(), homeKey);
+        if (progressKey == null)
+            node.reply(replyToNode, replyContext, WaitOnCommitReply.NACK);
+
+        Boolean success = node.ifLocal(progressKey, txnId, instance -> {
+            Command command = instance.command(txnId);
+            switch (command.status())
+            {
+                default:
+                    throw new IllegalStateException();
+                case NotWitnessed:
+                case PreAccepted:
+                case Accepted:
+                case AcceptedInvalidate:
+                    command.addListener(new Listener()
+                    {
+                        @Override
+                        public void onChange(Command command)
+                        {
+                            switch (command.status())
+                            {
+                                default: throw new IllegalStateException();
+                                case NotWitnessed:
+                                case PreAccepted:
+                                case Accepted:
+                                case AcceptedInvalidate:
+                                    return;
+
+                                case Committed:
+                                case ReadyToExecute:
+                                case Executed:
+                                case Applied:
+                                case Invalidated:
+                            }
+
+                            command.removeListener(this);
+                            node.reply(replyToNode, replyContext, WaitOnCommitReply.OK);
+                        }
+                    });
+                    instance.progressLog().waiting(txnId, null);
+                    return true;
+
+                case Committed:
+                case ReadyToExecute:
+                case Executed:
+                case Applied:
+                case Invalidated:
+                    node.reply(replyToNode, replyContext, WaitOnCommitReply.OK);
+                    return true;
+            }
+        });
+
+        if (success == null)
+            node.reply(replyToNode, replyContext, WaitOnCommitReply.NACK);
     }
 
     @Override
@@ -106,11 +83,21 @@ public class WaitOnCommit extends TxnRequest
         return MessageType.WAIT_ON_COMMIT_REQ;
     }
 
-    public static class WaitOnCommitOk implements Reply
+    public static class WaitOnCommitReply implements Reply
     {
-        public static final WaitOnCommitOk INSTANCE = new WaitOnCommitOk();
+        public static final WaitOnCommitReply OK = new WaitOnCommitReply(true);
+        public static final WaitOnCommitReply NACK = new WaitOnCommitReply(false);
 
-        private WaitOnCommitOk() {}
+        final boolean isOk;
+        private WaitOnCommitReply(boolean isOk)
+        {
+            this.isOk = isOk;
+        }
+
+        public boolean isOk()
+        {
+            return isOk;
+        }
 
         @Override
         public MessageType type()

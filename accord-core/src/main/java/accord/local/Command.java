@@ -414,15 +414,17 @@ public class Command implements Listener, Consumer<Listener>
     }
 
     /**
-     * @param dependency is either committed or has an executeAtExclusiveLowerBound >= our executeAt
+     * @param dependency is either committed or invalidated
      */
     private void updatePredecessor(Command dependency)
     {
+        // TODO (now): this is probably a vestige of when we handled mustExecuteAfter (i.e. we should remove); must also handle Invalidate
         if (!dependency.hasBeen(Committed))
         {
             dependency.removeListener(this);
         }
-        else if (dependency.executeAt.compareTo(executeAt) > 0)
+        else
+        if (dependency.executeAt.compareTo(executeAt) > 0)
         {
             // cannot be a predecessor if we execute later
             dependency.removeListener(this);

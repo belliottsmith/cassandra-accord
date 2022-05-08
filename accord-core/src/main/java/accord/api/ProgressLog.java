@@ -2,6 +2,8 @@ package accord.api;
 
 import java.util.Set;
 
+import javax.annotation.Nullable;
+
 import accord.coordinate.CheckOnUncommitted;
 import accord.coordinate.InformHomeOfTxn;
 import accord.local.CommandStore;
@@ -117,5 +119,5 @@ public interface ProgressLog
      *
      * In all other scenarios, the implementation is free to choose its course of action.
      */
-    void waiting(TxnId blockedBy, Key homeKey);
+    void waiting(TxnId blockedBy, @Nullable Key homeKey);
 }

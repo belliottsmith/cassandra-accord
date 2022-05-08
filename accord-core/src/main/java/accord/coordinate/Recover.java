@@ -15,6 +15,7 @@ import accord.txn.Ballot;
 import accord.messages.Callback;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.txn.Dependencies.TxnAndHomeKey;
 import accord.txn.Timestamp;
 import accord.txn.Dependencies;
 import accord.txn.Txn;
@@ -23,7 +24,7 @@ import accord.messages.BeginRecovery;
 import accord.messages.BeginRecovery.RecoverOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.WaitOnCommit;
-import accord.messages.WaitOnCommit.WaitOnCommitOk;
+import accord.messages.WaitOnCommit.WaitOnCommitReply;
 import org.apache.cassandra.utils.concurrent.AsyncPromise;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
@@ -35,21 +36,30 @@ import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedOrLater;
 // TODO: rename to Recover (verb); rename Recover message to not clash
 class Recover extends Propose implements Callback<RecoverReply>
 {
-    class AwaitCommit extends AsyncFuture<Object> implements Callback<WaitOnCommitOk>
+    class AwaitCommit extends AsyncFuture<Object> implements Callback<WaitOnCommitReply>
     {
         final QuorumTracker tracker;
 
-        AwaitCommit(Node node, TxnId txnId, Txn txn)
+        AwaitCommit(Node node, TxnId txnId, Txn txn, Key homeKey)
         {
-            Topologies topologies = node.topology().unsyncForTxn(txn, txnId.epoch);
+            Topologies topologies = node.topology().preciseEpochs(txn, txnId.epoch);
             this.tracker = new QuorumTracker(topologies);
-            node.send(topologies.nodes(), to -> new WaitOnCommit(to, topologies, txnId, txn.keys()), this);
+            node.send(topologies.nodes(), to -> new WaitOnCommit(to, topologies, txnId, txn.keys(), homeKey), this);
         }
 
         @Override
-        public synchronized void onSuccess(Id from, WaitOnCommitOk response)
+        public synchronized void onSuccess(Id from, WaitOnCommitReply reply)
         {
-            if (isDone()) return;
+            if (isDone())
+                return;
+
+            if (!reply.isOk())
+            {
+                Throwable t = new IllegalStateException();
+                t.fillInStackTrace();
+                tryFailure(t);
+                return;
+            }
 
             if (tracker.success(from))
             {
@@ -74,9 +84,9 @@ class Recover extends Propose implements Callback<RecoverReply>
     {
         AtomicInteger remaining = new AtomicInteger(waitOn.size());
         Promise<Object> future = new AsyncPromise<>();
-        for (Map.Entry<TxnId, Txn> e : waitOn)
+        for (Map.Entry<TxnId, TxnAndHomeKey> e : waitOn.deps.entrySet())
         {
-            new AwaitCommit(node, e.getKey(), e.getValue()).addCallback((success, failure) -> {
+            new AwaitCommit(node, e.getKey(), e.getValue().txn, e.getValue().homeKey).addCallback((success, failure) -> {
                 if (future.isDone())
                     return;
                 if (success != null && remaining.decrementAndGet() == 0)
