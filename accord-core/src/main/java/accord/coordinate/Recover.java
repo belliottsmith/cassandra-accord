@@ -36,7 +36,7 @@ import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedOrLater;
 // TODO: rename to Recover (verb); rename Recover message to not clash
 class Recover extends Propose implements Callback<RecoverReply>
 {
-    static class AwaitCommit extends AsyncFuture<Timestamp> implements Callback<WaitOnCommitOk>
+    class AwaitCommit extends AsyncFuture<Timestamp> implements Callback<WaitOnCommitOk>
     {
         // TODO (now): this should use ReadTracker and should terminate on the first successful reply,
         //             propagating the TxnId->ExecuteAt relation, so we can retry recover() without restarting
@@ -65,7 +65,7 @@ class Recover extends Propose implements Callback<RecoverReply>
             if (isDone()) return;
 
             if (tracker.failure(from))
-                tryFailure(new Timeout());
+                tryFailure(new Timeout(txnId, homeKey));
         }
     }
 
@@ -154,7 +154,7 @@ class Recover extends Propose implements Callback<RecoverReply>
 
         if (!response.isOK())
         {
-            tryFailure(new Preempted());
+            tryFailure(new Preempted(txnId, homeKey));
             return;
         }
 
@@ -202,7 +202,10 @@ class Recover extends Propose implements Callback<RecoverReply>
                     trySuccess(new Agreed(txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result));
                     return;
                 case Invalidated:
-                    Commit.commitInvalidate(node, txnId, txn.keys, recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max));
+                    Timestamp invalidateUntil = recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max);
+                    node.withEpoch(invalidateUntil.epoch, () -> {
+                        Commit.commitInvalidate(node, txnId, txn.keys, invalidateUntil);
+                    });
                     node.agent().onInvalidate(node, txn);
                     tryFailure(new Invalidated());
                     return;
@@ -263,6 +266,6 @@ class Recover extends Propose implements Callback<RecoverReply>
             return;
 
         if (tracker.failure(from))
-            tryFailure(new Timeout());
+            tryFailure(new Timeout(txnId, homeKey));
     }
 }

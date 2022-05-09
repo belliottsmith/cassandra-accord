@@ -53,7 +53,7 @@ public class NodeSink implements MessageSink
         }, 100 + random.nextInt(200), TimeUnit.MILLISECONDS);
         parent.pending.add((PendingRunnable) () -> {
             if (callback == callbacks.remove(messageId))
-                callback.onFailure(to, new Timeout());
+                callback.onFailure(to, new Timeout(null, null));
         }, 1000 + random.nextInt(10000), TimeUnit.MILLISECONDS);
     }
 

@@ -72,7 +72,7 @@ class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
 
         if (!reply.isOK())
         {
-            tryFailure(new Preempted());
+            tryFailure(new Preempted(txnId, homeKey));
             return;
         }
 
@@ -115,6 +115,8 @@ class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
         }
         else if (readTracker.hasFailed())
         {
+            if (throwable instanceof Timeout)
+                throwable = ((Timeout) throwable).with(txnId, homeKey);
             tryFailure(throwable);
         }
     }

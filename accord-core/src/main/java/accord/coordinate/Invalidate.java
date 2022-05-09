@@ -182,7 +182,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
             return;
 
         if (preacceptTracker.failure(from))
-            tryFailure(new Timeout());
+            tryFailure(new Timeout(txnId, null));
     }
 
     @Override

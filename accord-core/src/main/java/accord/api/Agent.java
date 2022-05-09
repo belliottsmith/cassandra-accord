@@ -20,11 +20,9 @@ public interface Agent
     void onRecover(Node node, Result success, Throwable fail);
 
     /**
-     * For use by implementations to decide what to do about successfully recovered transactions.
-     * Specifically intended to define if and how they should inform clients of the result.
-     * e.g. in Maelstrom we send the full result directly, in other impls we may simply acknowledge success via the coordinator
+     * For use by implementations to decide what to do about aborted transactions.
      *
-     * Note: may be invoked multiple times in different places
+     * Note: this is not currently guaranteed to be invoked *anywhere*. It may be invoked, or it may not be.
      */
     void onInvalidate(Node node, Txn txn);
 

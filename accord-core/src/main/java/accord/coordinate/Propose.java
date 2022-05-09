@@ -60,7 +60,7 @@ class Propose extends AsyncFuture<Agreed>
             public void onFailure(Id from, Throwable throwable)
             {
                 if (acceptTracker.failure(from))
-                    tryFailure(new Timeout());
+                    tryFailure(new Timeout(txnId, homeKey));
             }
         });
     }
@@ -72,7 +72,7 @@ class Propose extends AsyncFuture<Agreed>
 
         if (!reply.isOK())
         {
-            tryFailure(new Preempted());
+            tryFailure(new Preempted(txnId, homeKey));
             return;
         }
 
@@ -131,7 +131,7 @@ class Propose extends AsyncFuture<Agreed>
 
             if (!reply.isOK())
             {
-                tryFailure(new Preempted());
+                tryFailure(new Preempted(txnId, null));
                 return;
             }
 
@@ -145,7 +145,7 @@ class Propose extends AsyncFuture<Agreed>
         public void onFailure(Id from, Throwable throwable)
         {
             if (acceptTracker.failure(from))
-                tryFailure(new Timeout());
+                tryFailure(new Timeout(txnId, null));
         }
     }
 }

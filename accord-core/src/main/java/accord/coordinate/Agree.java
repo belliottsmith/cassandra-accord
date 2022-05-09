@@ -158,7 +158,7 @@ class Agree extends Propose implements Callback<PreAcceptReply>
             return;
 
         if (tracker.failure(from))
-            tryFailure(new Timeout());
+            tryFailure(new Timeout(txnId, homeKey));
 
         // if no other responses are expected and the slow quorum has been satisfied, proceed
         if (tracker.shouldSlowPathAccept())
@@ -192,7 +192,7 @@ class Agree extends Propose implements Callback<PreAcceptReply>
         if (!receive.isOK())
         {
             // we've been preempted by a recovery coordinator; defer to it, and wait to hear any result
-            tryFailure(new Preempted());
+            tryFailure(new Preempted(txnId, homeKey));
             return;
         }
 

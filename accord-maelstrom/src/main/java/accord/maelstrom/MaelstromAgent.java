@@ -5,6 +5,7 @@ import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Command;
 import accord.txn.Timestamp;
+import accord.txn.Txn;
 
 public class MaelstromAgent implements Agent
 {
@@ -18,6 +19,12 @@ public class MaelstromAgent implements Agent
             MaelstromResult result = (MaelstromResult) success;
             node.reply(result.client, MaelstromReplyContext.contextFor(result.requestId), new MaelstromReply(result.requestId, result));
         }
+    }
+
+    @Override
+    public void onInvalidate(Node node, Txn txn)
+    {
+
     }
 
     @Override
