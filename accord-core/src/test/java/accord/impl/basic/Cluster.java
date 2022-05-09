@@ -40,6 +40,7 @@ public class Cluster implements Scheduler
 
     final Function<Id, Node> lookup;
     final PendingQueue pending;
+    final List<Runnable> onDone = new ArrayList<>();
     final Consumer<Packet> responseSink;
     final Map<Id, NodeSink> sinks = new HashMap<>();
     int clock;
@@ -138,6 +139,11 @@ public class Cluster implements Scheduler
         return result;
     }
 
+    public void onDone(Runnable run)
+    {
+        onDone.add(run);
+    }
+
     @Override
     public void now(Runnable run)
     {
@@ -174,6 +180,9 @@ public class Cluster implements Scheduler
             while ((next = in.get()) != null)
                 sinks.add(next);
 
+            while (sinks.processPending());
+            sinks.onDone.forEach(Runnable::run);
+            sinks.onDone.clear();
             while (sinks.processPending());
             System.out.println();
         }

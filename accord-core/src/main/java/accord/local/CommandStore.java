@@ -45,6 +45,7 @@ public abstract class CommandStore
     {
         KeyRanges at(long epoch);
         KeyRanges since(long epoch);
+        boolean intersects(long epoch, Keys keys);
     }
 
     private final int generation;

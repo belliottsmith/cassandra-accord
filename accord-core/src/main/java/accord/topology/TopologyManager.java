@@ -309,8 +309,8 @@ public class TopologyManager implements ConfigurationService.Listener
 
         int count = (int)(1 + maxEpoch - minEpoch);
         Topologies.Multi topologies = new Topologies.Multi(count);
-        for (int i = 0 ; i < count ; ++i)
-            topologies.add(snapshot.get(minEpoch + count).global.forKeys(keys));
+        for (int i = count - 1 ; i >= 0 ; --i)
+            topologies.add(snapshot.get(minEpoch + i).global().forKeys(keys));
 
         return topologies;
     }
@@ -368,7 +368,7 @@ public class TopologyManager implements ConfigurationService.Listener
 
     public Topologies preciseEpochs(Txn txn, long minEpoch, long maxEpoch)
     {
-        return withUnsyncEpochs(txn.keys(), minEpoch, maxEpoch);
+        return preciseEpochs(txn.keys(), minEpoch, maxEpoch);
     }
 
     public Topology localForEpoch(long epoch)

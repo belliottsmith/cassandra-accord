@@ -44,7 +44,7 @@ public class PreAccept extends TxnRequest.WithUnsync
     public void process(Node node, Id from, ReplyContext replyContext)
     {
         // TODO: verify we handle all of the scope() keys
-        Key progressKey = doNotComputeProgressKey ? null : node.trySelectProgressKey(waitForEpoch(), txn.keys, homeKey);
+        Key progressKey = progressKey(node, homeKey);
         node.reply(from, replyContext, node.mapReduceLocal(scope(), minEpoch, maxEpoch, instance -> {
             // note: this diverges from the paper, in that instead of waiting for JoinShard,
             //       we PreAccept to both old and new topologies and require quorums in both.

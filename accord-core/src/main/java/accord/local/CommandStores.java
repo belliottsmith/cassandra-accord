@@ -311,7 +311,6 @@ public abstract class CommandStores
     {
         return new RangesForEpoch()
         {
-
             @Override
             public KeyRanges at(long epoch)
             {
@@ -322,6 +321,13 @@ public abstract class CommandStores
             public KeyRanges since(long epoch)
             {
                 return current.ranges[generation].rangesSinceEpoch(epoch);
+            }
+
+            @Override
+            public boolean intersects(long epoch, Keys keys)
+            {
+                KeyRanges ranges = at(epoch);
+                return ranges != null && ranges.intersects(keys);
             }
         };
     }

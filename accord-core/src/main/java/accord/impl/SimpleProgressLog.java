@@ -193,6 +193,9 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             if (globalNotPersisted == null)
             {
                 assert node != null && command != null;
+                if (!node.topology().hasEpoch(command.executeAt().epoch))
+                    return;
+
                 globalNotPersisted = new HashSet<>(node.topology().preciseEpochs(command.txn(), command.executeAt().epoch).nodes());
                 if (local == LocalStatus.Done)
                     globalNotPersisted.remove(node.id());
@@ -464,7 +467,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                             break;
                         case Committed:
                         case ReadyToExecute:
-                            Preconditions.checkState(command.hasBeen(Status.Committed));
+                            Preconditions.checkState(command.hasBeen(Status.Committed) || !command.commandStore.ranges().intersects(txnId.epoch, someKeys));
                             if (blockedOn == Status.Committed)
                                 progress = NoneExpected;
                             break;
@@ -787,8 +790,11 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 {
                     SimpleProgressLog.Instance log = ((SimpleProgressLog.Instance)instance.progressLog());
                     State state = log.stateMap.get(txnId);
-                    state.homeState.globalNotPersisted.retainAll(notPersisted);
-                    return new ApplyAndCheckOk(state.homeState.globalNotPersisted);
+                    if (state.homeState.globalNotPersisted != null)
+                    {
+                        state.homeState.globalNotPersisted.retainAll(notPersisted);
+                        return new ApplyAndCheckOk(state.homeState.globalNotPersisted);
+                    }
                 }
                 notPersisted.remove(node.id());
                 return new ApplyAndCheckOk(notPersisted);

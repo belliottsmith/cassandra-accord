@@ -86,7 +86,7 @@ public class BeginInvalidate implements EpochRequest
         @Override
         public String toString()
         {
-            return "InvalidateOk{witnessed:" + txn + ", homeKey:" + homeKey + '}';
+            return toString("InvalidateOk");
         }
     }
 

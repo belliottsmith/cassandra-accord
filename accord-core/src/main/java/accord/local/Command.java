@@ -133,21 +133,24 @@ public class Command implements Listener, Consumer<Listener>
         txn(txn);
         homeKey(homeKey);
         progressKey(progressKey);
-        if (executeAt != null)
-            return;
 
-        Timestamp max = commandStore.maxConflict(txn.keys);
-        // unlike in the Accord paper, we partition shards within a node, so that to ensure a total order we must either:
-        //  - use a global logical clock to issue new timestamps; or
-        //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
-        this.status = PreAccepted;
-        this.executeAt = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch()
-                         ? txnId : commandStore.uniqueNow(max);
+        if (status == NotWitnessed)
+            status = PreAccepted;
 
-        txn.keys().forEach(key -> {
-            if (commandStore.hashIntersects(key))
-                commandStore.commandsForKey(key).register(this);
-        });
+        if (executeAt == null)
+        {
+            Timestamp max = commandStore.maxConflict(txn.keys);
+            // unlike in the Accord paper, we partition shards within a node, so that to ensure a total order we must either:
+            //  - use a global logical clock to issue new timestamps; or
+            //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
+            executeAt = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch()
+                        ? txnId : commandStore.uniqueNow(max);
+
+            txn.keys().forEach(key -> {
+                if (commandStore.hashIntersects(key))
+                    commandStore.commandsForKey(key).register(this);
+            });
+        }
     }
 
     public boolean preaccept(Txn txn, Key homeKey, Key progressKey)
@@ -207,10 +210,10 @@ public class Command implements Listener, Consumer<Listener>
     {
         if (hasBeen(Committed))
         {
-            if (executeAt.equals(this.executeAt))
+            if (executeAt.equals(this.executeAt) && status != Invalidated)
                 return false;
 
-            commandStore.agent().onInconsistentTimestamp(this, this.executeAt, executeAt);
+            commandStore.agent().onInconsistentTimestamp(this, (status == Invalidated ? Timestamp.NONE : this.executeAt), executeAt);
         }
 
         witness(txn, homeKey, progressKey);
@@ -313,10 +316,12 @@ public class Command implements Listener, Consumer<Listener>
         if (this.promised.compareTo(ballot) > 0)
             return false;
 
+        Status status = this.status;
         witness(txn, homeKey, progressKey);
-        this.promised = ballot;
         boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
-        commandStore.progressLog().preaccept(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
+        if (status == NotWitnessed)
+            commandStore.progressLog().preaccept(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
+        this.promised = ballot;
         return true;
     }
 

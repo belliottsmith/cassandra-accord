@@ -7,6 +7,7 @@ import accord.api.Key;
 import accord.api.Result;
 import accord.coordinate.CheckOnCommitted;
 import accord.coordinate.CoordinateFailed;
+import accord.impl.basic.Cluster;
 import accord.impl.basic.Packet;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -44,7 +45,7 @@ public class ListRequest implements Request
             }
             else if (fail instanceof CoordinateFailed)
             {
-                node.scheduler().once(() -> {
+                ((Cluster)node.scheduler()).onDone(() -> {
                     Key homeKey = ((CoordinateFailed) fail).homeKey;
                     TxnId txnId = ((CoordinateFailed) fail).txnId;
                     CheckOnCommitted.checkOnCommitted(node, txnId, homeKey, node.topology().forEpoch(homeKey, txnId.epoch), txnId.epoch)
@@ -52,7 +53,7 @@ public class ListRequest implements Request
                                         if (s.status == Status.Invalidated)
                                             node.reply(client, replyContext, new ListResult(client, ((Packet)replyContext).requestId, null, null, null));
                                     });
-                }, 1L, TimeUnit.DAYS);
+                });
             }
         }
     }

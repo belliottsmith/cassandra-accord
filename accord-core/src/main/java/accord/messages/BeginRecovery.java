@@ -226,7 +226,12 @@ public class BeginRecovery extends TxnRequest
         @Override
         public String toString()
         {
-            return "RecoverOk{" +
+            return toString("RecoverOk");
+        }
+
+        String toString(String kind)
+        {
+            return kind + "{" +
                    "txnId:" + txnId +
                    ", status:" + status +
                    ", accepted:" + accepted +
@@ -247,9 +252,16 @@ public class BeginRecovery extends TxnRequest
             {
                 if (ok.status.hasBeen(Accepted))
                 {
-                    if (max == null) max = ok;
-                    else if (max.status.logicalCompareTo(ok.status) < 0) max = ok;
-                    else if (max.status == ok.status && max.accepted.compareTo(ok.accepted) < 0) max = ok;
+                    if (max == null)
+                    {
+                        max = ok;
+                    }
+                    else
+                    {
+                        int c = max.status.logicalCompareTo(ok.status);
+                        if (c < 0) max = ok;
+                        else if (c == 0 && max.accepted.compareTo(ok.accepted) < 0) max = ok;
+                    }
                 }
             }
             return max;
