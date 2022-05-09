@@ -445,7 +445,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                             progress = Investigating;
                             // TODO: this should instead invalidate the transaction on this shard, which invalidates it for all shards,
                             //       but we need to first support invalidation
-                            debugInvestigating = Invalidate.invalidate(node, new Ballot(node.uniqueNow()), txnId, someKeys, someKey)
+                            debugInvestigating = Invalidate.invalidate(node, txnId, someKeys, someKey)
                                       .addCallback((success2, fail2) -> {
                                           if (progress != Investigating) return;
                                           if (fail2 != null) progress = Expected;

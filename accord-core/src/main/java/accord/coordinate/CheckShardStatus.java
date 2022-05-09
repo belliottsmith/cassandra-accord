@@ -82,11 +82,16 @@ public abstract class CheckShardStatus<T extends CheckStatusOk> extends AsyncFut
             if (tracker.recordReadSuccess(from))
             {
                 if (hasMetSuccessCriteria())
+                {
                     onSuccessCriteriaOrExhaustion();
-                else if (!tracker.hasInFlight() && hasMoreCandidates())
-                    sendMore();
-                else
-                    onSuccessCriteriaOrExhaustion();
+                }
+                else if (!tracker.hasInFlight())
+                {
+                    if (hasMoreCandidates())
+                        sendMore();
+                    else
+                        onSuccessCriteriaOrExhaustion();
+                }
             }
         }
         else

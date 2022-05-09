@@ -51,8 +51,9 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
         this.preacceptTracker = new QuorumShardTracker(shard);
     }
 
-    public static Invalidate invalidate(Node node, Ballot ballot, TxnId txnId, Keys someKeys, Key someKey)
+    public static Invalidate invalidate(Node node, TxnId txnId, Keys someKeys, Key someKey)
     {
+        Ballot ballot = new Ballot(node.uniqueNow());
         Shard shard = node.topology().forEpochIfKnown(someKey, txnId.epoch);
         Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKeys, someKey);
         node.send(shard.nodes, to -> new BeginInvalidate(txnId, someKey, ballot), invalidate);

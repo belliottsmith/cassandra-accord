@@ -129,9 +129,15 @@ class Recover extends Propose implements Callback<RecoverReply>
         this.tracker = new FastPathTracker<>(topologies, ShardTracker[]::new, ShardTracker::new);
     }
 
-    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey)
+    public static Recover recover(Node node, TxnId txnId, Txn txn, Key homeKey)
     {
-        return recover(node, ballot, txnId, txn, homeKey, node.topology().forEpoch(txn, txnId.epoch));
+        return recover(node, txnId, txn, homeKey, node.topology().forEpoch(txn, txnId.epoch));
+    }
+
+    public static Recover recover(Node node, TxnId txnId, Txn txn, Key homeKey, Topologies topologies)
+    {
+        Ballot ballot = new Ballot(node.uniqueNow());
+        return recover(node, ballot, txnId, txn, homeKey, topologies);
     }
 
     public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey, Topologies topologies)

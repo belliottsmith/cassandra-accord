@@ -35,6 +35,6 @@ public class Coordinate
     public static Future<Result> recover(Node node, TxnId txnId, Txn txn, Key homeKey)
     {
         // TODO (now): invoke Execute from Recover instead of wrapping this
-        return andThenExecute(node, Recover.recover(node, new Ballot(node.uniqueNow()), txnId, txn, homeKey));
+        return andThenExecute(node, Recover.recover(node, txnId, txn, homeKey));
     }
 }
