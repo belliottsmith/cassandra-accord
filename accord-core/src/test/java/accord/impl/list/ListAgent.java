@@ -6,6 +6,7 @@ import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Command;
 import accord.txn.Timestamp;
+import accord.txn.Txn;
 
 public class ListAgent implements Agent
 {
@@ -19,6 +20,13 @@ public class ListAgent implements Agent
             ListResult result = (ListResult) success;
             node.reply(result.client, Network.replyCtxFor(result.requestId), result);
         }
+    }
+
+    @Override
+    public void onInvalidate(Node node, Txn txn)
+    {
+        ListQuery query = (ListQuery)txn.query;
+        node.reply(query.client, Network.replyCtxFor(query.requestId), new ListResult(query.client, query.requestId, null, null, null));
     }
 
     @Override

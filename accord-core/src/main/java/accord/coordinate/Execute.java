@@ -90,6 +90,14 @@ class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
     }
 
     @Override
+    public void onSlowResponse(Id from)
+    {
+        Set<Id> readFrom = readTracker.computeMinimalReadSetAndMarkInflight();
+        if (readFrom != null)
+            node.send(readFrom, to -> new ReadData(to, readTracker.topologies(), txnId, txn, homeKey, executeAt), this);
+    }
+
+    @Override
     public void onFailure(Id from, Throwable throwable)
     {
         // try again with another random node

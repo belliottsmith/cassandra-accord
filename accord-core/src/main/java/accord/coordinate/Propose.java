@@ -96,7 +96,7 @@ class Propose extends AsyncFuture<Agreed>
     }
 
     // A special version for proposing the invalidation of a transaction; only needs to succeed on one shard
-    static class Invalidate extends AsyncFuture<Agreed> implements Callback<AcceptReply>
+    static class Invalidate extends AsyncFuture<Void> implements Callback<AcceptReply>
     {
         final Node node;
         final Ballot ballot;

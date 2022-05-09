@@ -16,8 +16,11 @@ import accord.messages.BeginInvalidate.InvalidateNack;
 import accord.messages.BeginInvalidate.InvalidateOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.Callback;
+import accord.messages.Commit;
 import accord.topology.Shard;
 import accord.txn.Ballot;
+import accord.txn.Keys;
+import accord.txn.Txn;
 import accord.txn.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
@@ -31,25 +34,27 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
     final Node node;
     final Ballot ballot;
     final TxnId txnId;
+    final Keys someKeys;
     final Key someKey;
 
     final List<Id> invalidateOksFrom = new ArrayList<>();
     final List<InvalidateOk> invalidateOks = new ArrayList<>();
     final QuorumShardTracker preacceptTracker;
 
-    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, Key someKey)
+    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, Keys someKeys, Key someKey)
     {
         this.node = node;
         this.ballot = ballot;
         this.txnId = txnId;
+        this.someKeys = someKeys;
         this.someKey = someKey;
         this.preacceptTracker = new QuorumShardTracker(shard);
     }
 
-    public static Invalidate invalidate(Node node, Ballot ballot, TxnId txnId, Key someKey)
+    public static Invalidate invalidate(Node node, Ballot ballot, TxnId txnId, Keys someKeys, Key someKey)
     {
         Shard shard = node.topology().forEpochIfKnown(someKey, txnId.epoch);
-        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKey);
+        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKeys, someKey);
         node.send(shard.nodes, to -> new BeginInvalidate(txnId, someKey, ballot), invalidate);
         return invalidate;
     }
@@ -115,8 +120,11 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                         Set<Id> nodes = recover.tracker.topologies().copyOfNodes();
                         for (int i = 0 ; i < invalidateOks.size() ; ++i)
                         {
-                            recover.onSuccess(invalidateOksFrom.get(i), invalidateOks.get(i));
-                            nodes.remove(invalidateOksFrom.get(i));
+                            if (invalidateOks.get(i).executeAt != null)
+                            {
+                                recover.onSuccess(invalidateOksFrom.get(i), invalidateOks.get(i));
+                                nodes.remove(invalidateOksFrom.get(i));
+                            }
                         }
                         recover.start(nodes);
                     });
@@ -142,8 +150,28 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
         // if we have witnessed the transaction, but are able to invalidate, do we want to proceed?
         // Probably simplest to do so, but perhaps better for user if we don't.
         proposeInvalidate(node, ballot, txnId, someKey).addCallback((success, fail) -> {
-            if (fail != null) tryFailure(fail);
-            else trySuccess(Outcome.INVALIDATED);
+            if (fail != null)
+            {
+                tryFailure(fail);
+                return;
+            }
+
+            // TODO (now): error handling in other callbacks
+            try
+            {
+                Txn txn = invalidateOks.stream().map(ok -> ok.txn).reduce(null, (a, b) -> a != null ? a : b);
+                if (txn != null)
+                    node.agent().onInvalidate(node, txn);
+
+                Commit.commitInvalidate(node, txnId, someKeys, txnId);
+                node.forEachLocalSince(someKeys, txnId, instance -> {
+                    instance.command(txnId).commitInvalidate();
+                });
+            }
+            finally
+            {
+                trySuccess(Outcome.INVALIDATED);
+            }
         });
     }
 
@@ -161,6 +189,10 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
     public void accept(Result result, Throwable fail)
     {
         if (fail != null) tryFailure(fail);
-        else trySuccess(Outcome.EXECUTED);
+        else
+        {
+            node.agent().onRecover(node, result, fail);
+            trySuccess(Outcome.EXECUTED);
+        }
     }
 }

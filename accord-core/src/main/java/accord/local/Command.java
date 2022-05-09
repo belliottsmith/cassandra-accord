@@ -4,13 +4,15 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.function.Consumer;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.Key;
 import accord.api.Result;
 import accord.local.Node.Id;
-import accord.messages.Commit.Invalidate;
 import accord.topology.KeyRanges;
 import accord.txn.Ballot;
 import accord.txn.Dependencies;
+import accord.txn.Keys;
 import accord.txn.Timestamp;
 import accord.txn.Txn;
 import accord.txn.TxnId;
@@ -128,20 +130,19 @@ public class Command implements Listener, Consumer<Listener>
     // note: we do not set status = newStatus, we only use it to decide how we register with the retryLog
     private void witness(Txn txn, Key homeKey, Key progressKey)
     {
-        if (hasBeen(PreAccepted))
+        txn(txn);
+        homeKey(homeKey);
+        progressKey(progressKey);
+        if (executeAt != null)
             return;
 
         Timestamp max = commandStore.maxConflict(txn.keys);
         // unlike in the Accord paper, we partition shards within a node, so that to ensure a total order we must either:
         //  - use a global logical clock to issue new timestamps; or
         //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
-        Timestamp witnessed = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch() ? txnId : commandStore.uniqueNow(max);
-
-        txn(txn);
-        homeKey(homeKey);
-        progressKey(progressKey);
-        this.executeAt = witnessed;
         this.status = PreAccepted;
+        this.executeAt = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch()
+                         ? txnId : commandStore.uniqueNow(max);
 
         txn.keys().forEach(key -> {
             if (commandStore.hashIntersects(key))
@@ -243,9 +244,9 @@ public class Command implements Listener, Consumer<Listener>
                 case ReadyToExecute:
                 case Executed:
                 case Applied:
-                case Invalidated:
                     command.addListener(this);
                     updatePredecessor(command);
+                case Invalidated:
                     break;
             }
         }
@@ -386,10 +387,7 @@ public class Command implements Listener, Consumer<Listener>
             BlockedBy blockedBy = blockedBy();
             if (blockedBy != null)
             {
-                Key homeKey = blockedBy.directlyBlockedBy.homeKey();
-                if (homeKey == null)
-                    homeKey = blockedBy.directlyBlocked.deps.homeKey(blockedBy.directlyBlockedBy.txnId());
-                commandStore.progressLog().waiting(blockedBy.directlyBlockedBy.txnId, homeKey);
+                commandStore.progressLog().waiting(blockedBy.txnId, blockedBy.someKeys);
                 return;
             }
             assert waitingOnApply == null;
@@ -418,13 +416,14 @@ public class Command implements Listener, Consumer<Listener>
      */
     private void updatePredecessor(Command dependency)
     {
-        // TODO (now): this is probably a vestige of when we handled mustExecuteAfter (i.e. we should remove); must also handle Invalidate
-        if (!dependency.hasBeen(Committed))
+        Preconditions.checkState(dependency.hasBeen(Committed));
+        if (dependency.hasBeen(Invalidated))
         {
             dependency.removeListener(this);
+            if (waitingOnCommit.remove(dependency.txnId) != null && waitingOnCommit.isEmpty())
+                waitingOnCommit = null;
         }
-        else
-        if (dependency.executeAt.compareTo(executeAt) > 0)
+        else if (dependency.executeAt.compareTo(executeAt) > 0)
         {
             // cannot be a predecessor if we execute later
             dependency.removeListener(this);
@@ -443,13 +442,13 @@ public class Command implements Listener, Consumer<Listener>
     // TEMPORARY: once we can invalidate commands that have not been witnessed on any shard, we do not need to know the home shard
     static class BlockedBy
     {
-        final Command directlyBlocked;
-        final Command directlyBlockedBy;
+        final TxnId txnId;
+        final Keys someKeys;
 
-        BlockedBy(Command directlyBlocked, Command directlyBlockedBy)
+        BlockedBy(TxnId txnId, Keys someKeys)
         {
-            this.directlyBlocked = directlyBlocked;
-            this.directlyBlockedBy = directlyBlockedBy;
+            this.txnId = txnId;
+            this.someKeys = someKeys;
         }
     }
 
@@ -467,7 +466,10 @@ public class Command implements Listener, Consumer<Listener>
             cur = next;
         }
 
-        return new BlockedBy(prev, cur);
+        Keys someKeys = cur.someKeys();
+        if (someKeys == null)
+            someKeys = prev.deps.get(cur.txnId).keys;
+        return new BlockedBy(cur.txnId, someKeys);
     }
 
     /**
@@ -492,12 +494,23 @@ public class Command implements Listener, Consumer<Listener>
         else if (!this.homeKey.equals(homeKey)) throw new AssertionError();
     }
 
+    public Keys someKeys()
+    {
+        if (txn != null)
+            return txn.keys;
+
+        return null;
+    }
+
     public Key someKey()
     {
         if (homeKey != null)
             return homeKey;
 
-        return txn.keys.get(0);
+        if (txn.keys != null)
+            return txn.keys.get(0);
+
+        return null;
     }
 
     /**

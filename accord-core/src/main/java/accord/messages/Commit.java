@@ -3,6 +3,8 @@ package accord.messages;
 import java.util.Collections;
 import java.util.Set;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.Key;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -71,6 +73,21 @@ public class Commit extends ReadData
         commit(node, commitTo, Collections.emptySet(), txnId, txn, homeKey, executeAt, deps);
     }
 
+    public static void commitInvalidate(Node node, TxnId txnId, Keys someKeys, Timestamp until)
+    {
+        Topologies commitTo = node.topology().preciseEpochs(someKeys, txnId.epoch, until.epoch);
+        commitInvalidate(node, commitTo, txnId, someKeys);
+    }
+
+    public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, Keys someKeys)
+    {
+        for (Node.Id to : commitTo.nodes())
+        {
+            Invalidate send = new Invalidate(to, commitTo, txnId, someKeys);
+            node.send(to, send);
+        }
+    }
+
     public void process(Node node, Id from, ReplyContext replyContext)
     {
         Key progressKey = node.trySelectProgressKey(txnId, txn.keys, homeKey);
@@ -100,6 +117,7 @@ public class Commit extends ReadData
     public static class Invalidate extends TxnRequest
     {
         final TxnId txnId;
+
         public Invalidate(Id to, Topologies topologies, TxnId txnId, Keys someKeys)
         {
             super(to, topologies, someKeys);

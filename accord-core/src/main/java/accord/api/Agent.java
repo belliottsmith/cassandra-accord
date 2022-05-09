@@ -3,13 +3,13 @@ package accord.api;
 import accord.local.Node;
 import accord.local.Command;
 import accord.txn.Timestamp;
+import accord.txn.Txn;
 
 /**
  * Facility for augmenting node behaviour at specific points
  */
 public interface Agent
 {
-
     /**
      * For use by implementations to decide what to do about successfully recovered transactions.
      * Specifically intended to define if and how they should inform clients of the result.
@@ -18,6 +18,15 @@ public interface Agent
      * Note: may be invoked multiple times in different places
      */
     void onRecover(Node node, Result success, Throwable fail);
+
+    /**
+     * For use by implementations to decide what to do about successfully recovered transactions.
+     * Specifically intended to define if and how they should inform clients of the result.
+     * e.g. in Maelstrom we send the full result directly, in other impls we may simply acknowledge success via the coordinator
+     *
+     * Note: may be invoked multiple times in different places
+     */
+    void onInvalidate(Node node, Txn txn);
 
     /**
      * For use by implementations to decide what to do about timestamp inconsistency, i.e. two different timestamps

@@ -14,6 +14,7 @@ import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.*;
 import accord.coordinate.Coordinate;
+import accord.coordinate.MaybeRecover;
 import accord.messages.*;
 
 import javax.annotation.Nullable;
@@ -26,6 +27,7 @@ import accord.api.ProgressLog;
 import accord.api.Scheduler;
 import accord.api.DataStore;
 import accord.messages.Callback;
+import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.messages.Reply;
@@ -454,22 +456,31 @@ public class Node implements ConfigurationService.Listener
     // TODO: encapsulate in Coordinate, so we can request that e.g. commits be re-sent?
     public Future<Result> recover(TxnId txnId, Txn txn, Key homeKey)
     {
-        return withEpoch(txnId.epoch, () -> {
-            {
-                 Future<Result> result = coordinating.get(txnId);
-                 if (result != null)
-                     return result;
-            }
+        {
+            Future<Result> result = coordinating.get(txnId);
+            if (result != null)
+                return result;
+        }
 
-            Future<Result> result = Coordinate.recover(this, txnId, txn, homeKey);
-            coordinating.putIfAbsent(txnId, result);
-            result.addCallback((success, fail) -> {
-                coordinating.remove(txnId, result);
-                agent.onRecover(this, success, fail);
-                // TODO: if we fail, nominate another node to try instead
-            });
-            return result;
+        Future<Result> result = withEpoch(txnId.epoch, () -> Coordinate.recover(this, txnId, txn, homeKey));
+        coordinating.putIfAbsent(txnId, result);
+        result.addCallback((success, fail) -> {
+            coordinating.remove(txnId, result);
+            agent.onRecover(this, success, fail);
+            // TODO: if we fail, nominate another node to try instead
         });
+        return result;
+    }
+
+    // TODO: coalesce other maybeRecover calls also? perhaps have mutable knownStatuses so we can inject newer ones?
+    public Future<CheckStatusOk> maybeRecover(TxnId txnId, Txn txn, Key homeKey, Shard homeShard, long homeEpoch,
+                                              Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
+    {
+        Future<Result> result = coordinating.get(txnId);
+        if (result != null)
+            return result.map(r -> null);
+
+        return MaybeRecover.maybeRecover(this, txnId, txn, homeKey, homeShard, homeEpoch, knownStatus, knownPromised, knownPromiseHasBeenAccepted);
     }
 
     public void receive(Request request, Id from, ReplyContext replyContext)

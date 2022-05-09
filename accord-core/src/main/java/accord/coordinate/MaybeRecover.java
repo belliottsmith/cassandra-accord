@@ -4,14 +4,12 @@ import java.util.function.BiConsumer;
 
 import accord.api.Key;
 import accord.local.Node;
-import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.Commit;
 import accord.topology.Shard;
-import accord.topology.Topologies;
 import accord.txn.Ballot;
 import accord.txn.Txn;
 import accord.txn.TxnId;
@@ -25,13 +23,15 @@ import static accord.local.Status.Accepted;
  */
 public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object, Throwable>
 {
+    final Txn txn;
     final Status knownStatus;
     final Ballot knownPromised;
     final boolean knownPromisedHasBeenAccepted;
 
     MaybeRecover(Node node, TxnId txnId, Txn txn, Key homeKey, Shard homeShard, long homeEpoch, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
     {
-        super(node, txnId, txn, homeKey, homeShard, homeEpoch, IncludeInfo.OnlyIfExecuted);
+        super(node, txnId, homeKey, homeShard, homeEpoch, IncludeInfo.OnlyIfExecuted);
+        this.txn = txn;
         this.knownStatus = knownStatus;
         this.knownPromised = knownPromised;
         this.knownPromisedHasBeenAccepted = knownPromiseHasBeenAccepted;
@@ -58,7 +58,6 @@ public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object,
                                || (!knownPromisedHasBeenAccepted && knownStatus == Accepted && max.accepted.equals(knownPromised)));
     }
 
-    // TODO: invoke from {node} so we may have mutual exclusion with other attempts to recover or coordinate
     public static Future<CheckStatusOk> maybeRecover(Node node, TxnId txnId, Txn txn, Key homeKey, Shard homeShard, long homeEpoch,
                                                                Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
     {
@@ -84,7 +83,7 @@ public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object,
                 }
                 else
                 {
-                    node.recover(txnId, txn, key)
+                    node.recover(txnId, txn, someKey)
                         .addCallback(this);
                 }
                 break;
@@ -94,7 +93,7 @@ public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object,
                 CheckStatusOkFull full = (CheckStatusOkFull) max;
                 if (!max.hasExecutedOnAllShards)
                 {
-                    Persist.persistAndCommit(node, txnId, key, txn, full.executeAt, full.deps, full.writes, full.result)
+                    Persist.persistAndCommit(node, txnId, someKey, txn, full.executeAt, full.deps, full.writes, full.result)
                            .addCallback(this);
                 }
                 else

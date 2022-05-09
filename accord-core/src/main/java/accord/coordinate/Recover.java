@@ -9,13 +9,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import accord.api.Key;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.QuorumTracker;
+import accord.messages.Commit;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.txn.Ballot;
 import accord.messages.Callback;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.txn.Dependencies.TxnAndHomeKey;
 import accord.txn.Timestamp;
 import accord.txn.Dependencies;
 import accord.txn.Txn;
@@ -24,7 +24,7 @@ import accord.messages.BeginRecovery;
 import accord.messages.BeginRecovery.RecoverOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.WaitOnCommit;
-import accord.messages.WaitOnCommit.WaitOnCommitReply;
+import accord.messages.WaitOnCommit.WaitOnCommitOk;
 import org.apache.cassandra.utils.concurrent.AsyncPromise;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
@@ -36,38 +36,27 @@ import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedOrLater;
 // TODO: rename to Recover (verb); rename Recover message to not clash
 class Recover extends Propose implements Callback<RecoverReply>
 {
-    class AwaitCommit extends AsyncFuture<Object> implements Callback<WaitOnCommitReply>
+    static class AwaitCommit extends AsyncFuture<Timestamp> implements Callback<WaitOnCommitOk>
     {
+        // TODO (now): this should use ReadTracker and should terminate on the first successful reply,
+        //             propagating the TxnId->ExecuteAt relation, so we can retry recover() without restarting
+        //             if it has been committed with an earlier executeAt than our txnId, or restart otherwise
         final QuorumTracker tracker;
 
-        AwaitCommit(Node node, TxnId txnId, Txn txn, Key homeKey)
+        AwaitCommit(Node node, TxnId txnId, Txn txn)
         {
             Topologies topologies = node.topology().preciseEpochs(txn, txnId.epoch);
             this.tracker = new QuorumTracker(topologies);
-            node.send(topologies.nodes(), to -> new WaitOnCommit(to, topologies, txnId, txn.keys(), homeKey), this);
+            node.send(topologies.nodes(), to -> new WaitOnCommit(to, topologies, txnId, txn.keys()), this);
         }
 
         @Override
-        public synchronized void onSuccess(Id from, WaitOnCommitReply reply)
+        public synchronized void onSuccess(Id from, WaitOnCommitOk response)
         {
-            if (isDone())
-                return;
-
-            if (!reply.isOk())
-            {
-                Throwable t = new IllegalStateException();
-                t.fillInStackTrace();
-                tryFailure(t);
-                return;
-            }
+            if (isDone()) return;
 
             if (tracker.success(from))
-            {
-                new Recover(node, ballot, txnId, txn, homeKey).addCallback((success, failure) -> {
-                    if (success != null) trySuccess(success);
-                    else tryFailure(failure);
-                });
-            }
+                trySuccess(null);
         }
 
         @Override
@@ -84,9 +73,9 @@ class Recover extends Propose implements Callback<RecoverReply>
     {
         AtomicInteger remaining = new AtomicInteger(waitOn.size());
         Promise<Object> future = new AsyncPromise<>();
-        for (Map.Entry<TxnId, TxnAndHomeKey> e : waitOn.deps.entrySet())
+        for (Map.Entry<TxnId, Txn> e : waitOn)
         {
-            new AwaitCommit(node, e.getKey(), e.getValue().txn, e.getValue().homeKey).addCallback((success, failure) -> {
+            new AwaitCommit(node, e.getKey(), e.getValue()).addCallback((success, failure) -> {
                 if (future.isDone())
                     return;
                 if (success != null && remaining.decrementAndGet() == 0)
@@ -199,7 +188,11 @@ class Recover extends Propose implements Callback<RecoverReply>
                 case AcceptedInvalidate:
                     proposeInvalidate(node, ballot, txnId, homeKey).addCallback((success, fail) -> {
                         if (fail != null) tryFailure(fail);
-                        else tryFailure(new Invalidated());
+                        else
+                        {
+                            tryFailure(new Invalidated());
+                            Commit.commitInvalidate(node, txnId, txn.keys, recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max));
+                        }
                     });
                     return;
                 case Committed:
@@ -209,6 +202,8 @@ class Recover extends Propose implements Callback<RecoverReply>
                     trySuccess(new Agreed(txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result));
                     return;
                 case Invalidated:
+                    Commit.commitInvalidate(node, txnId, txn.keys, recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max));
+                    node.agent().onInvalidate(node, txn);
                     tryFailure(new Invalidated());
                     return;
             }
@@ -240,8 +235,8 @@ class Recover extends Propose implements Callback<RecoverReply>
             if (!earlierAcceptedNoWitness.isEmpty())
             {
                 awaitCommits(node, earlierAcceptedNoWitness).addCallback((success, failure) -> {
-                    if (success != null) retry();
-                    else tryFailure(new Timeout());
+                    if (failure != null) tryFailure(failure);
+                    else retry();
                 });
                 return;
             }

@@ -5,6 +5,7 @@ import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Command;
 import accord.txn.Timestamp;
+import accord.txn.Txn;
 
 public class TestAgent implements Agent
 {
@@ -14,6 +15,11 @@ public class TestAgent implements Agent
         // do nothing, intended for use by implementations to decide what to do about recovered transactions
         // specifically if and how they should inform clients of the result
         // e.g. in Maelstrom we send the full result directly, in other impls we may simply acknowledge success via the coordinator
+    }
+
+    @Override
+    public void onInvalidate(Node node, Txn txn)
+    {
     }
 
     @Override

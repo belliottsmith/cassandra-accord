@@ -35,14 +35,13 @@ public class BeginInvalidate implements EpochRequest
             Command command = instance.command(txnId);
 
             if (!command.preAcceptInvalidate(ballot))
-                return new RecoverNack(command.promised());
+                return new InvalidateNack(command.promised(), command.txn(), command.homeKey());
 
-            Dependencies deps = command.status() == Status.Accepted ? command.savedDeps() : null;
-            return new RecoverOk(txnId, command.status(), command.accepted(), command.executeAt(), deps,
-                                 null, null, false, command.writes(), command.result());
+            return new InvalidateOk(txnId, command.status(), command.accepted(), command.executeAt(), command.savedDeps(),
+                                    command.writes(), command.result(), command.txn(), command.homeKey());
         });
 
-
+        node.reply(replyToNode, replyContext, reply);
     }
 
     @Override
