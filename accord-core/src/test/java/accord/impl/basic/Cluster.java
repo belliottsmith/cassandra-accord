@@ -109,9 +109,22 @@ public class Cluster implements Scheduler
             {
                 Reply reply = (Reply) deliver.message;
                 Callback callback = reply.isFinal() ? sinks.get(deliver.dst).callbacks.remove(deliver.replyId)
-                        : sinks.get(deliver.dst).callbacks.get(deliver.replyId);
+                                                    : sinks.get(deliver.dst).callbacks.get(deliver.replyId);
+
                 if (callback != null)
-                    on.scheduler().now(() -> callback.onSuccess(deliver.src, reply));
+                {
+                    on.scheduler().now(() -> {
+                        try
+                        {
+                            callback.onSuccess(deliver.src, reply);
+                        }
+                        catch (Throwable t)
+                        {
+                            callback.onCallbackFailure(t);
+                            on.agent().onUncaughtException(t);
+                        }
+                    });
+                }
             }
             else on.receive((Request) deliver.message, deliver.src, deliver);
         }

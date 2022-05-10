@@ -112,11 +112,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                 case Accepted:
                     node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
                         Recover recover = new Recover(node, ballot, txnId, acceptOrCommit.txn, acceptOrCommit.homeKey);
-                        recover.addCallback((success, fail) -> {
-                            if (fail != null) tryFailure(fail);
-                            else Execute.execute(node, success)
-                                        .addCallback(this);
-                        });
+                        recover.addCallback(this);
 
                         Set<Id> nodes = recover.tracker.topologies().copyOfNodes();
                         for (int i = 0 ; i < invalidateOks.size() ; ++i)
@@ -134,12 +130,17 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                     break; // latest accept also invalidating, so we're on the same page and should finish our invalidation
                 case Committed:
                 case ReadyToExecute:
+                    node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
+                        Execute.execute(node, txnId, acceptOrCommit.txn, acceptOrCommit.homeKey, acceptOrCommit.executeAt,
+                                        acceptOrCommit.deps, this);
+                    });
+                    return;
                 case Executed:
                 case Applied:
                     node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
-                        Execute.execute(node, new Agreed(txnId, acceptOrCommit.txn, acceptOrCommit.homeKey, acceptOrCommit.executeAt,
-                                                         acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result))
-                               .addCallback(this);
+                        Persist.persistAndCommit(node, txnId, acceptOrCommit.homeKey, acceptOrCommit.txn, acceptOrCommit.executeAt,
+                                        acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result);
+                        trySuccess(Outcome.EXECUTED);
                     });
                     return;
                 case Invalidated:
@@ -177,7 +178,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
     }
 
     @Override
-    public void onFailure(Id from, Throwable throwable)
+    public void onFailure(Id from, Throwable failure)
     {
         if (isDone())
             return;
@@ -187,9 +188,19 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
     }
 
     @Override
+    public void onCallbackFailure(Throwable failure)
+    {
+        tryFailure(failure);
+    }
+
+    @Override
     public void accept(Result result, Throwable fail)
     {
-        if (fail != null) tryFailure(fail);
+        if (fail != null)
+        {
+            if (fail instanceof Invalidated) trySuccess(Outcome.INVALIDATED);
+            else tryFailure(fail);
+        }
         else
         {
             node.agent().onRecover(node, result, fail);

@@ -5,8 +5,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 import accord.api.Key;
+import accord.api.Result;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.messages.Commit;
@@ -34,13 +36,13 @@ import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedOrLater;
 
 // TODO: rename to Recover (verb); rename Recover message to not clash
-class Recover extends Propose implements Callback<RecoverReply>
+public class Recover extends AsyncFuture<Result> implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
     class AwaitCommit extends AsyncFuture<Timestamp> implements Callback<WaitOnCommitOk>
     {
-        // TODO (now): this should use ReadTracker and should terminate on the first successful reply,
-        //             propagating the TxnId->ExecuteAt relation, so we can retry recover() without restarting
-        //             if it has been committed with an earlier executeAt than our txnId, or restart otherwise
+        // TODO: this should collect the executeAt of any commit, and terminate as soon as one is found
+        //       that is earlier than TxnId for the Txn we are recovering; if all commits we wait for
+        //       are given earlier timestamps we can retry without restarting.
         final QuorumTracker tracker;
 
         AwaitCommit(Node node, TxnId txnId, Txn txn)
@@ -60,12 +62,18 @@ class Recover extends Propose implements Callback<RecoverReply>
         }
 
         @Override
-        public synchronized void onFailure(Id from, Throwable throwable)
+        public synchronized void onFailure(Id from, Throwable failure)
         {
             if (isDone()) return;
 
             if (tracker.failure(from))
                 tryFailure(new Timeout(txnId, homeKey));
+        }
+
+        @Override
+        public void onCallbackFailure(Throwable failure)
+        {
+            tryFailure(failure);
         }
     }
 
@@ -114,6 +122,12 @@ class Recover extends Propose implements Callback<RecoverReply>
         }
     }
 
+    final Node node;
+    final Ballot ballot;
+    final TxnId txnId;
+    final Txn txn;
+    final Key homeKey;
+
     final List<RecoverOk> recoverOks = new ArrayList<>();
     final FastPathTracker<ShardTracker> tracker;
 
@@ -124,9 +138,20 @@ class Recover extends Propose implements Callback<RecoverReply>
 
     private Recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey, Topologies topologies)
     {
-        super(node, ballot, txnId, txn, homeKey);
+        this.node = node;
+        this.ballot = ballot;
+        this.txnId = txnId;
+        this.txn = txn;
+        this.homeKey = homeKey;
         assert topologies.oldestEpoch() == topologies.currentEpoch() && topologies.currentEpoch() == txnId.epoch;
         this.tracker = new FastPathTracker<>(topologies, ShardTracker[]::new, ShardTracker::new);
+    }
+
+    @Override
+    public void accept(Result result, Throwable failure)
+    {
+        if (result != null) trySuccess(result);
+        else tryFailure(failure);
     }
 
     public static Recover recover(Node node, TxnId txnId, Txn txn, Key homeKey)
@@ -164,13 +189,21 @@ class Recover extends Propose implements Callback<RecoverReply>
             return;
         }
 
-        RecoverOk ok = (RecoverOk) response;
-        recoverOks.add(ok);
-        boolean fastPath = ok.executeAt.compareTo(txnId) == 0;
-        tracker.recordSuccess(from, fastPath);
+        try
+        {
+            RecoverOk ok = (RecoverOk) response;
+            recoverOks.add(ok);
+            boolean fastPath = ok.executeAt.compareTo(txnId) == 0;
+            tracker.recordSuccess(from, fastPath);
 
-        if (tracker.hasReachedQuorum())
-            recover();
+            if (tracker.hasReachedQuorum())
+                recover();
+        }
+        catch (Throwable t)
+        {
+            tryFailure(t);
+            node.agent().onUncaughtException(t);
+        }
     }
 
     private void recover()
@@ -184,11 +217,11 @@ class Recover extends Propose implements Callback<RecoverReply>
                 default: throw new IllegalStateException();
                 case NotWitnessed:
                 case PreAccepted:
-                    throw new IllegalStateException("Should only be possible to have Accepter or later commands");
+                    throw new IllegalStateException("Should only be possible to have Accepted or later commands");
                 case Accepted:
+                    // TODO (now): do we need to do a preaccept round for the later epoch?
                     node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
-                        Topologies topologies = node.topology().forTxn(txn, txnId, acceptOrCommit.executeAt);
-                        startAccept(acceptOrCommit.executeAt, acceptOrCommit.deps, topologies);
+                        Propose.propose(node, ballot, txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
                     });
                     return;
                 case AcceptedInvalidate:
@@ -203,9 +236,12 @@ class Recover extends Propose implements Callback<RecoverReply>
                     return;
                 case Committed:
                 case ReadyToExecute:
+                    Execute.execute(node, txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
+                    return;
                 case Executed:
                 case Applied:
-                    trySuccess(new Agreed(txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result));
+                    Persist.persistAndCommit(node, txnId, homeKey, txn, acceptOrCommit.executeAt, acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result);
+                    trySuccess(acceptOrCommit.result);
                     return;
                 case Invalidated:
                     Timestamp invalidateUntil = recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max);
@@ -253,7 +289,7 @@ class Recover extends Propose implements Callback<RecoverReply>
         }
 
         node.withEpoch(executeAt.epoch, () -> {
-            startAccept(executeAt, deps, node.topology().forTxn(txn, txnId, executeAt));
+            Propose.propose(node, ballot, txnId, txn, homeKey, executeAt, deps, this);
         });
     }
 
@@ -266,12 +302,18 @@ class Recover extends Propose implements Callback<RecoverReply>
     }
 
     @Override
-    public void onFailure(Id from, Throwable throwable)
+    public void onFailure(Id from, Throwable failure)
     {
         if (isDone())
             return;
 
         if (tracker.failure(from))
             tryFailure(new Timeout(txnId, homeKey));
+    }
+
+    @Override
+    public void onCallbackFailure(Throwable failure)
+    {
+        tryFailure(failure);
     }
 }

@@ -15,7 +15,6 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.api.*;
 import accord.coordinate.Coordinate;
 import accord.coordinate.MaybeRecover;
-import accord.messages.*;
 
 import javax.annotation.Nullable;
 
@@ -26,6 +25,7 @@ import accord.api.Result;
 import accord.api.ProgressLog;
 import accord.api.Scheduler;
 import accord.api.DataStore;
+import accord.coordinate.Recover;
 import accord.messages.Callback;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.ReplyContext;
@@ -405,7 +405,7 @@ public class Node implements ConfigurationService.Listener
             homeKey = selectRandomHomeKey(txnId);
             txn = new Txn(txn.keys.with(homeKey), txn.read, txn.query, txn.update);
         }
-        return Coordinate.execute(this, txnId, txn, homeKey);
+        return Coordinate.coordinate(this, txnId, txn, homeKey);
     }
 
     @VisibleForTesting
@@ -462,7 +462,7 @@ public class Node implements ConfigurationService.Listener
                 return result;
         }
 
-        Future<Result> result = withEpoch(txnId.epoch, () -> Coordinate.recover(this, txnId, txn, homeKey));
+        Future<Result> result = withEpoch(txnId.epoch, () -> Recover.recover(this, txnId, txn, homeKey));
         coordinating.putIfAbsent(txnId, result);
         result.addCallback((success, fail) -> {
             coordinating.remove(txnId, result);

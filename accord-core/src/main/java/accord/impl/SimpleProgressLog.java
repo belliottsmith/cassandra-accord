@@ -763,10 +763,16 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         }
 
         @Override
-        public void onFailure(Id from, Throwable throwable)
+        public void onFailure(Id from, Throwable failure)
         {
             if (waitingOnResponses.remove(from) && waitingOnResponses.isEmpty())
                 trySuccess(null);
+        }
+
+        @Override
+        public void onCallbackFailure(Throwable failure)
+        {
+            tryFailure(failure);
         }
     }
 

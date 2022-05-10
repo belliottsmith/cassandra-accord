@@ -32,4 +32,10 @@ public class MaelstromAgent implements Agent
     {
         throw new AssertionError();
     }
+
+    @Override
+    public void onUncaughtException(Throwable t)
+    {
+
+    }
 }

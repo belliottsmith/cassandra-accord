@@ -151,6 +151,8 @@ public class BeginRecovery extends TxnRequest
         node.reply(replyToNode, replyContext, reply);
         if (reply instanceof RecoverOk && ((RecoverOk) reply).status == Applied)
         {
+            // TODO: this should be a call to the node's agent for the implementation to decide what to do;
+            //       probably at most want to disseminate to local replicas, or notify the progress log
             RecoverOk ok = (RecoverOk) reply;
             Preconditions.checkArgument(ok.status == Applied);
             node.withEpoch(ok.executeAt.epoch, () -> {
@@ -159,10 +161,6 @@ public class BeginRecovery extends TxnRequest
         }
     }
 
-    private void disseminateApply(Node node, RecoverOk ok)
-    {
-    }
-    
     @Override
     public MessageType type()
     {

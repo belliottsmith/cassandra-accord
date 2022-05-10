@@ -34,4 +34,6 @@ public interface Agent
      */
     void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next);
 
+    void onUncaughtException(Throwable t);
+
 }

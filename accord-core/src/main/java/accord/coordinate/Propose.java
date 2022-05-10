@@ -2,8 +2,10 @@ package accord.coordinate;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import accord.api.Key;
+import accord.api.Result;
 import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.topology.Shard;
@@ -21,7 +23,7 @@ import accord.messages.Accept.AcceptOk;
 import accord.messages.Accept.AcceptReply;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
-class Propose extends AsyncFuture<Agreed>
+class Propose implements Callback<AcceptReply>
 {
     final Node node;
     final Ballot ballot;
@@ -29,50 +31,49 @@ class Propose extends AsyncFuture<Agreed>
     final Txn txn;
     final Key homeKey;
 
-    private List<AcceptOk> acceptOks;
-    private Timestamp proposed;
-    private QuorumTracker acceptTracker;
+    private final List<AcceptOk> acceptOks;
+    private final Timestamp executeAt;
+    private final QuorumTracker acceptTracker;
+    private final BiConsumer<Result, Throwable> callback;
+    private boolean isDone;
 
-    Propose(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey)
+    Propose(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, BiConsumer<Result, Throwable> callback)
     {
         this.node = node;
         this.ballot = ballot;
         this.txnId = txnId;
         this.txn = txn;
         this.homeKey = homeKey;
-    }
-
-    protected void startAccept(Timestamp executeAt, Dependencies deps, Topologies topologies)
-    {
-        this.proposed = executeAt;
+        this.executeAt = executeAt;
+        this.callback = callback;
         this.acceptOks = new ArrayList<>();
         this.acceptTracker = new QuorumTracker(topologies);
-        // TODO: acceptTracker should be a callback itself, with a reference to us for propagating failure
-        node.send(acceptTracker.nodes(), to -> new Accept(to, topologies, ballot, txnId, homeKey, txn, executeAt, deps), new Callback<AcceptReply>()
-        {
-            @Override
-            public void onSuccess(Id from, AcceptReply response)
-            {
-                onAccept(from, response);
-            }
-
-            @Override
-            public void onFailure(Id from, Throwable throwable)
-            {
-                if (acceptTracker.failure(from))
-                    tryFailure(new Timeout(txnId, homeKey));
-            }
-        });
     }
 
-    private void onAccept(Id from, AcceptReply reply)
+    public static void propose(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey,
+                               Timestamp executeAt, Dependencies dependencies, BiConsumer<Result, Throwable> callback)
     {
-        if (isDone())
+        Topologies topologies = node.topology().withUnsyncEpochs(txn, txnId, executeAt);
+        propose(node, topologies, ballot, txnId, txn, homeKey, executeAt, dependencies, callback);
+    }
+
+    public static void propose(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, Key homeKey,
+                               Timestamp executeAt, Dependencies dependencies, BiConsumer<Result, Throwable> callback)
+    {
+        Propose propose = new Propose(node, topologies, ballot, txnId, txn, homeKey, executeAt, callback);
+        node.send(propose.acceptTracker.nodes(), to -> new Accept(to, topologies, ballot, txnId, homeKey, txn, executeAt, dependencies), propose);
+    }
+
+    @Override
+    public void onSuccess(Id from, AcceptReply reply)
+    {
+        if (isDone)
             return;
 
         if (!reply.isOK())
         {
-            tryFailure(new Preempted(txnId, homeKey));
+            isDone = true;
+            callback.accept(null, new Preempted(txnId, homeKey));
             return;
         }
 
@@ -82,17 +83,31 @@ class Propose extends AsyncFuture<Agreed>
             onAccepted();
     }
 
+    @Override
+    public void onFailure(Id from, Throwable failure)
+    {
+        if (acceptTracker.failure(from))
+        {
+            isDone = true;
+            callback.accept(null, new Timeout(txnId, homeKey));
+        }
+    }
+
+    @Override
+    public void onCallbackFailure(Throwable failure)
+    {
+        isDone = true;
+        callback.accept(null, failure);
+    }
+
     private void onAccepted()
     {
+        isDone = true;
         Dependencies deps = new Dependencies();
         for (AcceptOk acceptOk : acceptOks)
             deps.addAll(acceptOk.deps);
-        agreed(proposed, deps);
-    }
 
-    protected void agreed(Timestamp executeAt, Dependencies deps)
-    {
-        trySuccess(new Agreed(txnId, txn, homeKey, executeAt, deps, null, null));
+        Execute.execute(node, txnId, txn, homeKey, executeAt, deps, callback);
     }
 
     // A special version for proposing the invalidation of a transaction; only needs to succeed on one shard
@@ -103,7 +118,6 @@ class Propose extends AsyncFuture<Agreed>
         final TxnId txnId;
         final Key someKey;
 
-        private final List<AcceptOk> acceptOks = new ArrayList<>();
         private final QuorumShardTracker acceptTracker;
 
         Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, Key someKey)
@@ -135,17 +149,21 @@ class Propose extends AsyncFuture<Agreed>
                 return;
             }
 
-            AcceptOk ok = (AcceptOk) reply;
-            acceptOks.add(ok);
             if (acceptTracker.success(from))
                 trySuccess(null);
         }
 
         @Override
-        public void onFailure(Id from, Throwable throwable)
+        public void onFailure(Id from, Throwable failure)
         {
             if (acceptTracker.failure(from))
                 tryFailure(new Timeout(txnId, null));
+        }
+
+        @Override
+        public void onCallbackFailure(Throwable failure)
+        {
+            tryFailure(failure);
         }
     }
 }

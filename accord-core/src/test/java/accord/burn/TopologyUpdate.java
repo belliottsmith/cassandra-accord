@@ -155,7 +155,7 @@ public class TopologyUpdate
     {
         Topology syncTopology = node.configService().getTopologyForEpoch(syncEpoch);
         Topology localTopology = syncTopology.forNode(node.id());
-        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().forTxn(cmd.txn, syncEpoch).nodes();
+        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().withUnsyncEpochs(cmd.txn, syncEpoch).nodes();
 
         KeyRanges ranges = localTopology.ranges();
         Stream<MessageTask> messageStream = Stream.empty();
@@ -176,7 +176,7 @@ public class TopologyUpdate
         Topology localTopology = syncTopology.forNode(node.id());
         Topology nextTopology = node.configService().getTopologyForEpoch(nextEpoch);
         Function<CommandSync, Collection<Node.Id>> nextNodes = cmd -> allNodesFor(cmd.txn, nextTopology);
-        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().forTxn(cmd.txn, syncEpoch).nodes();
+        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().withUnsyncEpochs(cmd.txn, syncEpoch).nodes();
 
         // backfill new replicas with operations from prior epochs
         Stream<MessageTask> messageStream = Stream.empty();

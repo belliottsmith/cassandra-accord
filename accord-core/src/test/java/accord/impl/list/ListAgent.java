@@ -34,4 +34,10 @@ public class ListAgent implements Agent
     {
         throw new AssertionError("Inconsistent execution timestamp detected for txnId " + command.txnId() + ": " + prev + " != " + next);
     }
+
+    @Override
+    public void onUncaughtException(Throwable t)
+    {
+        // TODO (now): ensure reported to runner
+    }
 }

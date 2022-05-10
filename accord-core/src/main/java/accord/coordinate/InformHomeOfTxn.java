@@ -53,13 +53,19 @@ public class InformHomeOfTxn extends AsyncFuture<Void> implements Callback<Infor
     }
 
     @Override
-    public void onFailure(Id from, Throwable throwable)
+    public void onFailure(Id from, Throwable failure)
     {
-        if (failure == null) failure = throwable;
-        else failure.addSuppressed(throwable);
+        if (this.failure == null) this.failure = failure;
+        else this.failure.addSuppressed(failure);
 
         // TODO: if we fail and have an incorrect topology, trigger refresh
         if (tracker.failure(from))
-            tryFailure(failure);
+            tryFailure(this.failure);
+    }
+
+    @Override
+    public void onCallbackFailure(Throwable failure)
+    {
+        tryFailure(failure);
     }
 }

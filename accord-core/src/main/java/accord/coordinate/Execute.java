@@ -1,6 +1,7 @@
 package accord.coordinate;
 
 import java.util.Set;
+import java.util.function.BiConsumer;
 
 import accord.api.Data;
 import accord.api.Key;
@@ -16,55 +17,51 @@ import accord.local.Node.Id;
 import accord.messages.Commit;
 import accord.messages.ReadData;
 import accord.messages.ReadData.ReadOk;
-import org.apache.cassandra.utils.concurrent.AsyncFuture;
-import org.apache.cassandra.utils.concurrent.Future;
 
-class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
+class Execute implements Callback<ReadReply>
 {
     final Node node;
     final TxnId txnId;
     final Txn txn;
     final Key homeKey;
     final Timestamp executeAt;
+    final Dependencies dependencies;
     final Topologies topologies;
-    final Keys keys;
-    final Dependencies deps;
     final ReadTracker readTracker;
+    final BiConsumer<Result, Throwable> callback;
     private Data data;
+    private boolean isDone;
 
-    private Execute(Node node, Agreed agreed)
+    private Execute(Node node, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Dependencies dependencies, BiConsumer<Result, Throwable> callback)
     {
         this.node = node;
-        this.txnId = agreed.txnId;
-        this.txn = agreed.txn;
-        this.homeKey = agreed.homeKey;
-        this.keys = txn.keys();
-        this.deps = agreed.deps;
-        this.executeAt = agreed.executeAt;
+        this.txnId = txnId;
+        this.txn = txn;
+        this.homeKey = homeKey;
+        this.executeAt = executeAt;
+        this.dependencies = dependencies;
+        this.topologies = node.topology().forEpoch(txn, executeAt.epoch);
+        Topologies readTopologies = node.topology().forEpoch(txn.read.keys(), executeAt.epoch);
+        this.readTracker = new ReadTracker(readTopologies);
+        this.callback = callback;
+    }
 
-        // TODO: perhaps compose these different behaviours differently?
-        if (agreed.applied != null)
-        {
-            topologies = null;
-            readTracker = null;
-            Persist.persistAndCommit(node, txnId, homeKey, txn, executeAt, deps, agreed.applied, agreed.result);
-            trySuccess(agreed.result);
-        }
-        else
-        {
-            Topologies executeTopologies = node.topology().forEpoch(txn, executeAt.epoch);
-            Topologies readTopologies = node.topology().forEpoch(txn.read.keys(), executeAt.epoch);
-            topologies = executeTopologies;
-            readTracker = new ReadTracker(readTopologies);
-            Set<Id> readSet = readTracker.computeMinimalReadSetAndMarkInflight();
-            Commit.commitAndRead(node, executeTopologies, txnId, txn, homeKey, executeAt, deps, readSet, this);
-        }
+    private void start()
+    {
+        Set<Id> readSet = readTracker.computeMinimalReadSetAndMarkInflight();
+        Commit.commitAndRead(node, topologies, txnId, txn, homeKey, executeAt, dependencies, readSet, this);
+    }
+
+    public static void execute(Node node, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Dependencies dependencies, BiConsumer<Result, Throwable> callback)
+    {
+        Execute execute = new Execute(node, txnId, txn, homeKey, executeAt, dependencies, callback);
+        execute.start();
     }
 
     @Override
     public void onSuccess(Id from, ReadReply reply)
     {
-        if (isDone())
+        if (isDone)
             return;
 
         if (!reply.isFinal())
@@ -72,7 +69,8 @@ class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
 
         if (!reply.isOK())
         {
-            tryFailure(new Preempted(txnId, homeKey));
+            isDone = true;
+            callback.accept(null, new Preempted(txnId, homeKey));
             return;
         }
 
@@ -83,9 +81,10 @@ class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
 
         if (readTracker.hasCompletedRead())
         {
+            isDone = true;
             Result result = txn.result(data);
-            trySuccess(result);
-            Persist.persist(node, topologies, txnId, homeKey, txn, executeAt, deps, txn.execute(executeAt, data), result);
+            callback.accept(result, null);
+            Persist.persist(node, topologies, txnId, homeKey, txn, executeAt, dependencies, txn.execute(executeAt, data), result);
         }
     }
 
@@ -98,12 +97,15 @@ class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
     }
 
     @Override
-    public void onFailure(Id from, Throwable throwable)
+    public void onFailure(Id from, Throwable failure)
     {
+        if (isDone)
+            return;
+
         // try again with another random node
         // TODO: API hooks
-        if (!(throwable instanceof Timeout))
-            throwable.printStackTrace();
+        if (!(failure instanceof Timeout))
+            failure.printStackTrace();
 
         // TODO: introduce two tiers of timeout, one to trigger a retry, and another to mark the original as failed
         // TODO: if we fail, nominate another coordinator from the homeKey shard to try
@@ -115,14 +117,18 @@ class Execute extends AsyncFuture<Result> implements Callback<ReadReply>
         }
         else if (readTracker.hasFailed())
         {
-            if (throwable instanceof Timeout)
-                throwable = ((Timeout) throwable).with(txnId, homeKey);
-            tryFailure(throwable);
+            if (failure instanceof Timeout)
+                failure = ((Timeout) failure).with(txnId, homeKey);
+
+            isDone = true;
+            callback.accept(null, failure);
         }
     }
 
-    static Future<Result> execute(Node instance, Agreed agreed)
+    @Override
+    public void onCallbackFailure(Throwable failure)
     {
-        return new Execute(instance, agreed);
+        isDone = true;
+        callback.accept(null, failure);
     }
 }

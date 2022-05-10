@@ -346,17 +346,17 @@ public class TopologyManager implements ConfigurationService.Listener
         return epochs.get(epoch) != null;
     }
 
-    public Topologies forTxn(Txn txn, long epoch)
+    public Topologies withUnsyncEpochs(Txn txn, long epoch)
     {
         return withUnsyncEpochs(txn.keys(), epoch, epoch);
     }
 
-    public Topologies forTxn(Txn txn, long minEpoch, long maxEpoch)
+    public Topologies withUnsyncEpochs(Txn txn, long minEpoch, long maxEpoch)
     {
         return withUnsyncEpochs(txn.keys(), minEpoch, maxEpoch);
     }
 
-    public Topologies forTxn(Txn txn, Timestamp min, Timestamp max)
+    public Topologies withUnsyncEpochs(Txn txn, Timestamp min, Timestamp max)
     {
         return withUnsyncEpochs(txn.keys(), min.epoch, max.epoch);
     }

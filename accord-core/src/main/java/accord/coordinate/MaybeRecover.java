@@ -21,7 +21,7 @@ import static accord.local.Status.Accepted;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object, Throwable>
+public class MaybeRecover extends CheckShardStatus<CheckStatusOk> implements BiConsumer<Object, Throwable>
 {
     final Txn txn;
     final Status knownStatus;
@@ -92,16 +92,10 @@ public class MaybeRecover extends CheckShardStatus implements BiConsumer<Object,
             case Applied:
                 CheckStatusOkFull full = (CheckStatusOkFull) max;
                 if (!max.hasExecutedOnAllShards)
-                {
-                    Persist.persistAndCommit(node, txnId, someKey, txn, full.executeAt, full.deps, full.writes, full.result)
-                           .addCallback(this);
-                }
-                else
-                {
+                    Persist.persistAndCommit(node, txnId, someKey, txn, full.executeAt, full.deps, full.writes, full.result);
+                else // TODO (now): we shouldn't need to do this?
                     Commit.commit(node, txnId, txn, full.homeKey, full.executeAt, full.deps);
-                    trySuccess(full);
-                }
-
+                trySuccess(full);
                 break;
 
             case Invalidated:
