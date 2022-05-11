@@ -341,7 +341,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         int offset = select.size();
         for (int j = 0 ; j < select.size() ; ++j)
         {
-            i = keys.findNextKey(select.get(0), i);
+            i = keys.findFirst(select.get(0), i);
             offset += keyToTxnId[i] - (i == 0 ? keys.size() : keyToTxnId[i - 1]);
         }
 
@@ -352,7 +352,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         offset = 0;
         for (int j = 0 ; j < select.size() ; ++j)
         {
-            i = keys.findNextKey(select.get(0), i);
+            i = keys.findFirst(select.get(0), i);
             int start = i == 0 ? keys.size() : src[i - 1];
             int count = src[i] - start;
             System.arraycopy(src, start, trg, j == 0 ? select.size() : trg[j - 1], count);

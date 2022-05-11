@@ -195,35 +195,6 @@ public class SortedArrays
         return found ? to : -1 - to;
     }
 
-    public static <T1, T2 extends Comparable<? super T1>> int exponentialSearchFloor(T2[] in, int from, int to, T1 find)
-    {
-        int step = 0;
-        while (from + step < to)
-        {
-            int i = from + step;
-            int c = in[i].compareTo(find);
-            if (c > 0)
-            {
-                to = i;
-                break;
-            }
-            from = i + 1;
-            step = step * 2 + 1; // jump in perfect binary search increments
-        }
-        return binarySearchFloor(in, from, to, find);
-    }
-
-    public static <T1, T2 extends Comparable<? super T1>> int binarySearchFloor(T2[] in, int from, int to, T1 find)
-    {
-        while (from < to)
-        {
-            int m = (from + to) >>> 1;
-            if (in[m].compareTo(find) > 0) to = m - 1;
-            else from = m;
-        }
-        return to;
-    }
-
     public static <T1, T2 extends Comparable<? super T1>> int exponentialSearchCeil2(T1[] in, int from, int to, T2 find)
     {
         int step = 0;

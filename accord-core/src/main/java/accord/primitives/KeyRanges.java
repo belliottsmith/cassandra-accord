@@ -163,26 +163,20 @@ public class KeyRanges implements Iterable<KeyRange>
 
     public int findFirstKey(Keys keys)
     {
-        return findNextKey(keys, 0, 0);
+        return findNextKey(0, keys, 0);
     }
 
-    public int findNextKey(Keys keys, int ki, int ri)
+    public int findNextKey(int ri, Keys keys, int ki)
     {
-        for (int i=0; i<ranges.length; i++)
-        {
-            int lowKeyIndex = ranges[i].lowKeyIndex(keys);
-            if (lowKeyIndex >= 0)
-                return lowKeyIndex;
-        }
-        return -1;
+        return (int) (findNext(ri, keys, ki) >> 32);
     }
 
-    public int findNextRange(Keys keys, int ki, int ri)
+    public long findNext(int ri, Keys keys, int ki)
     {
-        return (int) findNextRange(keys, ((long)ki << 32) | ri);
+        return findNext(keys, ((long)ki << 32) | ri);
     }
 
-    public long findNextRange(Keys keys, long packedKiAndRi)
+    public long findNext(Keys keys, long packedKiAndRi)
     {
         int ki = (int) (packedKiAndRi >>> 32);
         if (ki == keys.size())

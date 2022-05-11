@@ -198,24 +198,6 @@ public abstract class KeyRange<K extends Key<K>> implements Comparable<K>
         return 0;
     }
 
-//    /**
-//     * return 0 if intersecting, -1 if strictly before, and 1 if strictly greater
-//     */
-//    public int compare(KeyRange<K> that)
-//    {
-//        int c = this.end.compareTo(that.start);
-//        if (c > 0)
-//        {
-//            c = that.end.compareTo(this.start);
-//            if (c > 0) return 0;
-//            return c < 0 || !that.endInclusive() || !this.startInclusive() ? 1 : 0;
-//        }
-//        else
-//        {
-//            return c < 0 || !this.endInclusive() || !that.startInclusive() ? -1 : 0;
-//        }
-//    }
-
     public boolean intersects(KeyRange<K> that)
     {
         return compareIntersecting(that) == 0;

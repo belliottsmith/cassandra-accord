@@ -16,7 +16,7 @@ public class Keys implements Iterable<Key>
 {
     public interface Fold<V>
     {
-        V fold(int index, Key key, V value);
+        V apply(int index, Key key, V value);
     }
 
     public interface FoldToLong
@@ -24,7 +24,7 @@ public class Keys implements Iterable<Key>
         long apply(int index, Key key, long param, long prev);
     }
 
-    public interface IntersectionFoldToLong
+    public interface IntersectFoldToLong
     {
         long apply(int leftIndex, int rightIndex, Key key, long param, long prev);
     }
@@ -138,12 +138,17 @@ public class Keys implements Iterable<Key>
         return ceilIndex(0, keys.length, key);
     }
 
-    public int findNextKey(Key key, int startIndex)
+    public int findFirst(Key key, int startIndex)
     {
         return SortedArrays.exponentialSearch(keys, startIndex, keys.length, key);
     }
 
-    public long findNextKey(Keys that, long packedLiAndRi)
+    public long findNext(int li, Keys that, int ri)
+    {
+        return findNext(that, ((long)li << 32) | ri);
+    }
+
+    public long findNext(Keys that, long packedLiAndRi)
     {
         int li = (int) (packedLiAndRi >>> 32);
         if (li == size())
@@ -280,43 +285,28 @@ public class Keys implements Iterable<Key>
      * If terminateAfter is greater than 0, the method will return once terminateAfter matches are encountered
      */
     @Inline
-    public <V> V foldl(KeyRanges ranges, Fold<V> fold, V accumulator)
+    public <V> V foldl(KeyRanges rs, Fold<V> fold, V accumulator)
     {
-        int keyLB = 0;
-        int keyHB = size();
-        int rangeLB = 0;
-        int rangeHB = ranges.rangeIndexForKey(keys[keyHB-1]);
-        rangeHB = rangeHB < 0 ? -1 - rangeHB : rangeHB + 1;
-
-        for (;rangeLB<rangeHB && keyLB<keyHB;)
+        int ai = 0, ri = 0;
+        while (true)
         {
-            Key key = keys[keyLB];
-            rangeLB = ranges.rangeIndexForKey(rangeLB, rangeHB, key);
+            long ari = rs.findNext(ri, this, ai);
+            if (ari < 0)
+                break;
 
-            if (rangeLB < 0)
+            ai = (int)(ari >>> 32);
+            ri = (int)ari;
+            KeyRange range = rs.get(ri);
+            do
             {
-                rangeLB = -1 -rangeLB;
-                if (rangeLB >= rangeHB)
-                    break;
-                keyLB = ranges.get(rangeLB).lowKeyIndex(this, keyLB, keyHB);
-            }
-            else
-            {
-                KeyRange<?> range = ranges.get(rangeLB);
-                int highKey = range.higherKeyIndex(this, keyLB, keyHB);
+                accumulator = fold.apply(ai, get(ai), accumulator);
 
-                for (int i=keyLB; i<highKey; i++)
-                    accumulator = fold.fold(i, keys[i], accumulator);
-
-                keyLB = highKey;
-                rangeLB++;
-            }
-
-            if (keyLB < 0)
-                keyLB = -1 - keyLB;
+                ++ai;
+            } while (ai < size() && range.containsKey(get(ai)));
         }
 
         return accumulator;
+
     }
 
     public boolean any(KeyRanges ranges, Predicate<Key> predicate)
@@ -335,7 +325,7 @@ public class Keys implements Iterable<Key>
         int ai = 0, ri = 0;
         done: while (true)
         {
-            long ari = rs.findNextRange(this, ((long)ai << 32) | ri);
+            long ari = rs.findNext(ri, this, ai);
             if (ari < 0)
                 break;
 
@@ -371,17 +361,17 @@ public class Keys implements Iterable<Key>
         return foldl(ranges, keys, (li, ri, k, p, v) -> 1, 0, 0, 1) == 1;
     }
 
-    public long foldl(KeyRanges rs, Keys intersect, IntersectionFoldToLong fold, long param, long initialValue, long terminalValue)
+    public long foldl(KeyRanges rs, Keys intersect, IntersectFoldToLong fold, long param, long initialValue, long terminalValue)
     {
         Keys as = this, bs = intersect;
         int ai = 0, bi = 0, ri = 0;
         done: while (true)
         {
-            long ari = rs.findNextRange(as, ((long)ai << 32) | ri);
+            long ari = rs.findNext(ri, as, ai);
             if (ari < 0)
                 break;
 
-            long bri = rs.findNextRange(bs, ((long)bi << 32) | ri);
+            long bri = rs.findNext(ri, bs, bi);
             if (bri < 0)
                 break;
 
@@ -399,7 +389,7 @@ public class Keys implements Iterable<Key>
 
                     ++ai;
                     ++bi;
-                    long abi = as.findNextKey(bs, ((long)ai << 32)|bi);
+                    long abi = as.findNext(ai, bs, bi);
                     if (abi < 0)
                         break done;
 
@@ -412,13 +402,13 @@ public class Keys implements Iterable<Key>
         return initialValue;
     }
 
-    public long foldl(Keys intersect, IntersectionFoldToLong fold, long param, long initialValue, long terminalValue)
+    public long foldl(Keys intersect, IntersectFoldToLong fold, long param, long initialValue, long terminalValue)
     {
         Keys as = this, bs = intersect;
         int ai = 0, bi = 0;
         while (true)
         {
-            long abi = as.findNextKey(bs, ((long)ai << 32)|bi);
+            long abi = as.findNext(ai, bs, bi);
             if (abi < 0)
                 break;
 
