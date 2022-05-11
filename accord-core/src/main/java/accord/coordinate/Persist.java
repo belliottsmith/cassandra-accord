@@ -15,10 +15,10 @@ import accord.messages.Commit;
 import accord.messages.InformOfPersistence;
 import accord.topology.Shard;
 import accord.topology.Topologies;
-import accord.txn.Dependencies;
-import accord.txn.Timestamp;
+import accord.primitives.Dependencies;
+import accord.primitives.Timestamp;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import accord.txn.Writes;
 
 // TODO: do not extend AsyncFuture, just use a simple BiConsumer callback

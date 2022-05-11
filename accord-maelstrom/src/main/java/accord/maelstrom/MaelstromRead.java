@@ -1,8 +1,8 @@
 package accord.maelstrom;
 
 import accord.api.*;
-import accord.txn.Keys;
-import accord.txn.Timestamp;
+import accord.primitives.Keys;
+import accord.primitives.Timestamp;
 
 public class MaelstromRead implements Read
 {

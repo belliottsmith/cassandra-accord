@@ -4,14 +4,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.NavigableMap;
 import java.util.NavigableSet;
-import java.util.TreeMap;
 import java.util.TreeSet;
 
 import accord.local.Node;
 import accord.api.Result;
-import accord.txn.Dependencies.TxnAndHomeKey;
+import accord.primitives.Dependencies.Entry;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.TypeAdapter;
@@ -20,13 +18,13 @@ import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import accord.local.Node.Id;
 import accord.api.Key;
-import accord.txn.Dependencies;
+import accord.primitives.Dependencies;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import accord.txn.Writes;
-import accord.txn.Ballot;
-import accord.txn.Keys;
-import accord.txn.Timestamp;
+import accord.primitives.Ballot;
+import accord.primitives.Keys;
+import accord.primitives.Timestamp;
 import accord.messages.ReadData.ReadOk;
 
 public class Json
@@ -301,14 +299,11 @@ public class Json
         public void write(JsonWriter out, Dependencies value) throws IOException
         {
             out.beginArray();
-            for (Map.Entry<TxnId, TxnAndHomeKey> e : value.deps.entrySet())
+            for (Map.Entry<Key, TxnId> e : value)
             {
                 out.beginArray();
-                GSON.toJson(e.getKey(), TxnId.class, out);
-                out.beginArray();
-                ((MaelstromKey)e.getValue().homeKey).write(out);
-                TXN_ADAPTER.write(out, e.getValue().txn);
-                out.endArray();
+                ((MaelstromKey)e.getKey()).write(out);
+                GSON.toJson(e.getValue(), TxnId.class, out);
                 out.endArray();
             }
             out.endArray();
@@ -317,27 +312,29 @@ public class Json
         @Override
         public Dependencies read(JsonReader in) throws IOException
         {
-            Dependencies deps = new Dependencies();
             in.beginArray();
             if (!in.hasNext())
             {
                 in.endArray();
-                return new Dependencies();
+                return Dependencies.NONE;
             }
 
+            List<Dependencies.Entry> entries = new ArrayList<>();
             while (in.hasNext())
             {
                 in.beginArray();
+                Key key = MaelstromKey.read(in);
                 TxnId txnId = GSON.fromJson(in, TxnId.class);
-                in.beginArray();
-                Key homeKey = MaelstromKey.read(in);
-                Txn txn = TXN_ADAPTER.read(in);
-                in.endArray();
-                deps.add(txnId, txn, homeKey);
+                entries.add(new Dependencies.Entry(key, txnId));
                 in.endArray();
             }
             in.endArray();
-            return deps;
+
+            Keys keys = new Keys(entries.stream().map(Entry::getKey).sorted().toArray(Key[]::new));
+            Dependencies.Builder builder = Dependencies.builder(keys);
+            for (Entry entry : entries)
+                builder.add(entry.getKey(), entry.getValue());
+            return builder.build();
         }
     };
 

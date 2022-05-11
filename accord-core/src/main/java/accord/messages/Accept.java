@@ -3,13 +3,13 @@ package accord.messages;
 import accord.local.Node.Id;
 import accord.topology.Topologies;
 import accord.api.Key;
-import accord.txn.Ballot;
+import accord.primitives.Ballot;
 import accord.local.Node;
-import accord.txn.Timestamp;
+import accord.primitives.Timestamp;
 import accord.local.Command;
-import accord.txn.Dependencies;
+import accord.primitives.Dependencies;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 
 import static accord.messages.PreAccept.calculateDeps;
 
@@ -49,8 +49,7 @@ public class Accept extends TxnRequest.WithUnsync
             AcceptOk ok2 = (AcceptOk) r2;
             if (ok1.deps.isEmpty()) return ok2;
             if (ok2.deps.isEmpty()) return ok1;
-            ok1.deps.addAll(ok2.deps);
-            return ok1;
+            return new AcceptOk(txnId, ok1.deps.with(ok2.deps));
         }));
     }
 

@@ -3,6 +3,8 @@ package accord.topology;
 import accord.burn.TopologyUpdate;
 import accord.impl.IntHashKey;
 import accord.local.Node;
+import accord.primitives.KeyRanges;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -11,12 +11,12 @@ import accord.local.CommandsForKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.topology.Topologies;
-import accord.txn.Keys;
-import accord.txn.Timestamp;
+import accord.primitives.Keys;
+import accord.primitives.Timestamp;
 import accord.local.Command;
-import accord.txn.Dependencies;
+import accord.primitives.Dependencies;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 
 public class PreAccept extends TxnRequest.WithUnsync
 {
@@ -59,9 +59,10 @@ public class PreAccept extends TxnRequest.WithUnsync
             PreAcceptOk ok1 = (PreAcceptOk) r1;
             PreAcceptOk ok2 = (PreAcceptOk) r2;
             PreAcceptOk okMax = ok1.witnessedAt.compareTo(ok2.witnessedAt) >= 0 ? ok1 : ok2;
-            if (ok1 != okMax && !ok1.deps.isEmpty()) okMax.deps.addAll(ok1.deps);
-            if (ok2 != okMax && !ok2.deps.isEmpty()) okMax.deps.addAll(ok2.deps);
-            return okMax;
+            Dependencies deps = ok1.deps.with(ok2.deps);
+            if (deps == okMax.deps)
+                return okMax;
+            return new PreAcceptOk(txnId, okMax.witnessedAt, deps);
         }));
     }
 
@@ -148,15 +149,20 @@ public class PreAccept extends TxnRequest.WithUnsync
 
     static Dependencies calculateDeps(CommandStore commandStore, TxnId txnId, Txn txn, Timestamp executeAt)
     {
-        Dependencies deps = new Dependencies();
-        conflictsMayExecuteBefore(commandStore, executeAt, txn.keys).forEach(conflict -> {
+        return calculateDeps(commandStore, txnId, txn.keys, txn.update.keys(), executeAt);
+    }
+
+    static Dependencies calculateDeps(CommandStore commandStore, TxnId txnId, Keys keys, Keys writeKeys, Timestamp executeAt)
+    {
+        Dependencies.Builder deps = Dependencies.builder(keys);
+        conflictsMayExecuteBefore(commandStore, executeAt, keys).forEach(conflict -> {
             if (conflict.txnId().equals(txnId))
                 return;
 
-            if (txn.isWrite() || conflict.txn().isWrite())
+            if (writeKeys.intersects(commandStore.ranges().at(executeAt.epoch), conflict.txn().update.keys()))
                 deps.add(conflict);
         });
-        return deps;
+        return deps.build();
     }
 
     @Override

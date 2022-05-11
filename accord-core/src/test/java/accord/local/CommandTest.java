@@ -1,15 +1,14 @@
 package accord.local;
 
 import accord.impl.IntKey;
-import accord.impl.TestAgent;
 import accord.impl.TopologyFactory;
 import accord.impl.mock.MockCluster;
 import accord.impl.mock.MockStore;
 import accord.topology.Topology;
-import accord.txn.Keys;
-import accord.txn.Timestamp;
+import accord.primitives.Keys;
+import accord.primitives.Timestamp;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 

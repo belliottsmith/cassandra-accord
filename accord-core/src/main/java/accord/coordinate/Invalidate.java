@@ -18,10 +18,10 @@ import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.topology.Shard;
-import accord.txn.Ballot;
-import accord.txn.Keys;
+import accord.primitives.Ballot;
+import accord.primitives.Keys;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;

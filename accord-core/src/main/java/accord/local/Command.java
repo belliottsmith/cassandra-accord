@@ -9,13 +9,13 @@ import com.google.common.base.Preconditions;
 import accord.api.Key;
 import accord.api.Result;
 import accord.local.Node.Id;
-import accord.topology.KeyRanges;
-import accord.txn.Ballot;
-import accord.txn.Dependencies;
-import accord.txn.Keys;
-import accord.txn.Timestamp;
+import accord.primitives.KeyRanges;
+import accord.primitives.Ballot;
+import accord.primitives.Dependencies;
+import accord.primitives.Keys;
+import accord.primitives.Timestamp;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import accord.txn.Writes;
 
 import static accord.local.Status.Accepted;
@@ -37,7 +37,7 @@ public class Command implements Listener, Consumer<Listener>
     private Txn txn; // TODO: only store this on the home shard, or split to each shard independently
     private Ballot promised = Ballot.ZERO, accepted = Ballot.ZERO;
     private Timestamp executeAt; // TODO: compress these states together
-    private Dependencies deps = new Dependencies();
+    private Dependencies deps = Dependencies.NONE;
     private Writes writes;
     private Result result;
 
@@ -223,22 +223,18 @@ public class Command implements Listener, Consumer<Listener>
         this.waitingOnCommit = new TreeMap<>();
         this.waitingOnApply = new TreeMap<>();
 
-        for (TxnId id : savedDeps().on(commandStore, executeAt))
-        {
-            Command command = commandStore.command(id);
+        savedDeps().forEachOn(commandStore, executeAt, (id, command) -> {
             switch (command.status)
             {
                 default:
                     throw new IllegalStateException();
                 case NotWitnessed:
-                    Txn depTxn = savedDeps().get(id);
-                    command.txn(depTxn);
                 case PreAccepted:
                 case Accepted:
                 case AcceptedInvalidate:
                     // we don't know when these dependencies will execute, and cannot execute until we do
-                    waitingOnCommit.put(id, command);
                     command.addListener(this);
+                    waitingOnCommit.put(id, command);
                     break;
                 case Committed:
                     // TODO: split into ReadyToRead and ReadyToWrite;
@@ -252,7 +248,7 @@ public class Command implements Listener, Consumer<Listener>
                 case Invalidated:
                     break;
             }
-        }
+        });
         if (waitingOnCommit.isEmpty())
         {
             waitingOnCommit = null;
@@ -260,8 +256,6 @@ public class Command implements Listener, Consumer<Listener>
                 waitingOnApply = null;
         }
 
-        // TODO: we might not be the homeShard for later phases if we are no longer replicas of the range at executeAt;
-        //       this should be fine, but it might be helpful to provide this info to the progressLog here?
         boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
         commandStore.progressLog().commit(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
 
@@ -334,10 +328,9 @@ public class Command implements Listener, Consumer<Listener>
         return true;
     }
 
-    public Command addListener(Listener listener)
+    public boolean addListener(Listener listener)
     {
-        listeners.add(listener);
-        return this;
+        return listeners.add(listener);
     }
 
     public void removeListener(Listener listener)
@@ -473,7 +466,7 @@ public class Command implements Listener, Consumer<Listener>
 
         Keys someKeys = cur.someKeys();
         if (someKeys == null)
-            someKeys = prev.deps.get(cur.txnId).keys;
+            someKeys = prev.deps.someKeys(cur.txnId);
         return new BlockedBy(cur.txnId, someKeys);
     }
 

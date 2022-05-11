@@ -7,7 +7,7 @@ import java.util.TreeSet;
 import accord.api.Key;
 import accord.messages.MessageType;
 import accord.messages.ReplyContext;
-import accord.txn.Keys;
+import accord.primitives.Keys;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;

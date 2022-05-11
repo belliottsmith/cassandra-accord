@@ -10,14 +10,14 @@ import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.topology.Shard;
 import accord.topology.Topologies;
-import accord.txn.Ballot;
+import accord.primitives.Ballot;
 import accord.messages.Callback;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.txn.Timestamp;
-import accord.txn.Dependencies;
+import accord.primitives.Timestamp;
+import accord.primitives.Dependencies;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import accord.messages.Accept;
 import accord.messages.Accept.AcceptOk;
 import accord.messages.Accept.AcceptReply;
@@ -103,10 +103,7 @@ class Propose implements Callback<AcceptReply>
     private void onAccepted()
     {
         isDone = true;
-        Dependencies deps = new Dependencies();
-        for (AcceptOk acceptOk : acceptOks)
-            deps.addAll(acceptOk.deps);
-
+        Dependencies deps = Dependencies.merge(txn.keys, acceptOks, ok -> ok.deps);
         Execute.execute(node, txnId, txn, homeKey, executeAt, deps, callback);
     }
 

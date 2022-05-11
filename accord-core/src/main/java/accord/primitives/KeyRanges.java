@@ -1,7 +1,8 @@
-package accord.topology;
+package accord.primitives;
 
 import accord.api.Key;
-import accord.txn.Keys;
+import accord.utils.SortedArrays;
+
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterators;
 
@@ -12,7 +13,7 @@ public class KeyRanges implements Iterable<KeyRange>
     public static final KeyRanges EMPTY = new KeyRanges(new KeyRange[0]);
 
     // TODO: fix raw parameterized use
-    private final KeyRange[] ranges;
+    final KeyRange[] ranges;
 
     public KeyRanges(KeyRange[] ranges)
     {
@@ -160,7 +161,12 @@ public class KeyRanges implements Iterable<KeyRange>
         return false;
     }
 
-    public int findFirstIntersecting(Keys keys)
+    public int findFirstKey(Keys keys)
+    {
+        return findNextKey(keys, 0, 0);
+    }
+
+    public int findNextKey(Keys keys, int ki, int ri)
     {
         for (int i=0; i<ranges.length; i++)
         {
@@ -169,6 +175,40 @@ public class KeyRanges implements Iterable<KeyRange>
                 return lowKeyIndex;
         }
         return -1;
+    }
+
+    public int findNextRange(Keys keys, int ki, int ri)
+    {
+        return (int) findNextRange(keys, ((long)ki << 32) | ri);
+    }
+
+    public long findNextRange(Keys keys, long packedKiAndRi)
+    {
+        int ki = (int) (packedKiAndRi >>> 32);
+        if (ki == keys.size())
+            return -1;
+
+        int ri = (int) packedKiAndRi;
+        while (true)
+        {
+            ri = SortedArrays.exponentialSearchCeil(ranges, ri, ranges.length, keys.get(ki));
+            if (ri >= 0)
+                break;
+
+            ri = -1 - ri;
+            if (ri == ranges.length)
+                return -1;
+
+            // want least key greater than or equal to range
+            ki = SortedArrays.exponentialSearchCeil2(keys.keys, ki, keys.size(), ranges[ri]);
+            if (ki >= 0)
+                break;
+
+            ki = -1 - ki;
+            if (ki == keys.size())
+                return -1;
+        }
+        return ((long)ki << 32) | ri;
     }
 
     /**

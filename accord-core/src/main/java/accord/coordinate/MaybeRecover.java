@@ -10,9 +10,9 @@ import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.Commit;
 import accord.topology.Shard;
-import accord.txn.Ballot;
+import accord.primitives.Ballot;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.Future;
 
 import static accord.local.Status.Accepted;

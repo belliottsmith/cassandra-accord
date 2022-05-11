@@ -1,4 +1,4 @@
-package accord.txn;
+package accord.primitives;
 
 import java.util.*;
 import java.util.function.Predicate;
@@ -6,12 +6,29 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import accord.api.Key;
-import accord.topology.KeyRange;
-import accord.topology.KeyRanges;
+import accord.utils.IndexedPredicate;
+import accord.utils.SortedArrays;
+import org.apache.cassandra.utils.concurrent.Inline;
 
 @SuppressWarnings("rawtypes")
+// TODO: this should probably be a BTree
 public class Keys implements Iterable<Key>
 {
+    public interface Fold<V>
+    {
+        V fold(int index, Key key, V value);
+    }
+
+    public interface FoldToLong
+    {
+        long apply(int index, Key key, long param, long prev);
+    }
+
+    public interface IntersectionFoldToLong
+    {
+        long apply(int leftIndex, int rightIndex, Key key, long param, long prev);
+    }
+
     public static final Keys EMPTY = new Keys(new Key[0]);
 
     final Key[] keys;
@@ -76,152 +93,22 @@ public class Keys implements Iterable<Key>
      */
     public boolean containsAll(Keys that)
     {
-        if (isEmpty())
-            return that.isEmpty();
+        if (that.isEmpty())
+            return true;
 
-        for (int thisIdx=0, thatIdx=0, thisSize=size(), thatSize=that.size();
-             thatIdx<thatSize;
-             thisIdx++, thatIdx++)
-        {
-            if (thisIdx >= thisSize)
-                return false;
-
-            Key thatKey = that.keys[thatIdx];
-            Key thisKey = this.keys[thisIdx];
-            int cmp = thisKey.compareTo(thatKey);
-
-            if (cmp == 0)
-                continue;
-
-            // if this key is greater that that key, we can't contain that key
-            if (cmp > 0)
-                return false;
-
-            // if search returns a positive index, a match was found and
-            // no further comparison is needed
-            thisIdx = Arrays.binarySearch(keys, thisIdx, thisSize, thatKey);
-            if (thisIdx < 0)
-                return false;
-        }
-
-        return true;
+        return foldl(that, (li, ri, k, p, v) -> v + 1, 0, 0, 0) == that.size();
     }
 
     public Keys union(Keys that)
     {
-        int thisIdx = 0;
-        int thatIdx = 0;
-        Key[] noOp = keys.length >= that.keys.length ? this.keys : that.keys;
-        Key[] result = noOp;
-        int resultSize = 0;
-
-        while (thisIdx < this.size() && thatIdx < that.size())
-        {
-            Key thisKey = this.keys[thisIdx];
-            Key thatKey = that.keys[thatIdx];
-            int cmp = thisKey.compareTo(thatKey);
-            Key minKey;
-            if (cmp == 0)
-            {
-                thisIdx++;
-                thatIdx++;
-                if (result == noOp)
-                    continue;
-                minKey = thisKey;
-            }
-            else if (cmp < 0)
-            {
-                thisIdx++;
-                if (result == keys)
-                    continue;
-                minKey = thisKey;
-                if (result == noOp)
-                {
-                    resultSize = thatIdx;
-                    result = new Key[resultSize + (keys.length - (thisIdx - 1)) + (that.keys.length - thatIdx)];
-                    System.arraycopy(that.keys, 0, result, 0, resultSize);
-                }
-            }
-            else
-            {
-                thatIdx++;
-                if (result == that.keys)
-                    continue;
-                minKey = thatKey;
-                if (result == noOp)
-                {
-                    resultSize = thisIdx;
-                    result = new Key[resultSize + (keys.length - thisIdx) + (that.keys.length - (thatIdx - 1))];
-                    System.arraycopy(this.keys, 0, result, 0, resultSize);
-                }
-            }
-            result[resultSize++] = minKey;
-        }
-
-        if (result == noOp)
-        {
-            if (noOp == keys && thatIdx == that.keys.length)
-                return this;
-            if (noOp == that.keys && thisIdx == keys.length)
-                return that;
-
-            resultSize = noOp == keys ? thisIdx : thatIdx;
-            result = new Key[resultSize + (keys.length - thisIdx) + (that.keys.length - thatIdx)];
-            System.arraycopy(noOp, 0, result, 0, resultSize);
-        }
-
-        while (thisIdx < this.size())
-            result[resultSize++] = this.keys[thisIdx++];
-
-        while (thatIdx < that.size())
-            result[resultSize++] = that.keys[thatIdx++];
-
-        if (resultSize < result.length)
-            result = Arrays.copyOf(result, resultSize);
-
-        return new Keys(result);
+        Key[] result = SortedArrays.linearUnion(keys, that.keys, Key[]::new);
+        return result == keys ? this : result == that.keys ? that : new Keys(result);
     }
 
     public Keys intersect(Keys that)
     {
-        int thisIdx = 0;
-        int thatIdx = 0;
-        Key[] noOp = keys.length <= that.keys.length ? this.keys : that.keys;
-        Key[] result = noOp;
-        int resultSize = 0;
-
-        while (thisIdx < this.size() && thatIdx < that.size())
-        {
-            Key thisKey = this.keys[thisIdx];
-            Key thatKey = that.keys[thatIdx];
-            int cmp = thisKey.compareTo(thatKey);
-            if (cmp == 0)
-            {
-                thisIdx++;
-                thatIdx++;
-                if (result != noOp)
-                    result[resultSize] = thisKey;
-                resultSize++;
-            }
-            else
-            {
-                if (cmp < 0) thisIdx++;
-                else thatIdx++;
-                if (result == noOp)
-                {
-                    result = new Key[resultSize + Math.min(keys.length - thisIdx, that.keys.length - thatIdx)];
-                    System.arraycopy(noOp, 0, result, 0, resultSize);
-                }
-            }
-        }
-
-        if (result == noOp && resultSize == noOp.length)
-            return noOp == keys ? this : that;
-
-        if (resultSize < result.length)
-            result = Arrays.copyOf(result, resultSize);
-
-        return new Keys(result);
+        Key[] result = SortedArrays.linearIntersection(keys, that.keys, Key[]::new);
+        return result == keys ? this : result == that.keys ? that : new Keys(result);
     }
 
     public boolean isEmpty()
@@ -250,6 +137,40 @@ public class Keys implements Iterable<Key>
     {
         return ceilIndex(0, keys.length, key);
     }
+
+    public int findNextKey(Key key, int startIndex)
+    {
+        return SortedArrays.exponentialSearch(keys, startIndex, keys.length, key);
+    }
+
+    public long findNextKey(Keys that, long packedLiAndRi)
+    {
+        int li = (int) (packedLiAndRi >>> 32);
+        if (li == size())
+            return -1;
+
+        int ri = (int) packedLiAndRi;
+        while (true)
+        {
+            ri = SortedArrays.exponentialSearch(that.keys, ri, that.keys.length, get(li));
+            if (ri >= 0)
+                break;
+
+            ri = -1 - ri;
+            if (ri == that.keys.length)
+                return -1;
+
+            li = SortedArrays.exponentialSearch(this.keys, li, this.keys.length, that.get(ri));
+            if (li >= 0)
+                break;
+
+            li = -1 -li;
+            if (li == keys.length)
+                return -1;
+        }
+        return ((long)li << 32) | ri;
+    }
+
 
     public Keys with(Key key)
     {
@@ -307,6 +228,7 @@ public class Keys implements Iterable<Key>
         return new Keys(keys);
     }
 
+    // TODO: optimise for case where nothing is modified
     public Keys intersect(KeyRanges ranges)
     {
         Key[] result = null;
@@ -353,16 +275,12 @@ public class Keys implements Iterable<Key>
         return result != null ? new Keys(result) : EMPTY;
     }
 
-    public interface KeyFold<V>
-    {
-        V fold(Key key, V value);
-    }
-
     /**
      * Count the number of keys matching the predicate and intersecting with the given ranges.
      * If terminateAfter is greater than 0, the method will return once terminateAfter matches are encountered
      */
-    public <V> V foldl(KeyRanges ranges, KeyFold<V> fold, V accumulator)
+    @Inline
+    public <V> V foldl(KeyRanges ranges, Fold<V> fold, V accumulator)
     {
         int keyLB = 0;
         int keyHB = size();
@@ -388,7 +306,7 @@ public class Keys implements Iterable<Key>
                 int highKey = range.higherKeyIndex(this, keyLB, keyHB);
 
                 for (int i=keyLB; i<highKey; i++)
-                    accumulator = fold.fold(keys[i], accumulator);
+                    accumulator = fold.fold(i, keys[i], accumulator);
 
                 keyLB = highKey;
                 rangeLB++;
@@ -403,54 +321,123 @@ public class Keys implements Iterable<Key>
 
     public boolean any(KeyRanges ranges, Predicate<Key> predicate)
     {
-        return 1 == foldl(ranges, (key, i1, i2) -> predicate.test(key) ? 1 : 0, 0, 0, 1);
+        return 1 == foldl(ranges, (i1, key, i2, i3) -> predicate.test(key) ? 1 : 0, 0, 0, 1);
     }
 
-    public interface FoldKeysToLong
+    public boolean any(IndexedPredicate<Key> predicate)
     {
-        long apply(Key key, long param, long prev);
+        return 1 == foldl((i, key, p, v) -> predicate.test(i, key) ? 1 : 0, 0, 0, 1);
     }
 
-    public long foldl(KeyRanges ranges, FoldKeysToLong fold, long param, long initialValue, long terminalValue)
+    @Inline
+    public long foldl(KeyRanges rs, FoldToLong fold, long param, long initialValue, long terminalValue)
     {
-        int keyLB = 0;
-        int keyHB = size();
-        int rangeLB = 0;
-        int rangeHB = ranges.rangeIndexForKey(keys[keyHB-1]);
-        rangeHB = rangeHB < 0 ? -1 - rangeHB : rangeHB + 1;
-
-        for (;rangeLB<rangeHB && keyLB<keyHB;)
+        int ai = 0, ri = 0;
+        done: while (true)
         {
-            Key key = keys[keyLB];
-            rangeLB = ranges.rangeIndexForKey(rangeLB, ranges.size(), key);
+            long ari = rs.findNextRange(this, ((long)ai << 32) | ri);
+            if (ari < 0)
+                break;
 
-            if (rangeLB < 0)
+            ai = (int)(ari >>> 32);
+            ri = (int)ari;
+            KeyRange range = rs.get(ri);
+            do
             {
-                rangeLB = -1 -rangeLB;
-                if (rangeLB >= rangeHB)
-                    break;
-                keyLB = ranges.get(rangeLB).lowKeyIndex(this, keyLB, keyHB);
-            }
-            else
-            {
-                KeyRange<?> range = ranges.get(rangeLB);
-                int highKey = range.higherKeyIndex(this, keyLB, keyHB);
+                initialValue = fold.apply(ai, get(ai), param, initialValue);
+                if (initialValue == terminalValue)
+                    break done;
 
-                for (int i=keyLB; i<highKey; i++)
-                {
-                    initialValue = fold.apply(keys[i], param, initialValue);
-                    if (terminalValue == initialValue)
-                        return initialValue;
-                }
-
-                keyLB = highKey;
-                rangeLB++;
-            }
-
-            if (keyLB < 0)
-                keyLB = -1 - keyLB;
+                ++ai;
+            } while (ai < size() && range.containsKey(get(ai)));
         }
 
         return initialValue;
+    }
+
+    public long foldl(FoldToLong fold, long param, long initialValue, long terminalValue)
+    {
+        for (int i = 0; i < keys.length; i++)
+        {
+            initialValue = fold.apply(i, keys[i], param, initialValue);
+            if (terminalValue == initialValue)
+                return initialValue;
+        }
+        return initialValue;
+    }
+
+    public boolean intersects(KeyRanges ranges, Keys keys)
+    {
+        return foldl(ranges, keys, (li, ri, k, p, v) -> 1, 0, 0, 1) == 1;
+    }
+
+    public long foldl(KeyRanges rs, Keys intersect, IntersectionFoldToLong fold, long param, long initialValue, long terminalValue)
+    {
+        Keys as = this, bs = intersect;
+        int ai = 0, bi = 0, ri = 0;
+        done: while (true)
+        {
+            long ari = rs.findNextRange(as, ((long)ai << 32) | ri);
+            if (ari < 0)
+                break;
+
+            long bri = rs.findNextRange(bs, ((long)bi << 32) | ri);
+            if (bri < 0)
+                break;
+
+            ai = (int) (ari >>> 32);
+            bi = (int) (bri >>> 32);
+            ri = (int)bri;
+            if ((int)ari == ri)
+            {
+                KeyRange range = rs.get(ri);
+                do
+                {
+                    initialValue = fold.apply(ai, bi, as.get(ai), param, initialValue);
+                    if (initialValue == terminalValue)
+                        break done;
+
+                    ++ai;
+                    ++bi;
+                    long abi = as.findNextKey(bs, ((long)ai << 32)|bi);
+                    if (abi < 0)
+                        break done;
+
+                    ai = (int)(abi >>> 32);
+                    bi = (int)abi;
+                } while (range.containsKey(as.get(ai)));
+            }
+        }
+
+        return initialValue;
+    }
+
+    public long foldl(Keys intersect, IntersectionFoldToLong fold, long param, long initialValue, long terminalValue)
+    {
+        Keys as = this, bs = intersect;
+        int ai = 0, bi = 0;
+        while (true)
+        {
+            long abi = as.findNextKey(bs, ((long)ai << 32)|bi);
+            if (abi < 0)
+                break;
+
+            ai = (int)(abi >>> 32);
+            bi = (int)abi;
+
+            initialValue = fold.apply(ai, bi, as.get(ai), param, initialValue);
+            if (initialValue == terminalValue)
+                break;
+
+            ++ai;
+            ++bi;
+        }
+
+        return initialValue;
+    }
+
+    public int[] remapper(Keys to)
+    {
+        return SortedArrays.remapper(keys, to.keys);
     }
 }

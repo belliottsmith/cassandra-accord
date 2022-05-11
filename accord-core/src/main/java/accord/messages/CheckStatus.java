@@ -6,11 +6,11 @@ import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
-import accord.txn.Ballot;
-import accord.txn.Dependencies;
-import accord.txn.Timestamp;
+import accord.primitives.Ballot;
+import accord.primitives.Dependencies;
+import accord.primitives.Timestamp;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import accord.txn.Writes;
 
 public class CheckStatus implements Request

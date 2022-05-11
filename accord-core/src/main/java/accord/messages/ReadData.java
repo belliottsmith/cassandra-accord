@@ -9,10 +9,10 @@ import accord.local.*;
 import accord.local.Node.Id;
 import accord.api.Data;
 import accord.topology.Topologies;
-import accord.txn.Keys;
-import accord.txn.Timestamp;
+import accord.primitives.Keys;
+import accord.primitives.Timestamp;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import accord.utils.DeterministicIdentitySet;
 
 public class ReadData extends TxnRequest

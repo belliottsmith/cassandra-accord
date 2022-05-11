@@ -7,7 +7,7 @@ import accord.api.Data;
 import accord.api.Key;
 import accord.api.Query;
 import accord.api.Result;
-import accord.txn.Keys;
+import accord.primitives.Keys;
 
 public class ListQuery implements Query
 {

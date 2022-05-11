@@ -1,6 +1,6 @@
 package accord.utils;
 
-import accord.txn.Timestamp;
+import accord.primitives.Timestamp;
 
 public class Timestamped<T>
 {

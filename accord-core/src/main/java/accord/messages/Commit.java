@@ -3,17 +3,15 @@ package accord.messages;
 import java.util.Collections;
 import java.util.Set;
 
-import com.google.common.base.Preconditions;
-
 import accord.api.Key;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.topology.Topologies;
-import accord.txn.Keys;
-import accord.txn.Timestamp;
-import accord.txn.Dependencies;
+import accord.primitives.Keys;
+import accord.primitives.Timestamp;
+import accord.primitives.Dependencies;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 
 // TODO: CommitOk responses, so we can send again if no reply received? Or leave to recovery?
 public class Commit extends ReadData

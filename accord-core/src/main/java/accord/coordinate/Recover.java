@@ -2,7 +2,6 @@ package accord.coordinate;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -14,14 +13,15 @@ import accord.coordinate.tracking.QuorumTracker;
 import accord.messages.Commit;
 import accord.topology.Shard;
 import accord.topology.Topologies;
-import accord.txn.Ballot;
+import accord.primitives.Ballot;
 import accord.messages.Callback;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.txn.Timestamp;
-import accord.txn.Dependencies;
+import accord.primitives.Keys;
+import accord.primitives.Timestamp;
+import accord.primitives.Dependencies;
 import accord.txn.Txn;
-import accord.txn.TxnId;
+import accord.primitives.TxnId;
 import accord.messages.BeginRecovery;
 import accord.messages.BeginRecovery.RecoverOk;
 import accord.messages.BeginRecovery.RecoverReply;
@@ -45,9 +45,9 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         //       are given earlier timestamps we can retry without restarting.
         final QuorumTracker tracker;
 
-        AwaitCommit(Node node, TxnId txnId, Txn txn)
+        AwaitCommit(Node node, TxnId txnId, Keys someKeys)
         {
-            Topologies topologies = node.topology().preciseEpochs(txn, txnId.epoch);
+            Topologies topologies = node.topology().preciseEpochs(someKeys, txnId.epoch);
             this.tracker = new QuorumTracker(topologies);
             node.send(topologies.nodes(), to -> new WaitOnCommit(to, topologies, txnId, txn.keys()), this);
         }
@@ -79,11 +79,12 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
 
     Future<Object> awaitCommits(Node node, Dependencies waitOn)
     {
-        AtomicInteger remaining = new AtomicInteger(waitOn.size());
+        AtomicInteger remaining = new AtomicInteger(waitOn.txnIdCount());
         Promise<Object> future = new AsyncPromise<>();
-        for (Map.Entry<TxnId, Txn> e : waitOn)
+        for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
         {
-            new AwaitCommit(node, e.getKey(), e.getValue()).addCallback((success, failure) -> {
+            TxnId txnId = waitOn.txnId(i);
+            new AwaitCommit(node, txnId, waitOn.someKeys(txnId)).addCallback((success, failure) -> {
                 if (future.isDone())
                     return;
                 if (success != null && remaining.decrementAndGet() == 0)
@@ -255,16 +256,13 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         }
 
         // should all be PreAccept
+        Dependencies deps = Dependencies.merge(txn.keys, recoverOks, ok -> ok.deps);
+        Dependencies earlierAcceptedNoWitness = Dependencies.merge(txn.keys, recoverOks, ok -> ok.earlierAcceptedNoWitness);
+        Dependencies earlierCommittedWitness = Dependencies.merge(txn.keys, recoverOks, ok -> ok.earlierCommittedWitness);
         Timestamp maxExecuteAt = txnId;
-        Dependencies deps = new Dependencies();
-        Dependencies earlierAcceptedNoWitness = new Dependencies();
-        Dependencies earlierCommittedWitness = new Dependencies();
         boolean rejectsFastPath = false;
         for (RecoverOk ok : recoverOks)
         {
-            deps.addAll(ok.deps);
-            earlierAcceptedNoWitness.addAll(ok.earlierAcceptedNoWitness);
-            earlierCommittedWitness.addAll(ok.earlierCommittedWitness);
             maxExecuteAt = Timestamp.max(maxExecuteAt, ok.executeAt);
             rejectsFastPath |= ok.rejectsFastPath;
         }
@@ -276,7 +274,7 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         }
         else
         {
-            earlierAcceptedNoWitness.removeAll(earlierCommittedWitness);
+            earlierAcceptedNoWitness.without(earlierCommittedWitness::contains);
             if (!earlierAcceptedNoWitness.isEmpty())
             {
                 awaitCommits(node, earlierAcceptedNoWitness).addCallback((success, failure) -> {

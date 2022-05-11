@@ -1,13 +1,9 @@
 package accord.burn;
 
 import java.io.IOException;
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Map;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
@@ -26,7 +22,6 @@ import accord.impl.IntHashKey;
 import accord.impl.basic.Cluster;
 import accord.impl.basic.PropagatingPendingQueue;
 import accord.impl.basic.RandomDelayQueue.Factory;
-import accord.impl.IntKey;
 import accord.impl.TopologyFactory;
 import accord.impl.basic.Packet;
 import accord.impl.basic.PendingQueue;
@@ -35,15 +30,12 @@ import accord.impl.list.ListRead;
 import accord.impl.list.ListRequest;
 import accord.impl.list.ListResult;
 import accord.impl.list.ListUpdate;
-import accord.verify.SerializabilityVerifier;
-import accord.verify.LinearizabilityVerifier;
-import accord.verify.LinearizabilityVerifier.Observation;
 import accord.local.Node.Id;
 import accord.api.Key;
 import accord.txn.Txn;
-import accord.txn.Keys;
+import accord.primitives.Keys;
 import accord.verify.StrictSerializabilityVerifier;
-import ch.qos.logback.classic.Level;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

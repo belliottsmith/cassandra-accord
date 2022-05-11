@@ -5,7 +5,7 @@ import accord.local.Node;
 import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Command;
-import accord.txn.Timestamp;
+import accord.primitives.Timestamp;
 import accord.txn.Txn;
 
 public class ListAgent implements Agent

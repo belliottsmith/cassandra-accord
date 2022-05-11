@@ -1,8 +1,8 @@
 package accord.utils;
 
-import accord.topology.KeyRange;
+import accord.primitives.KeyRange;
 import accord.impl.IntKey;
-import accord.topology.KeyRanges;
+import accord.primitives.KeyRanges;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 

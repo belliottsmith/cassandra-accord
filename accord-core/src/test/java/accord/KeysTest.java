@@ -5,9 +5,9 @@ import java.util.List;
 
 import accord.api.Key;
 import accord.impl.IntKey;
-import accord.topology.KeyRange;
-import accord.topology.KeyRanges;
-import accord.txn.Keys;
+import accord.primitives.KeyRange;
+import accord.primitives.KeyRanges;
+import accord.primitives.Keys;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -56,22 +56,22 @@ public class KeysTest
     void foldlTest()
     {
         List<Key> keys = new ArrayList<>();
-        long result = keys(150, 250, 350, 450, 550).foldl(ranges(r(200, 400)), (key, p, v) -> { keys.add(key); return v * p + 1; }, 15, 0, -1);
+        long result = keys(150, 250, 350, 450, 550).foldl(ranges(r(200, 400)), (i, key, p, v) -> { keys.add(key); return v * p + 1; }, 15, 0, -1);
         assertEquals(16, result);
         assertEquals(keys(250, 350), new Keys(keys));
 
         keys.clear();
-        result = keys(150, 250, 350, 450, 550).foldl(ranges(r(0, 500)), (key, p, v) -> { keys.add(key); return v * p + 1; }, 15, 0, -1);
+        result = keys(150, 250, 350, 450, 550).foldl(ranges(r(0, 500)), (i, key, p, v) -> { keys.add(key); return v * p + 1; }, 15, 0, -1);
         assertEquals(3616, result);
         assertEquals(keys(150, 250, 350, 450), new Keys(keys));
 
         keys.clear();
-        result = keys(150, 250, 350, 450, 550).foldl(ranges(r(500, 1000)), (key, p, v) -> { keys.add(key); return v * p + 1; }, 15, 0, -1);
+        result = keys(150, 250, 350, 450, 550).foldl(ranges(r(500, 1000)), (i, key, p, v) -> { keys.add(key); return v * p + 1; }, 15, 0, -1);
         assertEquals(1, result);
         assertEquals(keys(550), new Keys(keys));
 
         keys.clear();
-        result = keys(150, 250, 350, 450, 550).foldl(ranges(r(0, 20), r(100, 140), r(149, 151), r(560, 2000)), (key, p, v) -> { keys.add(key); return v * p + 1; }, 15, 0, -1);
+        result = keys(150, 250, 350, 450, 550).foldl(ranges(r(0, 20), r(100, 140), r(149, 151), r(560, 2000)), (i, key, p, v) -> { keys.add(key); return v * p + 1; }, 15, 0, -1);
         assertEquals(1, result);
         assertEquals(keys(150), new Keys(keys));
     }
