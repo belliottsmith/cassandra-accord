@@ -2,7 +2,6 @@ package accord.coordinate;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.function.BiConsumer;
 
 import accord.api.Key;
@@ -11,7 +10,6 @@ import accord.coordinate.Invalidate.Outcome;
 import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.Status;
 import accord.messages.BeginInvalidate;
 import accord.messages.BeginInvalidate.InvalidateNack;
 import accord.messages.BeginInvalidate.InvalidateOk;
@@ -111,35 +109,13 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                 case PreAccepted:
                     throw new IllegalStateException("Should only have Accepted or later statuses here");
                 case Accepted:
-                    node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
-                        Recover recover = new Recover(node, ballot, txnId, acceptOrCommit.txn, acceptOrCommit.homeKey);
-                        recover.addCallback(this);
-
-                        Set<Id> nodes = recover.tracker.topologies().copyOfNodes();
-                        for (int i = 0 ; i < invalidateOks.size() ; ++i)
-                        {
-                            switch (invalidateOks.get(i).status)
-                            {
-                                case PreAccepted:
-                                case Accepted:
-                                    // TODO (now): this is a bug! we cannot propagate these unless only this key resides on the replica
-                                    recover.onSuccess(invalidateOksFrom.get(i), invalidateOks.get(i));
-                                    nodes.remove(invalidateOksFrom.get(i));
-                                case NotWitnessed:
-                                case AcceptedInvalidate:
-                                    break;
-
-                                case Committed:
-                                case ReadyToExecute:
-                                case Executed:
-                                case Applied:
-                                case Invalidated:
-                                default:
-                                    throw new IllegalStateException();
-                            }
-                        }
-                        recover.start(nodes);
-                    });
+                    // note: we do not propagate our responses to the Recover instance to avoid mistakes;
+                    //       since invalidate contacts only one key, only responses from nodes that replicate
+                    //       *only* that key for the transaction will be valid, as the shards on the replica
+                    //       that own the other keys may not have responded. It would be possible to filter
+                    //       replies now that we have the transaction, but safer to just start from scratch.
+                    Recover.recover(node, ballot, txnId, acceptOrCommit.txn, acceptOrCommit.homeKey)
+                           .addCallback(this);
                     return;
                 case AcceptedInvalidate:
                     break; // latest accept also invalidating, so we're on the same page and should finish our invalidation

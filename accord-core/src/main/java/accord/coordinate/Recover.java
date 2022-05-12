@@ -166,6 +166,11 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         return recover(node, ballot, txnId, txn, homeKey, topologies);
     }
 
+    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey)
+    {
+        return recover(node, ballot, txnId, txn, homeKey, node.topology().forEpoch(txn, txnId.epoch));
+    }
+
     public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey, Topologies topologies)
     {
         Recover recover = new Recover(node, ballot, txnId, txn, homeKey, topologies);
