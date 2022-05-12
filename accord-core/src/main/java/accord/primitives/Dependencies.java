@@ -683,6 +683,9 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             if (count == remapTxnIds.length)
                 return this;
 
+            if (count == 0)
+                return NONE;
+
             txnIds = new TxnId[count];
             for (int i = 0 ; i < this.txnIds.length ; ++i)
             {
@@ -691,22 +694,26 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             }
         }
 
-        int[] keysToTxnId = this.keyToTxnId.clone();
+        int[] keyToTxnId = new int[this.keyToTxnId.length];
         int k = 0, i = keys.size(), o = i;
-        while (i < keysToTxnId.length)
+        while (i < this.keyToTxnId.length)
         {
-            if (keysToTxnId[k] == i)
-                keysToTxnId[k++] = o;
+            while (this.keyToTxnId[k] == i)
+                keyToTxnId[k++] = o;
 
-            int remapped = remapTxnIds[keysToTxnId[i]];
-            if (remapped >= 0)
-                keysToTxnId[o++] = remapped;
+            int remapped = remapTxnIds[this.keyToTxnId[i]];
+            if (remapped > 0)
+                keyToTxnId[o++] = remapped;
             ++i;
         }
-        keysToTxnId = Arrays.copyOf(keysToTxnId, o);
 
-        // TODO: trim keys?
-        return new Dependencies(keys, txnIds, keysToTxnId);
+        while (k < keys.size())
+            keyToTxnId[k++] = o;
+
+        keyToTxnId = Arrays.copyOf(keyToTxnId, o);
+
+        // TODO (now): trim unused keys
+        return new Dependencies(keys, txnIds, keyToTxnId);
     }
 
     public boolean contains(TxnId txnId)
@@ -922,5 +929,4 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
                && keys.equals(that.keys)
                && Arrays.equals(keyToTxnId, that.keyToTxnId);
     }
-
 }

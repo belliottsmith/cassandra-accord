@@ -51,6 +51,7 @@ public class TopologyUpdate
 
         public CommandSync(Command command, long epoch)
         {
+            // TODO (now): AcceptInvalidate and CommitInvalidate can leave these fields null
             Preconditions.checkArgument(command.hasBeen(Status.PreAccepted));
             this.txnId = command.txnId();
             this.txn = command.txn();
@@ -77,14 +78,12 @@ public class TopologyUpdate
             node.forEachLocalSince(txn.keys, epoch, commandStore -> {
                 switch (status)
                 {
-                    case PreAccepted:
-                        commandStore.command(txnId).preaccept(txn, homeKey, progressKey);
-                        break;
-                    case Accepted:
-                        commandStore.command(txnId).accept(Ballot.ZERO, txn, homeKey, progressKey, executeAt, deps);
-                        break;
                     case AcceptedInvalidate:
-                        commandStore.command(txnId).acceptInvalidate(Ballot.ZERO);
+                        if (txn == null)
+                            break;
+                    case PreAccepted:
+                    case Accepted:
+                        commandStore.command(txnId).preaccept(txn, homeKey, progressKey);
                         break;
                     case Committed:
                     case ReadyToExecute:

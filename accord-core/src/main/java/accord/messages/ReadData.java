@@ -166,6 +166,12 @@ public class ReadData extends TxnRequest
         {
             return false;
         }
+
+        @Override
+        public String toString()
+        {
+            return "ReadNack";
+        }
     }
 
     public static class ReadOk extends ReadReply

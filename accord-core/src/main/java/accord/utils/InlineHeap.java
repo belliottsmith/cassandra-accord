@@ -7,6 +7,9 @@ import com.google.common.base.Preconditions;
 
 import org.apache.cassandra.utils.concurrent.Inline;
 
+/**
+ * Lifted directly from MergeIterator in Cassandra source tree
+ */
 public class InlineHeap
 {
     public interface IntHeapFold

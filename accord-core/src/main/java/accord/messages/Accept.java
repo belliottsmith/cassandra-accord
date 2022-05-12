@@ -91,7 +91,7 @@ public class Accept extends TxnRequest.WithUnsync
         @Override
         public String toString()
         {
-            return "AcceptInvalidate{" + ballot + '}';
+            return "AcceptInvalidate{ballot:" + ballot + ", txnId:" + txnId + ", key:" + someKey + '}';
         }
 
         @Override

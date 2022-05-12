@@ -11,6 +11,7 @@ import accord.coordinate.Invalidate.Outcome;
 import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.Status;
 import accord.messages.BeginInvalidate;
 import accord.messages.BeginInvalidate.InvalidateNack;
 import accord.messages.BeginInvalidate.InvalidateOk;
@@ -117,10 +118,24 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                         Set<Id> nodes = recover.tracker.topologies().copyOfNodes();
                         for (int i = 0 ; i < invalidateOks.size() ; ++i)
                         {
-                            if (invalidateOks.get(i).executeAt != null)
+                            switch (invalidateOks.get(i).status)
                             {
-                                recover.onSuccess(invalidateOksFrom.get(i), invalidateOks.get(i));
-                                nodes.remove(invalidateOksFrom.get(i));
+                                case PreAccepted:
+                                case Accepted:
+                                    // TODO (now): this is a bug! we cannot propagate these unless only this key resides on the replica
+                                    recover.onSuccess(invalidateOksFrom.get(i), invalidateOks.get(i));
+                                    nodes.remove(invalidateOksFrom.get(i));
+                                case NotWitnessed:
+                                case AcceptedInvalidate:
+                                    break;
+
+                                case Committed:
+                                case ReadyToExecute:
+                                case Executed:
+                                case Applied:
+                                case Invalidated:
+                                default:
+                                    throw new IllegalStateException();
                             }
                         }
                         recover.start(nodes);
