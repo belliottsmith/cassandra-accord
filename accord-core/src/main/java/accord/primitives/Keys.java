@@ -12,6 +12,7 @@ import org.apache.cassandra.utils.concurrent.Inline;
 
 @SuppressWarnings("rawtypes")
 // TODO: this should probably be a BTree
+// TODO: check that foldl call-sites are inlined and optimised by HotSpot
 public class Keys implements Iterable<Key>
 {
     public interface Fold<V>
@@ -138,7 +139,7 @@ public class Keys implements Iterable<Key>
         return ceilIndex(0, keys.length, key);
     }
 
-    public int findFirst(Key key, int startIndex)
+    public int find(Key key, int startIndex)
     {
         return SortedArrays.exponentialSearch(keys, startIndex, keys.length, key);
     }
@@ -345,6 +346,7 @@ public class Keys implements Iterable<Key>
         return initialValue;
     }
 
+    @Inline
     public long foldl(FoldToLong fold, long param, long initialValue, long terminalValue)
     {
         for (int i = 0; i < keys.length; i++)
@@ -361,6 +363,7 @@ public class Keys implements Iterable<Key>
         return foldl(ranges, keys, (li, ri, k, p, v) -> 1, 0, 0, 1) == 1;
     }
 
+    @Inline
     public long foldl(KeyRanges rs, Keys intersect, IntersectFoldToLong fold, long param, long initialValue, long terminalValue)
     {
         Keys as = this, bs = intersect;
@@ -402,6 +405,7 @@ public class Keys implements Iterable<Key>
         return initialValue;
     }
 
+    @Inline
     public long foldl(Keys intersect, IntersectFoldToLong fold, long param, long initialValue, long terminalValue)
     {
         Keys as = this, bs = intersect;

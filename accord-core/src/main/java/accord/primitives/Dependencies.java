@@ -1,12 +1,12 @@
 package accord.primitives;
 
 import java.util.Arrays;
-import java.util.BitSet;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -16,17 +16,13 @@ import accord.local.CommandStore;
 import accord.utils.InlineHeap;
 import accord.utils.SortedArrays;
 
+import static accord.utils.SortedArrays.remap;
 import static accord.utils.SortedArrays.remapper;
 
 // TODO (now): switch to RoutingKey
 public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
 {
     public static final Dependencies NONE = new Dependencies(Keys.EMPTY, new TxnId[0], new int[0]);
-
-    public interface DependencyConsumer
-    {
-        void accept(Key key, TxnId txnId, Command command);
-    }
 
     public static class Entry implements Map.Entry<Key, TxnId>
     {
@@ -55,6 +51,12 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         public TxnId setValue(TxnId value)
         {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public String toString()
+        {
+            return key + "->" + txnId;
         }
     }
 
@@ -144,7 +146,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
                 if (keysToTxnIdCounts[i] > 0)
                 {
                     int count = keysToTxnIdCounts[i];
-                    int offset = keyIndex == 0 ? keyCount : result[keyCount - 1];
+                    int offset = keyIndex == 0 ? keyCount : result[keyIndex - 1];
                     result[keyIndex] = offset + count;
                     int[] src = keysToTxnId[i];
                     for (int j = 0 ; j < count ; ++j)
@@ -237,7 +239,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             result = new int[Math.min(maxStreamSize * 2, totalStreamSize)]; // TODO: use cached temporary array
         }
 
-        int resultCount = 0;
+        int resultIndex = keys.size();
         int[] keyHeap = InlineHeap.create(mergeSize); // TODO: use cached temporary array
         int[] txnIdHeap = InlineHeap.create(mergeSize); // TODO: use cached temporary array
 
@@ -246,70 +248,77 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         for (int stream = 0 ; stream < mergeSize ; ++stream)
         {
             if (streams[stream] != null)
-                InlineHeap.set(keyHeap, keyHeapSize++, streams[stream].keys[0], stream);
+                InlineHeap.set(keyHeap, keyHeapSize++, remap(0, streams[stream].keys), stream);
         }
+
+        int keyIndex = 0;
         keyHeapSize = InlineHeap.heapify(keyHeap, keyHeapSize);
         while (keyHeapSize > 0)
         {
             // while the heap is non-empty, pop the streams matching the top key and insert them into their own heap
             int txnIdHeapSize = InlineHeap.consume(keyHeap, keyHeapSize, (key, streamIndex, size) -> {
                 MergeStream stream = streams[streamIndex];
-                InlineHeap.set(txnIdHeap, size, stream.remap[stream.index], streamIndex);
+                InlineHeap.set(txnIdHeap, size, remap(stream.input[stream.index], stream.remap), streamIndex);
                 return size + 1;
             }, 0);
-            while (txnIdHeapSize > 1)
+
+            if (txnIdHeapSize > 1)
             {
-                if (resultCount + txnIdHeapSize >= result.length)
-                    result = Arrays.copyOf(result, Math.max(resultCount + txnIdHeapSize, resultCount + (resultCount/2)));
+                txnIdHeapSize = InlineHeap.heapify(txnIdHeap, txnIdHeapSize);
+                do
+                {
+                    if (resultIndex + txnIdHeapSize >= result.length)
+                        result = Arrays.copyOf(result, Math.max(resultIndex + txnIdHeapSize, resultIndex + (resultIndex/2)));
 
-                int[] out = result;
-                resultCount = InlineHeap.consume(txnIdHeap, txnIdHeapSize, (key, stream, v) -> {
-                    out[v] = key;
-                    return v + 1;
-                }, resultCount);
+                    result[resultIndex++] = InlineHeap.key(txnIdHeap, 0);
+                    InlineHeap.consume(txnIdHeap, txnIdHeapSize, (key, stream, v) -> 0, 0);
 
-                txnIdHeapSize = InlineHeap.advance(txnIdHeap, txnIdHeapSize, streamIndex -> {
-                    MergeStream stream = streams[streamIndex];
-                    int index = ++stream.index;
-                    if (index == stream.endIndex)
-                    {
-                        stream.endIndex = stream.input[++stream.keyIndex];
-                        return Integer.MIN_VALUE;
-                    }
-                    return stream.remap[stream.input[index]];
-                });
+                    txnIdHeapSize = InlineHeap.advance(txnIdHeap, txnIdHeapSize, streamIndex -> {
+                        MergeStream stream = streams[streamIndex];
+                        int index = ++stream.index;
+                        if (index == stream.endIndex)
+                        {
+                            stream.endIndex = stream.input[++stream.keyIndex];
+                            return Integer.MIN_VALUE;
+                        }
+                        return remap(stream.input[index], stream.remap);
+                    });
+                }
+                while (txnIdHeapSize > 1);
             }
 
             // fast path when one remaining source for this key
+            if (txnIdHeapSize > 0)
             {
-                assert txnIdHeapSize == 1;
 
                 int streamIndex = InlineHeap.stream(txnIdHeap, 0);
                 MergeStream stream = streams[streamIndex];
                 int index = stream.index;
                 int endIndex = stream.endIndex;
                 int count = endIndex - index;
-                if (result.length < resultCount + count)
-                    result = Arrays.copyOf(result, Math.max(result.length + (result.length / 2), resultCount + count));
+                if (result.length < resultIndex + count)
+                    result = Arrays.copyOf(result, Math.max(result.length + (result.length / 2), resultIndex + count));
 
                 while (index < endIndex)
-                    result[resultCount++] = stream.remap[stream.input[index++]];
+                    result[resultIndex++] = remap(stream.input[index++], stream.remap);
 
-                stream.index = stream.endIndex;
+                stream.index = index;
                 stream.endIndex = stream.input[++stream.keyIndex];
             }
 
+            result[keyIndex++] = resultIndex;
             keyHeapSize = InlineHeap.advance(keyHeap, keyHeapSize, streamIndex -> {
                 MergeStream stream = streams[streamIndex];
                 // keyIndex should already have been advanced by the txnId copying
+                // TODO (now): stream.keys may be null - cleanest way to handle?
                 return stream.keyIndex == stream.keys.length
                        ? Integer.MIN_VALUE
-                       : stream.keys[stream.keyIndex];
+                       : remap(stream.keyIndex, stream.keys);
             });
         }
 
-        if (resultCount < result.length)
-            result = Arrays.copyOf(result, resultCount);
+        if (resultIndex < result.length)
+            result = Arrays.copyOf(result, resultIndex);
 
         return new Dependencies(keys, txnIds, result);
     }
@@ -330,6 +339,9 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
 
     public Dependencies select(KeyRanges ranges)
     {
+        if (isEmpty())
+            return this;
+
         Keys select = keys.intersect(ranges);
         if (select.isEmpty())
             return NONE;
@@ -341,7 +353,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         int offset = select.size();
         for (int j = 0 ; j < select.size() ; ++j)
         {
-            i = keys.findFirst(select.get(0), i);
+            i = keys.find(select.get(j), i);
             offset += keyToTxnId[i] - (i == 0 ? keys.size() : keyToTxnId[i - 1]);
         }
 
@@ -349,13 +361,13 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         int[] trg = new int[offset];
 
         i = 0;
-        offset = 0;
+        offset = select.size();
         for (int j = 0 ; j < select.size() ; ++j)
         {
-            i = keys.findFirst(select.get(0), i);
+            i = keys.find(select.get(j), i);
             int start = i == 0 ? keys.size() : src[i - 1];
             int count = src[i] - start;
-            System.arraycopy(src, start, trg, j == 0 ? select.size() : trg[j - 1], count);
+            System.arraycopy(src, start, trg, offset, count);
             offset += count;
             trg[j] = offset;
         }
@@ -384,7 +396,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             for (int i = 0 ; i < txnIds.length ; ++i)
             {
                 if (remapTxnId[i]>= 0)
-                    result[remapTxnId[i]] = result[i];
+                    result[remapTxnId[i]] = txnIds[i];
             }
             for (int i = keys.size() ; i < keysToTxnId.length ; ++i)
                 keysToTxnId[i] = remapTxnId[keysToTxnId[i]];
@@ -393,7 +405,6 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         return result;
     }
 
-    // TODO: optimise for case where none added
     public Dependencies with(Dependencies that)
     {
         Keys keys = this.keys.union(that.keys);
@@ -402,36 +413,168 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         int[] remapRight = remapper(that.txnIds, txnIds);
         Keys leftKeys = this.keys, rightKeys = that.keys;
         int[] left = keyToTxnId, right = that.keyToTxnId;
-        int[] noOp = remapLeft == null ? left : remapRight == null ? right : null;
-        int[] out = noOp == null ? new int[left.length + right.length] : noOp;
+        int[] out = null;
         int lk = 0, rk = 0, ok = 0, l = this.keys.size(), r = that.keys.size(), o = keys.size();
+
+        if (remapLeft == null && keys == leftKeys)
+        {
+            noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
+            {
+                int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
+                if (ck < 0)
+                {
+                    o += left[lk] - l;
+                    l = left[lk];
+                    assert o == l && ok == lk && left[ok] == o;
+                    ok++;
+                    lk++;
+                }
+                else if (ck > 0)
+                {
+                    throw new IllegalStateException();
+                }
+                else
+                {
+                    while (l < left[lk] && r < right[rk])
+                    {
+                        int nextLeft = left[l];
+                        int nextRight = remap(right[r], remapRight);
+
+                        if (nextLeft < nextRight)
+                        {
+                            o++;
+                            l++;
+                        }
+                        else if (nextRight < nextLeft)
+                        {
+                            out = copy(left, o, left.length + right.length - r);
+                            break noOp;
+                        }
+                        else
+                        {
+                            o++;
+                            l++;
+                            r++;
+                        }
+                    }
+
+                    if (l < left[lk])
+                    {
+                        o += left[lk] - l;
+                        l = left[lk];
+                    }
+                    else if (r < right[rk])
+                    {
+                        out = copy(left, o, left.length + right.length - r);
+                        break;
+                    }
+
+                    assert o == l && ok == lk && left[ok] == o;
+                    ok++;
+                    rk++;
+                    lk++;
+                }
+            }
+
+            if (out == null)
+                return this;
+        }
+        else if (remapRight == null && keys == rightKeys)
+        {
+            noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
+            {
+                int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
+                if (ck < 0)
+                {
+                    throw new IllegalStateException();
+                }
+                else if (ck > 0)
+                {
+                    o += right[rk] - r;
+                    r = right[rk];
+                    assert o == r && ok == rk && right[ok] == o;
+                    ok++;
+                    rk++;
+                }
+                else
+                {
+                    while (l < left[lk] && r < right[rk])
+                    {
+                        int nextLeft = remap(left[l], remapLeft);
+                        int nextRight = right[r];
+
+                        if (nextLeft < nextRight)
+                        {
+                            out = copy(right, o, left.length + right.length - r);
+                            break noOp;
+                        }
+                        else if (nextRight < nextLeft)
+                        {
+                            o++;
+                            r++;
+                        }
+                        else
+                        {
+                            o++;
+                            l++;
+                            r++;
+                        }
+                    }
+
+                    if (l < left[lk])
+                    {
+                        out = copy(right, o, left.length + right.length - r);
+                    }
+                    else if (r < right[rk])
+                    {
+                        o += right[rk] - r;
+                        r = right[rk];
+                        break;
+                    }
+
+                    assert o == r && ok == rk && right[ok] == o;
+                    ok++;
+                    rk++;
+                    lk++;
+                }
+            }
+
+            if (out == null)
+                return that;
+        }
+        else
+        {
+            out = new int[left.length + right.length];
+        }
+
         while (lk < leftKeys.size() && rk < rightKeys.size())
         {
             int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
             if (ck < 0)
             {
                 while (l < left[lk])
-                    out[o++] = remapLeft[left[l++]];
+                    out[o++] = remap(left[l++], remapLeft);
                 out[ok++] = o;
                 lk++;
             }
             else if (ck > 0)
             {
                 while (r < right[rk])
-                    out[o++] = remapRight[right[r++]];
+                    out[o++] = remap(right[r++], remapRight);
                 out[ok++] = o;
                 rk++;
             }
             else
             {
-                while (left[lk] > l && right[rk] > r)
+                while (l < left[lk] && r < right[rk])
                 {
-                    int nextLeft = remapLeft[left[l++]];
-                    int nextRight = remapRight[right[r++]];
+                    int nextLeft = remap(left[l], remapLeft);
+                    int nextRight = remap(right[r], remapRight);
+
                     if (nextLeft <= nextRight)
                     {
                         out[o++] = nextLeft;
-                        ++l;
+                        l += 1;
                         r += nextLeft == nextRight ? 1 : 0;
                     }
                     else
@@ -442,10 +585,10 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
                 }
 
                 while (l < left[lk])
-                    out[o++] = remapLeft[left[l++]];
+                    out[o++] = remap(left[l++], remapLeft);
 
                 while (r < right[rk])
-                    out[o++] = remapRight[right[r++]];
+                    out[o++] = remap(right[r++], remapRight);
 
                 out[ok++] = o;
                 rk++;
@@ -456,7 +599,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         while (lk < leftKeys.size())
         {
             while (l < left[lk])
-                out[o++] = remapLeft[left[l++]];
+                out[o++] = remap(left[l++], remapLeft);
             out[ok++] = o;
             lk++;
         }
@@ -464,7 +607,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         while (rk < rightKeys.size())
         {
             while (r < right[rk])
-                out[o++] = remapRight[right[r++]];
+                out[o++] = remap(right[r++], remapRight);
             out[ok++] = o;
             rk++;
         }
@@ -473,6 +616,13 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             out = Arrays.copyOf(out, o);
 
         return new Dependencies(keys, txnIds, out);
+    }
+
+    private static int[] copy(int[] src, int to, int length)
+    {
+        int[] result = new int[length];
+        System.arraycopy(src, 0, result, 0, to);
+        return result;
     }
 
     // TODO: optimise for case where none removed
@@ -528,17 +678,17 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
 
     public Keys someKeys(TxnId txnId)
     {
-        int i = Arrays.binarySearch(txnIds, txnId);
-        if (i < 0)
+        int txnIdIndex = Arrays.binarySearch(txnIds, txnId);
+        if (txnIdIndex < 0)
             return Keys.EMPTY;
 
         ensureTxnIdToKey();
 
-        int start = i == 0 ? txnIds.length : txnIdToKey[i - 1];
-        int end = txnIdToKey[i];
+        int start = txnIdIndex == 0 ? txnIds.length : txnIdToKey[txnIdIndex - 1];
+        int end = txnIdToKey[txnIdIndex];
         Key[] result = new Key[end - start];
-        for (int j = start ; j < end ; ++j)
-            result[j] = keys.get(txnIdToKey[i]);
+        for (int i = start ; i < end ; ++i)
+            result[i - start] = keys.get(txnIdToKey[i]);
         return new Keys(result);
     }
 
@@ -573,49 +723,85 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         }
     }
 
-    public void forEachOn(CommandStore commandStore, Timestamp executeAt, DependencyConsumer forEach)
+    public void forEachOn(KeyRanges ranges, Predicate<Key> include, BiConsumer<Key, TxnId> forEach)
     {
-        KeyRanges ranges = commandStore.ranges().since(executeAt.epoch);
-        if (ranges == null)
-            return;
-
         keys.foldl(ranges, (index, key, value) -> {
-            if (!commandStore.hashIntersects(key))
+            if (!include.test(key))
                 return null;
 
             for (int t = index == 0 ? keys.size() : keyToTxnId[index - 1], end = keyToTxnId[index]; t < end ; ++t)
             {
-                TxnId txnId = txnIds[keyToTxnId[t++]];
-                Command command = commandStore.command(txnId);
-                forEach.accept(key, txnId, command);
+                TxnId txnId = txnIds[keyToTxnId[t]];
+                forEach.accept(key, txnId);
             }
             return null;
         }, null);
     }
 
-    public void forEachOn(CommandStore commandStore, Timestamp executeAt, BiConsumer<TxnId, Command> forEach)
+    public void forEachOn(CommandStore commandStore, Timestamp executeAt, Consumer<TxnId> forEach)
     {
         KeyRanges ranges = commandStore.ranges().since(executeAt.epoch);
         if (ranges == null)
             return;
 
-        // TODO: avoid allocation if e.g. < 64 txnIds
-        BitSet bitSet = keys.foldl(ranges, (index, key, value) -> {
-            if (!commandStore.hashIntersects(key))
-                return value;
+        // TODO: check inlining
+        forEachOn(ranges, commandStore::hashIntersects, forEach);
+    }
 
-            for (int t = index == 0 ? keys.size() : keyToTxnId[index - 1], end = keyToTxnId[index]; t < end ; ++t)
-                value.set(keyToTxnId[t++]);
-
-            return value;
-        }, new BitSet());
-
-        for (int i = bitSet.nextSetBit(0) ; i < bitSet.size() ; i = bitSet.nextSetBit(i + 1))
+    public void forEachOn(KeyRanges ranges, Predicate<Key> include, Consumer<TxnId> forEach)
+    {
+        for (int offset = 0 ; offset < txnIds.length ; offset += 64)
         {
-            TxnId txnId = txnIds[i];
-            Command command = commandStore.command(txnId);
-            forEach.accept(txnId, command);
+            long bitset = keys.foldl(ranges, (keyIndex, key, off, value) -> {
+                if (!include.test(key))
+                    return value;
+
+                int index = keyIndex == 0 ? keys.size() : keyToTxnId[keyIndex - 1];
+                int end = keyToTxnId[keyIndex];
+                if (off > 0)
+                {
+                    // TODO: interpolation search probably great here
+                    index = Arrays.binarySearch(keyToTxnId, index, end, (int)off);
+                    if (index < 0)
+                        index = -1 - index;
+                }
+
+                while (index < end)
+                {
+                    long next = keyToTxnId[index++] - off;
+                    if (next >= 64)
+                        break;
+                    value |= 1L << next;
+                }
+
+                return value;
+            }, offset, 0, 0xffffffffffffffffL);
+
+            while (bitset != 0)
+            {
+                int i = Long.numberOfTrailingZeros(bitset);
+                TxnId txnId = txnIds[offset + i];
+                forEach.accept(txnId);
+                bitset ^= Long.lowestOneBit(bitset);
+            }
         }
+    }
+
+    public void forEach(Key key, Consumer<TxnId> forEach)
+    {
+        int keyIndex = keys.indexOf(key);
+        if (keyIndex < 0)
+            return;
+
+        int index = keyIndex == 0 ? keys.size() : keyToTxnId[keyIndex - 1];
+        int end = keyToTxnId[keyIndex];
+        while (index < end)
+            forEach.accept(txnIds[keyToTxnId[index++]]);
+    }
+
+    public Keys keys()
+    {
+        return keys;
     }
 
     public int txnIdCount()
@@ -659,7 +845,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             return "{}";
 
         StringBuilder builder = new StringBuilder("{");
-        for (int k = 0, t = 0; k < keys.size() ; ++t)
+        for (int k = 0, t = keys.size(); k < keys.size() ; ++k)
         {
             if (builder.length() > 1)
                 builder.append(", ");
@@ -675,6 +861,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             }
             builder.append("]");
         }
+        builder.append("}");
         return builder.toString();
     }
 

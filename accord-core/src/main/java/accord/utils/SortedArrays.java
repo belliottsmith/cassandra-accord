@@ -256,4 +256,9 @@ public class SortedArrays
         }
         return result;
     }
+
+    public static int remap(int i, int[] remapper)
+    {
+        return remapper == null ? i : remapper[i];
+    }
 }

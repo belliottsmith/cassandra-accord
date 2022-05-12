@@ -223,7 +223,8 @@ public class Command implements Listener, Consumer<Listener>
         this.waitingOnCommit = new TreeMap<>();
         this.waitingOnApply = new TreeMap<>();
 
-        savedDeps().forEachOn(commandStore, executeAt, (id, command) -> {
+        savedDeps().forEachOn(commandStore, executeAt, txnId -> {
+            Command command = commandStore.command(txnId);
             switch (command.status)
             {
                 default:
@@ -234,7 +235,7 @@ public class Command implements Listener, Consumer<Listener>
                 case AcceptedInvalidate:
                     // we don't know when these dependencies will execute, and cannot execute until we do
                     command.addListener(this);
-                    waitingOnCommit.put(id, command);
+                    waitingOnCommit.put(txnId, command);
                     break;
                 case Committed:
                     // TODO: split into ReadyToRead and ReadyToWrite;
