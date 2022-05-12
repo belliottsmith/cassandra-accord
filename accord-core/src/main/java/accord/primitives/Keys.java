@@ -380,9 +380,9 @@ public class Keys implements Iterable<Key>
 
             ai = (int) (ari >>> 32);
             bi = (int) (bri >>> 32);
-            ri = (int)bri;
-            if ((int)ari == ri)
+            if ((int)ari == (int)bri)
             {
+                ri = (int)ari;
                 KeyRange range = rs.get(ri);
                 do
                 {
@@ -399,6 +399,10 @@ public class Keys implements Iterable<Key>
                     ai = (int)(abi >>> 32);
                     bi = (int)abi;
                 } while (range.containsKey(as.get(ai)));
+            }
+            else
+            {
+                ri = Math.max((int)ari, (int)bri);
             }
         }
 

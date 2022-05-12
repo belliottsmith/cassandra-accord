@@ -185,6 +185,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         final int[] input;
         final int[] remap; // TODO: use cached backing array
         final int[] keys; // TODO: use cached backing array
+        final int keyCount;
         int keyIndex;
         int index;
         int endIndex;
@@ -194,12 +195,14 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             this.input = dependencies.keyToTxnId;
             this.remap = remapper(dependencies.txnIds, txnIds);
             this.keys = dependencies.keys.remapper(keys);
+            this.keyCount = dependencies.keys.size();
             this.keyIndex = 0;
             this.index = dependencies.keys.size();
             this.endIndex = input[0];
         }
     }
 
+    // TODO (now): filter out keys with no txnId
     public static <T> Dependencies merge(Keys keys, List<T> merge, Function<T, Dependencies> getter)
     {
         if (merge.size() == 2)
@@ -213,13 +216,13 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             }
             return left.with(right);
         }
-
+        // TODO (now): filter identical deps
         // TODO: use Cassandra MergeIterator to perform more efficient merge of TxnId
         TxnId[] txnIds = NONE.txnIds;
         for (T t : merge)
         {
             Dependencies dependencies = getter.apply(t);
-            if (dependencies != null)
+            if (dependencies != null && !dependencies.isEmpty())
                 txnIds = SortedArrays.linearUnion(txnIds, dependencies.txnIds, TxnId[]::new);
         }
 
@@ -233,8 +236,12 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             for (int stream = 0 ; stream < mergeSize ; ++stream)
             {
                 Dependencies dependencies = getter.apply(merge.get(stream));
-                if (dependencies != null)
+                if (dependencies != null && !dependencies.isEmpty())
+                {
                     streams[stream] = new MergeStream(keys, txnIds, dependencies);
+                    maxStreamSize = Math.max(maxStreamSize, streams[stream].input.length);
+                    totalStreamSize += streams[stream].input.length;
+                }
             }
             result = new int[Math.min(maxStreamSize * 2, totalStreamSize)]; // TODO: use cached temporary array
         }
@@ -256,6 +263,11 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         while (keyHeapSize > 0)
         {
             // while the heap is non-empty, pop the streams matching the top key and insert them into their own heap
+
+            // if we have keys with no contents, fill in zeroes
+            while (keyIndex < InlineHeap.key(keyHeap, 0))
+                result[keyIndex++] = resultIndex;
+
             int txnIdHeapSize = InlineHeap.consume(keyHeap, keyHeapSize, (key, streamIndex, size) -> {
                 MergeStream stream = streams[streamIndex];
                 InlineHeap.set(txnIdHeap, size, remap(stream.input[stream.index], stream.remap), streamIndex);
@@ -268,7 +280,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
                 do
                 {
                     if (resultIndex + txnIdHeapSize >= result.length)
-                        result = Arrays.copyOf(result, Math.max(resultIndex + txnIdHeapSize, resultIndex + (resultIndex/2)));
+                        result = Arrays.copyOf(result, Math.max((resultIndex + txnIdHeapSize) * 2, resultIndex + (resultIndex/2)));
 
                     result[resultIndex++] = InlineHeap.key(txnIdHeap, 0);
                     InlineHeap.consume(txnIdHeap, txnIdHeapSize, (key, stream, v) -> 0, 0);
@@ -290,7 +302,6 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             // fast path when one remaining source for this key
             if (txnIdHeapSize > 0)
             {
-
                 int streamIndex = InlineHeap.stream(txnIdHeap, 0);
                 MergeStream stream = streams[streamIndex];
                 int index = stream.index;
@@ -310,8 +321,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             keyHeapSize = InlineHeap.advance(keyHeap, keyHeapSize, streamIndex -> {
                 MergeStream stream = streams[streamIndex];
                 // keyIndex should already have been advanced by the txnId copying
-                // TODO (now): stream.keys may be null - cleanest way to handle?
-                return stream.keyIndex == stream.keys.length
+                return stream.keyIndex == stream.keyCount
                        ? Integer.MIN_VALUE
                        : remap(stream.keyIndex, stream.keys);
             });

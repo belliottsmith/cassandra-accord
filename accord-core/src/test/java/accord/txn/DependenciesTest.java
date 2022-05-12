@@ -248,6 +248,9 @@ public class DependenciesTest
                                  int uniqueKeysRange, int keyRange, int totalCountRange)
     {
         return () -> {
+            if (random.nextInt(100) == 0)
+                return new Deps(new TreeMap<>(), Dependencies.NONE);
+
             int uniqueTxnIds = 1 + random.nextInt(uniqueTxnIdsRange - 1);
             int uniqueKeys = 1 + random.nextInt(uniqueKeysRange - 1);
             int totalCount = uniqueTxnIds * uniqueKeys == 1 ? 1 : 1 + random.nextInt(Math.min(totalCountRange, uniqueKeys * uniqueTxnIds));

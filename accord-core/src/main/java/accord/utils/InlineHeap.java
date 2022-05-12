@@ -3,6 +3,8 @@ package accord.utils;
 import java.util.Arrays;
 import java.util.function.IntUnaryOperator;
 
+import com.google.common.base.Preconditions;
+
 import org.apache.cassandra.utils.concurrent.Inline;
 
 public class InlineHeap
@@ -21,7 +23,13 @@ public class InlineHeap
     public static int heapify(int[] heap, int size)
     {
         for (int i = size - 1; i >= 0; --i)
-            size = replaceAndSink(heap, key(heap, i), stream(heap, i), i, size);
+        {
+            int key = key(heap, i);
+            int stream = stream(heap, i);
+            if (key == Integer.MIN_VALUE)
+                throw new AssertionError();
+            size = replaceAndSink(heap, key, stream, i, size);
+        }
         return size;
     }
 
@@ -35,7 +43,10 @@ public class InlineHeap
             {
                 int stream = stream(heap, i);
                 key = next.applyAsInt(stream);
-                size = replaceAndSink(heap, key, stream, i, size);
+                int newSize = replaceAndSink(heap, key, stream, i, size);
+                if (key == Integer.MIN_VALUE && newSize != size - 1)
+                    throw new AssertionError();
+                size = newSize;
             }
         }
         return size;
@@ -46,6 +57,8 @@ public class InlineHeap
     public static int consume(int[] heap, int size, IntHeapFold consumer, int v)
     {
         int key = key(heap, 0);
+        if (key == Integer.MIN_VALUE)
+            throw new AssertionError();
         int i = 0;
         int sortedSize = Math.min(size, SORTED_SECTION_SIZE);
         do
@@ -58,7 +71,7 @@ public class InlineHeap
         if (i == SORTED_SECTION_SIZE && i < size)
         {
             boolean descend;
-            int depthSize = 2;
+            int depthSize = Math.min(size - SORTED_SECTION_SIZE, 2);
             do
             {
                 descend = false;
@@ -81,7 +94,6 @@ public class InlineHeap
     private static int maxConsumed(int[] heap, int size)
     {
         int i = 1;
-        clearKey(heap, 0);
         int sortedSize = Math.min(size, SORTED_SECTION_SIZE);
         while (i < sortedSize && key(heap, i) == Integer.MIN_VALUE)
             i++;
@@ -89,14 +101,14 @@ public class InlineHeap
         int result = i;
         if (i == SORTED_SECTION_SIZE && i < size)
         {
-            int depthSize = 2;
+            int depthSize = Math.min(size - SORTED_SECTION_SIZE, 2);
             loop: while (i < size)
             {
                 for (int j = depthSize - 1 ; j >= 0 ; --j)
                 {
                     if (key(heap, i + j) == Integer.MIN_VALUE)
                     {
-                        result = i + j;
+                        result = i + j + 1;
                         i += depthSize;
                         depthSize = Math.min(depthSize * 2, size - i);
                         continue loop;
@@ -120,8 +132,16 @@ public class InlineHeap
         int headIndex = currIdx;
         if (key == Integer.MIN_VALUE)
         {
-            // Drop iterator by replacing it with the last one in the heap.
-            key = key(heap, --size);
+            // Drop stream by replacing it with the last one in the heap.
+            if (--size == currIdx)
+            {
+                clear(heap, size);
+                return size;
+            }
+
+            key = key(heap, size);
+            if (key == Integer.MIN_VALUE)
+                throw new AssertionError();
             stream = stream(heap, size);
             clear(heap, size);
         }
@@ -212,6 +232,8 @@ public class InlineHeap
 
     public static void set(int[] heap, int index, int key, int stream)
     {
+        if (key == Integer.MIN_VALUE)
+            throw new AssertionError();
         heap[index * 2] = key;
         heap[index * 2 + 1] = stream;
     }

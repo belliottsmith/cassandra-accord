@@ -374,6 +374,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         void recordBlocking(Command blocking, Keys someKeys)
         {
             this.blocking = blocking;
+            if (blocking.txn() != null && !blocking.txn().keys.containsAll(someKeys))
+                throw new IllegalStateException();
             switch (blocking.status())
             {
                 default: throw new IllegalStateException();
