@@ -147,19 +147,20 @@ public class PreAccept extends TxnRequest.WithUnsync
         }
     }
 
+//    static Dependencies calculateDeps(CommandStore commandStore, TxnId txnId, Txn txn, Timestamp executeAt)
+//    {
+//        return calculateDeps(commandStore, txnId, txn.keys, txn.update.keys(), executeAt);
+//    }
+//
     static Dependencies calculateDeps(CommandStore commandStore, TxnId txnId, Txn txn, Timestamp executeAt)
     {
-        return calculateDeps(commandStore, txnId, txn.keys, txn.update.keys(), executeAt);
-    }
-
-    static Dependencies calculateDeps(CommandStore commandStore, TxnId txnId, Keys keys, Keys writeKeys, Timestamp executeAt)
-    {
-        Dependencies.Builder deps = Dependencies.builder(keys);
-        conflictsMayExecuteBefore(commandStore, executeAt, keys).forEach(conflict -> {
+        // TODO (now): do not use Txn
+        Dependencies.Builder deps = Dependencies.builder(txn.keys);
+        conflictsMayExecuteBefore(commandStore, executeAt, txn.keys).forEach(conflict -> {
             if (conflict.txnId().equals(txnId))
                 return;
 
-            if (writeKeys.intersects(commandStore.ranges().at(executeAt.epoch), conflict.txn().update.keys()))
+            if (txn.isWrite() || conflict.txn().isWrite())
                 deps.add(conflict);
         });
         return deps.build();

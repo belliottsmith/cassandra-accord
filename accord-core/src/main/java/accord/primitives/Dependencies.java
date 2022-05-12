@@ -96,6 +96,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         {
             int txnIdx = ensureTxnIdx(txnId);
             int keyIdx = keys.indexOf(key);
+            // TODO (now): try to do cheap dedup
             if (keysToTxnIdCounts[keyIdx] == keysToTxnId[keyIdx].length)
                 keysToTxnId[keyIdx] = Arrays.copyOf(keysToTxnId[keyIdx], Math.max(4, keysToTxnIdCounts[keyIdx] * 2));
             keysToTxnId[keyIdx][keysToTxnIdCounts[keyIdx]++] = txnIdx;
@@ -141,21 +142,28 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             }
 
             int keyIndex = 0;
+            int offset = keyCount;
             for (int i = 0 ; i < keys.size() ; ++i)
             {
                 if (keysToTxnIdCounts[i] > 0)
                 {
                     int count = keysToTxnIdCounts[i];
-                    int offset = keyIndex == 0 ? keyCount : result[keyIndex - 1];
-                    result[keyIndex] = offset + count;
                     int[] src = keysToTxnId[i];
                     for (int j = 0 ; j < count ; ++j)
                         result[j + offset] = txnIdMap[src[j]];
                     Arrays.sort(result, offset, count + offset);
-                    // TODO: filter duplicates
+                    int dups = 0;
+                    for (int j = offset + 1 ; j < offset + count ; ++j)
+                    {
+                        if (result[j] == result[j - 1]) ++dups;
+                        else if (dups > 0) result[j - dups] = result[j];
+                    }
+                    result[keyIndex] = offset += count - dups;
                     ++keyIndex;
                 }
             }
+            if (offset < result.length)
+                result = Arrays.copyOf(result, offset);
 
             Keys keys = this.keys;
             if (keyCount < keys.size())
@@ -233,17 +241,18 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         MergeStream[] streams = new MergeStream[mergeSize];
         int[] result; {
             int maxStreamSize = 0, totalStreamSize = 0;
-            for (int stream = 0 ; stream < mergeSize ; ++stream)
+            for (int streamIndex = 0 ; streamIndex < mergeSize ; ++streamIndex)
             {
-                Dependencies dependencies = getter.apply(merge.get(stream));
+                Dependencies dependencies = getter.apply(merge.get(streamIndex));
                 if (dependencies != null && !dependencies.isEmpty())
                 {
-                    streams[stream] = new MergeStream(keys, txnIds, dependencies);
-                    maxStreamSize = Math.max(maxStreamSize, streams[stream].input.length);
-                    totalStreamSize += streams[stream].input.length;
+                    MergeStream stream = new MergeStream(keys, txnIds, dependencies);
+                    streams[streamIndex] = stream;
+                    maxStreamSize = Math.max(maxStreamSize, stream.input.length - stream.keyCount);
+                    totalStreamSize += stream.input.length - stream.keyCount;
                 }
             }
-            result = new int[Math.min(maxStreamSize * 2, totalStreamSize)]; // TODO: use cached temporary array
+            result = new int[keys.size() + Math.min(maxStreamSize * 2, totalStreamSize)]; // TODO: use cached temporary array
         }
 
         int resultIndex = keys.size();
@@ -266,7 +275,12 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
 
             // if we have keys with no contents, fill in zeroes
             while (keyIndex < InlineHeap.key(keyHeap, 0))
+            {
+                if (keyIndex == result.length)
+                    result = Arrays.copyOf(result, result.length * 2);
+
                 result[keyIndex++] = resultIndex;
+            }
 
             int txnIdHeapSize = InlineHeap.consume(keyHeap, keyHeapSize, (key, streamIndex, size) -> {
                 MergeStream stream = streams[streamIndex];
@@ -327,6 +341,9 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             });
         }
 
+        while (keyIndex < keys.size())
+            result[keyIndex++] = resultIndex;
+
         if (resultIndex < result.length)
             result = Arrays.copyOf(result, resultIndex);
 
@@ -345,6 +362,22 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         this.keys = keys;
         this.txnIds = txnIds;
         this.keyToTxnId = keyToTxnId;
+        if (!keys.isEmpty() && keyToTxnId[keys.size() - 1] != keyToTxnId.length)
+            throw new IllegalStateException();
+        int k = 0;
+        for (int i = keys.size() ; i < keyToTxnId.length ; ++i)
+        {
+            boolean first = true;
+            while (i < keyToTxnId[k])
+            {
+                if (first) first = false;
+                else if (keyToTxnId[i - 1] == keyToTxnId[i])
+                    throw new AssertionError();
+                i++;
+            }
+
+            ++k;
+        }
     }
 
     public Dependencies select(KeyRanges ranges)
@@ -698,7 +731,11 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         int end = txnIdToKey[txnIdIndex];
         Key[] result = new Key[end - start];
         for (int i = start ; i < end ; ++i)
+        {
             result[i - start] = keys.get(txnIdToKey[i]);
+            if (i != start && result[i - (1 + start)] == result[i - start])
+                throw new AssertionError();
+        }
         return new Keys(result);
     }
 
@@ -726,7 +763,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         int k = 0;
         for (int i = keys.size() ; i < src.length ; ++i)
         {
-            if (i == keyToTxnId[k])
+            while (i == keyToTxnId[k])
                 ++k;
 
             trg[trg[src[i]]++] = k;

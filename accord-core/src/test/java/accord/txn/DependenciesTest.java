@@ -29,6 +29,7 @@ import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
+// TODO (now): test Keys with no contents
 public class DependenciesTest
 {
     private static final Logger logger = LoggerFactory.getLogger(DependenciesTest.class);
@@ -116,9 +117,8 @@ public class DependenciesTest
             {
                 Key key = keys.get(random.nextInt(uniqueKeys));
                 TxnId txnId = txnIds.get(random.nextInt(uniqueTxnIds));
-                // TODO: dedup in builder
-                if (canonical.computeIfAbsent(key, ignore -> new TreeSet<>()).add(txnId))
-                    builder.add(key, txnId);
+                canonical.computeIfAbsent(key, ignore -> new TreeSet<>()).add(txnId);
+                builder.add(key, txnId);
             }
 
             return new Deps(canonical, builder.build());

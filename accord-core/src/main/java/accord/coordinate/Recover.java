@@ -49,7 +49,7 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         {
             Topologies topologies = node.topology().preciseEpochs(someKeys, txnId.epoch);
             this.tracker = new QuorumTracker(topologies);
-            node.send(topologies.nodes(), to -> new WaitOnCommit(to, topologies, txnId, txn.keys()), this);
+            node.send(topologies.nodes(), to -> new WaitOnCommit(to, topologies, txnId, someKeys), this);
         }
 
         @Override
