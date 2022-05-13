@@ -13,7 +13,9 @@ import java.util.concurrent.ThreadLocalRandom;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-public class TestInlineHeap
+import static accord.utils.InlineHeap.NIL;
+
+public class InlineHeapTest
 {
     @Test
     public void testSmall()
@@ -53,6 +55,56 @@ public class TestInlineHeap
         int minStreamLength = 50;
         int maxStreamLength = 100;
         test(ThreadLocalRandom.current().nextLong(), streams, range, minStreamLength, maxStreamLength);
+    }
+
+    @Test
+    public void testConsume()
+    {
+        // hard coded for SORTED_SECTION_SIZE=4 (meaning indexes 0..3 are "sorted" and 4 is the head of the binary heap)
+        testConsume(new int[] { 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9 }, 1);
+        testConsume(new int[] { 1, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9 }, 2);
+        testConsume(new int[] { 1, 1, 1, 9, 9, 9, 9, 9, 9, 9, 9 }, 3);
+        testConsume(new int[] { 1, 1, 1, 1, 9, 9, 9, 9, 9, 9, 9 }, 4);
+        testConsume(new int[] { 1, 1, 1, 1, 1, 9, 9, 9, 9, 9, 9 }, 5);
+        testConsume(new int[] { 1, 1, 1, 1, 1, 1, 9, 9, 9, 9, 9 }, 6);
+        testConsume(new int[] { 1, 1, 1, 1, 1, 9, 1, 9, 9, 9, 9 }, 6);
+        testConsume(new int[] { 1, 1, 1, 1, 1, 1, 9, 1, 9, 9, 9 }, 7);
+        testConsume(new int[] { 1, 1, 1, 1, 1, 1, 9, 9, 1, 9, 9 }, 7);
+        testConsume(new int[] { 1, 1, 1, 1, 1, 9, 1, 9, 9, 1, 9 }, 7);
+        testConsume(new int[] { 1, 1, 1, 1, 1, 9, 1, 9, 9, 9, 1 }, 7);
+    }
+
+    private static void testConsume(int[] keys, int expect)
+    {
+        int size = keys.length;
+        int[] heap = InlineHeap.create(size);
+        for (int i = 0 ; i < size ; ++i)
+            InlineHeap.set(heap, i, keys[i], 0);
+
+        int count = InlineHeap.consume(heap, size, (key, stream, v) -> v + 1, 0);
+        Assertions.assertEquals(expect, count);
+        count = 0;
+        int max = 0;
+        for (int i = 0 ; i < size ; ++i)
+        {
+            if (InlineHeap.key(heap, i) == NIL)
+            {
+                max = i;
+                count++;
+            }
+        }
+        Assertions.assertEquals(expect, count);
+        count = 0;
+        for (int i = 0 ; i < size ; ++i)
+            count += InlineHeap.key(heap, i) == 1 ? 1 : 0;
+        Assertions.assertEquals(0, count);
+        Assertions.assertEquals(max, InlineHeap.maxConsumed(heap, size));
+        int newSize = InlineHeap.advance(heap, size, s -> 2);
+        Assertions.assertEquals(size, newSize);
+        count = 0;
+        for (int i = 0 ; i < size ; ++i)
+            count += InlineHeap.key(heap, i) == 2 ? 1 : 0;
+        Assertions.assertEquals(expect, count);
     }
 
     public static void test(long seed, int streams, int range, int minStreamLength, int maxStreamLength)
@@ -113,4 +165,17 @@ public class TestInlineHeap
 
         Assertions.assertEquals(canonical.size(), count, "Seed: " + seed);
     }
+
+    public static void main(String[] args)
+    {
+        for (long seed = 0 ; seed < 10000 ; ++seed)
+        {
+            test(seed, 2, 50, 2, 10);
+            test(seed, 16, 200, 10, 100);
+            test(seed, 32, 400, 50, 100);
+            test(seed, 32, 2000, 50, 100);
+        }
+
+    }
+
 }

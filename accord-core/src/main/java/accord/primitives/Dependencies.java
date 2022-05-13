@@ -24,42 +24,6 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
 {
     public static final Dependencies NONE = new Dependencies(Keys.EMPTY, new TxnId[0], new int[0]);
 
-    public static class Entry implements Map.Entry<Key, TxnId>
-    {
-        final Key key;
-        final TxnId txnId;
-
-        public Entry(Key key, TxnId txnId)
-        {
-            this.key = key;
-            this.txnId = txnId;
-        }
-
-        @Override
-        public Key getKey()
-        {
-            return key;
-        }
-
-        @Override
-        public TxnId getValue()
-        {
-            return txnId;
-        }
-
-        @Override
-        public TxnId setValue(TxnId value)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public String toString()
-        {
-            return key + "->" + txnId;
-        }
-    }
-
     public static class Builder
     {
         final Keys keys;
@@ -96,7 +60,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         {
             int txnIdx = ensureTxnIdx(txnId);
             int keyIdx = keys.indexOf(key);
-            // TODO (now): try to do cheap dedup
+            // TODO (now): try to do cheap dedup, so can avoid it on build
             if (keysToTxnIdCounts[keyIdx] == keysToTxnId[keyIdx].length)
                 keysToTxnId[keyIdx] = Arrays.copyOf(keysToTxnId[keyIdx], Math.max(4, keysToTxnIdCounts[keyIdx] * 2));
             keysToTxnId[keyIdx][keysToTxnIdCounts[keyIdx]++] = txnIdx;
@@ -189,42 +153,72 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
 
     static class MergeStream
     {
+        final Dependencies source;
         // TODO: could share backing array for all of these if we want, with an additional offset
         final int[] input;
-        final int[] remap; // TODO: use cached backing array
-        final int[] keys; // TODO: use cached backing array
         final int keyCount;
+        int[] remap; // TODO: use cached backing array
+        int[] keys; // TODO: use cached backing array
         int keyIndex;
         int index;
         int endIndex;
 
-        MergeStream(Keys keys, TxnId[] txnIds, Dependencies dependencies)
+        MergeStream(Dependencies source)
         {
-            this.input = dependencies.keyToTxnId;
-            this.remap = remapper(dependencies.txnIds, txnIds);
-            this.keys = dependencies.keys.remapper(keys);
-            this.keyCount = dependencies.keys.size();
-            this.keyIndex = 0;
-            this.index = dependencies.keys.size();
-            this.endIndex = input[0];
+            this.source = source;
+            this.input = source.keyToTxnId;
+            this.keyCount = source.keys.size();
+        }
+
+        private void init(Keys keys, TxnId[] txnIds)
+        {
+            this.remap = remapper(source.txnIds, txnIds, true);
+            this.keys = source.keys.remapper(keys, true);
+            while (input[keyIndex] == keyCount)
+                ++keyIndex;
+            this.index = keyCount;
+            this.endIndex = input[keyIndex];
         }
     }
 
     // TODO (now): filter out keys with no txnId
     public static <T> Dependencies merge(Keys keys, List<T> merge, Function<T, Dependencies> getter)
     {
-        if (merge.size() == 2)
+        // collect non-empty inputs
+        int streamCount = 0;
+        MergeStream[] streams = new MergeStream[merge.size()];
+        for (T t : merge)
         {
-            Dependencies left = getter.apply(merge.get(0));
-            Dependencies right = getter.apply(merge.get(1));
-            if (left == null || right == null)
-            {
-                if (left == null && right == null) return NONE;
-                else return left == null ? right : left;
-            }
-            return left.with(right);
+            Dependencies dependencies = getter.apply(t);
+            if (dependencies != null && !dependencies.isEmpty())
+                streams[streamCount++] = new MergeStream(dependencies);
         }
-        // TODO (now): filter identical deps
+
+        {
+            // first sort by size and remove identical collections
+            Arrays.sort(streams, 0, streamCount, (a, b) -> {
+                int c = Integer.compare(b.input.length, a.input.length);
+                if (c == 0) c = Integer.compare(b.keyCount, a.keyCount);
+                if (c == 0) c = Integer.compare(b.source.txnIds.length, a.source.txnIds.length);
+                return c;
+            });
+
+            int diff = 0;
+            for (int i = 1 ; i < streamCount ; i++)
+            {
+                if (streams[i - 1].source.equals(streams[i].source)) ++diff;
+                else if (diff > 0) streams[i - diff] = streams[i];
+            }
+            streamCount -= diff;
+        }
+
+        switch (streamCount)
+        {
+            case 0: return NONE;
+            case 1: return streams[0].source;
+            case 2: return streams[0].source.with(streams[1].source);
+        }
+
         // TODO: use Cassandra MergeIterator to perform more efficient merge of TxnId
         TxnId[] txnIds = NONE.txnIds;
         for (T t : merge)
@@ -234,37 +228,27 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
                 txnIds = SortedArrays.linearUnion(txnIds, dependencies.txnIds, TxnId[]::new);
         }
 
-        if (txnIds.length == 0)
-            return NONE;
-
-        int mergeSize = merge.size();
-        MergeStream[] streams = new MergeStream[mergeSize];
         int[] result; {
             int maxStreamSize = 0, totalStreamSize = 0;
-            for (int streamIndex = 0 ; streamIndex < mergeSize ; ++streamIndex)
+            for (int streamIndex = 0 ; streamIndex < streamCount ; ++streamIndex)
             {
-                Dependencies dependencies = getter.apply(merge.get(streamIndex));
-                if (dependencies != null && !dependencies.isEmpty())
-                {
-                    MergeStream stream = new MergeStream(keys, txnIds, dependencies);
-                    streams[streamIndex] = stream;
-                    maxStreamSize = Math.max(maxStreamSize, stream.input.length - stream.keyCount);
-                    totalStreamSize += stream.input.length - stream.keyCount;
-                }
+                MergeStream stream = streams[streamIndex];
+                stream.init(keys, txnIds);
+                maxStreamSize = Math.max(maxStreamSize, stream.input.length - stream.keyCount);
+                totalStreamSize += stream.input.length - stream.keyCount;
             }
             result = new int[keys.size() + Math.min(maxStreamSize * 2, totalStreamSize)]; // TODO: use cached temporary array
         }
 
         int resultIndex = keys.size();
-        int[] keyHeap = InlineHeap.create(mergeSize); // TODO: use cached temporary array
-        int[] txnIdHeap = InlineHeap.create(mergeSize); // TODO: use cached temporary array
+        int[] keyHeap = InlineHeap.create(streamCount); // TODO: use cached temporary array
+        int[] txnIdHeap = InlineHeap.create(streamCount); // TODO: use cached temporary array
 
         // build a heap of keys and streams, so we can merge those streams with overlapping keys
         int keyHeapSize = 0;
-        for (int stream = 0 ; stream < mergeSize ; ++stream)
+        for (int stream = 0 ; stream < streamCount ; ++stream)
         {
-            if (streams[stream] != null)
-                InlineHeap.set(keyHeap, keyHeapSize++, remap(0, streams[stream].keys), stream);
+            InlineHeap.set(keyHeap, keyHeapSize++, remap(0, streams[stream].keys), stream);
         }
 
         int keyIndex = 0;
@@ -450,12 +434,22 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
 
     public Dependencies with(Dependencies that)
     {
+        if (isEmpty() || that.isEmpty())
+            return isEmpty() ? that : this;
+
         Keys keys = this.keys.union(that.keys);
         TxnId[] txnIds = SortedArrays.linearUnion(this.txnIds, that.txnIds, TxnId[]::new);
-        int[] remapLeft = remapper(this.txnIds, txnIds);
-        int[] remapRight = remapper(that.txnIds, txnIds);
+        int[] remapLeft = remapper(this.txnIds, txnIds, true);
+        int[] remapRight = remapper(that.txnIds, txnIds, true);
         Keys leftKeys = this.keys, rightKeys = that.keys;
         int[] left = keyToTxnId, right = that.keyToTxnId;
+
+        if (remapLeft == null && remapRight == null && Arrays.equals(left, right)
+            && keys.size() == leftKeys.size() && keys.size() == rightKeys.size())
+        {
+            return this;
+        }
+
         int[] out = null;
         int lk = 0, rk = 0, ok = 0, l = this.keys.size(), r = that.keys.size(), o = keys.size();
 
@@ -721,9 +715,11 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         return Arrays.binarySearch(txnIds, txnId) >= 0;
     }
 
+    // return true iff we map any keys to any txnId
+    // if the mapping is empty we return false, whether or not we have any keys or txnId by themselves
     public boolean isEmpty()
     {
-        return keys.isEmpty();
+        return keyToTxnId.length == keys.size();
     }
 
     public Keys someKeys(TxnId txnId)
@@ -924,9 +920,52 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
     {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        Dependencies that = (Dependencies) o;
-        return txnIds.equals(that.txnIds)
-               && keys.equals(that.keys)
-               && Arrays.equals(keyToTxnId, that.keyToTxnId);
+        return equals((Dependencies) o);
     }
+
+    public boolean equals(Dependencies that)
+    {
+        return this.txnIds.length == that.txnIds.length
+               && this.keys.size() == that.keys.size()
+               && Arrays.equals(this.keyToTxnId, that.keyToTxnId)
+               && Arrays.equals(this.txnIds, that.txnIds)
+               && this.keys.equals(that.keys);
+    }
+
+    public static class Entry implements Map.Entry<Key, TxnId>
+    {
+        final Key key;
+        final TxnId txnId;
+
+        public Entry(Key key, TxnId txnId)
+        {
+            this.key = key;
+            this.txnId = txnId;
+        }
+
+        @Override
+        public Key getKey()
+        {
+            return key;
+        }
+
+        @Override
+        public TxnId getValue()
+        {
+            return txnId;
+        }
+
+        @Override
+        public TxnId setValue(TxnId value)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public String toString()
+        {
+            return key + "->" + txnId;
+        }
+    }
+
 }

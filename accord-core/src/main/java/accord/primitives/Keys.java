@@ -434,8 +434,13 @@ public class Keys implements Iterable<Key>
         return initialValue;
     }
 
-    public int[] remapper(Keys to)
+    public int[] remapper(Keys target, boolean isTargetKnownSuperset)
     {
-        return SortedArrays.remapper(keys, to.keys);
+        return SortedArrays.remapper(keys, target.keys, isTargetKnownSuperset);
+    }
+
+    public static Keys union(Keys left, Keys right)
+    {
+        return left == null ? right : right == null ? left : left.union(right);
     }
 }

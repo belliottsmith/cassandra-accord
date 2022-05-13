@@ -232,9 +232,9 @@ public class SortedArrays
         return found ? to : -1 - to;
     }
 
-    public static <T extends Comparable<? super T>> int[] remapper(T[] src, T[] trg)
+    public static <T extends Comparable<? super T>> int[] remapper(T[] src, T[] trg, boolean trgIsKnownSuperset)
     {
-        return remapper(src, src.length, trg, trg.length);
+        return remapper(src, src.length, trg, trg.length, trgIsKnownSuperset);
     }
 
     /**
@@ -243,9 +243,9 @@ public class SortedArrays
      * or -1 otherwise.
      * That is, {@code src[i] == -1 || src[i].equals(trg[result[i]])}
      */
-    public static <T extends Comparable<? super T>> int[] remapper(T[] src, int srcLength, T[] trg, int trgLength)
+    public static <T extends Comparable<? super T>> int[] remapper(T[] src, int srcLength, T[] trg, int trgLength, boolean trgIsSuperset)
     {
-        if (src == trg) return null;
+        if (src == trg || (trgIsSuperset && trgLength == srcLength)) return null;
         int[] result = new int[srcLength];
         for (int i = 0, j = 0 ; i < srcLength && j < trgLength ;)
         {

@@ -38,24 +38,24 @@ public class DependenciesTest
     @Test
     public void testRandom()
     {
-        testOneRandom(seed(), 1000, 3, 50, 10, 4, 100, 200, 1000);
-        testOneRandom(seed(), 1000, 3, 50, 10, 4, 10, 200, 1000);
-        testOneRandom(seed(), 100, 3, 50, 10, 4, 10, 200, 100);
+        testOneRandom(seed(), 1000, 3, 50, 10, 4, 100, 10, 200, 1000);
+        testOneRandom(seed(), 1000, 3, 50, 10, 4, 10, 2, 200, 1000);
+        testOneRandom(seed(), 100, 3, 50, 10, 4, 10, 2, 200, 100);
     }
 
     @Test
     public void testMerge()
     {
-        testMerge(seed(), 100, 3, 50, 10, 4, 10, 200, 100, 10);
-        testMerge(seed(), 1000, 3, 50, 10, 4, 100, 200, 1000, 10);
+        testMerge(seed(), 100, 3, 50, 10, 4, 10, 5, 200, 100, 10);
+        testMerge(seed(), 1000, 3, 50, 10, 4, 100, 10, 200, 1000, 10);
     }
 
     private static void testMerge(long seed, int uniqueTxnIdsRange, int epochRange, int realRange, int logicalRange, int nodeRange,
-                                 int uniqueKeysRange, int keyRange, int totalCountRange, int mergeCountRange)
+                                 int uniqueKeysRange, int emptyKeysRange, int keyRange, int totalCountRange, int mergeCountRange)
     {
         Random random = random(seed);
         Supplier<Deps> supplier = supplier(random, uniqueTxnIdsRange, epochRange, realRange, logicalRange, nodeRange,
-                                           uniqueKeysRange, keyRange, totalCountRange);
+                                           uniqueKeysRange, emptyKeysRange, keyRange, totalCountRange);
         int count = 1 + random.nextInt(mergeCountRange);
         List<Deps> deps = new ArrayList<>(count);
         while (count-- > 0)
@@ -66,15 +66,15 @@ public class DependenciesTest
     @Test
     public void testWith()
     {
-        testWith(seed(), 1000, 3, 50, 10, 4, 100, 200, 1000, 10);
+        testWith(seed(), 1000, 3, 50, 10, 4, 100, 10, 200, 1000, 10);
     }
 
     private static void testWith(long seed, int uniqueTxnIdsRange, int epochRange, int realRange, int logicalRange, int nodeRange,
-                                 int uniqueKeysRange, int keyRange, int totalCountRange, int mergeCountRange)
+                                 int uniqueKeysRange, int emptyKeysRange, int keyRange, int totalCountRange, int mergeCountRange)
     {
         Random random = random(seed);
         Supplier<Deps> supplier = supplier(random, uniqueTxnIdsRange, epochRange, realRange, logicalRange, nodeRange,
-                                           uniqueKeysRange, keyRange, totalCountRange);
+                                           uniqueKeysRange, emptyKeysRange, keyRange, totalCountRange);
         Deps cur = supplier.get();
         int count = 1 + random.nextInt(mergeCountRange);
         while (count-- > 0)
@@ -96,11 +96,15 @@ public class DependenciesTest
         }
 
         static Deps generate(Random random, int uniqueTxnIds, int epochRange, int realRange, int logicalRange, int nodeRange,
-                      int uniqueKeys, int keyRange, int totalCount)
+                      int uniqueKeys, int emptyKeys, int keyRange, int totalCount)
         {
-            Keys keys; {
+            Keys populateKeys, keys;
+            {
                 TreeSet<Key> tmp = new TreeSet<>();
                 while (tmp.size() < uniqueKeys)
+                    tmp.add(IntHashKey.key(random.nextInt(keyRange)));
+                populateKeys = new Keys(tmp);
+                while (tmp.size() < uniqueKeys + emptyKeys)
                     tmp.add(IntHashKey.key(random.nextInt(keyRange)));
                 keys = new Keys(tmp);
             }
@@ -116,7 +120,7 @@ public class DependenciesTest
             Map<Key, Set<TxnId>> canonical = new TreeMap<>();
             for (int i = 0 ; i < totalCount ; ++i)
             {
-                Key key = keys.get(random.nextInt(uniqueKeys));
+                Key key = populateKeys.get(random.nextInt(uniqueKeys));
                 TxnId txnId = txnIds.get(random.nextInt(uniqueTxnIds));
                 canonical.computeIfAbsent(key, ignore -> new TreeSet<>()).add(txnId);
                 builder.add(key, txnId);
@@ -236,17 +240,17 @@ public class DependenciesTest
     }
 
     private static void testOneRandom(long seed, int uniqueTxnIds, int epochRange, int realRange, int logicalRange, int nodeRange,
-                                      int uniqueKeys, int keyRange, int totalCountRange)
+                                      int uniqueKeys, int emptyKeys, int keyRange, int totalCountRange)
     {
         Random random = random(seed);
         int totalCount = 1 + random.nextInt(totalCountRange - 1);
         testOneDeps(random,
-                    Deps.generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, keyRange, totalCount),
+                    Deps.generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount),
                     keyRange);
     }
 
     private static Supplier<Deps> supplier(Random random, int uniqueTxnIdsRange, int epochRange, int realRange, int logicalRange, int nodeRange,
-                                 int uniqueKeysRange, int keyRange, int totalCountRange)
+                                 int uniqueKeysRange, int emptyKeysRange, int keyRange, int totalCountRange)
     {
         return () -> {
             if (random.nextInt(100) == 0)
@@ -254,10 +258,11 @@ public class DependenciesTest
 
             int uniqueTxnIds = 1 + random.nextInt(uniqueTxnIdsRange - 1);
             int uniqueKeys = 1 + random.nextInt(uniqueKeysRange - 1);
-            int totalCount = uniqueTxnIds * uniqueKeys == 1 ? 1 : 1 + random.nextInt(Math.min(totalCountRange, uniqueKeys * uniqueTxnIds));
+            int emptyKeys = 1 + random.nextInt(emptyKeysRange - 1);
+            int totalCount = random.nextInt(Math.min(totalCountRange, uniqueKeys * uniqueTxnIds));
             return Deps.generate(random, uniqueTxnIds,
                           epochRange, realRange, logicalRange, nodeRange,
-                          uniqueKeys, keyRange, totalCount);
+                          uniqueKeys, emptyKeys, keyRange, totalCount);
         };
     }
 
@@ -339,7 +344,10 @@ public class DependenciesTest
     public static void main(String[] args)
     {
         for (long seed = 0 ; seed < 10000 ; ++seed)
-            testMerge(seed, 1000, 3, 50, 10, 4, 20, 200, 100, 4);
+            testMerge(seed, 100, 3, 50, 10, 4, 4, 2, 100, 10, 4);
+
+        for (long seed = 0 ; seed < 10000 ; ++seed)
+            testMerge(seed, 1000, 3, 50, 10, 4, 20, 5, 200, 100, 4);
     }
 
 }

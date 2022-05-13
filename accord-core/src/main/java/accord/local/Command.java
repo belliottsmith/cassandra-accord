@@ -501,17 +501,6 @@ public class Command implements Listener, Consumer<Listener>
         return null;
     }
 
-    public Key someKey()
-    {
-        if (homeKey != null)
-            return homeKey;
-
-        if (txn.keys != null)
-            return txn.keys.get(0);
-
-        return null;
-    }
-
     /**
      * A key nominated to be the primary shard within this node for managing progress of the command.
      * It is nominated only as of txnId.epoch, and may be null (indicating that this node does not monitor

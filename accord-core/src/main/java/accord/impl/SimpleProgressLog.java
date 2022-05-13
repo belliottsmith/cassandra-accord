@@ -424,8 +424,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             // 2. otherwise record the homeKey for future reference and set the status based on whether progress has been made
             long onEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
             node.withEpoch(onEpoch, () -> {
-                Keys someKeys = this.someKeys == null ? command.someKeys() : this.someKeys;
-                Key someKey = this.someKeys == null ? command.someKey() : someKeys.get(0);
+                Keys someKeys = Keys.union(this.someKeys, command.someKeys());
+                Key someKey = command.homeKey() == null ? someKeys.get(0) : command.homeKey();
 
                 Shard someShard = node.topology().forEpoch(someKey, onEpoch);
                 CheckOnCommitted check = blockedOn == Executed ? checkOnCommitted(node, txnId, someKey, someShard, onEpoch)
@@ -442,6 +442,13 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     switch (success.status)
                     {
                         default: throw new IllegalStateException();
+                        case AcceptedInvalidate:
+                            // we may or may not know the homeShard at this point; if the response doesn't know
+                            // then assume we potentially need to pick up the invalidation
+                            if (success.homeKey != null)
+                                break;
+                            // TODO (now): probably don't want to immediately go to Invalidate,
+                            //             instead first give in-flight one a chance to complete
                         case NotWitnessed:
                             progress = Investigating;
                             // TODO: this should instead invalidate the transaction on this shard, which invalidates it for all shards,
@@ -464,7 +471,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                             break;
                         case PreAccepted:
                         case Accepted:
-                        case AcceptedInvalidate:
+                            // either it's the home shard and it's managing progress,
+                            // or we now know the home shard and will contact it next time
                             break;
                         case Committed:
                         case ReadyToExecute:
