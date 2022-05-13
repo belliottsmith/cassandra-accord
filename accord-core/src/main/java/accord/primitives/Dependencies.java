@@ -10,6 +10,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.Key;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -346,22 +348,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         this.keys = keys;
         this.txnIds = txnIds;
         this.keyToTxnId = keyToTxnId;
-        if (!keys.isEmpty() && keyToTxnId[keys.size() - 1] != keyToTxnId.length)
-            throw new IllegalStateException();
-        int k = 0;
-        for (int i = keys.size() ; i < keyToTxnId.length ; ++i)
-        {
-            boolean first = true;
-            while (i < keyToTxnId[k])
-            {
-                if (first) first = false;
-                else if (keyToTxnId[i - 1] == keyToTxnId[i])
-                    throw new AssertionError();
-                i++;
-            }
-
-            ++k;
-        }
+        Preconditions.checkState(keys.isEmpty() || keyToTxnId[keys.size() - 1] == keyToTxnId.length);
     }
 
     public Dependencies select(KeyRanges ranges)
@@ -966,6 +953,24 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         {
             return key + "->" + txnId;
         }
+    }
+
+    public boolean checkValid()
+    {
+        int k = 0;
+        for (int i = keys.size() ; i < keyToTxnId.length ; ++i)
+        {
+            boolean first = true;
+            while (i < keyToTxnId[k])
+            {
+                if (first) first = false;
+                else if (keyToTxnId[i - 1] == keyToTxnId[i])
+                    return false;
+                i++;
+            }
+            ++k;
+        }
+        return true;
     }
 
 }

@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.Key;
 import accord.api.Result;
 import accord.coordinate.Invalidate.Outcome;
@@ -42,6 +44,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
 
     private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, Keys someKeys, Key someKey)
     {
+        Preconditions.checkArgument(someKeys.contains(someKey));
         this.node = node;
         this.ballot = ballot;
         this.txnId = txnId;

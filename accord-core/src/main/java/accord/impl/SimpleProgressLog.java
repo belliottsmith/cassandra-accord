@@ -172,15 +172,15 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
         }
 
-        private void refreshGlobal(@Nullable Node node, @Nullable Command command, @Nullable Id persistedOn, @Nullable Set<Id> persistedOns)
+        private boolean refreshGlobal(@Nullable Node node, @Nullable Command command, @Nullable Id persistedOn, @Nullable Set<Id> persistedOns)
         {
             if (global == NotExecuted)
-                return;
+                return false;
 
             if (globalPendingDurable != null)
             {
                 if (node == null || command == null || command.is(Status.NotWitnessed))
-                    return;
+                    return false;
 
                 if (persistedOns == null) persistedOns = globalPendingDurable.persistedOn;
                 else persistedOns.addAll(globalPendingDurable.persistedOn);
@@ -193,7 +193,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             {
                 assert node != null && command != null;
                 if (!node.topology().hasEpoch(command.executeAt().epoch))
-                    return;
+                    return false;
 
                 globalNotPersisted = new HashSet<>(node.topology().preciseEpochs(command.txn(), command.executeAt().epoch).nodes());
                 if (local == LocalStatus.Done)
@@ -212,6 +212,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     globalProgress = Done;
                 }
             }
+
+            return true;
         }
 
         void executedOnAllShards(Node node, Command command, Set<Id> persistedOn)
@@ -328,7 +330,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
         void updateGlobal(Node node, TxnId txnId, Command command)
         {
-            refreshGlobal(node, command, null, null);
+            if (!refreshGlobal(node, command, null, null))
+                return;
 
             if (global != Disseminating)
                 return;
@@ -424,8 +427,11 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             // 2. otherwise record the homeKey for future reference and set the status based on whether progress has been made
             long onEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
             node.withEpoch(onEpoch, () -> {
-                Keys someKeys = Keys.union(this.someKeys, command.someKeys());
-                Key someKey = command.homeKey() == null ? someKeys.get(0) : command.homeKey();
+                Key someKey; Keys someKeys; {
+                    Keys tmpKeys = Keys.union(this.someKeys, command.someKeys());
+                    someKey = command.homeKey() == null ? tmpKeys.get(0) : command.homeKey();
+                    someKeys = tmpKeys.with(someKey);
+                }
 
                 Shard someShard = node.topology().forEpoch(someKey, onEpoch);
                 CheckOnCommitted check = blockedOn == Executed ? checkOnCommitted(node, txnId, someKey, someShard, onEpoch)

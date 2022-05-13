@@ -91,10 +91,12 @@ public class MaybeRecover extends CheckShardStatus<CheckStatusOk> implements BiC
             case Executed:
             case Applied:
                 CheckStatusOkFull full = (CheckStatusOkFull) max;
-                if (!max.hasExecutedOnAllShards)
-                    Persist.persistAndCommit(node, txnId, someKey, txn, full.executeAt, full.deps, full.writes, full.result);
-                else // TODO (now): we shouldn't need to do this?
-                    Commit.commit(node, txnId, txn, full.homeKey, full.executeAt, full.deps);
+                node.withEpoch(full.executeAt.epoch, () -> {
+                    if (!max.hasExecutedOnAllShards)
+                        Persist.persistAndCommit(node, txnId, someKey, txn, full.executeAt, full.deps, full.writes, full.result);
+                    else // TODO (now): we shouldn't need to do this?
+                        Commit.commit(node, txnId, txn, full.homeKey, full.executeAt, full.deps);
+                });
                 trySuccess(full);
                 break;
 
