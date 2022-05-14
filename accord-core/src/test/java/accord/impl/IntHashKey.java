@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.zip.CRC32C;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.primitives.KeyRange;
 import accord.primitives.KeyRanges;
 import accord.primitives.Keys;
@@ -20,7 +21,7 @@ public class IntHashKey implements Key
         }
 
         @Override
-        public KeyRange subRange(Key start, Key end)
+        public KeyRange subRange(RoutingKey start, RoutingKey end)
         {
             return new Range((IntHashKey) start, (IntHashKey) end);
         }
@@ -65,7 +66,7 @@ public class IntHashKey implements Key
     }
 
     @Override
-    public int compareTo(Key that)
+    public int compareTo(RoutingKey that)
     {
         return Integer.compare(this.hash, ((IntHashKey)that).hash);
     }
@@ -147,5 +148,14 @@ public class IntHashKey implements Key
     public int routingHash()
     {
         return hash;
+    }
+
+    @Override
+    public Key toRoutingKey()
+    {
+        if (key == Integer.MIN_VALUE)
+            return this;
+
+        return forHash(hash);
     }
 }

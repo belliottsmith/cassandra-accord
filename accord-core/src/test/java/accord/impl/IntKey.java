@@ -5,8 +5,11 @@ import java.util.List;
 import java.util.Objects;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.primitives.KeyRange;
 import accord.primitives.Keys;
+import accord.primitives.PartialRoute;
+import accord.primitives.RoutingKeys;
 
 public class IntKey implements Key
 {
@@ -18,7 +21,7 @@ public class IntKey implements Key
         }
 
         @Override
-        public KeyRange subRange(Key start, Key end)
+        public KeyRange subRange(RoutingKey start, RoutingKey end)
         {
             return new Range((IntKey)start, (IntKey)end);
         }
@@ -32,7 +35,7 @@ public class IntKey implements Key
     }
 
     @Override
-    public int compareTo(Key that)
+    public int compareTo(RoutingKey that)
     {
         return Integer.compare(this.key, ((IntKey)that).key);
     }
@@ -50,6 +53,11 @@ public class IntKey implements Key
             keys[i + 1] = new IntKey(kn[i]);
 
         return Keys.of(keys);
+    }
+
+    public static RoutingKeys scope(int k0, int... kn)
+    {
+        return keys(k0, kn).toRoutingKeys();
     }
 
     public static Keys keys(int[] keyArray)
@@ -112,5 +120,11 @@ public class IntKey implements Key
     public int routingHash()
     {
         return hashCode();
+    }
+
+    @Override
+    public RoutingKey toRoutingKey()
+    {
+        return this;
     }
 }

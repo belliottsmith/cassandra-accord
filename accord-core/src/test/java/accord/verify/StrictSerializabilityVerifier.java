@@ -12,6 +12,8 @@ import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
 
+import com.google.common.base.Preconditions;
+
 /**
  * Nomenclature:
  *  register: the values associated with a given key
@@ -289,7 +291,7 @@ public class StrictSerializabilityVerifier
         void setSuccessor(Step successor)
         {
             this.successor = successor;
-            successor.predecessorStep = successor;
+            successor.predecessorStep = this;
         }
 
         boolean updatePeers(int[] newPeers, UnknownStepHolder[] unknownSteps)

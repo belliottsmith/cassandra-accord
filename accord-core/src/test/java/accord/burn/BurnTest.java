@@ -32,7 +32,7 @@ import accord.impl.list.ListResult;
 import accord.impl.list.ListUpdate;
 import accord.local.Node.Id;
 import accord.api.Key;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.Keys;
 import accord.verify.StrictSerializabilityVerifier;
 
@@ -150,6 +150,7 @@ public class BurnTest
 
         AtomicInteger acks = new AtomicInteger();
         AtomicInteger nacks = new AtomicInteger();
+        AtomicInteger lost = new AtomicInteger();
         AtomicInteger clock = new AtomicInteger();
         AtomicInteger requestIndex = new AtomicInteger();
         for (int max = Math.min(concurrency, requests.length) ; requestIndex.get() < max ; )
@@ -181,9 +182,10 @@ public class BurnTest
                 logger.debug("{} at [{}, {}]", reply, start, end);
 
                 replies[(int)packet.replyId] = packet;
-                if (reply.keys == null)
+                if (reply.readKeys == null)
                 {
-                    nacks.incrementAndGet();
+                    if (reply.read == null) nacks.incrementAndGet();
+                    else lost.incrementAndGet();
                     return;
                 }
 
@@ -192,7 +194,7 @@ public class BurnTest
 
                 for (int i = 0 ; i < reply.read.length ; ++i)
                 {
-                    Key key = reply.keys.get(i);
+                    Key key = reply.readKeys.get(i);
                     int k = key(key);
 
                     int[] read = reply.read[i];
@@ -230,7 +232,7 @@ public class BurnTest
             throw t;
         }
 
-        logger.info("Received {} acks and {} nacks ({} total) to {} operations\n", acks.get(), nacks.get(), acks.get() + nacks.get(), operations);
+        logger.info("Received {} acks, {} nacks and {} lost ({} total) to {} operations\n", acks.get(), nacks.get(), lost.get(), acks.get() + nacks.get() + lost.get(), operations);
         if (clock.get() != operations * 2)
         {
             for (int i = 0 ; i < requests.length ; ++i)
@@ -244,8 +246,8 @@ public class BurnTest
 
     public static void main(String[] args) throws Exception
     {
-        Long overrideSeed = null;
-//        Long overrideSeed = -7569077303416028948L;
+//        Long overrideSeed = null;
+        Long overrideSeed = 7194894828747428666L;
         do
         {
             long seed = overrideSeed != null ? overrideSeed : ThreadLocalRandom.current().nextLong();

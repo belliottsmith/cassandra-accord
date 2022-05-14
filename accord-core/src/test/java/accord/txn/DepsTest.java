@@ -33,11 +33,11 @@ import accord.impl.IntHashKey;
 import accord.local.Node.Id;
 import accord.primitives.Deps.Entry;
 
-import static accord.primitives.Deps.orderedBuilder;
 import static accord.utils.Gens.lists;
 import static accord.utils.Property.qt;
 
-// TODO (now): test Keys with no contents
+// TODO: test Keys with no contents
+// TODO: test #without
 public class DepsTest
 {
     private static final Logger logger = LoggerFactory.getLogger(DepsTest.class);
@@ -141,7 +141,7 @@ public class DepsTest
     public void testIterator()
     {
         qt().forAll(Deps::generate).check(deps -> {
-            try (OrderedBuilder builder = orderedBuilder(true))
+            try (OrderedBuilder builder = accord.primitives.Deps.orderedBuilder(true))
             {
                 for (Map.Entry<Key, TxnId> e : deps.test)
                     builder.add(e.getKey(), e.getValue());
@@ -254,7 +254,7 @@ public class DepsTest
 
     private static Keys keys(List<Deps> list)
     {
-        return list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
+        return list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, Keys::union);
     }
 
     private static void testMergedProperty(List<Deps> list)
@@ -268,10 +268,10 @@ public class DepsTest
     }
 
     @Test
-    public void unorderedBuilder()
+    public void orderedBuilder()
     {
         qt().forAll(Deps::generate, Gens.random()).check((deps, random) -> {
-            OrderedBuilder builder = orderedBuilder(false);
+            OrderedBuilder builder = accord.primitives.Deps.orderedBuilder(false);
             for (Key key : deps.canonical.keySet())
             {
                 builder.nextKey(key);
@@ -343,7 +343,7 @@ public class DepsTest
                 canonical.computeIfAbsent(key, ignore -> new TreeSet<>()).add(txnId);
             }
 
-            try (OrderedBuilder builder = orderedBuilder(false))
+            try (OrderedBuilder builder = accord.primitives.Deps.orderedBuilder(false))
             {
                 canonical.forEach((key, ids) -> {
                     builder.nextKey(key);
@@ -409,7 +409,7 @@ public class DepsTest
                 builder.append(e.getValue());
             }
             builder.append("}");
-            Assertions.assertEquals(builder.toString(), test.toString());
+            Assertions.assertEquals(builder.toString(), test.toSimpleString());
         }
 
         TreeMap<TxnId, List<Key>> invertCanonical()
@@ -479,8 +479,8 @@ public class DepsTest
             int emptyKeys = 1 + random.nextInt(emptyKeysRange - 1);
             int totalCount = random.nextInt(Math.min(totalCountRange, uniqueKeys * uniqueTxnIds));
             return DepsTest.Deps.generate(random, uniqueTxnIds,
-                                          epochRange, realRange, logicalRange, nodeRange,
-                                          uniqueKeys, emptyKeys, keyRange, totalCount);
+                                                  epochRange, realRange, logicalRange, nodeRange,
+                                                  uniqueKeys, emptyKeys, keyRange, totalCount);
         };
     }
 
