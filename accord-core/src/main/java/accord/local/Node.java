@@ -39,7 +39,7 @@ import accord.topology.TopologyManager;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.Future;
 

@@ -2,34 +2,32 @@ package accord.impl.list;
 
 import java.util.Map;
 
+import accord.api.Read;
+import accord.api.Update;
 import accord.local.Node.Id;
 import accord.api.Data;
 import accord.api.Key;
 import accord.api.Query;
 import accord.api.Result;
-import accord.primitives.Keys;
 
 public class ListQuery implements Query
 {
     final Id client;
     final long requestId;
-    final Keys read;
-    final ListUpdate update; // we have to return the writes as well for some reason
 
-    public ListQuery(Id client, long requestId, Keys read, ListUpdate update)
+    public ListQuery(Id client, long requestId)
     {
         this.client = client;
         this.requestId = requestId;
-        this.read = read;
-        this.update = update;
     }
 
     @Override
-    public Result compute(Data data)
+    public Result compute(Data data, Read untypedRead, Update update)
     {
-        int[][] values = new int[read.size()][];
+        ListRead read = (ListRead) untypedRead;
+        int[][] values = new int[read.readKeys.size()][];
         for (Map.Entry<Key, int[]> e : ((ListData)data).entrySet())
-            values[read.indexOf(e.getKey())] = e.getValue();
-        return new ListResult(client, requestId, read, values, update);
+            values[read.readKeys.indexOf(e.getKey())] = e.getValue();
+        return new ListResult(client, requestId, read.keys, values, (ListUpdate) update);
     }
 }

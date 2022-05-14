@@ -11,7 +11,7 @@ import accord.api.Data;
 import accord.topology.Topologies;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.DeterministicIdentitySet;
 

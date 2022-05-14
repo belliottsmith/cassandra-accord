@@ -7,7 +7,7 @@ import accord.api.Key;
 import accord.local.*;
 import accord.primitives.Keys;
 import accord.messages.PreAccept;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 
 import org.junit.jupiter.api.Assertions;

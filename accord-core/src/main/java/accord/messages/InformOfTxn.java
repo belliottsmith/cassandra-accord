@@ -3,7 +3,7 @@ package accord.messages;
 import accord.api.Key;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 
 import static accord.messages.InformOfTxn.InformOfTxnNack.nack;

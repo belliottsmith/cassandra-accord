@@ -7,8 +7,8 @@ import accord.primitives.Ballot;
 import accord.local.Node;
 import accord.primitives.Timestamp;
 import accord.local.Command;
-import accord.primitives.Dependencies;
-import accord.txn.Txn;
+import accord.primitives.Deps;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 
 import static accord.messages.PreAccept.calculateDeps;
@@ -19,9 +19,9 @@ public class Accept extends TxnRequest.WithUnsync
     public final Key homeKey;
     public final Txn txn;
     public final Timestamp executeAt;
-    public final Dependencies deps;
+    public final Deps deps;
 
-    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, Key homeKey, Txn txn, Timestamp executeAt, Dependencies deps)
+    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, Key homeKey, Txn txn, Timestamp executeAt, Deps deps)
     {
         super(to, topologies, txn.keys, txnId);
         this.ballot = ballot;
@@ -115,9 +115,9 @@ public class Accept extends TxnRequest.WithUnsync
     public static class AcceptOk implements AcceptReply
     {
         public final TxnId txnId;
-        public final Dependencies deps;
+        public final Deps deps;
 
-        public AcceptOk(TxnId txnId, Dependencies deps)
+        public AcceptOk(TxnId txnId, Deps deps)
         {
             this.txnId = txnId;
             this.deps = deps;

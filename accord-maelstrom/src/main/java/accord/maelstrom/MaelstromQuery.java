@@ -2,6 +2,8 @@ package accord.maelstrom;
 
 import java.util.Map;
 
+import accord.api.Read;
+import accord.api.Update;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.api.Data;
@@ -14,23 +16,20 @@ public class MaelstromQuery implements Query
 {
     final Node.Id client;
     final long requestId;
-    final Keys read;
-    final MaelstromUpdate update; // we have to return the writes as well for some reason
 
-    public MaelstromQuery(Id client, long requestId, Keys read, MaelstromUpdate update)
+    public MaelstromQuery(Id client, long requestId)
     {
         this.client = client;
         this.requestId = requestId;
-        this.read = read;
-        this.update = update;
     }
 
     @Override
-    public Result compute(Data data)
+    public Result compute(Data data, Read untypedRead, Update update)
     {
-        Value[] values = new Value[read.size()];
+        MaelstromRead read = (MaelstromRead) untypedRead;
+        Value[] values = new Value[read.readKeys.size()];
         for (Map.Entry<Key, Value> e : ((MaelstromData)data).entrySet())
-            values[read.indexOf(e.getKey())] = e.getValue();
-        return new MaelstromResult(client, requestId, read, values, update);
+            values[read.readKeys.indexOf(e.getKey())] = e.getValue();
+        return new MaelstromResult(client, requestId, read.readKeys, values, (MaelstromUpdate) update);
     }
 }

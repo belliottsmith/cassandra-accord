@@ -7,11 +7,11 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
 import accord.primitives.Ballot;
-import accord.primitives.Dependencies;
+import accord.primitives.Deps;
 import accord.primitives.Timestamp;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.txn.Writes;
+import accord.primitives.Writes;
 
 public class CheckStatus implements Request
 {
@@ -46,7 +46,6 @@ public class CheckStatus implements Request
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-
         Reply reply = node.ifLocal(key, epoch, instance -> {
             Command command = instance.command(txnId);
             boolean includeInfo = this.includeInfo.include(command.status());
@@ -165,12 +164,12 @@ public class CheckStatus implements Request
         public final Txn txn;
         public final Key homeKey;
         public final Timestamp executeAt;
-        public final Dependencies deps;
+        public final Deps deps;
         public final Writes writes;
         public final Result result;
 
         CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards,
-                          Txn txn, Key homeKey, Timestamp executeAt, Dependencies deps, Writes writes, Result result)
+                          Txn txn, Key homeKey, Timestamp executeAt, Deps deps, Writes writes, Result result)
         {
             super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards);
             this.txn = txn;

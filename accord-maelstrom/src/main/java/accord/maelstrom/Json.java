@@ -9,7 +9,7 @@ import java.util.TreeSet;
 
 import accord.local.Node;
 import accord.api.Result;
-import accord.primitives.Dependencies.Entry;
+import accord.primitives.Deps.Entry;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.TypeAdapter;
@@ -18,10 +18,10 @@ import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import accord.local.Node.Id;
 import accord.api.Key;
-import accord.primitives.Dependencies;
-import accord.txn.Txn;
+import accord.primitives.Deps;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.txn.Writes;
+import accord.primitives.Writes;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
@@ -286,17 +286,17 @@ public class Json
             buildKeys.addAll(buildReadKeys);
             Keys readKeys = new Keys(buildReadKeys);
             Keys keys = new Keys(buildKeys);
-            MaelstromRead read = new MaelstromRead(keys);
-            MaelstromQuery query = new MaelstromQuery(client, requestId, readKeys, update);
+            MaelstromRead read = new MaelstromRead(readKeys, keys);
+            MaelstromQuery query = new MaelstromQuery(client, requestId);
 
             return new Txn(keys, read, query, update);
         }
     };
 
-    public static final TypeAdapter<Dependencies> DEPS_ADAPTER = new TypeAdapter<>()
+    public static final TypeAdapter<Deps> DEPS_ADAPTER = new TypeAdapter<>()
     {
         @Override
-        public void write(JsonWriter out, Dependencies value) throws IOException
+        public void write(JsonWriter out, Deps value) throws IOException
         {
             out.beginArray();
             for (Map.Entry<Key, TxnId> e : value)
@@ -310,28 +310,28 @@ public class Json
         }
 
         @Override
-        public Dependencies read(JsonReader in) throws IOException
+        public Deps read(JsonReader in) throws IOException
         {
             in.beginArray();
             if (!in.hasNext())
             {
                 in.endArray();
-                return Dependencies.NONE;
+                return Deps.NONE;
             }
 
-            List<Dependencies.Entry> entries = new ArrayList<>();
+            List<Deps.Entry> entries = new ArrayList<>();
             while (in.hasNext())
             {
                 in.beginArray();
                 Key key = MaelstromKey.read(in);
                 TxnId txnId = GSON.fromJson(in, TxnId.class);
-                entries.add(new Dependencies.Entry(key, txnId));
+                entries.add(new Deps.Entry(key, txnId));
                 in.endArray();
             }
             in.endArray();
 
             Keys keys = new Keys(entries.stream().map(Entry::getKey).sorted().toArray(Key[]::new));
-            Dependencies.Builder builder = Dependencies.builder(keys);
+            Deps.Builder builder = Deps.builder(keys);
             for (Entry entry : entries)
                 builder.add(entry.getKey(), entry.getValue());
             return builder.build();
@@ -476,7 +476,7 @@ public class Json
                                 .registerTypeAdapter(Writes.class, TXN_WRITES_ADAPTER)
                                 .registerTypeAdapter(MaelstromResult.class, MaelstromResult.GSON_ADAPTER)
                                 .registerTypeAdapter(ReadOk.class, READ_OK_ADAPTER)
-                                .registerTypeAdapter(Dependencies.class, Json.DEPS_ADAPTER)
+                                .registerTypeAdapter(Deps.class, Json.DEPS_ADAPTER)
                                 .registerTypeAdapter(Keys.class, KEYS_ADAPTER)
                                 .registerTypeAdapter(Body.class, Body.FAIL_READ)
                                 .registerTypeAdapter(Result.class, MaelstromResult.GSON_ADAPTER)

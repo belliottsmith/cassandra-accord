@@ -32,12 +32,12 @@ import accord.messages.ReplyContext;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.primitives.Ballot;
-import accord.primitives.Dependencies;
+import accord.primitives.Deps;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.txn.Writes;
+import accord.primitives.Writes;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
@@ -794,7 +794,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
     static class ApplyAndCheck extends Apply
     {
         final Set<Id> notPersisted;
-        ApplyAndCheck(Id id, Topologies topologies, TxnId txnId, Txn txn, Key homeKey, Dependencies deps, Timestamp executeAt, Writes writes, Result result, Set<Id> notPersisted)
+        ApplyAndCheck(Id id, Topologies topologies, TxnId txnId, Txn txn, Key homeKey, Deps deps, Timestamp executeAt, Writes writes, Result result, Set<Id> notPersisted)
         {
             super(id, topologies, txnId, txn, homeKey, executeAt, deps, writes, result);
             this.notPersisted = notPersisted;

@@ -14,12 +14,12 @@ import accord.topology.Topologies;
 import accord.primitives.Ballot;
 import accord.messages.Callback;
 import accord.local.Node;
-import accord.primitives.Dependencies;
+import accord.primitives.Deps;
 import accord.local.Node.Id;
 import accord.primitives.Timestamp;
 import accord.messages.PreAccept;
 import accord.messages.PreAccept.PreAcceptOk;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.messages.PreAccept.PreAcceptReply;
 import com.google.common.collect.Sets;
@@ -245,12 +245,12 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         if (tracker.hasMetFastPathCriteria())
         {
             isPreAccepted = true;
-            Dependencies deps = Dependencies.merge(txn.keys, preAcceptOks, ok -> ok.witnessedAt.equals(txnId) ? ok.deps : null);
+            Deps deps = Deps.merge(txn.keys, preAcceptOks, ok -> ok.witnessedAt.equals(txnId) ? ok.deps : null);
             Execute.execute(node, txnId, txn, homeKey, txnId, deps, this);
         }
         else
         {
-            Dependencies deps = Dependencies.merge(txn.keys, preAcceptOks, ok -> ok.deps);
+            Deps deps = Deps.merge(txn.keys, preAcceptOks, ok -> ok.deps);
             Timestamp executeAt; {
                 Timestamp accumulate = Timestamp.NONE;
                 for (PreAcceptOk preAcceptOk : preAcceptOks)

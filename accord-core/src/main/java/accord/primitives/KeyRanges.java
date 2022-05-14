@@ -53,6 +53,7 @@ public class KeyRanges implements Iterable<KeyRange>
         return Iterators.forArray(ranges);
     }
 
+    // TODO: reconsider users of this method, in light of newer facilities like foldl, findNext etc
     public int rangeIndexForKey(int lowerBound, int upperBound, Key key)
     {
         return Arrays.binarySearch(ranges, lowerBound, upperBound, key,
@@ -133,32 +134,17 @@ public class KeyRanges implements Iterable<KeyRange>
 
     public boolean intersects(Keys keys)
     {
-        for (int i=0; i<ranges.length; i++)
-            if (ranges[i].intersects(keys))
-                return true;
-        return false;
+        return findNextIntersection(0, keys, 0) >= 0;
     }
 
     public boolean intersects(KeyRange range)
     {
-        for (int i=0; i<ranges.length; i++)
-            if (ranges[i].compareIntersecting(range) == 0)
-                return true;
-        return false;
+        return Arrays.binarySearch(ranges, range, KeyRange::compareIntersecting) >= 0;
     }
 
-    public boolean intersects(KeyRanges ranges)
+    public boolean intersects(KeyRanges that)
     {
-        // TODO: efficiency
-        for (KeyRange thisRange : this.ranges)
-        {
-            for (KeyRange thatRange : ranges)
-            {
-                if (thisRange.intersects(thatRange))
-                    return true;
-            }
-        }
-        return false;
+        return SortedArrays.findNextIntersection(this.ranges, 0, that.ranges, 0, KeyRange::compareIntersecting) >= 0;
     }
 
     public int findFirstKey(Keys keys)
@@ -168,41 +154,13 @@ public class KeyRanges implements Iterable<KeyRange>
 
     public int findNextKey(int ri, Keys keys, int ki)
     {
-        return (int) (findNext(ri, keys, ki) >> 32);
+        return (int) (findNextIntersection(ri, keys, ki) >> 32);
     }
 
-    public long findNext(int ri, Keys keys, int ki)
+    // returns ki in top 32 bits, ri in bottom, or -1 if no match found
+    public long findNextIntersection(int ri, Keys keys, int ki)
     {
-        return findNext(keys, ((long)ki << 32) | ri);
-    }
-
-    public long findNext(Keys keys, long packedKiAndRi)
-    {
-        int ki = (int) (packedKiAndRi >>> 32);
-        if (ki == keys.size())
-            return -1;
-
-        int ri = (int) packedKiAndRi;
-        while (true)
-        {
-            ri = SortedArrays.exponentialSearchCeil(ranges, ri, ranges.length, keys.get(ki));
-            if (ri >= 0)
-                break;
-
-            ri = -1 - ri;
-            if (ri == ranges.length)
-                return -1;
-
-            // want least key greater than or equal to range
-            ki = SortedArrays.exponentialSearchCeil2(keys.keys, ki, keys.size(), ranges[ri]);
-            if (ki >= 0)
-                break;
-
-            ki = -1 - ki;
-            if (ki == keys.size())
-                return -1;
-        }
-        return ((long)ki << 32) | ri;
+        return SortedArrays.findNextIntersectionWithOverlaps(keys.keys, ki, ranges, ri);
     }
 
     /**
@@ -254,60 +212,90 @@ public class KeyRanges implements Iterable<KeyRange>
     }
 
     /**
-     * Adds a set of non-overlapping ranges
+     * attempts a linear merge where {@code as} is expected to be a superset of {@code bs},
+     * terminating at the first indexes where this ceases to be true
+     * @return index of {@code as} in upper 32bits, {@code bs} in lower 32bits
      */
-    public KeyRanges combine(KeyRanges that)
-    {
-        KeyRange[] combined = new KeyRange[this.ranges.length + that.ranges.length];
-        System.arraycopy(this.ranges, 0, combined, 0, this.ranges.length);
-        System.arraycopy(that.ranges, 0, combined, this.ranges.length, that.ranges.length);
-        Arrays.sort(combined, Comparator.comparing(KeyRange::start));
-
-        for (int i=1; i<combined.length; i++)
-            Preconditions.checkArgument(combined[i].compareIntersecting(combined[i -1]) != 0);
-
-        return new KeyRanges(combined);
-    }
-
-    public KeyRanges combine(KeyRange range)
-    {
-        return combine(new KeyRanges(new KeyRange[]{ range}));
-    }
-
-    private static KeyRange tryMerge(KeyRange range1, KeyRange range2)
-    {
-        if (range1 == null || range2 == null)
-            return null;
-        return range1.tryMerge(range2);
-    }
-
-    // optimised for case where one contains the other
-    public KeyRanges union(KeyRanges that)
+    private static long supersetMerge(KeyRange[] as, KeyRange[] bs)
     {
         int ai = 0, bi = 0;
-        KeyRange[] as = this.ranges, bs = that.ranges;
-        if (as.length < bs.length)
-        {
-            KeyRange[] tmp = as; as = bs; bs = tmp;
-        }
-
-        // TODO: this doesn't correctly handle as.length == bs.length if bs > as
-        while (ai < as.length && bi < bs.length)
+        out: while (ai < as.length && bi < bs.length)
         {
             KeyRange a = as[ai];
             KeyRange b = bs[bi];
+
             int c = a.compareIntersecting(b);
-            if (c < 0) ai++;
-            else if (c > 0 || !a.fullyContains(b)) break;
-            else bi++;
+            if (c < 0)
+            {
+                ai++;
+            }
+            else if (c > 0)
+            {
+                break;
+            }
+            else if (b.start().compareTo(a.start()) < 0)
+            {
+                break;
+            }
+            else if (b.end().compareTo(a.end()) < 0)
+            {
+                bi++;
+            }
+            else
+            {
+                do
+                {
+                    if (++ai == as.length || !a.end().equals(as[ai].start()))
+                        break out;
+                    a = as[ai];
+                }
+                while (a.end().compareTo(b.end()) < 0);
+            }
+        }
+
+        return ((long)ai << 32) | bi;
+    }
+
+    /**
+     * @return true iff {@code that} is a subset of {@code this}
+     */
+    public boolean contains(KeyRanges that)
+    {
+        if (this.isEmpty()) return that.isEmpty();
+        if (that.isEmpty()) return false;
+
+        return ((int)supersetMerge(this.ranges, that.ranges)) == that.size();
+    }
+
+    /**
+     * @return the union of {@code this} and {@code that}, returning one of the two inputs if possible
+     */
+    public KeyRanges union(KeyRanges that)
+    {
+        if (this.isEmpty()) return that;
+        if (that.isEmpty()) return this;
+
+        KeyRange[] as = this.ranges, bs = that.ranges;
+        {
+            // make sure as/ai represent the ranges that might fully contain the other
+            int c = as[0].start().compareTo(bs[0].start());
+            if (c > 0 || c == 0 && as[as.length - 1].end().compareTo(bs[bs.length - 1].end()) < 0)
+            {
+                KeyRange[] tmp = as; as = bs; bs = tmp;
+            }
+        }
+
+        int ai, bi; {
+            long tmp = supersetMerge(as, bs);
+            ai = (int)(tmp >>> 32);
+            bi = (int)tmp;
         }
 
         if (bi == bs.length)
             return as == this.ranges ? this : that;
 
         KeyRange[] result = new KeyRange[as.length + (bs.length - bi)];
-        System.arraycopy(as, 0, result, 0, ai);
-        int count = ai;
+        int count = copyAndCombineTouching(as, 0, result, 0, ai);
 
         while (ai < as.length && bi < bs.length)
         {
@@ -327,7 +315,8 @@ public class KeyRanges implements Iterable<KeyRange>
             }
             else
             {
-                KeyRange merged = a.subRange(c < 0 ? a.start() : b.start(), a.end().compareTo(b.end()) > 0 ? a.end() : b.end());
+                Key start = a.start().compareTo(b.start()) <= 0 ? a.start() : b.start();
+                Key end = a.end().compareTo(b.end()) >= 0 ? a.end() : b.end();
                 ai++;
                 bi++;
                 while (ai < as.length || bi < bs.length)
@@ -336,14 +325,14 @@ public class KeyRanges implements Iterable<KeyRange>
                     if (ai == as.length) min = bs[bi];
                     else if (bi == bs.length) min = a = as[ai];
                     else min = as[ai].start().compareTo(bs[bi].start()) < 0 ? a = as[ai] : bs[bi];
-                    if (min.start().compareTo(merged.end()) > 0)
+                    if (min.start().compareTo(end) > 0)
                         break;
-                    if (min.end().compareTo(merged.end()) > 0)
-                        merged = merged.subRange(merged.start(), min.end());
+                    if (min.end().compareTo(end) > 0)
+                        end = min.end();
                     if (a == min) ai++;
                     else bi++;
                 }
-                result[count++] = merged;
+                result[count++] = a.subRange(start, end);
             }
         }
 
@@ -363,28 +352,49 @@ public class KeyRanges implements Iterable<KeyRange>
     {
         if (ranges.length == 0)
             return this;
-        List<KeyRange> result = new ArrayList<>(ranges.length);
-        KeyRange current = ranges[0];
-        for (int i=1; i<ranges.length; i++)
+
+        KeyRange[] result = new KeyRange[ranges.length];
+        int count = copyAndCombineTouching(ranges, 0, result, 0, ranges.length);
+        if (count == result.length)
+            return this;
+        result = Arrays.copyOf(result, count);
+        return new KeyRanges(result);
+    }
+
+    // TODO (now): testing
+    private static int copyAndCombineTouching(KeyRange[] src, int srcPosition, KeyRange[] trg, int trgPosition, int srcCount)
+    {
+        if (srcCount == 0)
+            return 0;
+
+        int count = 0;
+        KeyRange prev = src[srcPosition];
+        Key end = prev.end();
+        for (int i = 1 ; i < srcCount ; ++i)
         {
-            KeyRange merged = current.tryMerge(ranges[i]);
-            if (merged != null)
+            KeyRange next = src[srcPosition + i];
+            if (end.equals(next.start()))
             {
-                current = merged;
+                end = next.end();
             }
             else
             {
-                result.add(current);
-                current = ranges[i];
+                trg[trgPosition + count++] = maybeUpdateEnd(prev, end);
+                prev = next;
+                end = next.end();
             }
         }
-        result.add(current);
-        return new KeyRanges(result.toArray(KeyRange[]::new));
+        trg[trgPosition + count++] = maybeUpdateEnd(prev, end);
+        return count;
     }
 
-    public static KeyRanges singleton(KeyRange range)
+    private static KeyRange maybeUpdateEnd(KeyRange range, Key withEnd)
+    {
+        return withEnd == range.end() ? range : range.subRange(range.start(), withEnd);
+    }
+
+    public static KeyRanges single(KeyRange range)
     {
         return new KeyRanges(new KeyRange[]{range});
     }
-
 }

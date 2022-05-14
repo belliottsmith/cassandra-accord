@@ -10,11 +10,11 @@ import accord.messages.BeginRecovery.RecoverNack;
 import accord.messages.BeginRecovery.RecoverOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.primitives.Ballot;
-import accord.primitives.Dependencies;
+import accord.primitives.Deps;
 import accord.primitives.Timestamp;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.txn.Writes;
+import accord.primitives.Writes;
 
 public class BeginInvalidate implements EpochRequest
 {
@@ -70,7 +70,7 @@ public class BeginInvalidate implements EpochRequest
         public final Txn txn;
         public final Key homeKey;
 
-        public InvalidateOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, Dependencies deps, Writes writes, Result result, Txn txn, Key homeKey)
+        public InvalidateOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, Deps deps, Writes writes, Result result, Txn txn, Key homeKey)
         {
             super(txnId, status, accepted, executeAt, deps, null, null, false, writes, result);
             this.txn = txn;

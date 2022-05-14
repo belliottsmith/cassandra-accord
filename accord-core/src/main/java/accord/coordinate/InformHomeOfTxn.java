@@ -8,7 +8,7 @@ import accord.messages.Callback;
 import accord.messages.InformOfTxn;
 import accord.messages.InformOfTxn.InformOfTxnReply;
 import accord.topology.Shard;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;

@@ -4,13 +4,14 @@ import accord.api.Key;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.*;
 import accord.messages.*;
-import accord.primitives.Dependencies;
+import accord.primitives.Deps;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies.Single;
 import accord.topology.Topology;
-import accord.txn.*;
+
 import com.google.common.base.Preconditions;
 import org.apache.cassandra.utils.concurrent.AsyncPromise;
 import org.slf4j.Logger;
@@ -44,7 +45,7 @@ public class EpochSync implements Runnable
         private final Txn txn;
         private final Key homeKey;
         private final Timestamp executeAt;
-        private final Dependencies deps;
+        private final Deps deps;
         private final long epoch;
 
         public SyncCommitted(Command command, long epoch)

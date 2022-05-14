@@ -61,9 +61,9 @@ public class KeyRangesTest
     void addTest()
     {
         Assertions.assertEquals(ranges(r(0, 50), r(50, 100), r(100, 150), r(150, 200)),
-                                ranges(r(0, 50), r(100, 150)).combine(ranges(r(50, 100), r(150, 200))));
+                                ranges(r(0, 50), r(100, 150)).union(ranges(r(50, 100), r(150, 200))));
 
-        Assertions.assertThrows(IllegalArgumentException.class, () -> ranges(r(0, 50)).combine(ranges(r(25, 75))));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> ranges(r(0, 50)).union(ranges(r(25, 75))));
     }
 
     private static void assertMergeResult(KeyRanges expected, KeyRanges input1, KeyRanges input2)

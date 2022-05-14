@@ -127,54 +127,15 @@ public class Keys implements Iterable<Key>
         return Arrays.binarySearch(keys, lowerBound, upperBound, key, comparator);
     }
 
-    public int ceilIndex(int lowerBound, int upperBound, Key key)
-    {
-        int i = Arrays.binarySearch(keys, lowerBound, upperBound, key);
-        if (i < 0) i = -1 - i;
-        return i;
-    }
-
-    public int ceilIndex(Key key)
-    {
-        return ceilIndex(0, keys.length, key);
-    }
-
     public int find(Key key, int startIndex)
     {
         return SortedArrays.exponentialSearch(keys, startIndex, keys.length, key);
     }
 
-    public long findNext(int li, Keys that, int ri)
+    // returns thisIdx in top 32 bits, thatIdx in bottom
+    public long findNextIntersection(int thisIdx, Keys that, int thatIdx)
     {
-        return findNext(that, ((long)li << 32) | ri);
-    }
-
-    public long findNext(Keys that, long packedLiAndRi)
-    {
-        int li = (int) (packedLiAndRi >>> 32);
-        if (li == size())
-            return -1;
-
-        int ri = (int) packedLiAndRi;
-        while (true)
-        {
-            ri = SortedArrays.exponentialSearch(that.keys, ri, that.keys.length, get(li));
-            if (ri >= 0)
-                break;
-
-            ri = -1 - ri;
-            if (ri == that.keys.length)
-                return -1;
-
-            li = SortedArrays.exponentialSearch(this.keys, li, this.keys.length, that.get(ri));
-            if (li >= 0)
-                break;
-
-            li = -1 -li;
-            if (li == keys.length)
-                return -1;
-        }
-        return ((long)li << 32) | ri;
+        return SortedArrays.findNextIntersection(this.keys, thisIdx, that.keys, thatIdx);
     }
 
 
@@ -291,7 +252,7 @@ public class Keys implements Iterable<Key>
         int ai = 0, ri = 0;
         while (true)
         {
-            long ari = rs.findNext(ri, this, ai);
+            long ari = rs.findNextIntersection(ri, this, ai);
             if (ari < 0)
                 break;
 
@@ -326,7 +287,7 @@ public class Keys implements Iterable<Key>
         int ai = 0, ri = 0;
         done: while (true)
         {
-            long ari = rs.findNext(ri, this, ai);
+            long ari = rs.findNextIntersection(ri, this, ai);
             if (ari < 0)
                 break;
 
@@ -370,11 +331,11 @@ public class Keys implements Iterable<Key>
         int ai = 0, bi = 0, ri = 0;
         done: while (true)
         {
-            long ari = rs.findNext(ri, as, ai);
+            long ari = rs.findNextIntersection(ri, as, ai);
             if (ari < 0)
                 break;
 
-            long bri = rs.findNext(ri, bs, bi);
+            long bri = rs.findNextIntersection(ri, bs, bi);
             if (bri < 0)
                 break;
 
@@ -392,7 +353,7 @@ public class Keys implements Iterable<Key>
 
                     ++ai;
                     ++bi;
-                    long abi = as.findNext(ai, bs, bi);
+                    long abi = as.findNextIntersection(ai, bs, bi);
                     if (abi < 0)
                         break done;
 
@@ -416,7 +377,7 @@ public class Keys implements Iterable<Key>
         int ai = 0, bi = 0;
         while (true)
         {
-            long abi = as.findNext(ai, bs, bi);
+            long abi = as.findNextIntersection(ai, bs, bi);
             if (abi < 0)
                 break;
 

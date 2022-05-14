@@ -14,8 +14,8 @@ import accord.topology.Topologies;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 import accord.local.Command;
-import accord.primitives.Dependencies;
-import accord.txn.Txn;
+import accord.primitives.Deps;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 
 public class PreAccept extends TxnRequest.WithUnsync
@@ -59,7 +59,7 @@ public class PreAccept extends TxnRequest.WithUnsync
             PreAcceptOk ok1 = (PreAcceptOk) r1;
             PreAcceptOk ok2 = (PreAcceptOk) r2;
             PreAcceptOk okMax = ok1.witnessedAt.compareTo(ok2.witnessedAt) >= 0 ? ok1 : ok2;
-            Dependencies deps = ok1.deps.with(ok2.deps);
+            Deps deps = ok1.deps.with(ok2.deps);
             if (deps == okMax.deps)
                 return okMax;
             return new PreAcceptOk(txnId, okMax.witnessedAt, deps);
@@ -87,9 +87,9 @@ public class PreAccept extends TxnRequest.WithUnsync
     {
         public final TxnId txnId;
         public final Timestamp witnessedAt;
-        public final Dependencies deps;
+        public final Deps deps;
 
-        public PreAcceptOk(TxnId txnId, Timestamp witnessedAt, Dependencies deps)
+        public PreAcceptOk(TxnId txnId, Timestamp witnessedAt, Deps deps)
         {
             this.txnId = txnId;
             this.witnessedAt = witnessedAt;
@@ -152,10 +152,10 @@ public class PreAccept extends TxnRequest.WithUnsync
 //        return calculateDeps(commandStore, txnId, txn.keys, txn.update.keys(), executeAt);
 //    }
 //
-    static Dependencies calculateDeps(CommandStore commandStore, TxnId txnId, Txn txn, Timestamp executeAt)
+    static Deps calculateDeps(CommandStore commandStore, TxnId txnId, Txn txn, Timestamp executeAt)
     {
         // TODO (now): do not use Txn
-        Dependencies.Builder deps = Dependencies.builder(txn.keys);
+        Deps.Builder deps = Deps.builder(txn.keys);
         conflictsMayExecuteBefore(commandStore, executeAt, txn.keys).forEach(conflict -> {
             if (conflict.txnId().equals(txnId))
                 return;

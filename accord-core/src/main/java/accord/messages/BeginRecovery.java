@@ -11,15 +11,15 @@ import accord.api.Key;
 import accord.local.CommandStore;
 import accord.local.CommandsForKey;
 import accord.primitives.Keys;
-import accord.txn.Writes;
+import accord.primitives.Writes;
 import accord.primitives.Ballot;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.Timestamp;
 import accord.local.Command;
-import accord.primitives.Dependencies;
+import accord.primitives.Deps;
 import accord.local.Status;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import com.google.common.base.Preconditions;
 
@@ -55,16 +55,16 @@ public class BeginRecovery extends TxnRequest
             if (!command.recover(txn, homeKey, progressKey, ballot))
                 return new RecoverNack(command.promised());
 
-            Dependencies deps = command.status() == PreAccepted ? calculateDeps(instance, txnId, txn, txnId)
-                                                                : command.savedDeps();
+            Deps deps = command.status() == PreAccepted ? calculateDeps(instance, txnId, txn, txnId)
+                                                        : command.savedDeps();
 
             boolean rejectsFastPath;
-            Dependencies earlierCommittedWitness, earlierAcceptedNoWitness;
+            Deps earlierCommittedWitness, earlierAcceptedNoWitness;
 
             if (command.hasBeen(Committed))
             {
                 rejectsFastPath = false;
-                earlierCommittedWitness = earlierAcceptedNoWitness = Dependencies.NONE;
+                earlierCommittedWitness = earlierAcceptedNoWitness = Deps.NONE;
             }
             else
             {
@@ -78,7 +78,7 @@ public class BeginRecovery extends TxnRequest
                 // committed txns with an earlier txnid and have our txnid as a dependency
                 earlierCommittedWitness = committedStartedBefore(instance, txnId, txn.keys)
                                           .filter(c -> c.savedDeps().contains(txnId))
-                                          .collect(() -> Dependencies.builder(txn.keys), Dependencies.Builder::add, (a, b) -> { throw new IllegalStateException(); })
+                                          .collect(() -> Deps.builder(txn.keys), Deps.Builder::add, (a, b) -> { throw new IllegalStateException(); })
                                           .build();
 
                 // accepted txns with an earlier txnid that don't have our txnid as a dependency
@@ -86,7 +86,7 @@ public class BeginRecovery extends TxnRequest
                                               .filter(c -> c.is(Accepted)
                                                            && !c.savedDeps().contains(txnId)
                                                            && c.executeAt().compareTo(txnId) > 0)
-                                              .collect(() -> Dependencies.builder(txn.keys), Dependencies.Builder::add, (a, b) -> { throw new IllegalStateException(); })
+                                              .collect(() -> Deps.builder(txn.keys), Deps.Builder::add, (a, b) -> { throw new IllegalStateException(); })
                                               .build();
             }
             return new RecoverOk(txnId, command.status(), command.accepted(), command.executeAt(), deps, earlierCommittedWitness, earlierAcceptedNoWitness, rejectsFastPath, command.writes(), command.result());
@@ -125,10 +125,10 @@ public class BeginRecovery extends TxnRequest
             }
 
             // ok1 and ok2 both PreAccepted
-            Dependencies deps = ok1.deps.with(ok2.deps);
-            Dependencies earlierCommittedWitness = ok1.earlierCommittedWitness.with(ok2.earlierCommittedWitness);
-            Dependencies earlierAcceptedNoWitness = ok1.earlierAcceptedNoWitness.with(ok2.earlierAcceptedNoWitness)
-                                                                                .without(earlierCommittedWitness::contains);
+            Deps deps = ok1.deps.with(ok2.deps);
+            Deps earlierCommittedWitness = ok1.earlierCommittedWitness.with(ok2.earlierCommittedWitness);
+            Deps earlierAcceptedNoWitness = ok1.earlierAcceptedNoWitness.with(ok2.earlierAcceptedNoWitness)
+                                                                        .without(earlierCommittedWitness::contains);
             return new RecoverOk(
                     txnId, ok1.status,
                     Ballot.max(ok1.accepted, ok2.accepted),
@@ -186,14 +186,14 @@ public class BeginRecovery extends TxnRequest
         public final Status status;
         public final Ballot accepted;
         public final Timestamp executeAt;
-        public final Dependencies deps;
-        public final Dependencies earlierCommittedWitness;  // counter-point to earlierAcceptedNoWitness
-        public final Dependencies earlierAcceptedNoWitness; // wait for these to commit
+        public final Deps deps;
+        public final Deps earlierCommittedWitness;  // counter-point to earlierAcceptedNoWitness
+        public final Deps earlierAcceptedNoWitness; // wait for these to commit
         public final boolean rejectsFastPath;
         public final Writes writes;
         public final Result result;
 
-        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, Dependencies deps, Dependencies earlierCommittedWitness, Dependencies earlierAcceptedNoWitness, boolean rejectsFastPath, Writes writes, Result result)
+        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, Deps deps, Deps earlierCommittedWitness, Deps earlierAcceptedNoWitness, boolean rejectsFastPath, Writes writes, Result result)
         {
             this.txnId = txnId;
             this.accepted = accepted;

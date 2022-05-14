@@ -21,7 +21,7 @@ import accord.messages.Commit;
 import accord.topology.Shard;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 

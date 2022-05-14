@@ -6,15 +6,15 @@ import accord.api.TestableConfigurationService;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Status;
-import accord.primitives.Ballot;
-import accord.primitives.Dependencies;
+import accord.primitives.Deps;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.KeyRange;
 import accord.primitives.KeyRanges;
+import accord.primitives.Writes;
 import accord.topology.Shard;
 import accord.topology.Topology;
-import accord.txn.*;
 import accord.utils.MessageTask;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Sets;
@@ -45,7 +45,7 @@ public class TopologyUpdate
         private final Timestamp executeAt;
         private final long epoch;
 
-        private final Dependencies deps;
+        private final Deps deps;
         private final Writes writes;
         private final Result result;
 
@@ -201,7 +201,7 @@ public class TopologyUpdate
                 if (newNodes.isEmpty())
                     continue;
 
-                KeyRanges ranges = KeyRanges.singleton(intersection);
+                KeyRanges ranges = KeyRanges.single(intersection);
                 for (long epoch=1; epoch<syncEpoch; epoch++)
                     messageStream = Stream.concat(messageStream, syncEpochCommands(node,
                                                                                    epoch,

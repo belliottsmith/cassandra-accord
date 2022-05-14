@@ -1,11 +1,9 @@
-package accord.txn;
+package accord.primitives;
 
 import java.util.Objects;
 
 import accord.api.*;
 import accord.local.*;
-import accord.primitives.Keys;
-import accord.primitives.Timestamp;
 
 public class Txn
 {
@@ -58,7 +56,7 @@ public class Txn
 
     public Result result(Data data)
     {
-        return query.compute(data);
+        return query.compute(data, read, update);
     }
 
     public Writes execute(Timestamp executeAt, Data data)
@@ -72,6 +70,12 @@ public class Txn
     public Keys keys()
     {
         return keys;
+    }
+
+    public PartialTxn slice(KeyRanges ranges, boolean includeQuery)
+    {
+        return new PartialTxn(ranges, keys.intersect(ranges), read.slice(ranges), includeQuery ? query : null,
+                              update == null ? null : update.slice(ranges));
     }
 
     public String toString()

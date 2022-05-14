@@ -8,6 +8,7 @@ import accord.api.Result;
 import accord.api.DataStore;
 import accord.api.Update;
 import accord.api.Write;
+import accord.primitives.KeyRanges;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 
@@ -22,7 +23,7 @@ public class MockStore implements DataStore
     };
 
     public static final Result RESULT = new Result() {};
-    public static final Query QUERY = data -> RESULT;
+    public static final Query QUERY = (data, read, update) -> RESULT;
     public static final Write WRITE = (key, executeAt, store) -> {};
 
     public static Read read(Keys keys)
@@ -39,6 +40,18 @@ public class MockStore implements DataStore
             public Data read(Key key, Timestamp executeAt, DataStore store)
             {
                 return DATA;
+            }
+
+            @Override
+            public Read slice(KeyRanges ranges)
+            {
+                return MockStore.read(keys.intersect(ranges));
+            }
+
+            @Override
+            public Read merge(Read other)
+            {
+                return MockStore.read(keys.union(other.keys()));
             }
         };
     }
@@ -57,6 +70,18 @@ public class MockStore implements DataStore
             public Write apply(Data data)
             {
                 return WRITE;
+            }
+
+            @Override
+            public Update slice(KeyRanges ranges)
+            {
+                return MockStore.update(keys.intersect(ranges));
+            }
+
+            @Override
+            public Update merge(Update other)
+            {
+                return MockStore.update(keys.union(other.keys()));
             }
         };
     }

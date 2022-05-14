@@ -32,7 +32,7 @@ import accord.impl.list.ListResult;
 import accord.impl.list.ListUpdate;
 import accord.local.Node.Id;
 import accord.api.Key;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.Keys;
 import accord.verify.StrictSerializabilityVerifier;
 
@@ -71,9 +71,10 @@ public class BurnTest
                 update.put(keys.get(i), ++next[i]);
             }
 
+            Keys readKeys = new Keys(requestKeys);
             requestKeys.addAll(update.keySet());
-            ListRead read = new ListRead(new Keys(requestKeys));
-            ListQuery query = new ListQuery(client, count, read.keys, update);
+            ListRead read = new ListRead(readKeys, new Keys(requestKeys));
+            ListQuery query = new ListQuery(client, count);
             ListRequest request = new ListRequest(new Txn(new Keys(requestKeys), read, query, update));
             packets.add(new Packet(client, node, count, request));
         }

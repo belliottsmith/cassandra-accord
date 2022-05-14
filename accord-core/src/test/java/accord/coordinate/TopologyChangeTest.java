@@ -11,7 +11,7 @@ import accord.messages.Accept;
 import accord.primitives.KeyRange;
 import accord.topology.Topology;
 import accord.primitives.Keys;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.EpochFunction;
 import org.junit.jupiter.api.Assertions;

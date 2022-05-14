@@ -1,7 +1,11 @@
 package accord.utils;
 
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.function.IntFunction;
+
+import accord.primitives.KeyRange;
+import accord.primitives.Keys;
 
 import static java.util.Arrays.*;
 
@@ -15,9 +19,58 @@ public class SortedArrays
     {
         int leftIdx = 0;
         int rightIdx = 0;
-        T[] noOp = left.length >= right.length ? left : right;
-        T[] result = noOp;
+
+        T[] result = null;
         int resultSize = 0;
+
+        // first, pick the superset candidate and merge the two until we find the first missing item
+        // if none found, return the superset candidate
+        if (left.length >= right.length)
+        {
+            while (leftIdx < left.length && rightIdx < right.length)
+            {
+                int cmp = left[leftIdx].compareTo(right[rightIdx]);
+                if (cmp <= 0)
+                {
+                    leftIdx += 1;
+                    rightIdx += cmp == 0 ? 1 : 0;
+                }
+                else
+                {
+                    resultSize = leftIdx;
+                    result = allocate.apply(resultSize + (left.length - leftIdx) + (right.length - (rightIdx - 1)));
+                    System.arraycopy(left, 0, result, 0, resultSize);
+                    result[resultSize++] = right[rightIdx++];
+                    break;
+                }
+            }
+
+            if (result == null && rightIdx == right.length)
+                return left;
+        }
+        else
+        {
+            while (leftIdx < left.length && rightIdx < right.length)
+            {
+                int cmp = left[leftIdx].compareTo(right[rightIdx]);
+                if (cmp >= 0)
+                {
+                    rightIdx += 1;
+                    leftIdx += cmp == 0 ? 1 : 0;
+                }
+                else
+                {
+                    resultSize = rightIdx;
+                    result = allocate.apply(resultSize + (left.length - (leftIdx - 1)) + (right.length - rightIdx));
+                    System.arraycopy(right, 0, result, 0, resultSize);
+                    result[resultSize++] = left[leftIdx++];
+                    break;
+                }
+            }
+
+            if (result == null && leftIdx == left.length)
+                return right;
+        }
 
         while (leftIdx < left.length && rightIdx < right.length)
         {
@@ -29,49 +82,19 @@ public class SortedArrays
             {
                 leftIdx++;
                 rightIdx++;
-                if (result == noOp)
-                    continue;
                 minKey = leftKey;
             }
             else if (cmp < 0)
             {
                 leftIdx++;
-                if (result == left)
-                    continue;
                 minKey = leftKey;
-                if (result == noOp)
-                {
-                    resultSize = rightIdx;
-                    result = allocate.apply(resultSize + (left.length - (leftIdx - 1)) + (right.length - rightIdx));
-                    System.arraycopy(right, 0, result, 0, resultSize);
-                }
             }
             else
             {
                 rightIdx++;
-                if (result == right)
-                    continue;
                 minKey = rightKey;
-                if (result == noOp)
-                {
-                    resultSize = leftIdx;
-                    result = allocate.apply(resultSize + (left.length - leftIdx) + (right.length - (rightIdx - 1)));
-                    System.arraycopy(left, 0, result, 0, resultSize);
-                }
             }
             result[resultSize++] = minKey;
-        }
-
-        if (result == noOp)
-        {
-            if (noOp == left && rightIdx == right.length)
-                return left;
-            if (noOp == right && leftIdx == left.length)
-                return right;
-
-            resultSize = noOp == left ? leftIdx : rightIdx;
-            result = allocate.apply(resultSize + (left.length - leftIdx) + (right.length - rightIdx));
-            System.arraycopy(noOp, 0, result, 0, resultSize);
         }
 
         while (leftIdx < left.length)
@@ -94,37 +117,72 @@ public class SortedArrays
     {
         int leftIdx = 0;
         int rightIdx = 0;
-        T[] noOp = left.length <= right.length ? left : right;
-        T[] result = noOp;
+
+        T[] result = null;
         int resultSize = 0;
+
+        // first pick a subset candidate, and merge both until we encounter an element not present in the other array
+        if (left.length <= right.length)
+        {
+            while (leftIdx < left.length && rightIdx < right.length)
+            {
+                int cmp = left[leftIdx].compareTo(right[rightIdx]);
+                if (cmp >= 0)
+                {
+                    rightIdx += 1;
+                    leftIdx += cmp == 0 ? 1 : 0;
+                }
+                else
+                {
+                    resultSize = leftIdx++;
+                    result = allocate.apply(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
+                    System.arraycopy(left, 0, result, 0, resultSize);
+                    break;
+                }
+            }
+
+            if (result == null)
+                return left;
+        }
+        else
+        {
+            while (leftIdx < left.length && rightIdx < right.length)
+            {
+                int cmp = left[leftIdx].compareTo(right[rightIdx]);
+                if (cmp <= 0)
+                {
+                    leftIdx += 1;
+                    rightIdx += cmp == 0 ? 1 : 0;
+                }
+                else
+                {
+                    resultSize = rightIdx++;
+                    result = allocate.apply(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
+                    System.arraycopy(right, 0, result, 0, resultSize);
+                    break;
+                }
+            }
+
+            if (result == null)
+                return left;
+        }
 
         while (leftIdx < left.length && rightIdx < right.length)
         {
             T leftKey = left[leftIdx];
-            T rightKey = right[rightIdx];
-            int cmp = leftKey.compareTo(rightKey);
+            int cmp = leftKey.compareTo(right[rightIdx]);
             if (cmp == 0)
             {
                 leftIdx++;
                 rightIdx++;
-                if (result != noOp)
-                    result[resultSize] = leftKey;
-                resultSize++;
+                result[resultSize++] = leftKey;
             }
             else
             {
                 if (cmp < 0) leftIdx++;
                 else rightIdx++;
-                if (result == noOp)
-                {
-                    result = allocate.apply(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
-                    System.arraycopy(noOp, 0, result, 0, resultSize);
-                }
             }
         }
-
-        if (result == noOp && resultSize == noOp.length)
-            return noOp;
 
         if (resultSize < result.length)
             result = Arrays.copyOf(result, resultSize);
@@ -156,6 +214,26 @@ public class SortedArrays
             step = step * 2 + 1; // jump in perfect binary search increments
         }
         return Arrays.binarySearch(in, from, to, find);
+    }
+
+    public static <T> int exponentialSearch(T[] in, int from, int to, T find, Comparator<T> comparator)
+    {
+        int step = 0;
+        while (from + step < to)
+        {
+            int i = from + step;
+            int c = comparator.compare(find, in[i]);
+            if (c < 0)
+            {
+                to = i;
+                break;
+            }
+            if (c == 0)
+                return i;
+            from = i + 1;
+            step = step * 2 + 1; // jump in perfect binary search increments
+        }
+        return Arrays.binarySearch(in, from, to, find, comparator);
     }
 
     public static <T1, T2 extends Comparable<? super T1>> int exponentialSearchCeil(T2[] in, int from, int to, T1 find)
@@ -230,6 +308,84 @@ public class SortedArrays
             else from = m + 1;
         }
         return found ? to : -1 - to;
+    }
+
+    public static <T1, T2 extends Comparable<? super T1>> long findNextIntersectionWithOverlaps(T1[] as, int ai, T2[] bs, int bi)
+    {
+        if (ai == as.length)
+            return -1;
+
+        while (true)
+        {
+            bi = SortedArrays.exponentialSearchCeil(bs, bi, bs.length, as[ai]);
+            if (bi >= 0)
+                break;
+
+            bi = -1 - bi;
+            if (bi == bs.length)
+                return -1;
+
+            ai = SortedArrays.exponentialSearchCeil2(as, ai, as.length, bs[bi]);
+            if (ai >= 0)
+                break;
+
+            ai = -1 -ai;
+            if (ai == as.length)
+                return -1;
+        }
+        return ((long)ai << 32) | bi;
+    }
+
+    public static <T1 extends Comparable<? super T1>> long findNextIntersection(T1[] as, int ai, T1[] bs, int bi)
+    {
+        if (ai == as.length)
+            return -1;
+
+        while (true)
+        {
+            bi = SortedArrays.exponentialSearch(bs, bi, bs.length, as[ai]);
+            if (bi >= 0)
+                break;
+
+            bi = -1 - bi;
+            if (bi == bs.length)
+                return -1;
+
+            ai = SortedArrays.exponentialSearch(as, ai, as.length, bs[bi]);
+            if (ai >= 0)
+                break;
+
+            ai = -1 -ai;
+            if (ai == as.length)
+                return -1;
+        }
+        return ((long)ai << 32) | bi;
+    }
+
+    public static <T> long findNextIntersection(T[] as, int ai, T[] bs, int bi, Comparator<T> comparator)
+    {
+        if (ai == as.length)
+            return -1;
+
+        while (true)
+        {
+            bi = SortedArrays.exponentialSearch(bs, bi, bs.length, as[ai], comparator);
+            if (bi >= 0)
+                break;
+
+            bi = -1 - bi;
+            if (bi == bs.length)
+                return -1;
+
+            ai = SortedArrays.exponentialSearch(as, ai, as.length, bs[bi], comparator);
+            if (ai >= 0)
+                break;
+
+            ai = -1 -ai;
+            if (ai == as.length)
+                return -1;
+        }
+        return ((long)ai << 32) | bi;
     }
 
     public static <T extends Comparable<? super T>> int[] remapper(T[] src, T[] trg, boolean trgIsKnownSuperset)

@@ -13,7 +13,7 @@ import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.MessageType;
 import accord.messages.ReplyContext;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.messages.Request;
 import accord.primitives.TxnId;
 

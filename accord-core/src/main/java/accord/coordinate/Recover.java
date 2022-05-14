@@ -19,8 +19,8 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
-import accord.primitives.Dependencies;
-import accord.txn.Txn;
+import accord.primitives.Deps;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.messages.BeginRecovery;
 import accord.messages.BeginRecovery.RecoverOk;
@@ -77,7 +77,7 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         }
     }
 
-    Future<Object> awaitCommits(Node node, Dependencies waitOn)
+    Future<Object> awaitCommits(Node node, Deps waitOn)
     {
         AtomicInteger remaining = new AtomicInteger(waitOn.txnIdCount());
         Promise<Object> future = new AsyncPromise<>();
@@ -261,9 +261,9 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         }
 
         // should all be PreAccept
-        Dependencies deps = Dependencies.merge(txn.keys, recoverOks, ok -> ok.deps);
-        Dependencies earlierAcceptedNoWitness = Dependencies.merge(txn.keys, recoverOks, ok -> ok.earlierAcceptedNoWitness);
-        Dependencies earlierCommittedWitness = Dependencies.merge(txn.keys, recoverOks, ok -> ok.earlierCommittedWitness);
+        Deps deps = Deps.merge(txn.keys, recoverOks, ok -> ok.deps);
+        Deps earlierAcceptedNoWitness = Deps.merge(txn.keys, recoverOks, ok -> ok.earlierAcceptedNoWitness);
+        Deps earlierCommittedWitness = Deps.merge(txn.keys, recoverOks, ok -> ok.earlierCommittedWitness);
         Timestamp maxExecuteAt = txnId;
         boolean rejectsFastPath = false;
         for (RecoverOk ok : recoverOks)

@@ -21,8 +21,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Key;
 import accord.impl.IntHashKey;
 import accord.local.Node.Id;
-import accord.primitives.Dependencies;
-import accord.primitives.Dependencies.Entry;
+import accord.primitives.Deps.Entry;
 import accord.primitives.KeyRange;
 import accord.primitives.KeyRanges;
 import accord.primitives.Keys;
@@ -31,9 +30,9 @@ import accord.primitives.TxnId;
 
 // TODO (now): test Keys with no contents
 // TODO (now): test without
-public class DependenciesTest
+public class DepsTest
 {
-    private static final Logger logger = LoggerFactory.getLogger(DependenciesTest.class);
+    private static final Logger logger = LoggerFactory.getLogger(DepsTest.class);
 
     @Test
     public void testRandom()
@@ -60,7 +59,7 @@ public class DependenciesTest
         List<Deps> deps = new ArrayList<>(count);
         while (count-- > 0)
             deps.add(supplier.get());
-        testOneDeps(random, Deps.merge(deps), 200);
+        testOneDeps(random, DependenciesTest.Deps.merge(deps), 200);
     }
 
     @Test
@@ -87,16 +86,16 @@ public class DependenciesTest
     static class Deps
     {
         final Map<Key, Set<TxnId>> canonical;
-        final Dependencies test;
+        final accord.primitives.Deps test;
 
-        Deps(Map<Key, Set<TxnId>> canonical, Dependencies test)
+        Deps(Map<Key, Set<TxnId>> canonical, accord.primitives.Deps test)
         {
             this.canonical = canonical;
             this.test = test;
         }
 
         static Deps generate(Random random, int uniqueTxnIds, int epochRange, int realRange, int logicalRange, int nodeRange,
-                      int uniqueKeys, int emptyKeys, int keyRange, int totalCount)
+                             int uniqueKeys, int emptyKeys, int keyRange, int totalCount)
         {
             Keys populateKeys, keys;
             {
@@ -116,7 +115,7 @@ public class DependenciesTest
                 txnIds = new ArrayList<>(tmp);
             }
 
-            Dependencies.Builder builder = Dependencies.builder(keys);
+            accord.primitives.Deps.Builder builder = accord.primitives.Deps.builder(keys);
             Map<Key, Set<TxnId>> canonical = new TreeMap<>();
             for (int i = 0 ; i < totalCount ; ++i)
             {
@@ -207,7 +206,7 @@ public class DependenciesTest
                     canonical.computeIfAbsent(e.getKey(), ignore -> new TreeSet<>()).addAll(e.getValue());
             }
 
-            return new Deps(canonical, Dependencies.merge(keys, deps, d -> d.test));
+            return new Deps(canonical, accord.primitives.Deps.merge(keys, deps, d -> d.test));
         }
 
         static Deps merge(List<Deps> deps)
@@ -245,24 +244,24 @@ public class DependenciesTest
         Random random = random(seed);
         int totalCount = 1 + random.nextInt(totalCountRange - 1);
         testOneDeps(random,
-                    Deps.generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount),
+                    DependenciesTest.Deps.generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount),
                     keyRange);
     }
 
     private static Supplier<Deps> supplier(Random random, int uniqueTxnIdsRange, int epochRange, int realRange, int logicalRange, int nodeRange,
-                                 int uniqueKeysRange, int emptyKeysRange, int keyRange, int totalCountRange)
+                                           int uniqueKeysRange, int emptyKeysRange, int keyRange, int totalCountRange)
     {
         return () -> {
             if (random.nextInt(100) == 0)
-                return new Deps(new TreeMap<>(), Dependencies.NONE);
+                return new Deps(new TreeMap<>(), accord.primitives.Deps.NONE);
 
             int uniqueTxnIds = 1 + random.nextInt(uniqueTxnIdsRange - 1);
             int uniqueKeys = 1 + random.nextInt(uniqueKeysRange - 1);
             int emptyKeys = 1 + random.nextInt(emptyKeysRange - 1);
             int totalCount = random.nextInt(Math.min(totalCountRange, uniqueKeys * uniqueTxnIds));
-            return Deps.generate(random, uniqueTxnIds,
-                          epochRange, realRange, logicalRange, nodeRange,
-                          uniqueKeys, emptyKeys, keyRange, totalCount);
+            return DependenciesTest.Deps.generate(random, uniqueTxnIds,
+                                                  epochRange, realRange, logicalRange, nodeRange,
+                                                  uniqueKeys, emptyKeys, keyRange, totalCount);
         };
     }
 

@@ -22,9 +22,9 @@ import static accord.utils.SortedArrays.remap;
 import static accord.utils.SortedArrays.remapper;
 
 // TODO (now): switch to RoutingKey
-public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
+public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 {
-    public static final Dependencies NONE = new Dependencies(Keys.EMPTY, new TxnId[0], new int[0]);
+    public static final Deps NONE = new Deps(Keys.EMPTY, new TxnId[0], new int[0]);
 
     public static class Builder
     {
@@ -49,7 +49,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         public Builder add(Command command)
         {
             int idx = ensureTxnIdx(command.txnId());
-            keys.foldl(command.txn().keys, (li, ri, k, p, v) -> {
+            keys.foldl(command.partialTxn().keys, (li, ri, k, p, v) -> {
                 if (keysToTxnId[li].length == keysToTxnIdCounts[li])
                     keysToTxnId[li] = Arrays.copyOf(keysToTxnId[li], keysToTxnId[li].length * 2);
                 keysToTxnId[li][keysToTxnIdCounts[li]++] = idx;
@@ -88,7 +88,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
             });
         }
 
-        public Dependencies build()
+        public Deps build()
         {
             TxnId[] txnIds = txnIdLookup.keySet().toArray(TxnId[]::new);
             Arrays.sort(txnIds, TxnId::compareTo);
@@ -144,7 +144,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
                 keys = new Keys(newKeys);
             }
 
-            return new Dependencies(keys, txnIds, result);
+            return new Deps(keys, txnIds, result);
         }
     }
 
@@ -155,7 +155,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
 
     static class MergeStream
     {
-        final Dependencies source;
+        final Deps source;
         // TODO: could share backing array for all of these if we want, with an additional offset
         final int[] input;
         final int keyCount;
@@ -165,7 +165,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         int index;
         int endIndex;
 
-        MergeStream(Dependencies source)
+        MergeStream(Deps source)
         {
             this.source = source;
             this.input = source.keyToTxnId;
@@ -184,16 +184,16 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
     }
 
     // TODO (now): filter out keys with no txnId
-    public static <T> Dependencies merge(Keys keys, List<T> merge, Function<T, Dependencies> getter)
+    public static <T> Deps merge(Keys keys, List<T> merge, Function<T, Deps> getter)
     {
         // collect non-empty inputs
         int streamCount = 0;
         MergeStream[] streams = new MergeStream[merge.size()];
         for (T t : merge)
         {
-            Dependencies dependencies = getter.apply(t);
-            if (dependencies != null && !dependencies.isEmpty())
-                streams[streamCount++] = new MergeStream(dependencies);
+            Deps deps = getter.apply(t);
+            if (deps != null && !deps.isEmpty())
+                streams[streamCount++] = new MergeStream(deps);
         }
 
         {
@@ -225,9 +225,9 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         TxnId[] txnIds = NONE.txnIds;
         for (T t : merge)
         {
-            Dependencies dependencies = getter.apply(t);
-            if (dependencies != null && !dependencies.isEmpty())
-                txnIds = SortedArrays.linearUnion(txnIds, dependencies.txnIds, TxnId[]::new);
+            Deps deps = getter.apply(t);
+            if (deps != null && !deps.isEmpty())
+                txnIds = SortedArrays.linearUnion(txnIds, deps.txnIds, TxnId[]::new);
         }
 
         int[] result; {
@@ -333,17 +333,17 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         if (resultIndex < result.length)
             result = Arrays.copyOf(result, resultIndex);
 
-        return new Dependencies(keys, txnIds, result);
+        return new Deps(keys, txnIds, result);
     }
 
-    private final Keys keys; // unique Keys
-    private final TxnId[] txnIds; // unique TxnId TODO: this should perhaps be a BTree?
+    final Keys keys; // unique Keys
+    final TxnId[] txnIds; // unique TxnId TODO: this should perhaps be a BTree?
 
     // first N entries are offsets for each src item, remainder are pointers into value set (either keys or txnIds)
-    private final int[] keyToTxnId; // Key -> [TxnId]
+    final int[] keyToTxnId; // Key -> [TxnId]
     private int[] txnIdToKey; // TxnId -> [Key]
 
-    private Dependencies(Keys keys, TxnId[] txnIds, int[] keyToTxnId)
+    Deps(Keys keys, TxnId[] txnIds, int[] keyToTxnId)
     {
         this.keys = keys;
         this.txnIds = txnIds;
@@ -351,17 +351,18 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         Preconditions.checkState(keys.isEmpty() || keyToTxnId[keys.size() - 1] == keyToTxnId.length);
     }
 
-    public Dependencies select(KeyRanges ranges)
+    public PartialDeps select(KeyRanges ranges)
     {
         if (isEmpty())
-            return this;
+            return new PartialDeps(ranges, keys, txnIds, keyToTxnId);
 
         Keys select = keys.intersect(ranges);
         if (select.isEmpty())
-            return NONE;
+            return PartialDeps.NONE;
 
+        // TODO (now): maximise ranges relative to deps
         if (select.size() == keys.size())
-            return this;
+            return new PartialDeps(ranges, keys, txnIds, keyToTxnId);
 
         int i = 0;
         int offset = select.size();
@@ -387,7 +388,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         }
 
         TxnId[] txnIds = trimUnusedTxnId(select, this.txnIds, trg);
-        return new Dependencies(select, txnIds, trg);
+        return new PartialDeps(ranges, select, txnIds, trg);
     }
 
     private static TxnId[] trimUnusedTxnId(Keys keys, TxnId[] txnIds, int[] keysToTxnId)
@@ -419,7 +420,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         return result;
     }
 
-    public Dependencies with(Dependencies that)
+    public Deps with(Deps that)
     {
         if (isEmpty() || that.isEmpty())
             return isEmpty() ? that : this;
@@ -639,7 +640,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         if (o < out.length)
             out = Arrays.copyOf(out, o);
 
-        return new Dependencies(keys, txnIds, out);
+        return new Deps(keys, txnIds, out);
     }
 
     private static int[] copy(int[] src, int to, int length)
@@ -650,7 +651,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
     }
 
     // TODO: optimise for case where none removed
-    public Dependencies without(Predicate<TxnId> remove)
+    public Deps without(Predicate<TxnId> remove)
     {
         int[] remapTxnIds = new int[txnIds.length];
         TxnId[] txnIds; {
@@ -694,7 +695,7 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
         keyToTxnId = Arrays.copyOf(keyToTxnId, o);
 
         // TODO (now): trim unused keys
-        return new Dependencies(keys, txnIds, keyToTxnId);
+        return new Deps(keys, txnIds, keyToTxnId);
     }
 
     public boolean contains(TxnId txnId)
@@ -907,10 +908,10 @@ public class Dependencies implements Iterable<Map.Entry<Key, TxnId>>
     {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        return equals((Dependencies) o);
+        return equals((Deps) o);
     }
 
-    public boolean equals(Dependencies that)
+    public boolean equals(Deps that)
     {
         return this.txnIds.length == that.txnIds.length
                && this.keys.size() == that.keys.size()
