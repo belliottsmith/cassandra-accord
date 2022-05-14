@@ -19,6 +19,7 @@
 package accord.impl.list;
 
 import accord.api.*;
+import accord.primitives.KeyRanges;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 import accord.local.CommandStore;
@@ -55,6 +56,18 @@ public class ListRead implements Read
         logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
         result.put(key, data);
         return ImmediateFuture.success(result);
+    }
+
+    @Override
+    public Read slice(KeyRanges ranges)
+    {
+        return new ListRead(readKeys, keys.slice(ranges));
+    }
+
+    @Override
+    public Read merge(Read other)
+    {
+        return new ListRead(readKeys, keys.union(((ListRead)other).keys));
     }
 
     @Override

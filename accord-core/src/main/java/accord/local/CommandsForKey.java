@@ -22,7 +22,7 @@ import java.util.Iterator;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
-import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import com.google.common.collect.Iterators;
@@ -61,7 +61,7 @@ public abstract class CommandsForKey implements Listener, Iterable<Command>
         Stream<Command> all();
     }
 
-    public abstract Key key();
+    public abstract RoutingKey key();
     public abstract CommandTimeseries uncommitted();
     public abstract CommandTimeseries committedById();
     public abstract CommandTimeseries committedByExecuteAt();

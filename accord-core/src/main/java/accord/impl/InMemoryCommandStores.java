@@ -24,6 +24,7 @@ import accord.api.ProgressLog;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.Node;
+import accord.primitives.AbstractKeys;
 import accord.primitives.Keys;
 
 import java.util.function.Consumer;
@@ -32,10 +33,9 @@ import static java.lang.Boolean.FALSE;
 
 public abstract class InMemoryCommandStores extends CommandStores
 {
-    public InMemoryCommandStores(int num, Node node, Agent agent, DataStore store,
-                                 ProgressLog.Factory progressLogFactory)
+    public InMemoryCommandStores(int num, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, CommandStore.Factory shardFactory)
     {
-        super(num, node, agent, store, progressLogFactory);
+        super(num, node, agent, store, progressLogFactory, shardFactory);
     }
 
     public static InMemoryCommandStores inMemory(Node node)
@@ -50,7 +50,7 @@ public abstract class InMemoryCommandStores extends CommandStores
               (store, f, r, t) -> { f.accept(store); return null; }, forEach, null, ignore -> FALSE);
     }
 
-    public void forEachLocal(Keys keys, long minEpoch, long maxEpoch, Consumer<? super CommandStore> forEach)
+    public void forEachLocal(AbstractKeys<?, ?> keys, long minEpoch, long maxEpoch, Consumer<? super CommandStore> forEach)
     {
         foldl(ShardedRanges::shards, keys, minEpoch, maxEpoch, (store, f, r, t) -> { f.accept(store); return null; }, forEach, null, ignore -> FALSE);
     }
@@ -60,22 +60,11 @@ public abstract class InMemoryCommandStores extends CommandStores
         forEachLocal(keys, epoch, epoch, forEach);
     }
 
-    public void forEachLocalSince(Keys keys, long epoch, Consumer<? super CommandStore> forEach)
-    {
-        forEachLocal(keys, epoch, Long.MAX_VALUE, forEach);
-    }
-
     public static class Synchronized extends InMemoryCommandStores
     {
         public Synchronized(int num, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory)
         {
-            super(num, node, agent, store, progressLogFactory);
-        }
-
-        @Override
-        protected CommandStore createCommandStore(int generation, int index, int numShards, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, CommandStore.RangesForEpoch rangesForEpoch)
-        {
-            return new InMemoryCommandStore.Synchronized(generation, index, numShards, node::uniqueNow, node.topology()::epoch, agent, store, progressLogFactory, rangesForEpoch);
+            super(num, node, agent, store, progressLogFactory, InMemoryCommandStore.Synchronized::new);
         }
     }
 
@@ -83,13 +72,12 @@ public abstract class InMemoryCommandStores extends CommandStores
     {
         public SingleThread(int num, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory)
         {
-            super(num, node, agent, store, progressLogFactory);
+            super(num, node, agent, store, progressLogFactory, InMemoryCommandStore.SingleThread::new);
         }
 
-        @Override
-        protected CommandStore createCommandStore(int generation, int index, int numShards, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, CommandStore.RangesForEpoch rangesForEpoch)
+        public SingleThread(int num, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, CommandStore.Factory shardFactory)
         {
-            return new InMemoryCommandStore.SingleThread(generation, index, numShards, node.id(), node::uniqueNow, node.topology()::epoch, agent, store, progressLogFactory, rangesForEpoch);
+            super(num, node, agent, store, progressLogFactory, shardFactory);
         }
     }
 
@@ -97,13 +85,7 @@ public abstract class InMemoryCommandStores extends CommandStores
     {
         public Debug(int num, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory)
         {
-            super(num, node, agent, store, progressLogFactory);
-        }
-
-        @Override
-        protected CommandStore createCommandStore(int generation, int index, int numShards, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, CommandStore.RangesForEpoch rangesForEpoch)
-        {
-            return new InMemoryCommandStore.SingleThreadDebug(generation, index, numShards, node.id(), node::uniqueNow, node.topology()::epoch, agent, store, progressLogFactory, rangesForEpoch);
+            super(num, node, agent, store, progressLogFactory, InMemoryCommandStore.Debug::new);
         }
     }
 

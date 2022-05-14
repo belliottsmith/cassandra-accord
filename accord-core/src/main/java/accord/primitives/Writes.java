@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package accord.txn;
+package accord.primitives;
 
 import accord.api.Write;
 import accord.local.CommandStore;
@@ -51,6 +51,11 @@ public class Writes
         if (o == null || getClass() != o.getClass()) return false;
         Writes writes = (Writes) o;
         return executeAt.equals(writes.executeAt) && keys.equals(writes.keys) && write.equals(writes.write);
+    }
+
+    public boolean isEmpty()
+    {
+        return keys.isEmpty();
     }
 
     @Override

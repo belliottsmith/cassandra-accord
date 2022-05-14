@@ -18,26 +18,24 @@
 
 package accord.messages;
 
-import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.impl.*;
 import accord.impl.mock.*;
-import accord.impl.SimpleProgressLog;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.impl.mock.MockCluster.Clock;
+import accord.primitives.KeyRanges;
+import accord.primitives.Route;
 import accord.topology.Topology;
 import accord.primitives.Deps;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.EpochFunction;
 import accord.utils.ThreadPoolScheduler;
 import accord.local.*;
 import accord.primitives.Keys;
-import accord.impl.IntKey;
-import accord.impl.TestAgent;
-import accord.impl.TopologyFactory;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -58,6 +56,7 @@ public class PreAcceptTest
     private static final Id ID3 = id(3);
     private static final List<Id> IDS = listOf(ID1, ID2, ID3);
     private static final Topology TOPOLOGY = TopologyFactory.toTopology(IDS, 3, IntKey.range(0, 100));
+    private static final KeyRanges FULL_RANGE = KeyRanges.single(IntKey.range(new IntKey(Integer.MIN_VALUE), new IntKey(Integer.MAX_VALUE)));
 
     private static final ReplyContext REPLY_CONTEXT = Network.replyCtxFor(0);
 
@@ -77,9 +76,10 @@ public class PreAcceptTest
                         InMemoryCommandStores.SingleThread::new);
     }
 
-    private static PreAccept preAccept(TxnId txnId, Txn txn, Key homeKey)
+    private static PreAccept preAccept(TxnId txnId, Txn txn, RoutingKey homeKey)
     {
-        return new PreAccept(txn.keys(), txnId.epoch, txnId, txn, homeKey);
+        Route route = txn.keys().toRoute(homeKey);
+        return new PreAccept(route.slice(FULL_RANGE), txnId.epoch, txnId, txn.slice(FULL_RANGE, true), route);
     }
 
     @Test

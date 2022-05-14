@@ -18,7 +18,7 @@
 
 package accord.impl;
 
-import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.CommandsForKey;
 import accord.primitives.Timestamp;
@@ -86,20 +86,20 @@ public class InMemoryCommandsForKey extends CommandsForKey
         }
     }
 
-    private final Key key;
+    private final RoutingKey key;
     private final InMemoryCommandTimeseries uncommitted = new InMemoryCommandTimeseries();
     private final InMemoryCommandTimeseries committedById = new InMemoryCommandTimeseries();
     private final InMemoryCommandTimeseries committedByExecuteAt = new InMemoryCommandTimeseries();
 
     private Timestamp max = Timestamp.NONE;
 
-    public InMemoryCommandsForKey(Key key)
+    public InMemoryCommandsForKey(RoutingKey key)
     {
         this.key = key;
     }
 
     @Override
-    public Key key()
+    public RoutingKey key()
     {
         return key;
     }

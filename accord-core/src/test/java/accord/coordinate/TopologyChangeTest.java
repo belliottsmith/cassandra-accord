@@ -29,7 +29,7 @@ import accord.messages.Accept;
 import accord.primitives.KeyRange;
 import accord.topology.Topology;
 import accord.primitives.Keys;
-import accord.txn.Txn;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.EpochFunction;
 import org.junit.jupiter.api.Assertions;
@@ -77,7 +77,7 @@ public class TopologyChangeTest
             node1.coordinate(txnId1, txn1).get();
             inMemory(node1).forEachLocal(keys, 1, commands -> {
                 Command command = commands.command(txnId1);
-                Assertions.assertTrue(command.savedDeps().isEmpty());
+                Assertions.assertTrue(command.partialDeps().isEmpty());
             });
 
             cluster.configServices(4, 5, 6).forEach(config -> config.reportTopology(topology2));
@@ -91,7 +91,7 @@ public class TopologyChangeTest
             cluster.nodes(4, 5, 6).forEach(node -> {
                 inMemory(node).forEachLocal(keys, 2, commands -> {
                     Command command = commands.command(txnId2);
-                    Assertions.assertTrue(command.savedDeps().contains(txnId1));
+                    Assertions.assertTrue(command.partialDeps().contains(txnId1));
                 });
             });
 
@@ -122,7 +122,7 @@ public class TopologyChangeTest
             TxnId txnId1 = coordinate(node1, keys);
             inMemory(node1).forEachLocal(keys, 1, commands -> {
                 Command command = commands.command(txnId1);
-                Assertions.assertTrue(command.savedDeps().isEmpty());
+                Assertions.assertTrue(command.partialDeps().isEmpty());
             });
 
             // check there was no accept phase
@@ -144,7 +144,7 @@ public class TopologyChangeTest
             inMemory(node1).forEachLocal(keys, 2, commands -> {
                 Command command = commands.command(txnId2);
                 Assertions.assertTrue(command.hasBeen(Status.Committed));
-                Assertions.assertTrue(command.savedDeps().contains(txnId1));
+                Assertions.assertTrue(command.partialDeps().contains(txnId1));
                 Assertions.assertEquals(txnId2, command.executeAt());
             });
 
@@ -157,8 +157,8 @@ public class TopologyChangeTest
             inMemory(node1).forEachLocal(keys, 2, commands -> {
                 Command command = commands.command(txnId3);
                 Assertions.assertTrue(command.hasBeen(Status.Committed));
-                Assertions.assertTrue(command.savedDeps().contains(txnId1));
-                Assertions.assertTrue(command.savedDeps().contains(txnId2));
+                Assertions.assertTrue(command.partialDeps().contains(txnId1));
+                Assertions.assertTrue(command.partialDeps().contains(txnId2));
                 Assertions.assertEquals(txnId3, command.executeAt());
             });
         }

@@ -20,17 +20,22 @@ package accord.topology;
 
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.KeyRanges;
 import accord.utils.IndexedConsumer;
 import com.google.common.base.Preconditions;
 
 import java.util.*;
 import java.util.function.Consumer;
 
+// TODO: we can probably most efficiently create a new synthetic Topology that applies for a range of epochs
+//       and permit Topology to implement it, so that
 public interface Topologies
 {
     Topology current();
 
     Topology forEpoch(long epoch);
+
+    Topology oldest();
 
     long oldestEpoch();
 
@@ -48,9 +53,17 @@ public interface Topologies
 
     int totalShards();
 
+    boolean contains(Id to);
+
     Set<Node.Id> nodes();
 
     Set<Node.Id> copyOfNodes();
+
+    KeyRanges toRanges();
+
+    KeyRanges computeRangesForNode(Id node);
+
+    boolean hasRangesForNode(Id node, KeyRanges ranges);
 
     default void forEach(IndexedConsumer<Topology> consumer)
     {
@@ -139,6 +152,12 @@ public interface Topologies
         }
 
         @Override
+        public Topology oldest()
+        {
+            return current();
+        }
+
+        @Override
         public long oldestEpoch()
         {
             return currentEpoch();
@@ -171,6 +190,12 @@ public interface Topologies
         }
 
         @Override
+        public boolean contains(Id to)
+        {
+            return topology.contains(to);
+        }
+
+        @Override
         public Set<Node.Id> nodes()
         {
             return topology.nodes();
@@ -180,6 +205,24 @@ public interface Topologies
         public Set<Id> copyOfNodes()
         {
             return new HashSet<>(nodes());
+        }
+
+        @Override
+        public KeyRanges toRanges()
+        {
+            return topology.ranges();
+        }
+
+        @Override
+        public KeyRanges computeRangesForNode(Id node)
+        {
+            return topology.rangesForNode(node);
+        }
+
+        @Override
+        public boolean hasRangesForNode(Id node, KeyRanges ranges)
+        {
+            return topology.rangesForNode(node).contains(ranges);
         }
 
         @Override
@@ -221,6 +264,12 @@ public interface Topologies
         public Topology current()
         {
             return get(0);
+        }
+
+        @Override
+        public Topology oldest()
+        {
+            return get(size() - 1);
         }
 
         @Override
@@ -269,6 +318,17 @@ public interface Topologies
         }
 
         @Override
+        public boolean contains(Id to)
+        {
+            for (Topology topology : topologies)
+            {
+                if (topology.contains(to))
+                    return true;
+            }
+            return false;
+        }
+
+        @Override
         public Set<Node.Id> nodes()
         {
             Set<Node.Id> result = new HashSet<>();
@@ -281,6 +341,31 @@ public interface Topologies
         public Set<Id> copyOfNodes()
         {
             return nodes();
+        }
+
+        @Override
+        public KeyRanges toRanges()
+        {
+            KeyRanges ranges = KeyRanges.EMPTY;
+            for (int i = 0, mi = size() ; i < mi ; i++)
+                ranges = ranges.union(get(i).ranges());
+            return ranges;
+        }
+
+        @Override
+        public KeyRanges computeRangesForNode(Id node)
+        {
+            KeyRanges ranges = KeyRanges.EMPTY;
+            for (int i = 0, mi = size() ; i < mi ; i++)
+                ranges = ranges.union(get(i).rangesForNode(node));
+            return ranges;
+        }
+
+        @Override
+        public boolean hasRangesForNode(Id node, KeyRanges ranges)
+        {
+            // TODO: optimise
+            return computeRangesForNode(node).contains(ranges);
         }
 
         public void add(Topology topology)

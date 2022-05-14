@@ -18,10 +18,7 @@
 
 package accord.impl;
 
-import accord.api.Agent;
-import accord.api.DataStore;
-import accord.api.Key;
-import accord.api.ProgressLog;
+import accord.api.*;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandsForKey;
@@ -43,22 +40,21 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
 public abstract class InMemoryCommandStore extends CommandStore
 {
     private final NavigableMap<TxnId, Command> commands = new TreeMap<>();
-    private final NavigableMap<Key, CommandsForKey> commandsForKey = new TreeMap<>();
+    private final NavigableMap<RoutingKey, CommandsForKey> commandsForKey = new TreeMap<>();
 
     public static InMemoryCommandStore inMemory(CommandStore commandStore)
     {
         return (InMemoryCommandStore) commandStore;
     }
 
-    public InMemoryCommandStore(int generation, int index, int numShards, Function<Timestamp, Timestamp> uniqueNow, LongSupplier currentEpoch, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, RangesForEpoch rangesForEpoch)
+    public InMemoryCommandStore(int generation, int shardIndex, int numShards, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, RangesForEpoch rangesForEpoch)
     {
-        super(generation, index, numShards, uniqueNow, currentEpoch, agent, store, progressLogFactory, rangesForEpoch);
+        super(generation, shardIndex, numShards, node, agent, store, progressLogFactory, rangesForEpoch);
     }
 
     @Override
@@ -157,17 +153,9 @@ public abstract class InMemoryCommandStore extends CommandStore
 
     public static class Synchronized extends InMemoryCommandStore
     {
-        public Synchronized(int generation,
-                            int index,
-                            int numShards,
-                            Function<Timestamp, Timestamp> uniqueNow,
-                            LongSupplier currentEpoch,
-                            Agent agent,
-                            DataStore store,
-                            ProgressLog.Factory progressLogFactory,
-                            RangesForEpoch rangesForEpoch)
+        public Synchronized(int generation, int shardIndex, int numShards, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, RangesForEpoch rangesForEpoch)
         {
-            super(generation, index, numShards, uniqueNow, currentEpoch, agent, store, progressLogFactory, rangesForEpoch);
+            super(generation, shardIndex, numShards, node, agent, store, progressLogFactory, rangesForEpoch);
         }
 
         @Override
@@ -242,21 +230,12 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
         }
 
-        public SingleThread(int generation,
-                            int index,
-                            int numShards,
-                            Node.Id nodeId,
-                            Function<Timestamp, Timestamp> uniqueNow,
-                            LongSupplier currentEpoch,
-                            Agent agent,
-                            DataStore store,
-                            ProgressLog.Factory progressLogFactory,
-                            RangesForEpoch rangesForEpoch)
+        public SingleThread(int generation, int shardIndex, int numShards, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, RangesForEpoch rangesForEpoch)
         {
-            super(generation, index, numShards, uniqueNow, currentEpoch, agent, store, progressLogFactory, rangesForEpoch);
+            super(generation, shardIndex, numShards, node, agent, store, progressLogFactory, rangesForEpoch);
             executor = Executors.newSingleThreadExecutor(r -> {
                 Thread thread = new Thread(r);
-                thread.setName(CommandStore.class.getSimpleName() + '[' + nodeId + ':' + index + ']');
+                thread.setName(CommandStore.class.getSimpleName() + '[' + node.id() + ':' + shardIndex + ']');
                 return thread;
             });
         }
@@ -300,22 +279,13 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
     }
 
-    public static class SingleThreadDebug extends SingleThread
+    public static class Debug extends SingleThread
     {
         private final AtomicReference<Thread> expectedThread = new AtomicReference<>();
 
-        public SingleThreadDebug(int generation,
-                                 int index,
-                                 int numShards,
-                                 Node.Id nodeId,
-                                 Function<Timestamp, Timestamp> uniqueNow,
-                                 LongSupplier currentEpoch,
-                                 Agent agent,
-                                 DataStore store,
-                                 ProgressLog.Factory progressLogFactory,
-                                 RangesForEpoch rangesForEpoch)
+        public Debug(int generation, int shardIndex, int numShards, Node node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, RangesForEpoch rangesForEpoch)
         {
-            super(generation, index, numShards, nodeId, uniqueNow, currentEpoch, agent, store, progressLogFactory, rangesForEpoch);
+            super(generation, shardIndex, numShards, node, agent, store, progressLogFactory, rangesForEpoch);
         }
 
         private void assertThread()

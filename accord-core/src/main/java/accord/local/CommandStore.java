@@ -20,8 +20,10 @@ package accord.local;
 
 import accord.api.Agent;
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.CommandStores.ShardedRanges;
 import accord.api.ProgressLog;
+import accord.primitives.AbstractKeys;
 import accord.api.DataStore;
 import accord.primitives.KeyRanges;
 import accord.primitives.Keys;
@@ -32,38 +34,53 @@ import org.apache.cassandra.utils.concurrent.Future;
 import com.google.common.base.Preconditions;
 
 import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.LongSupplier;
 
 /**
  * Single threaded internal shard of accord transaction metadata
  */
 public abstract class CommandStore
 {
+    public interface Factory
+    {
+        CommandStore create(int generation,
+                            int shardIndex,
+                            int numShards,
+                            Node node,
+                            Agent agent,
+                            DataStore store,
+                            ProgressLog.Factory progressLogFactory,
+                            RangesForEpoch rangesForEpoch);
+    }
+
     public interface RangesForEpoch
     {
         KeyRanges at(long epoch);
+        KeyRanges between(long fromInclusive, long toInclusive);
         KeyRanges since(long epoch);
-        boolean intersects(long epoch, Keys keys);
+        boolean owns(long epoch, RoutingKey key);
+        boolean intersects(long epoch, AbstractKeys<?, ?> keys);
     }
 
     private final int generation;
     private final int shardIndex;
     private final int numShards;
-    private final Function<Timestamp, Timestamp> uniqueNow;
-    private final LongSupplier currentEpoch;
+    private final Node node;
     private final Agent agent;
     private final DataStore store;
     private final ProgressLog progressLog;
     private final RangesForEpoch rangesForEpoch;
 
+    private final NavigableMap<TxnId, Command> commands = new TreeMap<>();
+    // note: we actually *store* Key (for now), but we must permit slicing by RoutingKey so use this as the type parameter
+    private final NavigableMap<RoutingKey, CommandsForKey> commandsForKey = new TreeMap<>();
 
     public CommandStore(int generation,
                         int shardIndex,
                         int numShards,
-                        Function<Timestamp, Timestamp> uniqueNow,
-                        LongSupplier currentEpoch,
+                        Node node,
                         Agent agent,
                         DataStore store,
                         ProgressLog.Factory progressLogFactory,
@@ -73,8 +90,7 @@ public abstract class CommandStore
         this.generation = generation;
         this.shardIndex = shardIndex;
         this.numShards = numShards;
-        this.uniqueNow = uniqueNow;
-        this.currentEpoch = currentEpoch;
+        this.node = node;
         this.agent = agent;
         this.store = store;
         this.progressLog = progressLogFactory.create(this);
@@ -98,7 +114,7 @@ public abstract class CommandStore
 
     public Timestamp uniqueNow(Timestamp atLeast)
     {
-        return uniqueNow.apply(atLeast);
+        return node.uniqueNow(atLeast);
     }
 
     public Agent agent()
@@ -111,6 +127,11 @@ public abstract class CommandStore
         return progressLog;
     }
 
+    public Node node()
+    {
+        return node;
+    }
+
     public RangesForEpoch ranges()
     {
         return rangesForEpoch;
@@ -119,7 +140,7 @@ public abstract class CommandStore
     public long latestEpoch()
     {
         // TODO: why not inject the epoch to each command store?
-        return currentEpoch.getAsLong();
+        return node.epoch();
     }
 
     protected Timestamp maxConflict(Keys keys)
@@ -145,7 +166,7 @@ public abstract class CommandStore
         return generation;
     }
 
-    public boolean hashIntersects(Key key)
+    public boolean hashIntersects(RoutingKey key)
     {
         return ShardedRanges.keyIndex(key, numShards) == shardIndex;
     }
@@ -159,6 +180,18 @@ public abstract class CommandStore
     {
         for (CommandStore store : stores)
             store.process(scope, consumer);
+    }
+
+    public static <T> T mapReduce(Collection<CommandStore> stores, Function<? super CommandStore, T> map, BiFunction<T, T, T> reduce)
+    {
+        T prev = null;
+        for (CommandStore store : stores)
+        {
+            T next = map.apply(store);
+            if (prev == null) prev = next;
+            else prev = reduce.apply(prev, next);
+        }
+        return prev;
     }
 
     /**

@@ -21,19 +21,20 @@ package accord.messages;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.*;
 import accord.local.Node.Id;
-import accord.topology.Topologies;
+import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
-import accord.primitives.Keys;
-import accord.utils.VisibleForImplementation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static accord.utils.Utils.listOf;
+import accord.topology.Topology;
 
-public class WaitOnCommit extends TxnRequest
+import static accord.local.Status.Committed;
+
+public class WaitOnCommit implements EpochRequest
 {
     private static final Logger logger = LoggerFactory.getLogger(WaitOnCommit.class);
 
@@ -61,7 +62,7 @@ public class WaitOnCommit extends TxnRequest
         }
 
         @Override
-        public Iterable<Key> keys()
+        public Iterable<? extends RoutingKey> keys()
         {
             return Collections.emptyList();
         }
@@ -93,10 +94,10 @@ public class WaitOnCommit extends TxnRequest
                     return;
 
                 case Committed:
+                case ReadyToExecute:
                 case Executed:
                 case Applied:
                 case Invalidated:
-                case ReadyToExecute:
             }
 
             command.removeListener(this);
@@ -115,7 +116,7 @@ public class WaitOnCommit extends TxnRequest
                 node.reply(replyToNode, replyContext, WaitOnCommitOk.INSTANCE);
         }
 
-        void setup(Keys keys, CommandStore instance)
+        void setup(RoutingKeys scope, CommandStore instance)
         {
             Command command = instance.command(txnId);
             switch (command.status())
@@ -125,7 +126,7 @@ public class WaitOnCommit extends TxnRequest
                 case Accepted:
                 case AcceptedInvalidate:
                     command.addListener(this);
-                    instance.progressLog().waiting(txnId, keys);
+                    instance.progressLog().waiting(txnId, Committed, scope);
                     break;
 
                 case Committed:
@@ -137,44 +138,26 @@ public class WaitOnCommit extends TxnRequest
             }
         }
 
-        synchronized void setup(Keys keys)
+        synchronized void setup(RoutingKeys scope)
         {
-            List<CommandStore> instances = node.collectLocal(keys, txnId, ArrayList::new);
+            List<CommandStore> instances = node.collectLocal(scope, txnId, ArrayList::new);
             waitingOn.set(instances.size());
-            CommandStore.onEach(this, instances, instance -> setup(keys, instance));
+            CommandStore.onEach(this, instances, instance -> setup(scope, instance));
         }
     }
 
     public final TxnId txnId;
+    public final RoutingKeys scope;
 
-    public WaitOnCommit(Id to, Topologies topologies, TxnId txnId, Keys keys)
+    public WaitOnCommit(Id to, Topology topologies, TxnId txnId, RoutingKeys someKeys)
     {
-        super(to, topologies, keys);
         this.txnId = txnId;
-    }
-
-    @VisibleForImplementation
-    public WaitOnCommit(Keys scope, long waitForEpoch, TxnId txnId)
-    {
-        super(scope, waitForEpoch);
-        this.txnId = txnId;
-    }
-
-    @Override
-    public Iterable<TxnId> txnIds()
-    {
-        return Collections.singleton(txnId);
-    }
-
-    @Override
-    public Iterable<Key> keys()
-    {
-        return scope();
+        this.scope = someKeys.slice(topologies.rangesForNode(to));
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        new LocalWait(node, replyToNode, txnId, replyContext).setup(scope());
+        new LocalWait(node, replyToNode, txnId, replyContext).setup(scope);
     }
 
     @Override
@@ -194,5 +177,11 @@ public class WaitOnCommit extends TxnRequest
         {
             return MessageType.WAIT_ON_COMMIT_RSP;
         }
+    }
+
+    @Override
+    public long waitForEpoch()
+    {
+        return txnId.epoch;
     }
 }

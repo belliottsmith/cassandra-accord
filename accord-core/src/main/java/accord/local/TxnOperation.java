@@ -19,6 +19,7 @@
 package accord.local;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.primitives.TxnId;
 
 import java.util.Collections;
@@ -40,9 +41,9 @@ public interface TxnOperation
     /**
      * @return keys of the {@link CommandsForKey} objects that need to be loaded into memory before this operation is run
      */
-    Iterable<Key> keys();
+    Iterable<? extends RoutingKey> keys();
 
-    static TxnOperation scopeFor(Iterable<TxnId> txnIds, Iterable<Key> keys)
+    static TxnOperation scopeFor(Iterable<TxnId> txnIds, Iterable<? extends RoutingKey> keys)
     {
         return new TxnOperation()
         {
@@ -50,11 +51,11 @@ public interface TxnOperation
             public Iterable<TxnId> txnIds() { return txnIds; }
 
             @Override
-            public Iterable<Key> keys() { return keys; }
+            public Iterable<? extends RoutingKey> keys() { return keys; }
         };
     }
 
-    static TxnOperation scopeFor(TxnId txnId, Iterable<Key> keys)
+    static TxnOperation scopeFor(TxnId txnId, Iterable<? extends RoutingKey> keys)
     {
         return scopeFor(Collections.singleton(txnId), keys);
     }
@@ -67,5 +68,10 @@ public interface TxnOperation
     static TxnOperation scopeFor(Key key)
     {
         return scopeFor(Collections.emptyList(), Collections.singleton(key));
+    }
+
+    static TxnOperation emptyScope()
+    {
+        return scopeFor(Collections.emptyList(), Collections.emptyList());
     }
 }
