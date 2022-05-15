@@ -4,6 +4,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.KeyRanges;
@@ -51,7 +52,7 @@ public abstract class TxnRequest implements EpochRequest
             }
         }
 
-        Key progressKey(Node node, Key homeKey)
+        Key progressKey(Node node, RoutingKey homeKey)
         {
             // if waitForEpoch < txnId.epoch, then this replica's ownership is unchanged
             long progressEpoch = min(waitForEpoch(), txnId.epoch);

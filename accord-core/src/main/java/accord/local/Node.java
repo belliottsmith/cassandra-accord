@@ -399,7 +399,7 @@ public class Node implements ConfigurationService.Listener
 
     private Future<Result> initiateCoordination(TxnId txnId, Txn txn)
     {
-        Key homeKey = trySelectHomeKey(txnId, txn.keys);
+        RoutingKey homeKey = trySelectHomeKey(txnId, txn.keys);
         if (homeKey == null)
         {
             homeKey = selectRandomHomeKey(txnId);
@@ -409,32 +409,32 @@ public class Node implements ConfigurationService.Listener
     }
 
     @VisibleForTesting
-    public @Nullable Key trySelectHomeKey(TxnId txnId, Keys keys)
+    public @Nullable RoutingKey trySelectHomeKey(TxnId txnId, Keys keys)
     {
         int i = topology().localForEpoch(txnId.epoch).ranges().findFirstKey(keys);
         return i >= 0 ? keys.get(i) : null;
     }
 
-    public Key selectHomeKey(TxnId txnId, Keys keys)
+    public RoutingKey selectHomeKey(TxnId txnId, Keys keys)
     {
-        Key key = trySelectHomeKey(txnId, keys);
+        RoutingKey key = trySelectHomeKey(txnId, keys);
         return key != null ? key : selectRandomHomeKey(txnId);
     }
 
-    public Key selectProgressKey(TxnId txnId, Keys keys, Key homeKey)
+    public RoutingKey selectProgressKey(TxnId txnId, Keys keys, Key homeKey)
     {
-        Key progressKey = trySelectProgressKey(txnId, keys, homeKey);
+        RoutingKey progressKey = trySelectProgressKey(txnId, keys, homeKey);
         if (progressKey == null)
             throw new IllegalStateException();
         return progressKey;
     }
 
-    public Key trySelectProgressKey(TxnId txnId, Keys keys, Key homeKey)
+    public RoutingKey trySelectProgressKey(TxnId txnId, Keys keys, RoutingKey homeKey)
     {
         return trySelectProgressKey(txnId.epoch, keys, homeKey);
     }
 
-    public Key trySelectProgressKey(long epoch, Keys keys, Key homeKey)
+    public RoutingKey trySelectProgressKey(long epoch, Keys keys, RoutingKey homeKey)
     {
         Topology topology = this.topology.localForEpoch(epoch);
         if (topology.ranges().contains(homeKey))
@@ -443,10 +443,10 @@ public class Node implements ConfigurationService.Listener
         int i = topology.ranges().findFirstKey(keys);
         if (i < 0)
             return null;
-        return keys.get(i);
+        return keys.get(i).toRoutingKey();
     }
 
-    public Key selectRandomHomeKey(TxnId txnId)
+    public RoutingKey selectRandomHomeKey(TxnId txnId)
     {
         KeyRanges ranges = topology().localForEpoch(txnId.epoch).ranges();
         KeyRange range = ranges.get(ranges.size() == 1 ? 0 : random.nextInt(ranges.size()));

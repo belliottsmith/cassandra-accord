@@ -1,6 +1,9 @@
 package accord.messages;
 
+import accord.api.RoutingKey;
 import accord.local.Node.Id;
+import accord.primitives.Keys;
+import accord.primitives.PartialDeps;
 import accord.topology.Topologies;
 import accord.api.Key;
 import accord.primitives.Ballot;
@@ -8,7 +11,6 @@ import accord.local.Node;
 import accord.primitives.Timestamp;
 import accord.local.Command;
 import accord.primitives.Deps;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 
 import static accord.messages.PreAccept.calculateDeps;
@@ -16,18 +18,18 @@ import static accord.messages.PreAccept.calculateDeps;
 public class Accept extends TxnRequest.WithUnsync
 {
     public final Ballot ballot;
-    public final Key homeKey;
-    public final Txn txn;
+    public final RoutingKey homeKey;
     public final Timestamp executeAt;
-    public final Deps deps;
+    public final PartialDeps deps;
+    public final boolean isWrite;
 
-    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, Key homeKey, Txn txn, Timestamp executeAt, Deps deps)
+    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, RoutingKey homeKey, Keys keys, boolean isWrite, Timestamp executeAt, PartialDeps deps)
     {
-        super(to, topologies, txn.keys, txnId);
+        super(to, topologies, keys, txnId);
         this.ballot = ballot;
         this.homeKey = homeKey;
-        this.txn = txn;
         this.executeAt = executeAt;
+        this.isWrite = isWrite;
         this.deps = deps;
     }
 
@@ -39,9 +41,9 @@ public class Accept extends TxnRequest.WithUnsync
         //       should enquire as to the result
         node.reply(replyToNode, replyContext, node.mapReduceLocal(scope(), minEpoch, executeAt.epoch, instance -> {
             Command command = instance.command(txnId);
-            if (!command.accept(ballot, txn, homeKey, progressKey, executeAt, deps))
+            if (!command.accept(ballot, homeKey, progressKey, executeAt, deps))
                 return new AcceptNack(txnId, command.promised());
-            return new AcceptOk(txnId, calculateDeps(instance, txnId, txn, executeAt));
+            return new AcceptOk(txnId, calculateDeps(instance, txnId, scope(), executeAt));
         }, (r1, r2) -> {
             if (!r1.isOK()) return r1;
             if (!r2.isOK()) return r2;

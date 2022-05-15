@@ -152,7 +152,7 @@ public class IntHashKey implements Key<IntHashKey>
     @Override
     public Key toRoutingKey()
     {
-        if (key == Long.MIN_VALUE)
+        if (key == Integer.MIN_VALUE)
             return this;
 
         return forHash(hash);

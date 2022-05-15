@@ -2,6 +2,7 @@ package accord.local;
 
 import accord.api.Agent;
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.CommandStores.ShardedRanges;
 import accord.api.ProgressLog;
 import accord.primitives.KeyRange;
@@ -58,7 +59,8 @@ public abstract class CommandStore
     private final RangesForEpoch rangesForEpoch;
 
     private final NavigableMap<TxnId, Command> commands = new TreeMap<>();
-    private final NavigableMap<Key, CommandsForKey> commandsForKey = new TreeMap<>();
+    // note: we actually *store* Key (for now), but we must permit slicing by RoutingKey so use this as the type parameter
+    private final NavigableMap<RoutingKey, CommandsForKey> commandsForKey = new TreeMap<>();
 
     public CommandStore(int generation,
                         int shardIndex,
@@ -195,7 +197,7 @@ public abstract class CommandStore
         }
     }
 
-    public boolean hashIntersects(Key key)
+    public boolean hashIntersects(RoutingKey key)
     {
         return ShardedRanges.keyIndex(key, numShards) == shardIndex;
     }

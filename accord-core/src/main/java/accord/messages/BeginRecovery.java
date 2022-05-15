@@ -2,6 +2,7 @@ package accord.messages;
 
 import accord.api.Result;
 import accord.coordinate.Persist;
+import accord.primitives.PartialTxn;
 import accord.topology.Topologies;
 
 import java.util.List;
@@ -19,7 +20,6 @@ import accord.primitives.Timestamp;
 import accord.local.Command;
 import accord.primitives.Deps;
 import accord.local.Status;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import com.google.common.base.Preconditions;
 
@@ -33,11 +33,11 @@ import static accord.messages.PreAccept.calculateDeps;
 public class BeginRecovery extends TxnRequest
 {
     final TxnId txnId;
-    final Txn txn;
+    final PartialTxn txn;
     final Key homeKey;
     final Ballot ballot;
 
-    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, Txn txn, Key homeKey, Ballot ballot)
+    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, PartialTxn txn, Key homeKey, Ballot ballot)
     {
         super(to, topologies, txn.keys);
         this.txnId = txnId;
@@ -90,7 +90,11 @@ public class BeginRecovery extends TxnRequest
                                               .build();
             }
             return new RecoverOk(txnId, command.status(), command.accepted(), command.executeAt(), deps, earlierCommittedWitness, earlierAcceptedNoWitness, rejectsFastPath, command.writes(), command.result());
-        }, (r1, r2) -> { // TODO: reduce function that constructs a list to reduce at the end
+        }, (r1, r2) -> {
+
+            // TODO: should not operate on dependencies directly here, as we only merge them;
+            //       should have a cheaply mergeable variant (or should collect them before merging)
+
             if (!r1.isOK()) return r1;
             if (!r2.isOK()) return r2;
             RecoverOk ok1 = (RecoverOk) r1;

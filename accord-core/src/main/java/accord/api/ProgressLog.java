@@ -71,6 +71,14 @@ public interface ProgressLog
     void commit(TxnId txnId, boolean isProgressShard, boolean isHomeShard);
 
     /**
+     * Has committed, but lacks sufficient information to execute
+     *
+     * A home shard should monitor this transaction for global progress.
+     * A non-home shard can safely ignore this transaction, as it has been witnessed by a majority of the home shard.
+     */
+    void partialCommit(TxnId txnId, boolean isProgressShard, boolean isHomeShard);
+
+    /**
      * The transaction is waiting to make progress, as all local dependencies have applied.
      *
      * A home shard should monitor this transaction for global progress.

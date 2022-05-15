@@ -3,6 +3,7 @@ package accord.local;
 import accord.api.Agent;
 import accord.api.Key;
 import accord.api.DataStore;
+import accord.api.RoutingKey;
 import accord.local.CommandStore.RangesForEpoch;
 import accord.api.ProgressLog;
 import accord.primitives.KeyRanges;
@@ -205,12 +206,12 @@ public abstract class CommandStores
             return ranges[ranges.length - 1];
         }
 
-        static long keyIndex(Key key, long numShards)
+        static long keyIndex(RoutingKey key, long numShards)
         {
             return Integer.toUnsignedLong(key.routingHash()) % numShards;
         }
 
-        private static long addKeyIndex(int i, Key key, long numShards, long accumulate)
+        private static long addKeyIndex(int i, RoutingKey key, long numShards, long accumulate)
         {
             return accumulate | (1L << keyIndex(key, numShards));
         }

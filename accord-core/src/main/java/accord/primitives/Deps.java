@@ -21,7 +21,7 @@ import accord.utils.SortedArrays;
 import static accord.utils.SortedArrays.remap;
 import static accord.utils.SortedArrays.remapper;
 
-// TODO (now): switch to RoutingKey
+// TODO (now): switch to RoutingKey?
 public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 {
     public static final Deps NONE = new Deps(Keys.EMPTY, new TxnId[0], new int[0]);

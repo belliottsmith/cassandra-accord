@@ -20,6 +20,11 @@ public class PartialTxn extends Txn
         this.covering = covering;
     }
 
+    public boolean covers(KeyRanges ranges)
+    {
+        return covering.contains(ranges);
+    }
+
     // TODO: merge efficient merge when more than one input
     public PartialTxn with(PartialTxn add)
     {

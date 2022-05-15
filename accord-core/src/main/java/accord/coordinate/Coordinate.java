@@ -8,6 +8,7 @@ import java.util.function.BiConsumer;
 
 import accord.api.Key;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.topology.Shard;
 import accord.topology.Topologies;
@@ -138,7 +139,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
     // TODO: hybrid fast path? or at least short-circuit accept if we gain a fast-path quorum _and_ proposed one by accept
     boolean permitHybridFastPath;
 
-    private Coordinate(Node node, TxnId txnId, Txn txn, Key homeKey)
+    private Coordinate(Node node, TxnId txnId, Txn txn, RoutingKey homeKey)
     {
         this.node = node;
         this.txnId = txnId;
@@ -155,7 +156,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         node.send(tracker.nodes(), to -> new PreAccept(to, tracker.topologies(), txnId, txn, homeKey), this);
     }
 
-    public static Future<Result> coordinate(Node node, TxnId txnId, Txn txn, Key homeKey)
+    public static Future<Result> coordinate(Node node, TxnId txnId, Txn txn, RoutingKey homeKey)
     {
         Coordinate coordinate = new Coordinate(node, txnId, txn, homeKey);
         coordinate.start();

@@ -1,6 +1,7 @@
 package accord.primitives;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 
 import com.google.common.base.Preconditions;
 
@@ -10,7 +11,7 @@ import java.util.Objects;
  * A range of keys
  * @param <K>
  */
-public abstract class KeyRange<K extends Key<K>> implements Comparable<K>
+public abstract class KeyRange<K extends RoutingKey<K>> implements Comparable<K>
 {
     public static abstract class EndInclusive<K extends Key<K>> extends KeyRange<K>
     {
