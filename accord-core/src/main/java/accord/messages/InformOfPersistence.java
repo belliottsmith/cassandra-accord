@@ -3,6 +3,7 @@ package accord.messages;
 import java.util.Set;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.Timestamp;
@@ -14,11 +15,11 @@ import static accord.messages.InformOfTxn.InformOfTxnOk.ok;
 public class InformOfPersistence implements Request
 {
     final TxnId txnId;
-    final Key homeKey;
+    final RoutingKey homeKey;
     final Timestamp executeAt;
     final Set<Id> persistedOn;
 
-    public InformOfPersistence(TxnId txnId, Key homeKey, Timestamp executeAt, Set<Id> persistedOn)
+    public InformOfPersistence(TxnId txnId, RoutingKey homeKey, Timestamp executeAt, Set<Id> persistedOn)
     {
         this.txnId = txnId;
         this.homeKey = homeKey;

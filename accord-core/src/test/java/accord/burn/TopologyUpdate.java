@@ -41,7 +41,7 @@ public class TopologyUpdate
         private final Status status;
         private final TxnId txnId;
         private final Txn txn;
-        private final Key homeKey;
+        private final RoutingKey homeKey;
         private final Timestamp executeAt;
         private final long epoch;
 

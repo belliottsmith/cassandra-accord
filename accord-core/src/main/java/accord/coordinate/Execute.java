@@ -4,11 +4,11 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 
 import accord.api.Data;
-import accord.api.Key;
 import accord.coordinate.tracking.ReadTracker;
 import accord.api.Result;
 import accord.messages.Callback;
 import accord.local.Node;
+import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -25,7 +25,7 @@ class Execute implements Callback<ReadReply>
     final Node node;
     final TxnId txnId;
     final Txn txn;
-    final Key homeKey;
+    final Route route;
     final Timestamp executeAt;
     final Deps deps;
     final Topologies topologies;
@@ -34,12 +34,12 @@ class Execute implements Callback<ReadReply>
     private Data data;
     private boolean isDone;
 
-    private Execute(Node node, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Deps deps, BiConsumer<Result, Throwable> callback)
+    private Execute(Node node, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, BiConsumer<Result, Throwable> callback)
     {
         this.node = node;
         this.txnId = txnId;
         this.txn = txn;
-        this.homeKey = homeKey;
+        this.route = route;
         this.executeAt = executeAt;
         this.deps = deps;
         this.topologies = node.topology().forEpoch(txn, executeAt.epoch);
@@ -51,12 +51,12 @@ class Execute implements Callback<ReadReply>
     private void start()
     {
         Set<Id> readSet = readTracker.computeMinimalReadSetAndMarkInflight();
-        Commit.commitAndRead(node, topologies, txnId, txn, homeKey, executeAt, deps, readSet, this);
+        Commit.commitAndRead(node, topologies, txnId, txn, route, executeAt, deps, readSet, this);
     }
 
-    public static void execute(Node node, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Deps deps, BiConsumer<Result, Throwable> callback)
+    public static void execute(Node node, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, BiConsumer<Result, Throwable> callback)
     {
-        Execute execute = new Execute(node, txnId, txn, homeKey, executeAt, deps, callback);
+        Execute execute = new Execute(node, txnId, txn, route, executeAt, deps, callback);
         execute.start();
     }
 
@@ -72,7 +72,7 @@ class Execute implements Callback<ReadReply>
         if (!reply.isOK())
         {
             isDone = true;
-            callback.accept(null, new Preempted(txnId, homeKey));
+            callback.accept(null, new Preempted(txnId, route.homeKey));
             return;
         }
 
@@ -86,7 +86,7 @@ class Execute implements Callback<ReadReply>
             isDone = true;
             Result result = txn.result(data);
             callback.accept(result, null);
-            Persist.persist(node, topologies, txnId, homeKey, txn, executeAt, deps, txn.execute(executeAt, data), result);
+            Persist.persist(node, topologies, txnId, route, executeAt, deps, txn.execute(executeAt, data), result);
         }
     }
 
@@ -95,7 +95,7 @@ class Execute implements Callback<ReadReply>
     {
         Set<Id> readFrom = readTracker.computeMinimalReadSetAndMarkInflight();
         if (readFrom != null)
-            node.send(readFrom, to -> new ReadData(to, readTracker.topologies(), txnId, txn, homeKey, executeAt), this);
+            node.send(readFrom, to -> new ReadData(to, readTracker.topologies(), txnId, route, executeAt), this);
     }
 
     @Override
@@ -115,12 +115,12 @@ class Execute implements Callback<ReadReply>
         Set<Id> readFrom = readTracker.computeMinimalReadSetAndMarkInflight();
         if (readFrom != null)
         {
-            node.send(readFrom, to -> new ReadData(to, readTracker.topologies(), txnId, txn, homeKey, executeAt), this);
+            node.send(readFrom, to -> new ReadData(to, readTracker.topologies(), txnId, route, executeAt), this);
         }
         else if (readTracker.hasFailed())
         {
             if (failure instanceof Timeout)
-                failure = ((Timeout) failure).with(txnId, homeKey);
+                failure = ((Timeout) failure).with(txnId, route.homeKey);
 
             isDone = true;
             callback.accept(null, failure);

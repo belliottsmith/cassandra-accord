@@ -4,8 +4,10 @@ import java.util.*;
 import java.util.function.IntFunction;
 import java.util.stream.IntStream;
 
+import accord.api.RoutingKey;
 import accord.local.Node.Id;
 import accord.api.Key;
+import accord.primitives.AbstractKeys;
 import accord.primitives.KeyRange;
 import accord.primitives.KeyRanges;
 import accord.primitives.Keys;
@@ -145,7 +147,7 @@ public class Topology extends AbstractCollection<Shard>
     }
 
     // TODO: optimised HomeKey concept containing the Key, Shard and Topology to avoid lookups when topology hasn't changed
-    public Shard forKey(Key key)
+    public Shard forKey(RoutingKey key)
     {
         int i = ranges.rangeIndexForKey(key);
         if (i < 0 || i >= ranges.size())
@@ -153,7 +155,7 @@ public class Topology extends AbstractCollection<Shard>
         return shards[i];
     }
 
-    public Topology forKeys(Keys select, IndexedPredicate<Shard> predicate)
+    public Topology forKeys(AbstractKeys<?, ?> select, IndexedPredicate<Shard> predicate)
     {
         int subsetIndex = 0;
         int count = 0;
@@ -185,12 +187,12 @@ public class Topology extends AbstractCollection<Shard>
         return new Topology(epoch, shards, ranges, nodeLookup, rangeSubset, newSubset);
     }
 
-    public Topology forKeys(Keys select)
+    public Topology forKeys(AbstractKeys<?, ?> select)
     {
         return forKeys(select, (i, shard) -> true);
     }
 
-    public <T> T foldl(Keys select, IndexedBiFunction<Shard, T, T> function, T accumulator)
+    public <T> T foldl(AbstractKeys<?, ?> select, IndexedBiFunction<Shard, T, T> function, T accumulator)
     {
         int subsetIndex = 0;
         for (int i = 0 ; i < select.size() ; )

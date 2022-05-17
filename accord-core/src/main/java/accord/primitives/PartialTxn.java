@@ -6,18 +6,21 @@ import accord.api.Update;
 
 public class PartialTxn extends Txn
 {
-    final KeyRanges covering;
+    public final KeyRanges covering;
+    public final Kind kind; // TODO: we do not need to take a write-edge dependency on every key
 
-    public PartialTxn(KeyRanges covering, Keys keys, Read read, Query query)
+    public PartialTxn(KeyRanges covering, Kind kind, Keys keys, Read read, Query query)
     {
         super(keys, read, query);
         this.covering = covering;
+        this.kind = kind;
     }
 
-    public PartialTxn(KeyRanges covering, Keys keys, Read read, Query query, Update update)
+    public PartialTxn(KeyRanges covering, Kind kind, Keys keys, Read read, Query query, Update update)
     {
         super(keys, read, query, update);
         this.covering = covering;
+        this.kind = kind;
     }
 
     public boolean covers(KeyRanges ranges)
@@ -28,6 +31,9 @@ public class PartialTxn extends Txn
     // TODO: merge efficient merge when more than one input
     public PartialTxn with(PartialTxn add)
     {
+        if (!add.kind.equals(kind))
+            throw new IllegalArgumentException();
+
         KeyRanges covering = this.covering.union(add.covering);
         Keys keys = this.keys.union(add.keys);
         Read read = this.read.merge(add.read);
@@ -43,6 +49,6 @@ public class PartialTxn extends Txn
             if (covering == add.covering && read == add.read && query == add.query && update == add.update)
                 return add;
         }
-        return new PartialTxn(covering, keys, read, query, update);
+        return new PartialTxn(covering, kind, keys, read, query, update);
     }
 }

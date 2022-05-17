@@ -18,6 +18,7 @@ import accord.messages.BeginInvalidate.InvalidateOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.Callback;
 import accord.messages.Commit;
+import accord.primitives.Route;
 import accord.topology.Shard;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
@@ -117,7 +118,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                     //       *only* that key for the transaction will be valid, as the shards on the replica
                     //       that own the other keys may not have responded. It would be possible to filter
                     //       replies now that we have the transaction, but safer to just start from scratch.
-                    Recover.recover(node, ballot, txnId, acceptOrCommit.txn, acceptOrCommit.homeKey)
+                    Recover.recover(node, ballot, txnId, acceptOrCommit.txn, findRoute())
                            .addCallback(this);
                     return;
                 case AcceptedInvalidate:
@@ -125,7 +126,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                 case Committed:
                 case ReadyToExecute:
                     node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
-                        Execute.execute(node, txnId, acceptOrCommit.txn, acceptOrCommit.homeKey, acceptOrCommit.executeAt,
+                        Execute.execute(node, txnId, acceptOrCommit.txn, findRoute(), acceptOrCommit.executeAt,
                                         acceptOrCommit.deps, this);
                     });
                     return;
@@ -169,6 +170,11 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                 trySuccess(Outcome.INVALIDATED);
             }
         });
+    }
+
+    private Route findRoute()
+    {
+
     }
 
     @Override

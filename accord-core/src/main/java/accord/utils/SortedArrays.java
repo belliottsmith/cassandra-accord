@@ -4,9 +4,6 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.function.IntFunction;
 
-import accord.primitives.KeyRange;
-import accord.primitives.Keys;
-
 import static java.util.Arrays.*;
 
 public class SortedArrays
@@ -45,8 +42,12 @@ public class SortedArrays
                 }
             }
 
-            if (result == null && rightIdx == right.length)
-                return left;
+            if (result == null)
+            {
+                if (rightIdx == right.length)
+                    return left;
+                result = allocate.apply(resultSize + (left.length - leftIdx) + (right.length - rightIdx));
+            }
         }
         else
         {
@@ -68,8 +69,12 @@ public class SortedArrays
                 }
             }
 
-            if (result == null && leftIdx == left.length)
-                return right;
+            if (result == null)
+            {
+                if (leftIdx == left.length)
+                    return right;
+                result = allocate.apply(resultSize + (left.length - leftIdx) + (right.length - rightIdx));
+            }
         }
 
         while (leftIdx < left.length && rightIdx < right.length)
@@ -113,7 +118,7 @@ public class SortedArrays
      * Given two sorted arrays, return the elements present only in both, preferentially returning one of the inputs if
      * it contains no elements not present in the other.
      */
-    public static <T extends Comparable<T>> T[] linearIntersection(T[] left, T[] right, IntFunction<T[]> allocate)
+    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, IntFunction<T[]> allocate)
     {
         int leftIdx = 0;
         int rightIdx = 0;
@@ -164,7 +169,7 @@ public class SortedArrays
             }
 
             if (result == null)
-                return left;
+                return right;
         }
 
         while (leftIdx < left.length && rightIdx < right.length)
@@ -188,6 +193,80 @@ public class SortedArrays
             result = Arrays.copyOf(result, resultSize);
         
         return result;
+    }
+
+    /**
+     * Given two sorted arrays, return the elements present only in the first, preferentially returning the first array
+     * itself if possible
+     */
+    public static <T extends Comparable<? super T>> T[] linearDifference(T[] left, T[] right, IntFunction<T[]> allocate)
+    {
+        int rightIdx = 0;
+        int leftIdx = 0;
+
+        T[] result = null;
+        int resultSize = 0;
+
+        while (leftIdx < left.length && rightIdx < right.length)
+        {
+            int cmp = left[leftIdx].compareTo(right[rightIdx]);
+            if (cmp == 0)
+            {
+                resultSize = leftIdx++;
+                ++rightIdx;
+                result = allocate.apply(resultSize + left.length - leftIdx);
+                System.arraycopy(left, 0, result, 0, resultSize);
+                break;
+            }
+            else if (cmp < 0)
+            {
+                ++leftIdx;
+            }
+            else
+            {
+                ++rightIdx;
+            }
+        }
+
+        if (result == null)
+            return left;
+
+        while (leftIdx < left.length && rightIdx < right.length)
+        {
+            int cmp = left[leftIdx].compareTo(right[rightIdx]);
+            if (cmp > 0)
+            {
+                result[resultSize++] = left[leftIdx++];
+            }
+            else if (cmp < 0)
+            {
+                ++rightIdx;
+            }
+            else
+            {
+                ++leftIdx;
+                ++rightIdx;
+            }
+        }
+
+        if (resultSize < result.length)
+            result = Arrays.copyOf(result, resultSize);
+
+        return result;
+    }
+
+    public static <T extends Comparable<? super T>> T[] insert(T[] src, T item, IntFunction<T[]> factory)
+    {
+        int insertPos = Arrays.binarySearch(src, item);
+        if (insertPos >= 0)
+            return src;
+        insertPos = -1 - insertPos;
+
+        T[] trg = factory.apply(src.length + 1);
+        System.arraycopy(src, 0, trg, 0, insertPos);
+        trg[insertPos] = item;
+        System.arraycopy(src, insertPos, trg, insertPos + 1, src.length - insertPos);
+        return trg;
     }
 
     /**

@@ -59,7 +59,7 @@ public class DepsTest
         List<Deps> deps = new ArrayList<>(count);
         while (count-- > 0)
             deps.add(supplier.get());
-        testOneDeps(random, DependenciesTest.Deps.merge(deps), 200);
+        testOneDeps(random, DepsTest.Deps.merge(deps), 200);
     }
 
     @Test
@@ -137,7 +137,7 @@ public class DepsTest
                     canonical.put(e.getKey(), e.getValue());
             }
 
-            return new Deps(canonical, test.select(ranges));
+            return new Deps(canonical, test.slice(ranges));
         }
 
         Deps with(Deps that)
@@ -244,7 +244,7 @@ public class DepsTest
         Random random = random(seed);
         int totalCount = 1 + random.nextInt(totalCountRange - 1);
         testOneDeps(random,
-                    DependenciesTest.Deps.generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount),
+                    DepsTest.Deps.generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount),
                     keyRange);
     }
 
@@ -259,7 +259,7 @@ public class DepsTest
             int uniqueKeys = 1 + random.nextInt(uniqueKeysRange - 1);
             int emptyKeys = 1 + random.nextInt(emptyKeysRange - 1);
             int totalCount = random.nextInt(Math.min(totalCountRange, uniqueKeys * uniqueTxnIds));
-            return DependenciesTest.Deps.generate(random, uniqueTxnIds,
+            return DepsTest.Deps.generate(random, uniqueTxnIds,
                                                   epochRange, realRange, logicalRange, nodeRange,
                                                   uniqueKeys, emptyKeys, keyRange, totalCount);
         };

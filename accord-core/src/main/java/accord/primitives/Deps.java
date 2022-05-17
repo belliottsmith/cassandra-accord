@@ -49,7 +49,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         public Builder add(Command command)
         {
             int idx = ensureTxnIdx(command.txnId());
-            keys.foldl(command.partialTxn().keys, (li, ri, k, p, v) -> {
+            keys.foldlIntersect(command.partialTxn().keys, (li, ri, k, p, v) -> {
                 if (keysToTxnId[li].length == keysToTxnIdCounts[li])
                     keysToTxnId[li] = Arrays.copyOf(keysToTxnId[li], keysToTxnId[li].length * 2);
                 keysToTxnId[li][keysToTxnIdCounts[li]++] = idx;
@@ -351,12 +351,12 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         Preconditions.checkState(keys.isEmpty() || keyToTxnId[keys.size() - 1] == keyToTxnId.length);
     }
 
-    public PartialDeps select(KeyRanges ranges)
+    public PartialDeps slice(KeyRanges ranges)
     {
         if (isEmpty())
             return new PartialDeps(ranges, keys, txnIds, keyToTxnId);
 
-        Keys select = keys.intersect(ranges);
+        Keys select = keys.slice(ranges);
         if (select.isEmpty())
             return PartialDeps.NONE;
 

@@ -49,7 +49,7 @@ public class TopologyTest
         return topology(1, 1, ranges);
     }
 
-    private static KeyRange<IntKey> r(int start, int end)
+    private static KeyRange r(int start, int end)
     {
         return IntKey.range(start, end);
     }

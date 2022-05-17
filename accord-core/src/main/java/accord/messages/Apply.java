@@ -1,36 +1,34 @@
 package accord.messages;
 
-import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.api.Result;
-import accord.topology.Topologies;
 import accord.primitives.Deps;
+import accord.primitives.PartialDeps;
+import accord.primitives.PartialRoute;
+import accord.primitives.Route;
+import accord.topology.Topologies;
 import accord.primitives.Timestamp;
 import accord.primitives.Writes;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 
 import static accord.messages.MessageType.APPLY_REQ;
 import static accord.messages.MessageType.APPLY_RSP;
 
-public class Apply extends TxnRequest
+public class Apply extends TxnRequest<PartialRoute>
 {
     public final TxnId txnId;
-    public final Txn txn;
-    protected final Key homeKey;
     public final Timestamp executeAt;
-    public final Deps deps;
+    public final PartialDeps deps;
     public final Writes writes;
     public final Result result;
 
-    public Apply(Node.Id to, Topologies topologies, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public Apply(Node.Id to, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        super(to, topologies, txn.keys);
+        super(to, topologies, route, Route.SLICER);
         this.txnId = txnId;
-        this.txn = txn;
-        this.homeKey = homeKey;
-        this.deps = deps;
+        this.deps = deps.slice(scope.covering);
         this.executeAt = executeAt;
         this.writes = writes;
         this.result = result;
@@ -38,9 +36,9 @@ public class Apply extends TxnRequest
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        Key progressKey = node.trySelectProgressKey(txnId, txn.keys, homeKey);
+        RoutingKey progressKey = node.trySelectProgressKey(txnId, scope, scope.homeKey);
         node.forEachLocalSince(scope(), executeAt,
-                               instance -> instance.command(txnId).apply(txn, homeKey, progressKey, executeAt, deps, writes, result));
+                               instance -> instance.command(txnId).apply(scope.homeKey, progressKey, executeAt, deps, writes, result));
         // note, we do not also commit here if txnId.epoch != executeAt.epoch, as the scope() for a commit would be different
         node.reply(replyToNode, replyContext, ApplyOk.INSTANCE);
     }
@@ -74,7 +72,6 @@ public class Apply extends TxnRequest
     {
         return "Apply{" +
                "txnId:" + txnId +
-               ", txn:" + txn +
                ", deps:" + deps +
                ", executeAt:" + executeAt +
                ", writes:" + writes +

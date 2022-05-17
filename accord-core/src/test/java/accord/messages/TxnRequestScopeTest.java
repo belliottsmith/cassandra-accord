@@ -1,6 +1,7 @@
 package accord.messages;
 
 import accord.primitives.KeyRange;
+import accord.primitives.Route;
 import accord.topology.Topologies;
 import accord.topology.Topology;
 import accord.primitives.Keys;
@@ -18,6 +19,7 @@ public class TxnRequestScopeTest
     void createDisjointScopeTest()
     {
         Keys keys = keys(150);
+        Route route = new Route(keys.get(0).toRoutingKey(), keys.toRoutingKeys());
         KeyRange range = range(100, 200);
         Topology topology1 = topology(1, shard(range, idList(1, 2, 3), idSet(1, 2)));
         Topology topology2 = topology(2, shard(range, idList(4, 5, 6), idSet(4, 5)));
@@ -26,9 +28,9 @@ public class TxnRequestScopeTest
         topologies.add(topology2);
         topologies.add(topology1);
 
-        Assertions.assertEquals(keys(150), TxnRequest.computeScope(id(1), topologies, keys));
+        Assertions.assertEquals(keys(150), TxnRequest.computeScope(id(1), topologies, route));
         Assertions.assertEquals(1, TxnRequest.computeWaitForEpoch(id(1), topologies, keys));
-        Assertions.assertEquals(keys(150), TxnRequest.computeScope(id(4), topologies, keys));
+        Assertions.assertEquals(keys(150), TxnRequest.computeScope(id(4), topologies, route));
         Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(4), topologies, keys));
     }
 
@@ -36,6 +38,8 @@ public class TxnRequestScopeTest
     void movingRangeTest()
     {
         Keys keys = keys(150, 250);
+        Route route = new Route(keys.get(0).toRoutingKey(), keys.toRoutingKeys());
+
         KeyRange range1 = range(100, 200);
         KeyRange range2 = range(200, 300);
         Topology topology1 = topology(1,
@@ -50,9 +54,9 @@ public class TxnRequestScopeTest
         topologies.add(topology2);
         topologies.add(topology1);
 
-        Assertions.assertEquals(keys(150, 250), TxnRequest.computeScope(id(1), topologies, keys));
+        Assertions.assertEquals(keys(150, 250), TxnRequest.computeScope(id(1), topologies, route));
         Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(1), topologies, keys));
-        Assertions.assertEquals(keys(150, 250), TxnRequest.computeScope(id(4), topologies, keys));
+        Assertions.assertEquals(keys(150, 250), TxnRequest.computeScope(id(4), topologies, route));
         Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(4), topologies, keys));
     }
 }

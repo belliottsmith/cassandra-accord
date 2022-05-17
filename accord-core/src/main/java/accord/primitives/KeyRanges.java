@@ -93,7 +93,7 @@ public class KeyRanges implements Iterable<KeyRange>
         return new KeyRanges(selection);
     }
 
-    public boolean intersects(Keys keys)
+    public boolean intersects(AbstractKeys<?, ?> keys)
     {
         return findNextIntersection(0, keys, 0) >= 0;
     }
@@ -108,20 +108,36 @@ public class KeyRanges implements Iterable<KeyRange>
         return SortedArrays.findNextIntersection(this.ranges, 0, that.ranges, 0, KeyRange::compareIntersecting) >= 0;
     }
 
-    public int findFirstKey(Keys keys)
+    public int findFirstKey(AbstractKeys<?, ?> keys)
     {
         return findNextKey(0, keys, 0);
     }
 
-    public int findNextKey(int ri, Keys keys, int ki)
+    public int findNextKey(int ri, AbstractKeys<?, ?> keys, int ki)
     {
         return (int) (findNextIntersection(ri, keys, ki) >> 32);
     }
 
     // returns ki in top 32 bits, ri in bottom, or -1 if no match found
-    public long findNextIntersection(int ri, Keys keys, int ki)
+    public long findNextIntersection(int ri, AbstractKeys<?, ?> keys, int ki)
     {
         return SortedArrays.findNextIntersectionWithOverlaps(keys.keys, ki, ranges, ri);
+    }
+
+    public int findFirstKey(RoutingKey[] keys)
+    {
+        return findNextKey(0, keys, 0);
+    }
+
+    public int findNextKey(int ri, RoutingKey[] keys, int ki)
+    {
+        return (int) (findNextIntersection(ri, keys, ki) >> 32);
+    }
+
+    // returns ki in top 32 bits, ri in bottom, or -1 if no match found
+    public long findNextIntersection(int ri, RoutingKey[] keys, int ki)
+    {
+        return SortedArrays.findNextIntersectionWithOverlaps(keys, ki, ranges, ri);
     }
 
     /**

@@ -1,9 +1,10 @@
 package accord.messages;
 
-import accord.api.Key;
+import accord.api.RoutingKey;
+import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.primitives.Txn;
+import accord.local.Status;
 import accord.primitives.TxnId;
 
 import static accord.messages.InformOfTxn.InformOfTxnNack.nack;
@@ -12,21 +13,21 @@ import static accord.messages.InformOfTxn.InformOfTxnOk.ok;
 public class InformOfTxn implements EpochRequest
 {
     final TxnId txnId;
-    final Key homeKey;
-    final Txn txn;
+    final RoutingKey homeKey;
 
-    public InformOfTxn(TxnId txnId, Key homeKey, Txn txn)
+    public InformOfTxn(TxnId txnId, RoutingKey homeKey)
     {
         this.txnId = txnId;
         this.homeKey = homeKey;
-        this.txn = txn;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        Key progressKey = node.selectProgressKey(txnId, txn.keys, homeKey);
         Reply reply = node.ifLocal(homeKey, txnId, instance -> {
-            instance.command(txnId).preaccept(txn, homeKey, progressKey);
+            // TODO (now): we don't want to preaccept here, only mark it in the progress log
+            Command command = instance.ifPresent(txnId);
+            if (command == null || !command.hasBeen(Status.PreAccepted))
+                instance.progressLog().unwitnessed(txnId);
             return ok();
         });
 
@@ -39,10 +40,7 @@ public class InformOfTxn implements EpochRequest
     @Override
     public String toString()
     {
-        return "InformOfTxn{" +
-               "txnId:" + txnId +
-               ", txn:" + txn +
-               '}';
+        return "InformOfTxn{txnId:" + txnId + '}';
     }
 
     public interface InformOfTxnReply extends Reply

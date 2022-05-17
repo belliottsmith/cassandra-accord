@@ -3,7 +3,6 @@ package accord.coordinate;
 import java.util.HashSet;
 import java.util.Set;
 
-import accord.api.Key;
 import accord.api.Result;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
@@ -13,11 +12,12 @@ import accord.messages.Apply.ApplyOk;
 import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.messages.InformOfPersistence;
+import accord.primitives.Deps;
+import accord.primitives.PartialDeps;
+import accord.primitives.Route;
 import accord.topology.Shard;
 import accord.topology.Topologies;
-import accord.primitives.Deps;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 
@@ -26,35 +26,35 @@ public class Persist implements Callback<ApplyOk>
 {
     final Node node;
     final TxnId txnId;
-    final Key homeKey;
+    final Route route;
     final Timestamp executeAt;
     final QuorumTracker tracker;
     final Set<Id> persistedOn;
     boolean isDone;
 
-    public static void persist(Node node, Topologies topologies, TxnId txnId, Key homeKey, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public static void persist(Node node, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        Persist persist = new Persist(node, topologies, txnId, homeKey, executeAt);
-        node.send(topologies.nodes(), to -> new Apply(to, topologies, txnId, txn, homeKey, executeAt, deps, writes, result), persist);
+        Persist persist = new Persist(node, topologies, txnId, route, executeAt);
+        node.send(topologies.nodes(), to -> new Apply(to, topologies, txnId, route, executeAt, deps, writes, result), persist);
     }
 
-    public static void persistAndCommit(Node node, TxnId txnId, Key homeKey, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public static void persistAndCommit(Node node, TxnId txnId, Route route, Timestamp executeAt, PartialDeps deps, Writes writes, Result result)
     {
-        Topologies persistTo = node.topology().preciseEpochs(txn, executeAt.epoch);
-        Persist persist = new Persist(node, persistTo, txnId, homeKey, executeAt);
-        node.send(persistTo.nodes(), to -> new Apply(to, persistTo, txnId, txn, homeKey, executeAt, deps, writes, result), persist);
+        Topologies persistTo = node.topology().preciseEpochs(route, executeAt.epoch);
+        Persist persist = new Persist(node, persistTo, txnId, route, executeAt);
+        node.send(persistTo.nodes(), to -> new Apply(to, persistTo, txnId, route, executeAt, deps, writes, result), persist);
         if (txnId.epoch != executeAt.epoch)
         {
-            Topologies earlierTopologies = node.topology().preciseEpochs(txn, txnId.epoch, executeAt.epoch - 1);
-            Commit.commit(node, earlierTopologies, persistTo, txnId, txn, homeKey, executeAt, deps);
+            Topologies earlierTopologies = node.topology().preciseEpochs(route, txnId.epoch, executeAt.epoch - 1);
+            Commit.commit(node, earlierTopologies, persistTo, txnId, route, executeAt, deps);
         }
     }
 
-    private Persist(Node node, Topologies topologies, TxnId txnId, Key homeKey, Timestamp executeAt)
+    private Persist(Node node, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt)
     {
         this.node = node;
         this.txnId = txnId;
-        this.homeKey = homeKey;
+        this.route = route;
         this.tracker = new QuorumTracker(topologies);
         this.executeAt = executeAt;
         this.persistedOn = new HashSet<>();
@@ -67,8 +67,8 @@ public class Persist implements Callback<ApplyOk>
         if (tracker.success(from) && !isDone)
         {
             // TODO: send to non-home replicas also, so they may clear their log more easily?
-            Shard homeShard = node.topology().forEpochIfKnown(homeKey, txnId.epoch);
-            node.send(homeShard, new InformOfPersistence(txnId, homeKey, executeAt, persistedOn));
+            Shard homeShard = node.topology().forEpochIfKnown(route.homeKey, txnId.epoch);
+            node.send(homeShard, new InformOfPersistence(txnId, route.homeKey, executeAt, persistedOn));
             isDone = true;
         }
     }

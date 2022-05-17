@@ -1,407 +1,113 @@
 package accord.primitives;
 
 import java.util.*;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.util.function.IntFunction;
 
 import accord.api.Key;
-import accord.utils.IndexedPredicate;
+import accord.api.RoutingKey;
 import accord.utils.SortedArrays;
-import org.apache.cassandra.utils.concurrent.Inline;
 
-@SuppressWarnings("rawtypes")
-// TODO: this should probably be a BTree
-// TODO: check that foldl call-sites are inlined and optimised by HotSpot
-public class Keys implements Iterable<Key>
+public class Keys extends AbstractKeys<Key, Keys>
 {
-    public interface Fold<V>
+    public static final Slicer<Keys, Keys> SLICER = new Slicer<>()
     {
-        V apply(int index, Key key, V value);
-    }
+        @Override
+        public Keys slice(Keys in, KeyRanges ranges)
+        {
+            return in.slice(ranges);
+        }
 
-    public interface FoldToLong
-    {
-        long apply(int index, Key key, long param, long prev);
-    }
-
-    public interface IntersectFoldToLong
-    {
-        long apply(int leftIndex, int rightIndex, Key key, long param, long prev);
-    }
+        @Override
+        public Keys merge(Keys a, Keys b)
+        {
+            return a.union(b);
+        }
+    };
 
     public static final Keys EMPTY = new Keys(new Key[0]);
 
-    final Key[] keys;
-
     public Keys(SortedSet<? extends Key> keys)
     {
-        this.keys = keys.toArray(Key[]::new);
+        this(keys.toArray(Key[]::new));
     }
 
     public Keys(Collection<? extends Key> keys)
     {
-        this.keys = keys.toArray(Key[]::new);
-        Arrays.sort(this.keys);
+        this(sort(keys.toArray(Key[]::new)));
     }
 
     public Keys(Key[] keys)
     {
-        this.keys = keys;
-        Arrays.sort(keys);
-    }
-
-    @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Keys keys1 = (Keys) o;
-        return Arrays.equals(keys, keys1.keys);
-    }
-
-    @Override
-    public int hashCode()
-    {
-        return Arrays.hashCode(keys);
-    }
-
-    public int indexOf(Key key)
-    {
-        return Arrays.binarySearch(keys, key);
-    }
-
-    public boolean contains(Key key)
-    {
-        return indexOf(key) >= 0;
-    }
-
-    public Key get(int indexOf)
-    {
-        return keys[indexOf];
-    }
-
-    public Keys select(int[] indexes)
-    {
-        Key[] selection = new Key[indexes.length];
-        for (int i = 0 ; i < indexes.length ; ++i)
-            selection[i] = keys[indexes[i]];
-        return new Keys(selection);
-    }
-
-    /**
-     * return true if this keys collection contains all keys found in the given keys
-     */
-    public boolean containsAll(Keys that)
-    {
-        if (that.isEmpty())
-            return true;
-
-        return foldl(that, (li, ri, k, p, v) -> v + 1, 0, 0, 0) == that.size();
+        super(keys);
     }
 
     public Keys union(Keys that)
     {
-        Key[] result = SortedArrays.linearUnion(keys, that.keys, Key[]::new);
-        return result == keys ? this : result == that.keys ? that : new Keys(result);
+        return wrap(SortedArrays.linearUnion(keys, that.keys, factory()), that);
     }
 
     public Keys intersect(Keys that)
     {
-        Key[] result = SortedArrays.linearIntersection(keys, that.keys, Key[]::new);
-        return result == keys ? this : result == that.keys ? that : new Keys(result);
+        return wrap(SortedArrays.linearIntersection(keys, that.keys, factory()), that);
     }
 
-    public boolean isEmpty()
+    public Keys slice(KeyRanges ranges)
     {
-        return keys.length == 0;
+        return wrap(slice(ranges, factory()));
     }
 
-    public int size()
+    public RoutingKey[] toRoutingKeys()
     {
-        return keys.length;
-    }
+        if (isEmpty())
+            return new RoutingKey[0];
 
-    public int search(int lowerBound, int upperBound, Object key, Comparator<Object> comparator)
-    {
-        return Arrays.binarySearch(keys, lowerBound, upperBound, key, comparator);
-    }
-
-    public int find(Key key, int startIndex)
-    {
-        return SortedArrays.exponentialSearch(keys, startIndex, keys.length, key);
-    }
-
-    // returns thisIdx in top 32 bits, thatIdx in bottom
-    public long findNextIntersection(int thisIdx, Keys that, int thatIdx)
-    {
-        return SortedArrays.findNextIntersection(this.keys, thisIdx, that.keys, thatIdx);
-    }
-
-
-    public Keys with(Key key)
-    {
-        int insertPos = Arrays.binarySearch(keys, key);
-        if (insertPos >= 0)
-            return this;
-        insertPos = -1 - insertPos;
-
-        Key[] src = keys;
-        Key[] trg = new Key[src.length + 1];
-        System.arraycopy(src, 0, trg, 0, insertPos);
-        trg[insertPos] = key;
-        System.arraycopy(src, insertPos, trg, insertPos + 1, src.length - insertPos);
-        return new Keys(trg);
-    }
-
-    public Stream<Key> stream()
-    {
-        return Stream.of(keys);
-    }
-
-    @Override
-    public Iterator<Key> iterator()
-    {
-        return new Iterator<>()
+        RoutingKey[] result = new RoutingKey[keys.length];
+        result[0] = keys[0].toRoutingKey();
+        int resultCount = 1;
+        for (int i = 1 ; i < keys.length ; ++i)
         {
-            int i = 0;
-            @Override
-            public boolean hasNext()
-            {
-                return i < keys.length;
-            }
-
-            @Override
-            public Key next()
-            {
-                return keys[i++];
-            }
-        };
-    }
-
-    @Override
-    public String toString()
-    {
-        return stream().map(Object::toString).collect(Collectors.joining(",", "[", "]"));
-    }
-
-    public static Keys of(Key k0, Key... kn)
-    {
-        Key[] keys = new Key[kn.length + 1];
-        keys[0] = k0;
-        for (int i=0; i<kn.length; i++)
-            keys[i + 1] = kn[i];
-
-        return new Keys(keys);
-    }
-
-    // TODO: optimise for case where nothing is modified
-    public Keys intersect(KeyRanges ranges)
-    {
-        Key[] result = null;
-        int resultSize = 0;
-
-        int keyLB = 0;
-        int keyHB = size();
-        int rangeLB = 0;
-        int rangeHB = ranges.rangeIndexForKey(keys[keyHB-1]);
-        rangeHB = rangeHB < 0 ? -1 - rangeHB : rangeHB + 1;
-
-        for (;rangeLB<rangeHB && keyLB<keyHB;)
-        {
-            Key key = keys[keyLB];
-            rangeLB = ranges.rangeIndexForKey(rangeLB, ranges.size(), key);
-
-            if (rangeLB < 0)
-            {
-                rangeLB = -1 -rangeLB;
-                if (rangeLB >= rangeHB)
-                    break;
-                keyLB = ranges.get(rangeLB).lowKeyIndex(this, keyLB, keyHB);
-            }
-            else
-            {
-                if (result == null)
-                    result = new Key[keyHB - keyLB];
-                KeyRange<?> range = ranges.get(rangeLB);
-                int highKey = range.higherKeyIndex(this, keyLB, keyHB);
-                int size = highKey - keyLB;
-                System.arraycopy(keys, keyLB, result, resultSize, size);
-                keyLB = highKey;
-                resultSize += size;
-                rangeLB++;
-            }
-
-            if (keyLB < 0)
-                keyLB = -1 - keyLB;
+            RoutingKey next = keys[i].toRoutingKey();
+            if (!next.equals(result[resultCount - 1]))
+                result[resultCount++] = next;
         }
-
-        if (result != null && resultSize < result.length)
-            result = Arrays.copyOf(result, resultSize);
-
-        return result != null ? new Keys(result) : EMPTY;
+        if (resultCount < result.length)
+            result = Arrays.copyOf(result, resultCount);
+        return result;
     }
 
-    /**
-     * Count the number of keys matching the predicate and intersecting with the given ranges.
-     * If terminateAfter is greater than 0, the method will return once terminateAfter matches are encountered
-     */
-    @Inline
-    public <V> V foldl(KeyRanges rs, Fold<V> fold, V accumulator)
+    private Keys wrap(Key[] wrap, Keys that)
     {
-        int ai = 0, ri = 0;
-        while (true)
-        {
-            long ari = rs.findNextIntersection(ri, this, ai);
-            if (ari < 0)
-                break;
-
-            ai = (int)(ari >>> 32);
-            ri = (int)ari;
-            KeyRange range = rs.get(ri);
-            do
-            {
-                accumulator = fold.apply(ai, get(ai), accumulator);
-
-                ++ai;
-            } while (ai < size() && range.containsKey(get(ai)));
-        }
-
-        return accumulator;
-
+        return wrap == keys ? this : wrap == that.keys ? that : new Keys(wrap);
     }
 
-    public boolean any(KeyRanges ranges, Predicate<Key> predicate)
+    private Keys wrap(Key[] wrap)
     {
-        return 1 == foldl(ranges, (i1, key, i2, i3) -> predicate.test(key) ? 1 : 0, 0, 0, 1);
+        return wrap == keys ? this : new Keys(wrap);
     }
 
-    public boolean any(IndexedPredicate<Key> predicate)
+    private static IntFunction<Key[]> factory()
     {
-        return 1 == foldl((i, key, p, v) -> predicate.test(i, key) ? 1 : 0, 0, 0, 1);
+        return Key[]::new;
     }
 
-    @Inline
-    public long foldl(KeyRanges rs, FoldToLong fold, long param, long initialValue, long terminalValue)
+    public static Keys of(Key key)
     {
-        int ai = 0, ri = 0;
-        done: while (true)
-        {
-            long ari = rs.findNextIntersection(ri, this, ai);
-            if (ari < 0)
-                break;
-
-            ai = (int)(ari >>> 32);
-            ri = (int)ari;
-            KeyRange range = rs.get(ri);
-            do
-            {
-                initialValue = fold.apply(ai, get(ai), param, initialValue);
-                if (initialValue == terminalValue)
-                    break done;
-
-                ++ai;
-            } while (ai < size() && range.containsKey(get(ai)));
-        }
-
-        return initialValue;
+        return new Keys(new Key[] { key });
     }
 
-    @Inline
-    public long foldl(FoldToLong fold, long param, long initialValue, long terminalValue)
+    public static Keys of(Key ... keys)
     {
-        for (int i = 0; i < keys.length; i++)
-        {
-            initialValue = fold.apply(i, keys[i], param, initialValue);
-            if (terminalValue == initialValue)
-                return initialValue;
-        }
-        return initialValue;
-    }
-
-    public boolean intersects(KeyRanges ranges, Keys keys)
-    {
-        return foldl(ranges, keys, (li, ri, k, p, v) -> 1, 0, 0, 1) == 1;
-    }
-
-    @Inline
-    public long foldl(KeyRanges rs, Keys intersect, IntersectFoldToLong fold, long param, long initialValue, long terminalValue)
-    {
-        Keys as = this, bs = intersect;
-        int ai = 0, bi = 0, ri = 0;
-        done: while (true)
-        {
-            long ari = rs.findNextIntersection(ri, as, ai);
-            if (ari < 0)
-                break;
-
-            long bri = rs.findNextIntersection(ri, bs, bi);
-            if (bri < 0)
-                break;
-
-            ai = (int) (ari >>> 32);
-            bi = (int) (bri >>> 32);
-            if ((int)ari == (int)bri)
-            {
-                ri = (int)ari;
-                KeyRange range = rs.get(ri);
-                do
-                {
-                    initialValue = fold.apply(ai, bi, as.get(ai), param, initialValue);
-                    if (initialValue == terminalValue)
-                        break done;
-
-                    ++ai;
-                    ++bi;
-                    long abi = as.findNextIntersection(ai, bs, bi);
-                    if (abi < 0)
-                        break done;
-
-                    ai = (int)(abi >>> 32);
-                    bi = (int)abi;
-                } while (range.containsKey(as.get(ai)));
-            }
-            else
-            {
-                ri = Math.max((int)ari, (int)bri);
-            }
-        }
-
-        return initialValue;
-    }
-
-    @Inline
-    public long foldl(Keys intersect, IntersectFoldToLong fold, long param, long initialValue, long terminalValue)
-    {
-        Keys as = this, bs = intersect;
-        int ai = 0, bi = 0;
-        while (true)
-        {
-            long abi = as.findNextIntersection(ai, bs, bi);
-            if (abi < 0)
-                break;
-
-            ai = (int)(abi >>> 32);
-            bi = (int)abi;
-
-            initialValue = fold.apply(ai, bi, as.get(ai), param, initialValue);
-            if (initialValue == terminalValue)
-                break;
-
-            ++ai;
-            ++bi;
-        }
-
-        return initialValue;
-    }
-
-    public int[] remapper(Keys target, boolean isTargetKnownSuperset)
-    {
-        return SortedArrays.remapper(keys, target.keys, isTargetKnownSuperset);
+        return new Keys(sort(keys));
     }
 
     public static Keys union(Keys left, Keys right)
     {
         return left == null ? right : right == null ? left : left.union(right);
+    }
+
+    private static Key[] sort(Key[] array)
+    {
+        Arrays.sort(array);
+        return array;
     }
 }

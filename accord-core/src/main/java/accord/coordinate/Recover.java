@@ -6,11 +6,12 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
-import accord.api.Key;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.messages.Commit;
+import accord.primitives.Route;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.primitives.Ballot;
@@ -67,7 +68,7 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
             if (isDone()) return;
 
             if (tracker.failure(from))
-                tryFailure(new Timeout(txnId, homeKey));
+                tryFailure(new Timeout(txnId, route.homeKey));
         }
 
         @Override
@@ -127,23 +128,23 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
     final Ballot ballot;
     final TxnId txnId;
     final Txn txn;
-    final Key homeKey;
+    final Route route;
 
     final List<RecoverOk> recoverOks = new ArrayList<>();
     final FastPathTracker<ShardTracker> tracker;
 
-    public Recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey)
+    public Recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Route route)
     {
-        this(node, ballot, txnId, txn, homeKey, node.topology().forEpoch(txn, txnId.epoch));
+        this(node, ballot, txnId, txn, route, node.topology().forEpoch(txn, txnId.epoch));
     }
 
-    private Recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey, Topologies topologies)
+    private Recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Route route, Topologies topologies)
     {
         this.node = node;
         this.ballot = ballot;
         this.txnId = txnId;
         this.txn = txn;
-        this.homeKey = homeKey;
+        this.route = route;
         assert topologies.oldestEpoch() == topologies.currentEpoch() && topologies.currentEpoch() == txnId.epoch;
         this.tracker = new FastPathTracker<>(topologies, ShardTracker[]::new, ShardTracker::new);
     }
@@ -155,32 +156,32 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         else tryFailure(failure);
     }
 
-    public static Recover recover(Node node, TxnId txnId, Txn txn, Key homeKey)
+    public static Recover recover(Node node, TxnId txnId, Txn txn, Route route)
     {
-        return recover(node, txnId, txn, homeKey, node.topology().forEpoch(txn, txnId.epoch));
+        return recover(node, txnId, txn, route, node.topology().forEpoch(route, txnId.epoch));
     }
 
-    public static Recover recover(Node node, TxnId txnId, Txn txn, Key homeKey, Topologies topologies)
+    public static Recover recover(Node node, TxnId txnId, Txn txn, Route route, Topologies topologies)
     {
         Ballot ballot = new Ballot(node.uniqueNow());
-        return recover(node, ballot, txnId, txn, homeKey, topologies);
+        return recover(node, ballot, txnId, txn, route, topologies);
     }
 
-    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey)
+    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Route route)
     {
-        return recover(node, ballot, txnId, txn, homeKey, node.topology().forEpoch(txn, txnId.epoch));
+        return recover(node, ballot, txnId, txn, route, node.topology().forEpoch(txn, txnId.epoch));
     }
 
-    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey, Topologies topologies)
+    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, Route route, Topologies topologies)
     {
-        Recover recover = new Recover(node, ballot, txnId, txn, homeKey, topologies);
+        Recover recover = new Recover(node, ballot, txnId, txn, route, topologies);
         recover.start(topologies.nodes());
         return recover;
     }
 
     void start(Set<Id> nodes)
     {
-        node.send(nodes, to -> new BeginRecovery(to, tracker.topologies(), txnId, txn, homeKey, ballot), this);
+        node.send(nodes, to -> new BeginRecovery(to, tracker.topologies(), txnId, txn, route, ballot), this);
     }
 
     @Override
@@ -191,7 +192,7 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
 
         if (!response.isOK())
         {
-            tryFailure(new Preempted(txnId, homeKey));
+            tryFailure(new Preempted(txnId, route.homeKey));
             return;
         }
 
@@ -227,11 +228,11 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
                 case Accepted:
                     // TODO (now): do we need to do a preaccept round for the later epoch?
                     node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
-                        Propose.propose(node, ballot, txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
+                        Propose.propose(node, ballot, txnId, txn, route, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
                     });
                     return;
                 case AcceptedInvalidate:
-                    proposeInvalidate(node, ballot, txnId, homeKey).addCallback((success, fail) -> {
+                    proposeInvalidate(node, ballot, txnId, route.homeKey).addCallback((success, fail) -> {
                         if (fail != null) tryFailure(fail);
                         else
                         {
@@ -242,11 +243,11 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
                     return;
                 case Committed:
                 case ReadyToExecute:
-                    Execute.execute(node, txnId, txn, homeKey, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
+                    Execute.execute(node, txnId, txn, route, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
                     return;
                 case Executed:
                 case Applied:
-                    Persist.persistAndCommit(node, txnId, homeKey, txn, acceptOrCommit.executeAt, acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result);
+                    Persist.persistAndCommit(node, txnId, route, acceptOrCommit.executeAt, acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result);
                     trySuccess(acceptOrCommit.result);
                     return;
                 case Invalidated:
@@ -292,13 +293,13 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         }
 
         node.withEpoch(executeAt.epoch, () -> {
-            Propose.propose(node, ballot, txnId, txn, homeKey, executeAt, deps, this);
+            Propose.propose(node, ballot, txnId, txn, route, executeAt, deps, this);
         });
     }
 
     private void retry()
     {
-        Recover.recover(node, ballot, txnId, txn, homeKey, tracker.topologies()).addCallback((success, failure) -> {
+        Recover.recover(node, ballot, txnId, txn, route, tracker.topologies()).addCallback((success, failure) -> {
             if (success != null) trySuccess(success);
             else tryFailure(failure);
         });
@@ -311,7 +312,7 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
             return;
 
         if (tracker.failure(from))
-            tryFailure(new Timeout(txnId, homeKey));
+            tryFailure(new Timeout(txnId, route.homeKey));
     }
 
     @Override

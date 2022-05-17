@@ -45,7 +45,7 @@ public class ListRequest implements Request
             else if (fail instanceof CoordinateFailed)
             {
                 ((Cluster)node.scheduler()).onDone(() -> {
-                    Key homeKey = ((CoordinateFailed) fail).homeKey;
+                    RoutingKey homeKey = ((CoordinateFailed) fail).homeKey;
                     TxnId txnId = ((CoordinateFailed) fail).txnId;
                     CheckOnCommitted.checkOnCommitted(node, txnId, homeKey, node.topology().forEpoch(homeKey, txnId.epoch), txnId.epoch)
                                     .addCallback((s, f) -> {

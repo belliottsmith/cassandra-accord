@@ -1,7 +1,10 @@
 package accord.messages;
 
+import java.util.List;
+
 import accord.api.Key;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -10,9 +13,11 @@ import accord.messages.BeginRecovery.RecoverNack;
 import accord.messages.BeginRecovery.RecoverOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.primitives.Ballot;
-import accord.primitives.Deps;
+import accord.primitives.PartialDeps;
+import accord.primitives.PartialTxn;
+import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 
@@ -35,10 +40,10 @@ public class BeginInvalidate implements EpochRequest
             Command command = instance.command(txnId);
 
             if (!command.preAcceptInvalidate(ballot))
-                return new InvalidateNack(command.promised(), command.txn(), command.homeKey());
+                return new InvalidateNack(command.promised(), command.homeKey());
 
-            return new InvalidateOk(txnId, command.status(), command.accepted(), command.executeAt(), command.savedDeps(),
-                                    command.writes(), command.result(), command.txn(), command.homeKey());
+            return new InvalidateOk(txnId, command.status(), command.accepted(), command.executeAt(), command.savedPartialDeps(),
+                                    command.writes(), command.result(), command.routingKeys(), command.homeKey());
         });
 
         node.reply(replyToNode, replyContext, reply);
@@ -67,13 +72,15 @@ public class BeginInvalidate implements EpochRequest
 
     public static class InvalidateOk extends RecoverOk
     {
-        public final Txn txn;
-        public final Key homeKey;
+        public final PartialTxn txn;
+        public final RoutingKeys routingKeys;
+        public final RoutingKey homeKey;
 
-        public InvalidateOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, Deps deps, Writes writes, Result result, Txn txn, Key homeKey)
+        public InvalidateOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, PartialDeps deps, Writes writes, Result result, PartialTxn txn, RoutingKeys routingKeys, RoutingKey homeKey)
         {
             super(txnId, status, accepted, executeAt, deps, null, null, false, writes, result);
             this.txn = txn;
+            this.routingKeys = routingKeys;
             this.homeKey = homeKey;
         }
 
@@ -88,16 +95,24 @@ public class BeginInvalidate implements EpochRequest
         {
             return toString("InvalidateOk");
         }
+
+        public static Route findRoute(List<InvalidateOk> invalidateOks)
+        {
+            for (InvalidateOk ok : invalidateOks)
+            {
+                if (ok.routingKeys != null)
+                    return ok.routingKeys.toRoute(ok.homeKey);
+            }
+            throw new IllegalStateException();
+        }
     }
 
     public static class InvalidateNack extends RecoverNack
     {
-        public final Txn txn;
-        public final Key homeKey;
-        public InvalidateNack(Ballot supersededBy, Txn txn, Key homeKey)
+        public final RoutingKey homeKey;
+        public InvalidateNack(Ballot supersededBy, RoutingKey homeKey)
         {
             super(supersededBy);
-            this.txn = txn;
             this.homeKey = homeKey;
         }
 

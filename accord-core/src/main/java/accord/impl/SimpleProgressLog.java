@@ -15,6 +15,7 @@ import com.google.common.base.Preconditions;
 import accord.api.Key;
 import accord.api.ProgressLog;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.coordinate.CheckOnCommitted;
 import accord.coordinate.Invalidate;
 import accord.impl.SimpleProgressLog.HomeState.LocalStatus;
@@ -282,7 +283,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         // must also be committed, as at the time of writing we do not guarantee dissemination of Commit
                         // records to the home shard, so we only know the executeAt shards will have witnessed this
                         // if the home shard is at an earlier phase, it must run recovery
-                        Key homeKey = command.homeKey();
+                        RoutingKey homeKey = command.homeKey();
                         long homeEpoch = command.executeAt().epoch;
 
                         node.withEpoch(homeEpoch, () -> {
@@ -297,7 +298,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     }
                     else
                     {
-                        Key homeKey = command.homeKey();
+                        RoutingKey homeKey = command.homeKey();
                         long homeEpoch = (local.isAtMost(Uncommitted) ? txnId : command.executeAt()).epoch;
 
                         node.withEpoch(homeEpoch, () -> {
@@ -560,7 +561,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     break;
                 case StillUnsafe:
                     // make sure a quorum of the home shard is aware of the transaction, so we can rely on it to ensure progress
-                    Future<Void> inform = inform(node, txnId, command.txn(), command.homeKey());
+                    Future<Void> inform = inform(node, txnId, command.homeKey());
                     inform.addCallback((success, fail) -> {
                         if (nonHomeState == Safe)
                             return;
@@ -794,7 +795,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
     static class ApplyAndCheck extends Apply
     {
         final Set<Id> notPersisted;
-        ApplyAndCheck(Id id, Topologies topologies, TxnId txnId, Txn txn, Key homeKey, Deps deps, Timestamp executeAt, Writes writes, Result result, Set<Id> notPersisted)
+        ApplyAndCheck(Id id, Topologies topologies, TxnId txnId, Txn txn, RoutingKey homeKey, Deps deps, Timestamp executeAt, Writes writes, Result result, Set<Id> notPersisted)
         {
             super(id, topologies, txnId, txn, homeKey, executeAt, deps, writes, result);
             this.notPersisted = notPersisted;
@@ -803,7 +804,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         @Override
         public void process(Node node, Id from, ReplyContext replyContext)
         {
-            Key progressKey = node.trySelectProgressKey(txnId, txn.keys, homeKey);
+            RoutingKey progressKey = node.trySelectProgressKey(txnId, txn.keys, homeKey);
             node.reply(from, replyContext, node.mapReduceLocalSince(scope(), executeAt, instance -> {
                 Command command = instance.command(txnId);
                 command.apply(txn, homeKey, progressKey, executeAt, deps, writes, result);

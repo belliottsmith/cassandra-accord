@@ -3,34 +3,36 @@ package accord.messages;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
-import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.AbstractKeys;
+import accord.primitives.AbstractKeys.Slicer;
 import accord.primitives.KeyRanges;
+import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
 import accord.topology.Topologies;
 import accord.topology.Topology;
-import accord.primitives.Keys;
 import accord.primitives.TxnId;
 
 import static java.lang.Long.min;
 
-public abstract class TxnRequest implements EpochRequest
+public abstract class TxnRequest<KS extends AbstractKeys<?, ?>> implements EpochRequest
 {
-    public static abstract class WithUnsync extends TxnRequest
+    public static abstract class WithUnsync<KS extends AbstractKeys<?, ?>> extends TxnRequest<KS>
     {
         public final TxnId txnId;
         public final long minEpoch;
         protected final boolean doNotComputeProgressKey;
 
-        public WithUnsync(Id to, Topologies topologies, Keys keys, TxnId txnId)
+        public <I extends AbstractKeys<?, ?>> WithUnsync(Id to, Topologies topologies, TxnId txnId, I keys, Slicer<I, KS> slicer)
         {
-            this(to, topologies, keys, txnId, latestRelevantEpochIndex(to, topologies, keys));
+            this(to, topologies, txnId, keys, slicer, latestRelevantEpochIndex(to, topologies, keys));
         }
 
-        private WithUnsync(Id to, Topologies topologies, Keys keys, TxnId txnId, int startIndex)
+        private <I extends AbstractKeys<?, ?>> WithUnsync(Id to, Topologies topologies, TxnId txnId, I keys, Slicer<I, KS> slicer, int startIndex)
         {
-            super(to, topologies, keys, startIndex);
+            super(to, topologies, keys, slicer, startIndex);
             this.txnId = txnId;
             this.minEpoch = topologies.oldestEpoch();
             this.doNotComputeProgressKey = waitForEpoch() < txnId.epoch && startIndex > 0
@@ -52,7 +54,7 @@ public abstract class TxnRequest implements EpochRequest
             }
         }
 
-        Key progressKey(Node node, RoutingKey homeKey)
+        RoutingKey progressKey(Node node, RoutingKey homeKey)
         {
             // if waitForEpoch < txnId.epoch, then this replica's ownership is unchanged
             long progressEpoch = min(waitForEpoch(), txnId.epoch);
@@ -60,7 +62,7 @@ public abstract class TxnRequest implements EpochRequest
         }
 
         @VisibleForTesting
-        public WithUnsync(Keys scope, long epoch, TxnId txnId)
+        public WithUnsync(KS scope, long epoch, TxnId txnId)
         {
             super(scope, epoch);
             this.txnId = txnId;
@@ -69,28 +71,28 @@ public abstract class TxnRequest implements EpochRequest
         }
     }
 
-    private final Keys scope;
+    protected final KS scope;
     private final long waitForEpoch;
 
-    public TxnRequest(Node.Id to, Topologies topologies, Keys keys)
+    public <I extends AbstractKeys<?, ?>> TxnRequest(Node.Id to, Topologies topologies, I keys, Slicer<I, KS> slicer)
     {
-        this(to, topologies, keys, 0);
+        this(to, topologies, keys, slicer, 0);
     }
 
-    public TxnRequest(Node.Id to, Topologies topologies, Keys keys, int startIndex)
+    public <I extends AbstractKeys<?, ?>> TxnRequest(Node.Id to, Topologies topologies, I keys, Slicer<I, KS> slicer, int startIndex)
     {
-        this(computeScope(to, topologies, keys, startIndex),
+        this(computeScope(to, topologies, keys, slicer, startIndex),
              computeWaitForEpoch(to, topologies, startIndex));
     }
 
-    public TxnRequest(Keys scope, long waitForEpoch)
+    public TxnRequest(KS scope, long waitForEpoch)
     {
         Preconditions.checkState(!scope.isEmpty());
         this.scope = scope;
         this.waitForEpoch = waitForEpoch;
     }
 
-    public Keys scope()
+    public KS scope()
     {
         return scope;
     }
@@ -100,9 +102,7 @@ public abstract class TxnRequest implements EpochRequest
         return waitForEpoch;
     }
 
-
-
-    protected static int latestRelevantEpochIndex(Node.Id node, Topologies topologies, Keys keys)
+    protected static int latestRelevantEpochIndex(Node.Id node, Topologies topologies, AbstractKeys<?, ?> keys)
     {
         KeyRanges latest = topologies.get(0).rangesForNode(node);
 
@@ -141,7 +141,7 @@ public abstract class TxnRequest implements EpochRequest
     // for now use a simple heuristic of whether the node's ownership ranges have changed,
     // on the assumption that this might also mean some local shard rearrangement
     // except if the latest epoch is empty for the keys
-    public static long computeWaitForEpoch(Node.Id node, Topologies topologies, Keys keys)
+    public static long computeWaitForEpoch(Node.Id node, Topologies topologies, AbstractKeys<?, ?> keys)
     {
         return computeWaitForEpoch(node, topologies, latestRelevantEpochIndex(node, topologies, keys));
     }
@@ -164,24 +164,30 @@ public abstract class TxnRequest implements EpochRequest
         return topologies.get(i - 1).epoch();
     }
 
-    public static Keys computeScope(Node.Id node, Topologies topologies, Keys keys)
+    public static RoutingKeys computeScope(Node.Id node, Topologies topologies, Route keys)
     {
-        return computeScope(node, topologies, keys, latestRelevantEpochIndex(node, topologies, keys));
+        return computeScope(node, topologies, keys, Route.SLICER, latestRelevantEpochIndex(node, topologies, keys));
     }
 
-    public static Keys computeScope(Node.Id node, Topologies topologies, Keys keys, int startIndex)
+    public static <I extends AbstractKeys<?, ?>, O extends AbstractKeys<?, ?>> O computeScope(Node.Id node, Topologies topologies, I keys,
+                                                                                              Slicer<I, O> slicer, int startIndex)
     {
         KeyRanges last = null;
-        Keys scopeKeys = Keys.EMPTY;
+        O scopeKeys = null;
         for (int i = startIndex, mi = topologies.size() ; i < mi ; ++i)
         {
             Topology topology = topologies.get(i);
             KeyRanges ranges = topology.rangesForNode(node);
             if (ranges != last && ranges != null && !ranges.equals(last))
-                scopeKeys = scopeKeys.union(keys.intersect(ranges));
+            {
+                O add = slicer.slice(keys, ranges);
+                scopeKeys = scopeKeys == null ? add : slicer.merge(scopeKeys, add);
+            }
 
             last = ranges;
         }
+        if (scopeKeys == null)
+            throw new IllegalArgumentException("No intersection");
         return scopeKeys;
     }
 }

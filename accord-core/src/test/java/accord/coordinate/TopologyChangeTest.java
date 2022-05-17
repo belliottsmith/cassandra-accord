@@ -57,7 +57,7 @@ public class TopologyChangeTest
             node1.coordinate(txnId1, txn1).get();
             node1.forEachLocal(keys, 1, commands -> {
                 Command command = commands.command(txnId1);
-                Assertions.assertTrue(command.savedDeps().isEmpty());
+                Assertions.assertTrue(command.savedPartialDeps().isEmpty());
             });
 
             cluster.configServices(4, 5, 6).forEach(config -> config.reportTopology(topology2));
@@ -71,7 +71,7 @@ public class TopologyChangeTest
             cluster.nodes(4, 5, 6).forEach(node -> {
                 node.forEachLocal(keys, 2, commands -> {
                     Command command = commands.command(txnId2);
-                    Assertions.assertTrue(command.savedDeps().contains(txnId1));
+                    Assertions.assertTrue(command.savedPartialDeps().contains(txnId1));
                 });
             });
 
@@ -102,7 +102,7 @@ public class TopologyChangeTest
             TxnId txnId1 = coordinate(node1, keys);
             node1.forEachLocal(keys, 1, commands -> {
                 Command command = commands.command(txnId1);
-                Assertions.assertTrue(command.savedDeps().isEmpty());
+                Assertions.assertTrue(command.savedPartialDeps().isEmpty());
             });
 
             // check there was no accept phase
@@ -125,7 +125,7 @@ public class TopologyChangeTest
             node1.forEachLocal(keys, 2, commands -> {
                 Command command = commands.command(txnId2);
                 Assertions.assertTrue(command.hasBeen(Status.Committed));
-                Assertions.assertTrue(command.savedDeps().contains(txnId1));
+                Assertions.assertTrue(command.savedPartialDeps().contains(txnId1));
                 Assertions.assertEquals(txnId2, command.executeAt());
             });
 
@@ -138,8 +138,8 @@ public class TopologyChangeTest
             node1.forEachLocal(keys, 2, commands -> {
                 Command command = commands.command(txnId3);
                 Assertions.assertTrue(command.hasBeen(Status.Committed));
-                Assertions.assertTrue(command.savedDeps().contains(txnId1));
-                Assertions.assertTrue(command.savedDeps().contains(txnId2));
+                Assertions.assertTrue(command.savedPartialDeps().contains(txnId1));
+                Assertions.assertTrue(command.savedPartialDeps().contains(txnId2));
                 Assertions.assertEquals(txnId3, command.executeAt());
             });
         }

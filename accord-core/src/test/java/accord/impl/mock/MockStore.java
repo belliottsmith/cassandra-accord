@@ -45,7 +45,7 @@ public class MockStore implements DataStore
             @Override
             public Read slice(KeyRanges ranges)
             {
-                return MockStore.read(keys.intersect(ranges));
+                return MockStore.read(keys.slice(ranges));
             }
 
             @Override
@@ -75,7 +75,7 @@ public class MockStore implements DataStore
             @Override
             public Update slice(KeyRanges ranges)
             {
-                return MockStore.update(keys.intersect(ranges));
+                return MockStore.update(keys.slice(ranges));
             }
 
             @Override

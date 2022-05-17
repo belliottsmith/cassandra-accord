@@ -6,8 +6,10 @@ import java.util.function.BiConsumer;
 
 import accord.api.Key;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.coordinate.tracking.QuorumTracker;
+import accord.primitives.Route;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.primitives.Ballot;
@@ -29,7 +31,7 @@ class Propose implements Callback<AcceptReply>
     final Ballot ballot;
     final TxnId txnId;
     final Txn txn;
-    final Key homeKey;
+    final Route route;
 
     private final List<AcceptOk> acceptOks;
     private final Timestamp executeAt;
@@ -37,31 +39,31 @@ class Propose implements Callback<AcceptReply>
     private final BiConsumer<Result, Throwable> callback;
     private boolean isDone;
 
-    Propose(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, BiConsumer<Result, Throwable> callback)
+    Propose(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, Route route, Timestamp executeAt, BiConsumer<Result, Throwable> callback)
     {
         this.node = node;
         this.ballot = ballot;
         this.txnId = txnId;
         this.txn = txn;
-        this.homeKey = homeKey;
+        this.route = route;
         this.executeAt = executeAt;
         this.callback = callback;
         this.acceptOks = new ArrayList<>();
         this.acceptTracker = new QuorumTracker(topologies);
     }
 
-    public static void propose(Node node, Ballot ballot, TxnId txnId, Txn txn, Key homeKey,
+    public static void propose(Node node, Ballot ballot, TxnId txnId, Txn txn, Route route,
                                Timestamp executeAt, Deps deps, BiConsumer<Result, Throwable> callback)
     {
         Topologies topologies = node.topology().withUnsyncEpochs(txn, txnId, executeAt);
-        propose(node, topologies, ballot, txnId, txn, homeKey, executeAt, deps, callback);
+        propose(node, topologies, ballot, txnId, txn, route, executeAt, deps, callback);
     }
 
-    public static void propose(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, Key homeKey,
+    public static void propose(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, Route route,
                                Timestamp executeAt, Deps deps, BiConsumer<Result, Throwable> callback)
     {
-        Propose propose = new Propose(node, topologies, ballot, txnId, txn, homeKey, executeAt, callback);
-        node.send(propose.acceptTracker.nodes(), to -> new Accept(to, topologies, ballot, txnId, homeKey, txn, executeAt, deps, isWrite), propose);
+        Propose propose = new Propose(node, topologies, ballot, txnId, txn, route, executeAt, callback);
+        node.send(propose.acceptTracker.nodes(), to -> new Accept(to, topologies, ballot, txnId, route.homeKey, , executeAt, deps), propose);
     }
 
     @Override
@@ -73,7 +75,7 @@ class Propose implements Callback<AcceptReply>
         if (!reply.isOK())
         {
             isDone = true;
-            callback.accept(null, new Preempted(txnId, homeKey));
+            callback.accept(null, new Preempted(txnId, route.homeKey));
             return;
         }
 
@@ -89,7 +91,7 @@ class Propose implements Callback<AcceptReply>
         if (acceptTracker.failure(from))
         {
             isDone = true;
-            callback.accept(null, new Timeout(txnId, homeKey));
+            callback.accept(null, new Timeout(txnId, route.homeKey));
         }
     }
 
@@ -104,7 +106,7 @@ class Propose implements Callback<AcceptReply>
     {
         isDone = true;
         Deps deps = Deps.merge(txn.keys, acceptOks, ok -> ok.deps);
-        Execute.execute(node, txnId, txn, homeKey, executeAt, deps, callback);
+        Execute.execute(node, txnId, txn, route, executeAt, deps, callback);
     }
 
     // A special version for proposing the invalidation of a transaction; only needs to succeed on one shard

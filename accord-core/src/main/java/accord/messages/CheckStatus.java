@@ -1,15 +1,16 @@
 package accord.messages;
 
-import accord.api.Key;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
 import accord.primitives.Ballot;
-import accord.primitives.Deps;
+import accord.primitives.PartialDeps;
+import accord.primitives.PartialTxn;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 
@@ -32,21 +33,21 @@ public class CheckStatus implements Request
     }
 
     final TxnId txnId;
-    final Key key; // the key's commandStore to consult - not necessarily the homeKey
+    final RoutingKey someKey; // the key's commandStore to consult - not necessarily the homeKey
     final long epoch;
     final IncludeInfo includeInfo;
 
-    public CheckStatus(TxnId txnId, Key key, long epoch, IncludeInfo includeInfo)
+    public CheckStatus(TxnId txnId, RoutingKey someKey, long epoch, IncludeInfo includeInfo)
     {
         this.txnId = txnId;
-        this.key = key;
+        this.someKey = someKey;
         this.epoch = epoch;
         this.includeInfo = includeInfo;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        Reply reply = node.ifLocal(key, epoch, instance -> {
+        Reply reply = node.ifLocal(someKey, epoch, instance -> {
             Command command = instance.command(txnId);
             boolean includeInfo = this.includeInfo.include(command.status());
             if (includeInfo)
@@ -56,10 +57,11 @@ public class CheckStatus implements Request
                                                                 command.accepted(),
                                                                 node.isCoordinating(txnId, command.promised()),
                                                                 command.isGloballyPersistent(),
-                                                                command.txn(),
+                                                                command.partialTxn(),
+                                                                command.routingKeys(),
                                                                 command.homeKey(),
                                                                 command.executeAt(),
-                                                                command.savedDeps(),
+                                                                command.savedPartialDeps(),
                                                                 command.writes(),
                                                                 command.result());
             }
@@ -161,18 +163,20 @@ public class CheckStatus implements Request
 
     public static class CheckStatusOkFull extends CheckStatusOk
     {
-        public final Txn txn;
-        public final Key homeKey;
+        public final PartialTxn txn;
+        public final RoutingKeys routingKeys;
+        public final RoutingKey homeKey;
         public final Timestamp executeAt;
-        public final Deps deps;
+        public final PartialDeps deps;
         public final Writes writes;
         public final Result result;
 
         CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards,
-                          Txn txn, Key homeKey, Timestamp executeAt, Deps deps, Writes writes, Result result)
+                          PartialTxn txn, RoutingKeys routingKeys, RoutingKey homeKey, Timestamp executeAt, PartialDeps deps, Writes writes, Result result)
         {
             super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards);
             this.txn = txn;
+            this.routingKeys = routingKeys;
             this.homeKey = homeKey;
             this.executeAt = executeAt;
             this.deps = deps;
@@ -218,7 +222,7 @@ public class CheckStatus implements Request
 
             CheckStatusOkFull src = (CheckStatusOkFull) maxSrc;
             return new CheckStatusOkFull(max.status, max.promised, max.accepted, max.isCoordinating,
-                                         max.hasExecutedOnAllShards, src.txn, src.homeKey, src.executeAt, src.deps, src.writes, src.result);
+                                         max.hasExecutedOnAllShards, src.txn, routingKeys, src.homeKey, src.executeAt, src.deps, src.writes, src.result);
         }
     }
 

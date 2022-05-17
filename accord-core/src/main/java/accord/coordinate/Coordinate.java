@@ -6,10 +6,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.BiConsumer;
 
-import accord.api.Key;
 import accord.api.Result;
-import accord.api.RoutingKey;
 import accord.coordinate.tracking.FastPathTracker;
+import accord.primitives.Route;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.primitives.Ballot;
@@ -130,7 +129,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
     final Node node;
     final TxnId txnId;
     final Txn txn;
-    final Key homeKey;
+    final Route route;
 
     private PreacceptTracker tracker;
     private final List<PreAcceptOk> preAcceptOks = new ArrayList<>();
@@ -139,12 +138,12 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
     // TODO: hybrid fast path? or at least short-circuit accept if we gain a fast-path quorum _and_ proposed one by accept
     boolean permitHybridFastPath;
 
-    private Coordinate(Node node, TxnId txnId, Txn txn, RoutingKey homeKey)
+    private Coordinate(Node node, TxnId txnId, Txn txn, Route route)
     {
         this.node = node;
         this.txnId = txnId;
         this.txn = txn;
-        this.homeKey = homeKey;
+        this.route = route;
         Topologies topologies = node.topology().withUnsyncEpochs(txn.keys(), txnId.epoch, txnId.epoch);
         this.tracker = new PreacceptTracker(topologies);
     }
@@ -153,12 +152,12 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
     {
         // TODO: consider sending only to electorate of most recent topology (as only these PreAccept votes matter)
         // note that we must send to all replicas of old topology, as electorate may not be reachable
-        node.send(tracker.nodes(), to -> new PreAccept(to, tracker.topologies(), txnId, txn, homeKey), this);
+        node.send(tracker.nodes(), to -> new PreAccept(to, tracker.topologies(), txnId, txn, route), this);
     }
 
-    public static Future<Result> coordinate(Node node, TxnId txnId, Txn txn, RoutingKey homeKey)
+    public static Future<Result> coordinate(Node node, TxnId txnId, Txn txn, Route route)
     {
-        Coordinate coordinate = new Coordinate(node, txnId, txn, homeKey);
+        Coordinate coordinate = new Coordinate(node, txnId, txn, route);
         coordinate.start();
         return coordinate;
     }
@@ -172,7 +171,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         if (tracker.failure(from))
         {
             isPreAccepted = true;
-            tryFailure(new Timeout(txnId, homeKey));
+            tryFailure(new Timeout(txnId, route.homeKey));
         }
 
         // if no other responses are expected and the slow quorum has been satisfied, proceed
@@ -202,7 +201,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         // send messages to new nodes
         Set<Id> needMessages = Sets.difference(tracker.nodes(), previousNodes);
         if (!needMessages.isEmpty())
-            node.send(needMessages, to -> new PreAccept(to, newTopologies, txnId, txn, homeKey), this);
+            node.send(needMessages, to -> new PreAccept(to, newTopologies, txnId, txn, route), this);
 
         if (tracker.shouldSlowPathAccept())
             onPreAccepted();
@@ -216,7 +215,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         if (!receive.isOK())
         {
             // we've been preempted by a recovery coordinator; defer to it, and wait to hear any result
-            tryFailure(new Preempted(txnId, homeKey));
+            tryFailure(new Preempted(txnId, route.homeKey));
             return;
         }
 
@@ -247,7 +246,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         {
             isPreAccepted = true;
             Deps deps = Deps.merge(txn.keys, preAcceptOks, ok -> ok.witnessedAt.equals(txnId) ? ok.deps : null);
-            Execute.execute(node, txnId, txn, homeKey, txnId, deps, this);
+            Execute.execute(node, txnId, txn, route, txnId, deps, this);
         }
         else
         {
@@ -262,7 +261,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
             // TODO: perhaps don't submit Accept immediately if we almost have enough for fast-path,
             //       but by sending accept we rule out hybrid fast-path
             permitHybridFastPath = executeAt.compareTo(txnId) == 0;
-            node.withEpoch(executeAt.epoch, () -> Propose.propose(node, tracker.topologies(), Ballot.ZERO, txnId, txn, homeKey, executeAt, deps, this));
+            node.withEpoch(executeAt.epoch, () -> Propose.propose(node, tracker.topologies(), Ballot.ZERO, txnId, txn, route, executeAt, deps, this));
         }
     }
 

@@ -4,6 +4,7 @@ import accord.api.RoutingKey;
 import accord.local.Node.Id;
 import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
+import accord.primitives.Txn;
 import accord.topology.Topologies;
 import accord.api.Key;
 import accord.primitives.Ballot;
@@ -15,27 +16,27 @@ import accord.primitives.TxnId;
 
 import static accord.messages.PreAccept.calculateDeps;
 
-public class Accept extends TxnRequest.WithUnsync
+public class Accept extends TxnRequest.WithUnsync<Keys>
 {
     public final Ballot ballot;
     public final RoutingKey homeKey;
     public final Timestamp executeAt;
     public final PartialDeps deps;
-    public final boolean isWrite;
+    public final Txn.Kind kindOfTxn;
 
-    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, RoutingKey homeKey, Keys keys, boolean isWrite, Timestamp executeAt, PartialDeps deps)
+    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, RoutingKey homeKey, Keys keys, Timestamp executeAt, PartialDeps deps, Txn.Kind kindOfTxn)
     {
-        super(to, topologies, keys, txnId);
+        super(to, topologies, txnId, keys, Keys.SLICER);
         this.ballot = ballot;
         this.homeKey = homeKey;
         this.executeAt = executeAt;
-        this.isWrite = isWrite;
         this.deps = deps;
+        this.kindOfTxn = kindOfTxn;
     }
 
     public void process(Node node, Node.Id replyToNode, ReplyContext replyContext)
     {
-        Key progressKey = progressKey(node, homeKey);
+        RoutingKey progressKey = progressKey(node, homeKey);
         // TODO: when we begin expunging old epochs we need to ensure we handle the case where we do not fully handle the keys;
         //       since this will likely imply the transaction has been applied or aborted we can indicate the coordinator
         //       should enquire as to the result
@@ -43,7 +44,7 @@ public class Accept extends TxnRequest.WithUnsync
             Command command = instance.command(txnId);
             if (!command.accept(ballot, homeKey, progressKey, executeAt, deps))
                 return new AcceptNack(txnId, command.promised());
-            return new AcceptOk(txnId, calculateDeps(instance, txnId, scope(), executeAt));
+            return new AcceptOk(txnId, calculateDeps(instance, txnId, scope(), kindOfTxn, executeAt));
         }, (r1, r2) -> {
             if (!r1.isOK()) return r1;
             if (!r2.isOK()) return r2;
@@ -174,7 +175,6 @@ public class Accept extends TxnRequest.WithUnsync
         return "Accept{" +
                "ballot: " + ballot +
                ", txnId: " + txnId +
-               ", txn: " + txn +
                ", executeAt: " + executeAt +
                ", deps: " + deps +
                '}';

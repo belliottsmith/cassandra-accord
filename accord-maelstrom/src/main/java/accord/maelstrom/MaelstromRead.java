@@ -34,7 +34,7 @@ public class MaelstromRead implements Read
     @Override
     public Read slice(KeyRanges ranges)
     {
-        return new MaelstromRead(readKeys.intersect(ranges), keys.intersect(ranges));
+        return new MaelstromRead(readKeys.slice(ranges), keys.slice(ranges));
     }
 
     @Override

@@ -6,13 +6,11 @@ public enum Status
     PreAccepted(10),
     Accepted(20),
     AcceptedInvalidate(20),
-    PartiallyCommitted(30),
-    Committed(40),
-    ReadyToExecute(50),
-    PartiallyExecuted(60),
-    Executed(70),
-    Applied(80),
-    Invalidated(90);
+    Committed(30),
+    ReadyToExecute(40),
+    Executed(50),
+    Applied(60),
+    Invalidated(70);
 
     final int logicalOrdinal;
 

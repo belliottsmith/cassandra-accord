@@ -3,6 +3,7 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
@@ -28,7 +29,7 @@ public class MaybeRecover extends CheckShardStatus<CheckStatusOk> implements BiC
     final Ballot knownPromised;
     final boolean knownPromisedHasBeenAccepted;
 
-    MaybeRecover(Node node, TxnId txnId, Txn txn, Key homeKey, Shard homeShard, long homeEpoch, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
+    MaybeRecover(Node node, TxnId txnId, Txn txn, RoutingKey homeKey, Shard homeShard, long homeEpoch, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
     {
         super(node, txnId, homeKey, homeShard, homeEpoch, IncludeInfo.OnlyIfExecuted);
         this.txn = txn;
@@ -58,8 +59,8 @@ public class MaybeRecover extends CheckShardStatus<CheckStatusOk> implements BiC
                                || (!knownPromisedHasBeenAccepted && knownStatus == Accepted && max.accepted.equals(knownPromised)));
     }
 
-    public static Future<CheckStatusOk> maybeRecover(Node node, TxnId txnId, Txn txn, Key homeKey, Shard homeShard, long homeEpoch,
-                                                               Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
+    public static Future<CheckStatusOk> maybeRecover(Node node, TxnId txnId, Txn txn, RoutingKey homeKey, Shard homeShard, long homeEpoch,
+                                                     Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
     {
         MaybeRecover maybeRecover = new MaybeRecover(node, txnId, txn, homeKey, homeShard, homeEpoch, knownStatus, knownPromised, knownPromiseHasBeenAccepted);
         maybeRecover.start();

@@ -31,6 +31,8 @@ public interface Agent
      * committed for the same transaction. This is a protocol consistency violation, potentially leading to non-linearizable
      * histories. In test cases this is used to fail the transaction, whereas in real systems this likely will be used for
      * reporting the violation, as it is no more correct at this point to refuse the operation than it is to complete it.
+     *
+     * Should throw an exception if the inconsistent timestamp should not be applied
      */
     void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next);
 

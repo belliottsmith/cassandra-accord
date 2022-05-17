@@ -1,6 +1,7 @@
 package accord.coordinate;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
 import accord.messages.CheckStatus.CheckStatusOkFull;
@@ -53,7 +54,7 @@ public class CheckOnCommitted extends CheckShardStatus<CheckStatusOkFull>
                 return;
         }
 
-        Key progressKey = node.trySelectProgressKey(txnId, max.txn.keys, max.homeKey);
+        RoutingKey progressKey = node.trySelectProgressKey(txnId, max.txn.keys, max.homeKey);
         switch (max.status)
         {
             default: throw new IllegalStateException();

@@ -52,7 +52,7 @@ public class CoordinateTest
     {
         TxnId txnId = new TxnId(1, clock, 0, node.id());
         Txn txn = writeTxn(keys);
-        Result result = Coordinate.coordinate(node, txnId, txn, node.selectHomeKey(txnId, txn.keys)).get();
+        Result result = Coordinate.coordinate(node, txnId, txn, node.computeRoute(txnId, txn.keys)).get();
         Assertions.assertEquals(MockStore.RESULT, result);
         return txnId;
     }

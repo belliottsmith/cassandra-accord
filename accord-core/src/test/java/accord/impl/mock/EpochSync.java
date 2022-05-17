@@ -43,7 +43,7 @@ public class EpochSync implements Runnable
     {
         private final TxnId txnId;
         private final Txn txn;
-        private final Key homeKey;
+        private final RoutingKey homeKey;
         private final Timestamp executeAt;
         private final Deps deps;
         private final long epoch;

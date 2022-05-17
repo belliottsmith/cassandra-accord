@@ -7,7 +7,15 @@ import accord.local.*;
 
 public class Txn
 {
-    enum Kind { READ, WRITE }
+    public enum Kind
+    {
+        READ, WRITE;
+
+        public boolean isWrite()
+        {
+            return this == WRITE;
+        }
+    }
 
     final Kind kind;
     // TODO (now): separate into read/write keys and routing keys (including homeKey, and potentially minimised)
@@ -51,7 +59,7 @@ public class Txn
 
     public boolean isWrite()
     {
-        return kind == Kind.WRITE;
+        return kind.isWrite();
     }
 
     public Result result(Data data)
@@ -74,7 +82,7 @@ public class Txn
 
     public PartialTxn slice(KeyRanges ranges, boolean includeQuery)
     {
-        return new PartialTxn(ranges, keys.intersect(ranges), read.slice(ranges), includeQuery ? query : null,
+        return new PartialTxn(ranges, kind, keys.slice(ranges), read.slice(ranges), includeQuery ? query : null,
                               update == null ? null : update.slice(ranges));
     }
 
@@ -83,7 +91,7 @@ public class Txn
         return "{read:" + read.toString() + (update != null ? ", update:" + update : "") + '}';
     }
 
-    public Data read(Command command, Keys keys)
+    public Data read(Command command)
     {
         return keys.foldl(command.commandStore.ranges().at(command.executeAt().epoch), (index, key, accumulate) -> {
             CommandStore commandStore = command.commandStore;

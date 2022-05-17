@@ -40,7 +40,7 @@ public class ListRead implements Read
     @Override
     public Read slice(KeyRanges ranges)
     {
-        return new ListRead(readKeys, keys.intersect(ranges));
+        return new ListRead(readKeys, keys.slice(ranges));
     }
 
     @Override

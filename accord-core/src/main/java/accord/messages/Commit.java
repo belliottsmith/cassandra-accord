@@ -3,72 +3,88 @@ package accord.messages;
 import java.util.Collections;
 import java.util.Set;
 
-import accord.api.Key;
+import javax.annotation.Nullable;
+
+import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.KeyRanges;
+import accord.primitives.PartialDeps;
+import accord.primitives.PartialTxn;
+import accord.primitives.Route;
+import accord.primitives.Txn;
 import accord.topology.Topologies;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 import accord.primitives.Deps;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 
 // TODO: CommitOk responses, so we can send again if no reply received? Or leave to recovery?
 public class Commit extends ReadData
 {
-    public final Deps deps;
+    public final @Nullable PartialTxn partialTxn;
+    public final PartialDeps deps;
     public final boolean read;
 
-    public Commit(Id to, Topologies topologies, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Deps deps, boolean read)
+    public Commit(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, boolean read)
     {
-        super(to, topologies, txnId, txn, homeKey, executeAt);
-        this.deps = deps;
+        super(to, topologies, txnId, route, executeAt);
+        this.deps = deps.slice(scope.covering);
+        PartialTxn partialTxn = null;
+        if (executeAt.epoch != txnId.epoch)
+        {
+            KeyRanges executeRanges = topologies.forEpoch(executeAt.epoch).rangesForNode(to);
+            KeyRanges commitRanges = topologies.forEpoch(executeAt.epoch).rangesForNode(to);
+            KeyRanges extraRanges = executeRanges.difference(commitRanges);
+            if (!extraRanges.isEmpty()) partialTxn = txn.slice(extraRanges, commitRanges.contains(route.homeKey));
+        }
+        this.partialTxn = partialTxn;
         this.read = read;
     }
 
     // TODO (now): accept Topology not Topologies
-    public static void commitAndRead(Node node, Topologies executeTopologies, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Deps deps, Set<Id> readSet, Callback<ReadReply> callback)
+    public static void commitAndRead(Node node, Topologies executeTopologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Set<Id> readSet, Callback<ReadReply> callback)
     {
         for (Node.Id to : executeTopologies.nodes())
         {
             boolean read = readSet.contains(to);
-            Commit send = new Commit(to, executeTopologies, txnId, txn, homeKey, executeAt, deps, read);
+            Commit send = new Commit(to, executeTopologies, txnId, txn, route, executeAt, deps, read);
             if (read) node.send(to, send, callback);
             else node.send(to, send);
         }
         if (txnId.epoch != executeAt.epoch)
         {
-            Topologies earlierTopologies = node.topology().preciseEpochs(txn, txnId.epoch, executeAt.epoch - 1);
-            Commit.commit(node, earlierTopologies, executeTopologies, txnId, txn, homeKey, executeAt, deps);
+            Topologies earlierTopologies = node.topology().preciseEpochs(route, txnId.epoch, executeAt.epoch - 1);
+            Commit.commit(node, earlierTopologies, executeTopologies, txnId, txn, route, executeAt, deps);
         }
     }
 
-    public static void commit(Node node, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Deps deps)
+    public static void commit(Node node, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps)
     {
-        Topologies commitTo = node.topology().preciseEpochs(txn, txnId.epoch, executeAt.epoch);
+        Topologies commitTo = node.topology().preciseEpochs(route, txnId.epoch, executeAt.epoch);
         for (Node.Id to : commitTo.nodes())
         {
-            Commit send = new Commit(to, commitTo, txnId, txn, homeKey, executeAt, deps, false);
+            Commit send = new Commit(to, commitTo, txnId, txn, route, executeAt, deps, false);
             node.send(to, send);
         }
     }
 
-    public static void commit(Node node, Topologies commitTo, Set<Id> doNotCommitTo, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Deps deps)
+    public static void commit(Node node, Topologies commitTo, Set<Id> doNotCommitTo, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps)
     {
         for (Node.Id to : commitTo.nodes())
         {
             if (doNotCommitTo.contains(to))
                 continue;
 
-            Commit send = new Commit(to, commitTo, txnId, txn, homeKey, executeAt, deps, false);
+            Commit send = new Commit(to, commitTo, txnId, txn, route, executeAt, deps, false);
             node.send(to, send);
         }
     }
 
-    public static void commit(Node node, Topologies commitTo, Topologies appliedTo, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt, Deps deps)
+    public static void commit(Node node, Topologies commitTo, Topologies appliedTo, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps)
     {
         // TODO (now): if we switch to Topology rather than Topologies we can avoid sending commits to nodes that Apply the same
-        commit(node, commitTo, Collections.emptySet(), txnId, txn, homeKey, executeAt, deps);
+        commit(node, commitTo, Collections.emptySet(), txnId, txn, route, executeAt, deps);
     }
 
     public static void commitInvalidate(Node node, TxnId txnId, Keys someKeys, Timestamp until)
@@ -88,9 +104,9 @@ public class Commit extends ReadData
 
     public void process(Node node, Id from, ReplyContext replyContext)
     {
-        Key progressKey = node.trySelectProgressKey(txnId, txn.keys, homeKey);
+        RoutingKey progressKey = node.trySelectProgressKey(txnId, scope);
         node.forEachLocal(scope(), txnId.epoch, executeAt.epoch,
-                          instance -> instance.command(txnId).commit(txn, homeKey, progressKey, executeAt, deps));
+                          instance -> instance.command(txnId).commit(partialTxn, scope.homeKey, progressKey, executeAt, deps));
 
         if (read)
             super.process(node, from, replyContext);
@@ -112,13 +128,14 @@ public class Commit extends ReadData
                '}';
     }
 
-    public static class Invalidate extends TxnRequest
+    // TODO: should use RoutingKeys or PartialRoute
+    public static class Invalidate extends TxnRequest<Keys>
     {
         final TxnId txnId;
 
-        public Invalidate(Id to, Topologies topologies, TxnId txnId, Keys someKeys)
+        public Invalidate(Id to, Topologies topologies, TxnId txnId, Keys keys)
         {
-            super(to, topologies, someKeys);
+            super(to, topologies, keys, Keys.SLICER);
             this.txnId = txnId;
         }
 

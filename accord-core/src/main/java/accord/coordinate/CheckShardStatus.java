@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.coordinate.tracking.ReadTracker.ReadShardTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -53,7 +54,7 @@ public abstract class CheckShardStatus<T extends CheckStatusOk> extends AsyncFut
 
     final Node node;
     final TxnId txnId;
-    final Key someKey; // not necessarily homeKey
+    final RoutingKey someKey; // not necessarily homeKey
     final Tracker tracker;
     final List<Id> candidates;
     final long epoch;
@@ -62,7 +63,7 @@ public abstract class CheckShardStatus<T extends CheckStatusOk> extends AsyncFut
     CheckStatusOk max;
     Throwable failure;
 
-    CheckShardStatus(Node node, TxnId txnId, Key someKey, Shard shard, long epoch, IncludeInfo includeInfo)
+    CheckShardStatus(Node node, TxnId txnId, RoutingKey someKey, Shard shard, long epoch, IncludeInfo includeInfo)
     {
         this.epoch = epoch;
         this.txnId = txnId;

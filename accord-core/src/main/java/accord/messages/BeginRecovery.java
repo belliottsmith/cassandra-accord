@@ -1,14 +1,16 @@
 package accord.messages;
 
 import accord.api.Result;
-import accord.coordinate.Persist;
+import accord.api.RoutingKey;
+import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
+import accord.primitives.Route;
+import accord.primitives.Txn;
 import accord.topology.Topologies;
 
 import java.util.List;
 import java.util.stream.Stream;
 
-import accord.api.Key;
 import accord.local.CommandStore;
 import accord.local.CommandsForKey;
 import accord.primitives.Keys;
@@ -21,42 +23,38 @@ import accord.local.Command;
 import accord.primitives.Deps;
 import accord.local.Status;
 import accord.primitives.TxnId;
-import com.google.common.base.Preconditions;
 
 import static accord.local.Status.Accepted;
-import static accord.local.Status.Applied;
 import static accord.local.Status.Committed;
 import static accord.local.Status.NotWitnessed;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.PreAccept.calculateDeps;
 
-public class BeginRecovery extends TxnRequest
+public class BeginRecovery extends TxnRequest<PartialRoute>
 {
     final TxnId txnId;
     final PartialTxn txn;
-    final Key homeKey;
     final Ballot ballot;
 
-    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, PartialTxn txn, Key homeKey, Ballot ballot)
+    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route, Ballot ballot)
     {
-        super(to, topologies, txn.keys);
+        super(to, topologies, route, Route.SLICER);
         this.txnId = txnId;
-        this.txn = txn;
-        this.homeKey = homeKey;
+        this.txn = txn.slice(scope.covering, scope.contains(scope.homeKey));
         this.ballot = ballot;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        Key progressKey = node.selectProgressKey(txnId, txn.keys, homeKey);
+        RoutingKey progressKey = node.selectProgressKey(txnId, scope);
         RecoverReply reply = node.mapReduceLocal(scope(), txnId.epoch, txnId.epoch, instance -> {
             Command command = instance.command(txnId);
 
-            if (!command.recover(txn, homeKey, progressKey, ballot))
+            if (!command.recover(txn, scope.homeKey, progressKey, ballot))
                 return new RecoverNack(command.promised());
 
-            Deps deps = command.status() == PreAccepted ? calculateDeps(instance, txnId, txn, txnId)
-                                                        : command.savedDeps();
+            Deps deps = command.status() == PreAccepted ? calculateDeps(instance, txnId, txn.keys, txn.kind, txnId)
+                                                        : command.savedPartialDeps();
 
             boolean rejectsFastPath;
             Deps earlierCommittedWitness, earlierAcceptedNoWitness;
@@ -70,21 +68,21 @@ public class BeginRecovery extends TxnRequest
             {
                 rejectsFastPath = uncommittedStartedAfter(instance, txnId, txn.keys)
                                              .filter(c -> c.hasBeen(Accepted))
-                                             .anyMatch(c -> !c.savedDeps().contains(txnId));
+                                             .anyMatch(c -> !c.savedPartialDeps().contains(txnId));
                 if (!rejectsFastPath)
                     rejectsFastPath = committedExecutesAfter(instance, txnId, txn.keys)
-                                         .anyMatch(c -> !c.savedDeps().contains(txnId));
+                                         .anyMatch(c -> !c.savedPartialDeps().contains(txnId));
 
                 // committed txns with an earlier txnid and have our txnid as a dependency
                 earlierCommittedWitness = committedStartedBefore(instance, txnId, txn.keys)
-                                          .filter(c -> c.savedDeps().contains(txnId))
+                                          .filter(c -> c.savedPartialDeps().contains(txnId))
                                           .collect(() -> Deps.builder(txn.keys), Deps.Builder::add, (a, b) -> { throw new IllegalStateException(); })
                                           .build();
 
                 // accepted txns with an earlier txnid that don't have our txnid as a dependency
                 earlierAcceptedNoWitness = uncommittedStartedBefore(instance, txnId, txn.keys)
                                               .filter(c -> c.is(Accepted)
-                                                           && !c.savedDeps().contains(txnId)
+                                                           && !c.savedPartialDeps().contains(txnId)
                                                            && c.executeAt().compareTo(txnId) > 0)
                                               .collect(() -> Deps.builder(txn.keys), Deps.Builder::add, (a, b) -> { throw new IllegalStateException(); })
                                               .build();
@@ -145,16 +143,6 @@ public class BeginRecovery extends TxnRequest
         });
 
         node.reply(replyToNode, replyContext, reply);
-        if (reply instanceof RecoverOk && ((RecoverOk) reply).status == Applied)
-        {
-            // TODO: this should be a call to the node's agent for the implementation to decide what to do;
-            //       probably at most want to disseminate to local replicas, or notify the progress log
-            RecoverOk ok = (RecoverOk) reply;
-            Preconditions.checkArgument(ok.status == Applied);
-            node.withEpoch(ok.executeAt.epoch, () -> {
-                Persist.persistAndCommit(node, txnId, homeKey, txn, ok.executeAt, ok.deps, ok.writes, ok.result);
-            });
-        }
     }
 
     @Override

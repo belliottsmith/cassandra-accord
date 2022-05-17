@@ -2,10 +2,12 @@ package accord.topology;
 
 import accord.api.ConfigurationService;
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.messages.EpochRequest;
 import accord.messages.Request;
+import accord.primitives.AbstractKeys;
 import accord.topology.Topologies.Single;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
@@ -85,7 +87,7 @@ public class TopologyManager implements ConfigurationService.Listener
         /**
          * determine if sync has completed for all shards intersecting with the given keys
          */
-        boolean syncCompleteFor(Keys keys)
+        boolean syncCompleteFor(AbstractKeys<?, ?> keys)
         {
             if (!prevSynced)
                 return false;
@@ -192,7 +194,7 @@ public class TopologyManager implements ConfigurationService.Listener
             return epochs[(int) (currentEpoch - epoch)];
         }
 
-        boolean requiresHistoricalTopologiesFor(Keys keys, long epoch)
+        boolean requiresHistoricalTopologiesFor(AbstractKeys<?, ?> keys, long epoch)
         {
             Preconditions.checkState(epoch <= currentEpoch);
             if (1 + currentEpoch - epoch >= epochs.length)
@@ -268,7 +270,7 @@ public class TopologyManager implements ConfigurationService.Listener
         return epochs.get(epoch);
     }
 
-    public Topologies withUnsyncEpochs(Keys keys, long minEpoch, long maxEpoch)
+    public Topologies withUnsyncEpochs(AbstractKeys<?, ?> keys, long minEpoch, long maxEpoch)
     {
         Epochs snapshot = epochs;
 
@@ -300,7 +302,7 @@ public class TopologyManager implements ConfigurationService.Listener
         return withUnsyncEpochs(keys, epoch, epoch);
     }
 
-    public Topologies preciseEpochs(Keys keys, long minEpoch, long maxEpoch)
+    public Topologies preciseEpochs(AbstractKeys<?, ?> keys, long minEpoch, long maxEpoch)
     {
         Epochs snapshot = epochs;
 
@@ -315,17 +317,17 @@ public class TopologyManager implements ConfigurationService.Listener
         return topologies;
     }
 
-    public Topologies preciseEpochs(Keys keys, long epoch)
+    public Topologies preciseEpochs(AbstractKeys<?, ?> keys, long epoch)
     {
         return preciseEpochs(keys, epoch, epoch);
     }
 
-    public Topologies forEpoch(Keys keys, long epoch)
+    public Topologies forEpoch(AbstractKeys<?, ?> keys, long epoch)
     {
         return new Single(epochs.get(epoch).global().forKeys(keys), true);
     }
 
-    public Shard forEpochIfKnown(Key key, long epoch)
+    public Shard forEpochIfKnown(RoutingKey key, long epoch)
     {
         EpochState epochState = epochs.get(epoch);
         if (epochState == null)
@@ -333,7 +335,7 @@ public class TopologyManager implements ConfigurationService.Listener
         return epochState.global().forKey(key);
     }
 
-    public Shard forEpoch(Key key, long epoch)
+    public Shard forEpoch(RoutingKey key, long epoch)
     {
         Shard ifKnown = forEpochIfKnown(key, epoch);
         if (ifKnown == null)

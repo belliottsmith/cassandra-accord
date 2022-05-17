@@ -2,40 +2,34 @@ package accord.messages;
 
 import java.util.Set;
 
-import com.google.common.base.Preconditions;
-
-import accord.api.Key;
 import accord.local.*;
 import accord.local.Node.Id;
 import accord.api.Data;
+import accord.primitives.PartialRoute;
+import accord.primitives.Route;
 import accord.topology.Topologies;
-import accord.primitives.Keys;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.DeterministicIdentitySet;
 
-public class ReadData extends TxnRequest
+public class ReadData extends TxnRequest<PartialRoute>
 {
     static class LocalRead implements Listener
     {
         final TxnId txnId;
         final Node node;
         final Node.Id replyToNode;
-        final Keys readKeys;
         final ReplyContext replyContext;
 
         Data data;
         boolean isObsolete; // TODO: respond with the Executed result we have stored?
         Set<CommandStore> waitingOn;
 
-        LocalRead(TxnId txnId, Node node, Id replyToNode, Keys readKeys, ReplyContext replyContext)
+        LocalRead(TxnId txnId, Node node, Id replyToNode, ReplyContext replyContext)
         {
-            Preconditions.checkArgument(!readKeys.isEmpty());
             this.txnId = txnId;
             this.node = node;
             this.replyToNode = replyToNode;
-            this.readKeys = readKeys;
             this.replyContext = replyContext;
         }
 
@@ -67,7 +61,7 @@ public class ReadData extends TxnRequest
         private void read(Command command)
         {
             // TODO: threading/futures (don't want to perform expensive reads within this mutually exclusive context)
-            Data next = command.txn().read(command, readKeys);
+            Data next = command.partialTxn().read(command);
             data = data == null ? next : data.merge(next);
 
             waitingOn.remove(command.commandStore);
@@ -84,24 +78,21 @@ public class ReadData extends TxnRequest
             }
         }
 
-        synchronized void setup(TxnId txnId, Txn txn, Key homeKey, Keys keys, Timestamp executeAt)
+        synchronized void setup(TxnId txnId, PartialRoute scope, Timestamp executeAt)
         {
-            Key progressKey = node.trySelectProgressKey(txnId, txn.keys, homeKey);
-            waitingOn = node.collectLocal(keys, executeAt, DeterministicIdentitySet::new);
+            waitingOn = node.collectLocal(scope, executeAt, DeterministicIdentitySet::new);
             // FIXME: fix/check thread safety
             CommandStore.onEach(waitingOn, instance -> {
                 Command command = instance.command(txnId);
-                command.preaccept(txn, homeKey, progressKey); // ensure pre-accepted
                 switch (command.status())
                 {
                     default:
                     case NotWitnessed:
-                        throw new IllegalStateException();
-
                     case PreAccepted:
                     case Accepted:
                     case AcceptedInvalidate:
                     case Committed:
+                        instance.progressLog().waiting(txnId, scope);
                         command.addListener(this);
                         break;
 
@@ -120,23 +111,19 @@ public class ReadData extends TxnRequest
     }
 
     public final TxnId txnId;
-    public final Txn txn;
-    final Key homeKey;
     public final Timestamp executeAt;
 
-    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Txn txn, Key homeKey, Timestamp executeAt)
+    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt)
     {
-        super(to, topologies, txn.keys);
+        super(to, topologies, route, Route.SLICER);
         this.txnId = txnId;
-        this.txn = txn;
-        this.homeKey = homeKey;
         this.executeAt = executeAt;
     }
 
     public void process(Node node, Node.Id from, ReplyContext replyContext)
     {
-        new LocalRead(txnId, node, from, txn.read.keys().intersect(scope()), replyContext)
-            .setup(txnId, txn, homeKey, scope(), executeAt);
+        new LocalRead(txnId, node, from, replyContext)
+            .setup(txnId, scope(), executeAt);
     }
 
     @Override
@@ -194,7 +181,6 @@ public class ReadData extends TxnRequest
     {
         return "ReadData{" +
                "txnId:" + txnId +
-               ", txn:" + txn +
                '}';
     }
 }

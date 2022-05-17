@@ -46,6 +46,14 @@ public interface ProgressLog
     }
 
     /**
+     * Has not been pre-accepted, but has been witnessed by ourselves (only partially) or another node that has informed us
+     *
+     * A home shard should monitor this transaction for global progress.
+     * A non-home shard should not receive this message.
+     */
+    void unwitnessed(TxnId txnId, boolean isProgressShard, boolean isHomeShard);
+
+    /**
      * Has been pre-accepted.
      *
      * A home shard should monitor this transaction for global progress.
