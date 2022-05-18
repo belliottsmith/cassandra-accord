@@ -63,7 +63,7 @@ public class CheckOnUncommitted extends CheckOnCommitted
                 node.forEachLocalSince(full.txn.keys, txnId.epoch, commandStore -> {
                     Command command = commandStore.ifPresent(txnId);
                     if (command != null)
-                        command.homeKey(full.homeKey);
+                        command.updateHomeKey(full.homeKey);
                 });
                 break;
             case Executed:

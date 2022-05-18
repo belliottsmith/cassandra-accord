@@ -2,14 +2,16 @@ package accord.messages;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
-import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
 
 import java.util.List;
 import java.util.stream.Stream;
+
+import javax.annotation.Nullable;
 
 import accord.local.CommandStore;
 import accord.local.CommandsForKey;
@@ -30,18 +32,20 @@ import static accord.local.Status.NotWitnessed;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.PreAccept.calculateDeps;
 
-public class BeginRecovery extends TxnRequest<PartialRoute>
+public class BeginRecovery extends TxnRequest
 {
     final TxnId txnId;
     final PartialTxn txn;
     final Ballot ballot;
+    final @Nullable RoutingKeys allRoutingKeys;
 
     public BeginRecovery(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route, Ballot ballot)
     {
-        super(to, topologies, route, Route.SLICER);
+        super(to, topologies, route);
         this.txnId = txnId;
         this.txn = txn.slice(scope.covering, scope.contains(scope.homeKey));
         this.ballot = ballot;
+        this.allRoutingKeys = scope.contains(scope.homeKey) ? route : null;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
@@ -50,7 +54,7 @@ public class BeginRecovery extends TxnRequest<PartialRoute>
         RecoverReply reply = node.mapReduceLocal(scope(), txnId.epoch, txnId.epoch, instance -> {
             Command command = instance.command(txnId);
 
-            if (!command.recover(txn, scope.homeKey, progressKey, ballot))
+            if (!command.recover(txn, scope.homeKey, progressKey, allRoutingKeys, ballot))
                 return new RecoverNack(command.promised());
 
             Deps deps = command.status() == PreAccepted ? calculateDeps(instance, txnId, txn.keys, txn.kind, txnId)

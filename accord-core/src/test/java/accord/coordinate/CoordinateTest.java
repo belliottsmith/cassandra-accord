@@ -5,6 +5,7 @@ import accord.impl.mock.MockCluster;
 import accord.api.Result;
 import accord.impl.mock.MockStore;
 import accord.primitives.Keys;
+import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import org.junit.jupiter.api.Assertions;
@@ -26,8 +27,10 @@ public class CoordinateTest
             Assertions.assertNotNull(node);
 
             TxnId txnId = new TxnId(1, 100, 0, node.id());
-            Txn txn = writeTxn(keys(10));
-            Result result = Coordinate.coordinate(node, txnId, txn, txn.keys().get(0)).get();
+            Keys keys = keys(10);
+            Txn txn = writeTxn(keys);
+            Route route = new Route(keys.get(0).toRoutingKey(), keys.toRoutingKeys());
+            Result result = Coordinate.coordinate(node, txnId, txn, route).get();
             Assertions.assertEquals(MockStore.RESULT, result);
         }
     }

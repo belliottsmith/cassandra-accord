@@ -15,12 +15,17 @@ import accord.primitives.KeyRanges;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 
+import static accord.local.Command.Outcome.INCOMPLETE;
+import static accord.local.Command.Outcome.REDUNDANT;
+import static accord.local.Command.Outcome.REJECTED_BALLOT;
+import static accord.local.Command.Outcome.SUCCESS;
 import static accord.local.Status.Accepted;
 import static accord.local.Status.AcceptedInvalidate;
 import static accord.local.Status.Applied;
@@ -36,7 +41,7 @@ public class Command implements Listener, Consumer<Listener>
 {
     public enum Outcome
     {
-        SUCCESS, REDUNDANT, REJECTED_BALLOT, INCOMPLETE
+        SUCCESS, REDUNDANT, INCOMPLETE, REJECTED_BALLOT
     }
 
     public final CommandStore commandStore;
@@ -131,7 +136,7 @@ public class Command implements Listener, Consumer<Listener>
 
     public void setGloballyPersistent(RoutingKey homeKey, Timestamp executeAt)
     {
-        homeKey(homeKey);
+        updateHomeKey(homeKey);
         if (!hasBeen(Committed))
             this.executeAt = executeAt;
         else if (!this.executeAt.equals(executeAt))
@@ -139,50 +144,54 @@ public class Command implements Listener, Consumer<Listener>
         isGloballyPersistent = true;
     }
 
-    // requires that command != null
-    // relies on mutual exclusion for each key
-    // note: we do not set status = newStatus, we only use it to decide how we register with the retryLog
-    private boolean witness(PartialTxn partialTxn, RoutingKey homeKey, @Nullable RoutingKey progressKey)
-    {
-        partialTxn(partialTxn);
-        homeKey(homeKey);
-        progressKey(progressKey);
-
-        if (executeAt != null)
-            return true;
-
-        if (!this.partialTxn.covers(commandStore.ranges().at(txnId.epoch)))
-            return false;
-
-        Timestamp max = commandStore.maxConflict(partialTxn.keys);
-        // unlike in the Accord paper, we partition shards within a node, so that to ensure a total order we must either:
-        //  - use a global logical clock to issue new timestamps; or
-        //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
-        executeAt = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch()
-                    ? txnId : commandStore.uniqueNow(max);
-
-        return true;
-    }
-
-    public Outcome preaccept(PartialTxn partialTxn, RoutingKey homeKey, @Nullable RoutingKey progressKey)
+    public Outcome preaccept(PartialTxn partialTxn, RoutingKey homeKey, @Nullable RoutingKey progressKey, @Nullable RoutingKeys routingKeys)
     {
         if (promised.compareTo(Ballot.ZERO) > 0)
             return Outcome.REJECTED_BALLOT;
 
         if (hasBeen(PreAccepted))
-            return Outcome.REDUNDANT;
+            return REDUNDANT;
 
-        boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
-        if (!witness(partialTxn, homeKey, progressKey))
+        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
+        boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
+        if (isHomeShard)
         {
-            commandStore.progressLog().unwitnessed(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
-            return Outcome.INCOMPLETE;
+            if (routingKeys == null)
+                throw new IllegalArgumentException("routingKeys must be provided on preaccept to the home shard");
+            this.routingKeys = routingKeys;
         }
 
-        status = PreAccepted;
-        commandStore.progressLog().preaccept(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
-        listeners.forEach(this);
-        return Outcome.SUCCESS;
+        KeyRanges ranges = commandStore.ranges().at(txnId.epoch);
+        if (!partialTxn.covers(ranges))
+        {
+            commandStore.progressLog().unwitnessed(txnId, isProgressShard, isHomeShard);
+            throw new IllegalArgumentException("Incomplete partialTxn received for " + txnId + " covering " + partialTxn.covering + " which does not span " + ranges);
+        }
+
+        this.homeKey = homeKey;
+        this.progressKey = progressKey;
+        updatePartialTxn(partialTxn, ranges, isHomeShard);
+
+        Timestamp max = commandStore.maxConflict(partialTxn.keys);
+        // unlike in the Accord paper, we partition shards within a node, so that to ensure a total order we must either:
+        //  - use a global logical clock to issue new timestamps; or
+        //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
+        this.executeAt = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch()
+                         ? txnId : commandStore.uniqueNow(max);
+
+        this.status = PreAccepted;
+        this.commandStore.progressLog().preaccept(txnId, isProgressShard, isHomeShard);
+        this.listeners.forEach(this);
+        return SUCCESS;
+    }
+
+    public boolean preacceptInvalidate(Ballot ballot)
+    {
+        if (this.promised.compareTo(ballot) > 0)
+            return false;
+
+        this.promised = ballot;
+        return true;
     }
 
     public Outcome accept(Ballot ballot, RoutingKey homeKey, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps)
@@ -191,65 +200,83 @@ public class Command implements Listener, Consumer<Listener>
             return Outcome.REJECTED_BALLOT;
 
         if (hasBeen(Committed))
-            return Outcome.REDUNDANT;
+            return REDUNDANT;
 
-        if (!witness(null, homeKey, progressKey))
-            return Outcome.INCOMPLETE;
+        KeyRanges ranges = commandStore.ranges().at(txnId.epoch);
+        if (!partialDeps.covers(ranges))
+            throw new IllegalArgumentException("Incomplete partialDeps received for " + txnId + " covering " + partialDeps.covering + " which does not span " + ranges);
 
-        this.partialDeps = partialDeps;
+        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
+        boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
+
+        updatePartialTxn(partialTxn, ranges, isHomeShard);
+        updateHomeKey(homeKey);
+        this.partialDeps = partialDeps.slice(ranges);
         this.executeAt = executeAt;
-        promised = accepted = ballot;
-        status = Accepted;
+        this.promised = this.accepted = ballot;
+        this.status = Accepted;
 
-        boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
-        commandStore.progressLog().accept(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
+        this.commandStore.progressLog().accept(txnId, isProgressShard, isHomeShard);
+        this.listeners.forEach(this);
 
-        listeners.forEach(this);
-        return Outcome.SUCCESS;
+        return SUCCESS;
     }
 
     public Outcome acceptInvalidate(Ballot ballot)
     {
         if (this.promised.compareTo(ballot) > 0)
-            return Outcome.REJECTED_BALLOT;
+            return REJECTED_BALLOT;
 
         if (hasBeen(Committed))
-            return Outcome.REDUNDANT;
+            return REDUNDANT;
 
         promised = accepted = ballot;
         status = AcceptedInvalidate;
 
         listeners.forEach(this);
-        return Outcome.SUCCESS;
+        return SUCCESS;
     }
 
     // relies on mutual exclusion for each key
-    public Outcome commit(@Nullable PartialTxn partialTxn, RoutingKey homeKey, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps)
+    public Outcome commit(RoutingKey homeKey, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps, @Nullable PartialTxn partialTxn)
     {
         if (hasBeen(Committed))
         {
             if (executeAt.equals(this.executeAt) && status != Invalidated)
-                return Outcome.REDUNDANT;
+                return REDUNDANT;
 
             commandStore.agent().onInconsistentTimestamp(this, (status == Invalidated ? Timestamp.NONE : this.executeAt), executeAt);
         }
 
-        if (!witness(partialTxn, homeKey, progressKey))
-            return Outcome.INCOMPLETE;
+        KeyRanges ranges = commandStore.ranges().between(txnId.epoch, executeAt.epoch);
+        if (!willCover(partialTxn, ranges))
+            return INCOMPLETE;
 
-        KeyRanges executeRanges = commandStore.ranges().at(executeAt.epoch);
-        if (!partialDeps.covers(executeRanges))
-            return Outcome.INCOMPLETE;
+        if (!partialDeps.covers(ranges))
+            throw new IllegalArgumentException("Incomplete partialDeps received for " + txnId + " covering " + partialDeps.covering + " which does not span " + ranges);
 
-        boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
+        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
         boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
 
-        this.partialDeps = partialDeps;
+        updateHomeKey(homeKey);
+        updatePartialTxn(partialTxn, ranges, isHomeShard);
+        this.partialDeps = partialDeps.slice(ranges);
         this.executeAt = executeAt;
         this.waitingOnCommit = new TreeMap<>();
         this.waitingOnApply = new TreeMap<>();
 
         this.status = Committed;
+        populateWaitingOn();
+
+        commandStore.progressLog().commit(txnId, isProgressShard, isHomeShard);
+
+        maybeExecute(false);
+        listeners.forEach(this);
+        return SUCCESS;
+    }
+
+    private void populateWaitingOn()
+    {
         partialDeps.forEachOn(commandStore, executeAt, txnId -> {
             Command command = commandStore.command(txnId);
             switch (command.status)
@@ -284,12 +311,6 @@ public class Command implements Listener, Consumer<Listener>
             if (waitingOnApply.isEmpty())
                 waitingOnApply = null;
         }
-
-        commandStore.progressLog().commit(txnId, isProgressShard, isHomeShard);
-
-        maybeExecute(false);
-        listeners.forEach(this);
-        return Outcome.SUCCESS;
     }
 
     public Outcome commitInvalidate()
@@ -299,65 +320,144 @@ public class Command implements Listener, Consumer<Listener>
             if (!hasBeen(Invalidated))
                 commandStore.agent().onInconsistentTimestamp(this, Timestamp.NONE, executeAt);
 
-            return Outcome.REDUNDANT;
+            return REDUNDANT;
         }
 
         status = Invalidated;
-
-        boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
+        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
         commandStore.progressLog().invalidate(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
 
         listeners.forEach(this);
-        return Outcome.SUCCESS;
+        return SUCCESS;
     }
 
-    // TODO (now): stop sending deps with Apply; should seek them asynchronously if not yet known locally
-    public boolean apply(RoutingKey homeKey, RoutingKey progressKey, Timestamp executeAt, PartialDeps deps, Writes writes, Result result)
+    public Outcome apply(RoutingKey homeKey, RoutingKey progressKey, Timestamp executeAt, @Nullable PartialDeps deps, Writes writes, Result result)
     {
         if (hasBeen(Executed) && executeAt.equals(this.executeAt))
-            return false;
+        {
+            return REDUNDANT;
+        }
         else if (!hasBeen(Committed))
-            commit(null, homeKey, progressKey, executeAt, deps);
+        {
+            switch (commit(homeKey, progressKey, executeAt, deps, null))
+            {
+                default:
+                case REJECTED_BALLOT:
+                case REDUNDANT:
+                    throw new IllegalStateException();
+                case INCOMPLETE:
+                    return INCOMPLETE;
+                case SUCCESS:
+            }
+        }
         else if (!executeAt.equals(this.executeAt))
+        {
             commandStore.agent().onInconsistentTimestamp(this, this.executeAt, executeAt);
+        }
 
         this.executeAt = executeAt;
         this.writes = writes;
         this.result = result;
         this.status = Executed;
 
-        boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
-        commandStore.progressLog().execute(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
+        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
+        boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
+        commandStore.progressLog().execute(txnId, isProgressShard, isHomeShard);
 
         maybeExecute(false);
         this.listeners.forEach(this);
-        return true;
+        return SUCCESS;
     }
 
-    public boolean recover(PartialTxn txn, RoutingKey homeKey, RoutingKey progressKey, Ballot ballot)
+    public Outcome recover(PartialTxn txn, RoutingKey homeKey, @Nullable RoutingKey progressKey, @Nullable RoutingKeys routingKeys, Ballot ballot)
     {
         if (this.promised.compareTo(ballot) > 0)
-            return false;
+            return REJECTED_BALLOT;
 
-        witness(txn, homeKey, progressKey);
-        boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
-        this.promised = ballot;
         if (status == NotWitnessed)
         {
-            status = PreAccepted;
-            commandStore.progressLog().preaccept(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
-            listeners.forEach(this);
+            Outcome outcome = preaccept(txn, homeKey, progressKey, routingKeys);
+            if (outcome != SUCCESS)
+                return outcome;
         }
-        return true;
-    }
-
-    public boolean preAcceptInvalidate(Ballot ballot)
-    {
-        if (this.promised.compareTo(ballot) > 0)
-            return false;
 
         this.promised = ballot;
-        return true;
+        return SUCCESS;
+    }
+
+    public Outcome propagate(long epoch, Status status, PartialTxn partialTxn, PartialDeps partialDeps, RoutingKey homeKey, Timestamp executeAt, Writes writes, Result result)
+    {
+        switch (status)
+        {
+            case Invalidated:
+                this.status = Invalidated;
+                return SUCCESS;
+            case AcceptedInvalidate:
+                if (partialTxn != null)
+                    break;
+                if (homeKey != null)
+                    updateHomeKey(homeKey);
+                return SUCCESS;
+        }
+
+        Status prev = this.status;
+        try
+        {
+            KeyRanges ranges = commandStore.ranges().at(epoch);
+            if (!hasBeen(PreAccepted))
+            {
+                // TODO: think about how this might work in a world where we have pre-accepted, but we adopt more ranges
+                updateHomeKey(homeKey);
+                updatePartialTxn(partialTxn, ranges, commandStore.ranges().owns(epoch, homeKey));
+
+                if (!this.partialTxn.covers(ranges))
+                    return INCOMPLETE;
+
+                this.executeAt = executeAt;
+                this.status = PreAccepted;
+            }
+
+            // Accept is a no-op for propagation purposes, as the accept was for the prior epoch
+            if (status.compareTo(AcceptedInvalidate) <= 0)
+                return SUCCESS;
+
+            if (!hasBeen(Committed))
+            {
+                if (this.partialDeps == null) this.partialDeps = partialDeps;
+                else if (partialDeps != null) this.partialDeps = this.partialDeps.with(partialDeps.slice(ranges));
+
+                if (!this.partialDeps.covers(ranges))
+                    return INCOMPLETE;
+
+                this.executeAt = executeAt;
+                this.status = Committed;
+
+                populateWaitingOn();
+                maybeExecute(false);
+            }
+            else if (this.executeAt != null && !this.executeAt.equals(executeAt))
+            {
+                commandStore.agent().onInconsistentTimestamp(this, this.executeAt, executeAt);
+            }
+
+            if (status.compareTo(ReadyToExecute) <= 0)
+                return SUCCESS;
+
+            if (!hasBeen(Executed))
+            {
+                this.writes = writes;
+                this.result = result;
+
+                maybeExecute(false);
+            }
+
+            return SUCCESS;
+        }
+        finally
+        {
+            if (prev != this.status)
+                this.listeners.forEach(this);
+        }
     }
 
     public boolean addListener(Listener listener)
@@ -417,7 +517,7 @@ public class Command implements Listener, Consumer<Listener>
             BlockedBy blockedBy = blockedBy();
             if (blockedBy != null)
             {
-                commandStore.progressLog().waiting(blockedBy.txnId, blockedBy.someKeys);
+                commandStore.progressLog().waiting(blockedBy.txnId, blockedBy.someRoute);
                 return;
             }
             assert waitingOnApply == null;
@@ -428,7 +528,7 @@ public class Command implements Listener, Consumer<Listener>
             case Committed:
                 // TODO: maintain distinct ReadyToRead and ReadyToWrite states
                 status = ReadyToExecute;
-                boolean isProgressShard = progressKey != null && handles(txnId.epoch, progressKey);
+                boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
                 commandStore.progressLog().readyToExecute(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
                 if (notifyListeners)
                     listeners.forEach(this);
@@ -473,12 +573,12 @@ public class Command implements Listener, Consumer<Listener>
     static class BlockedBy
     {
         final TxnId txnId;
-        final Keys someKeys;
+        final PartialRoute someRoute;
 
-        BlockedBy(TxnId txnId, Keys someKeys)
+        BlockedBy(TxnId txnId, PartialRoute someRoute)
         {
             this.txnId = txnId;
-            this.someKeys = someKeys;
+            this.someRoute = someRoute;
         }
     }
 
@@ -496,10 +596,10 @@ public class Command implements Listener, Consumer<Listener>
             cur = next;
         }
 
-        Keys someKeys = cur.someKeys();
-        if (someKeys == null)
-            someKeys = prev.partialDeps.someKeys(cur.txnId);
-        return new BlockedBy(cur.txnId, someKeys);
+        PartialRoute someRoute = cur.someRoute();
+        if (someRoute == null)
+            someRoute = prev.partialDeps.someRoute(cur.txnId);
+        return new BlockedBy(cur.txnId, someRoute);
     }
 
     /**
@@ -518,13 +618,24 @@ public class Command implements Listener, Consumer<Listener>
         return homeKey;
     }
 
-    public void homeKey(RoutingKey homeKey)
+    public void updateHomeKey(RoutingKey homeKey)
     {
         if (this.homeKey == null) this.homeKey = homeKey;
         else if (!this.homeKey.equals(homeKey)) throw new AssertionError();
     }
 
     public Keys someKeys()
+    {
+        if (partialTxn != null)
+            return partialTxn.keys;
+
+        if (partialDeps != null)
+            return partialDeps.keys();
+
+        return null;
+    }
+
+    public PartialRoute someRoute()
     {
         if (partialTxn != null)
             return partialTxn.keys;
@@ -553,20 +664,15 @@ public class Command implements Listener, Consumer<Listener>
         else if (!this.progressKey.equals(progressKey)) throw new AssertionError();
     }
 
-    // does this specific Command instance execute (i.e. does it lose ownership post Commit)
-    public boolean executes()
+    public void updatePartialTxn(PartialTxn partialTxn, KeyRanges ranges, boolean isHomeShard)
     {
-        KeyRanges ranges = commandStore.ranges().at(executeAt.epoch);
-        // TODO: take care when merging commandStores, as partialTxn may be incomplete
-        return ranges != null && partialTxn.keys.any(ranges, commandStore::hashIntersects);
-    }
+        if (partialTxn == null)
+            return;
 
-    public void partialTxn(PartialTxn partialTxn)
-    {
         // TODO (now): slice/trim the partialTxn
         if (this.partialTxn == null)
         {
-            this.partialTxn = partialTxn;
+            this.partialTxn = partialTxn.slice(ranges, isHomeShard);
             partialTxn.keys().forEach(key -> {
                 if (commandStore.hashIntersects(key))
                     commandStore.commandsForKey(key).register(this);
@@ -579,19 +685,37 @@ public class Command implements Listener, Consumer<Listener>
                     commandStore.commandsForKey(key).register(this);
                 return v;
             }, 0, 0, 1);
-            this.partialTxn = this.partialTxn.with(partialTxn);
+            this.partialTxn = this.partialTxn.with(partialTxn.slice(ranges, isHomeShard));
         }
     }
 
-    public boolean handles(long epoch, RoutingKey someKey)
+    private boolean willCover(PartialTxn partialTxn, KeyRanges ranges)
+    {
+        if (this.partialTxn == null && partialTxn == null) return ranges.isEmpty();
+        else if (this.partialTxn == null) return partialTxn.covers(ranges);
+        else if (partialTxn == null) return this.partialTxn.covers(ranges);
+        else if (this.partialTxn.covers(ranges)) return true;
+        else if (partialTxn.covers(ranges)) return true;
+        else return partialTxn.covers(ranges.difference(this.partialTxn.covering));
+    }
+
+    // does this specific Command instance execute (i.e. does it lose ownership post Commit)
+    public boolean executes()
+    {
+        KeyRanges ranges = commandStore.ranges().at(executeAt.epoch);
+        // TODO: take care when merging commandStores, as partialTxn may be incomplete
+        return partialTxn.keys.any(ranges, commandStore::hashIntersects);
+    }
+
+    /**
+     * true iff this commandStore owns the given key on the given epoch
+     */
+    public boolean owns(long epoch, RoutingKey someKey)
     {
         if (!commandStore.hashIntersects(someKey))
             return false;
 
-        KeyRanges ranges = commandStore.ranges().at(epoch);
-        if (ranges == null)
-            return false;
-        return ranges.contains(someKey);
+        return commandStore.ranges().at(epoch).contains(someKey);
     }
 
     private Id coordinator()

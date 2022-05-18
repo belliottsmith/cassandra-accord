@@ -42,7 +42,7 @@ class Execute implements Callback<ReadReply>
         this.route = route;
         this.executeAt = executeAt;
         this.deps = deps;
-        this.topologies = node.topology().forEpoch(txn, executeAt.epoch);
+        this.topologies = node.topology().forEpoch(route, executeAt.epoch);
         Topologies readTopologies = node.topology().forEpoch(txn.read.keys(), executeAt.epoch);
         this.readTracker = new ReadTracker(readTopologies);
         this.callback = callback;
@@ -64,9 +64,6 @@ class Execute implements Callback<ReadReply>
     public void onSuccess(Id from, ReadReply reply)
     {
         if (isDone)
-            return;
-
-        if (!reply.isFinal())
             return;
 
         if (!reply.isOK())

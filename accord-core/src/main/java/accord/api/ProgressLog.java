@@ -9,6 +9,7 @@ import accord.coordinate.InformHomeOfTxn;
 import accord.local.CommandStore;
 import accord.local.Node.Id;
 import accord.primitives.Keys;
+import accord.primitives.PartialRoute;
 import accord.primitives.TxnId;
 
 /**
@@ -136,5 +137,5 @@ public interface ProgressLog
      *
      * In all other scenarios, the implementation is free to choose its course of action.
      */
-    void waiting(TxnId blockedBy, @Nullable Keys someKeys);
+    void waiting(TxnId blockedBy, PartialRoute someRoute);
 }

@@ -808,7 +808,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             node.reply(from, replyContext, node.mapReduceLocalSince(scope(), executeAt, instance -> {
                 Command command = instance.command(txnId);
                 command.apply(txn, homeKey, progressKey, executeAt, deps, writes, result);
-                if (homeKey.equals(progressKey) && command.handles(txnId.epoch, progressKey))
+                if (homeKey.equals(progressKey) && command.owns(txnId.epoch, progressKey))
                 {
                     SimpleProgressLog.Instance log = ((SimpleProgressLog.Instance)instance.progressLog());
                     State state = log.stateMap.get(txnId);

@@ -2,15 +2,14 @@ package accord.messages;
 
 import java.util.Set;
 
-import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
-import static accord.messages.InformOfTxn.InformOfTxnNack.nack;
-import static accord.messages.InformOfTxn.InformOfTxnOk.ok;
+import static accord.messages.InformOfTxnId.InformOfTxnIdNack.nack;
+import static accord.messages.InformOfTxnId.InformOfTxnIdOk.ok;
 
 public class InformOfPersistence implements Request
 {

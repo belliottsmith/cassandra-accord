@@ -153,8 +153,26 @@ public abstract class CommandStores
         {
             int i = Arrays.binarySearch(epochs, epoch);
             if (i < 0) i = -2 -i;
-            if (i < 0) return null;
+            if (i < 0) return KeyRanges.EMPTY;
             return ranges[i];
+        }
+
+        KeyRanges rangesBetweenEpochs(long fromInclusive, long toInclusive)
+        {
+            if (fromInclusive == toInclusive)
+                return rangesForEpoch(fromInclusive);
+
+            int i = Arrays.binarySearch(epochs, fromInclusive);
+            if (i < 0) i = -2 -i;
+            if (i < 0) return KeyRanges.EMPTY;
+
+            int j = Arrays.binarySearch(epochs, toInclusive);
+            if (j < 0) j = -2 -j;
+
+            KeyRanges result = ranges[i++];
+            while (i <= j)
+                result = result.union(ranges[i++]);
+            return result;
         }
 
         KeyRanges rangesSinceEpoch(long epoch)
@@ -319,6 +337,12 @@ public abstract class CommandStores
             }
 
             @Override
+            public KeyRanges between(long fromInclusive, long toInclusive)
+            {
+                return current.ranges[generation].rangesBetweenEpochs(fromInclusive, toInclusive);
+            }
+
+            @Override
             public KeyRanges since(long epoch)
             {
                 return current.ranges[generation].rangesSinceEpoch(epoch);
@@ -327,8 +351,7 @@ public abstract class CommandStores
             @Override
             public boolean intersects(long epoch, Keys keys)
             {
-                KeyRanges ranges = at(epoch);
-                return ranges != null && ranges.intersects(keys);
+                return at(epoch).intersects(keys);
             }
         };
     }

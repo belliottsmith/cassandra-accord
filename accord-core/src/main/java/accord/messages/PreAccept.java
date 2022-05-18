@@ -3,6 +3,8 @@ package accord.messages;
 import java.util.Objects;
 import java.util.function.Consumer;
 
+import javax.annotation.Nullable;
+
 import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.RoutingKey;
@@ -13,6 +15,7 @@ import accord.local.Node.Id;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
 import accord.topology.Topologies;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
@@ -21,24 +24,27 @@ import accord.primitives.Deps;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 
-public class PreAccept extends TxnRequest.WithUnsync<PartialRoute>
+public class PreAccept extends TxnRequest.WithUnsync
 {
     public final PartialTxn txn;
+    public final @Nullable RoutingKeys allRoutingKeys; // ordinarily only set on home shard
     public final long maxEpoch;
 
     public PreAccept(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route)
     {
-        super(to, topologies, txnId, route, Route.SLICER);
+        super(to, topologies, txnId, route);
         this.txn = txn.slice(scope.covering, route.contains(route.homeKey));
         this.maxEpoch = topologies.currentEpoch();
+        this.allRoutingKeys = scope.contains(scope.homeKey) ? route : null;
     }
 
     @VisibleForTesting
-    public PreAccept(PartialRoute scope, long epoch, TxnId txnId, PartialTxn txn)
+    public PreAccept(PartialRoute scope, long epoch, TxnId txnId, PartialTxn txn, @Nullable RoutingKeys allRoutingKeys)
     {
         super(scope, epoch, txnId);
         this.txn = txn;
         this.maxEpoch = epoch;
+        this.allRoutingKeys = allRoutingKeys;
     }
 
     public void process(Node node, Id from, ReplyContext replyContext)
@@ -50,21 +56,18 @@ public class PreAccept extends TxnRequest.WithUnsync<PartialRoute>
             //       we PreAccept to both old and new topologies and require quorums in both.
             //       This necessitates sending to ALL replicas of old topology, not only electorate (as fast path may be unreachable).
             Command command = instance.command(txnId);
-            switch (command.preaccept(txn, scope.homeKey, progressKey))
+            switch (command.preaccept(txn, scope.homeKey, progressKey, allRoutingKeys))
             {
+                default:
+                case INCOMPLETE:
+                    throw new IllegalStateException();
+
                 case SUCCESS:
                 case REDUNDANT:
                     return new PreAcceptOk(txnId, command.executeAt(), calculateDeps(instance, txnId, txn.keys, txn.kind, txnId));
 
                 case REJECTED_BALLOT:
                     return PreAcceptNack.INSTANCE;
-
-                case INCOMPLETE:
-                    // TODO (now): report failure
-                    throw new UnsupportedOperationException();
-
-                default:
-                    throw new IllegalStateException();
             }
         }, (r1, r2) -> {
             if (!r1.isOK()) return r1;

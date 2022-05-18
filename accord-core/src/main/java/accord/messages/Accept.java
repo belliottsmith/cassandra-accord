@@ -1,12 +1,17 @@
 package accord.messages;
 
+import java.util.IdentityHashMap;
+
 import accord.api.RoutingKey;
+import accord.local.Command.Outcome;
+import accord.local.CommandStore;
+import accord.local.Listener;
 import accord.local.Node.Id;
 import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
+import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
-import accord.api.Key;
 import accord.primitives.Ballot;
 import accord.local.Node;
 import accord.primitives.Timestamp;
@@ -14,46 +19,75 @@ import accord.local.Command;
 import accord.primitives.Deps;
 import accord.primitives.TxnId;
 
+import static accord.local.Command.Outcome.REJECTED_BALLOT;
+import static accord.local.Command.Outcome.SUCCESS;
+import static accord.local.Status.PreAccepted;
 import static accord.messages.PreAccept.calculateDeps;
 
-public class Accept extends TxnRequest.WithUnsync<Keys>
+// TODO: use different objects for send and receive, so can be more efficient (e.g. serialize without slicing, and without unnecessary fields)
+public class Accept extends TxnRequest.WithUnsync
 {
     public final Ballot ballot;
-    public final RoutingKey homeKey;
+    public final Keys keys;
     public final Timestamp executeAt;
     public final PartialDeps deps;
     public final Txn.Kind kindOfTxn;
 
-    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, RoutingKey homeKey, Keys keys, Timestamp executeAt, PartialDeps deps, Txn.Kind kindOfTxn)
+    private transient Defer defer;
+
+    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, Route route, Keys keys, Timestamp executeAt, Deps deps, Txn.Kind kindOfTxn)
     {
-        super(to, topologies, txnId, keys, Keys.SLICER);
+        super(to, topologies, txnId, route);
         this.ballot = ballot;
-        this.homeKey = homeKey;
+        this.keys = keys;
         this.executeAt = executeAt;
-        this.deps = deps;
+        this.deps = deps.slice(scope.covering);
         this.kindOfTxn = kindOfTxn;
     }
 
     public void process(Node node, Node.Id replyToNode, ReplyContext replyContext)
     {
-        RoutingKey progressKey = progressKey(node, homeKey);
-        // TODO: when we begin expunging old epochs we need to ensure we handle the case where we do not fully handle the keys;
-        //       since this will likely imply the transaction has been applied or aborted we can indicate the coordinator
-        //       should enquire as to the result
+        RoutingKey progressKey = progressKey(node, scope.homeKey);
         node.reply(replyToNode, replyContext, node.mapReduceLocal(scope(), minEpoch, executeAt.epoch, instance -> {
             Command command = instance.command(txnId);
-            if (!command.accept(ballot, homeKey, progressKey, executeAt, deps))
-                return new AcceptNack(txnId, command.promised());
-            return new AcceptOk(txnId, calculateDeps(instance, txnId, scope(), kindOfTxn, executeAt));
+            Outcome outcome = command.accept(ballot, scope.homeKey, progressKey, executeAt, deps);
+            switch (outcome)
+            {
+                default: throw new IllegalStateException();
+                case REDUNDANT:
+                    return AcceptNack.REDUNDANT;
+                case INCOMPLETE:
+                    if (defer == null)
+                        defer = new Defer(PreAccepted, this, node, replyToNode, replyContext);
+                    defer.add(command, instance);
+                    return AcceptNack.INCOMPLETE;
+                case REJECTED_BALLOT:
+                    return new AcceptNack(outcome, command.promised());
+                case SUCCESS:
+                    return new AcceptOk(calculateDeps(instance, txnId, keys, kindOfTxn, executeAt));
+            }
         }, (r1, r2) -> {
-            if (!r1.isOK()) return r1;
-            if (!r2.isOK()) return r2;
+            if (!r1.isOK() || !r2.isOK())
+                return r1.outcome().compareTo(r2.outcome()) >= 0 ? r1 : r2;
+
             AcceptOk ok1 = (AcceptOk) r1;
             AcceptOk ok2 = (AcceptOk) r2;
-            if (ok1.deps.isEmpty()) return ok2;
-            if (ok2.deps.isEmpty()) return ok1;
-            return new AcceptOk(txnId, ok1.deps.with(ok2.deps));
+            Deps deps = ok1.deps.with(ok2.deps);
+            if (deps == ok1.deps) return ok1;
+            if (deps == ok2.deps) return ok2;
+            return new AcceptOk(deps);
         }));
+    }
+
+    @Override
+    public String toString()
+    {
+        return "Accept{" +
+               "ballot: " + ballot +
+               ", txnId: " + txnId +
+               ", executeAt: " + executeAt +
+               ", deps: " + deps +
+               '}';
     }
 
     @Override
@@ -66,9 +100,9 @@ public class Accept extends TxnRequest.WithUnsync<Keys>
     {
         public final Ballot ballot;
         public final TxnId txnId;
-        public final Key someKey;
+        public final RoutingKey someKey;
 
-        public Invalidate(Ballot ballot, TxnId txnId, Key someKey)
+        public Invalidate(Ballot ballot, TxnId txnId, RoutingKey someKey)
         {
             this.ballot = ballot;
             this.txnId = txnId;
@@ -79,9 +113,18 @@ public class Accept extends TxnRequest.WithUnsync<Keys>
         {
             node.reply(replyToNode, replyContext, node.ifLocal(someKey, txnId.epoch, instance -> {
                 Command command = instance.command(txnId);
-                if (!command.acceptInvalidate(ballot))
-                    return new AcceptNack(txnId, command.promised());
-                return new AcceptOk(txnId, null);
+                switch (command.acceptInvalidate(ballot))
+                {
+                    default:
+                    case INCOMPLETE:
+                        throw new IllegalStateException();
+                    case REDUNDANT:
+                        return AcceptNack.REDUNDANT;
+                    case SUCCESS:
+                        return new AcceptOk(null);
+                    case REJECTED_BALLOT:
+                       return new AcceptNack(REJECTED_BALLOT, command.promised());
+                }
             }));
         }
 
@@ -104,25 +147,24 @@ public class Accept extends TxnRequest.WithUnsync<Keys>
         }
     }
 
-    public interface AcceptReply extends Reply
+    public static abstract class AcceptReply implements Reply
     {
         @Override
-        default MessageType type()
+        public MessageType type()
         {
             return MessageType.ACCEPT_RSP;
         }
 
-        boolean isOK();
+        public abstract boolean isOK();
+        public abstract Outcome outcome();
     }
 
-    public static class AcceptOk implements AcceptReply
+    public static class AcceptOk extends AcceptReply
     {
-        public final TxnId txnId;
         public final Deps deps;
 
-        public AcceptOk(TxnId txnId, Deps deps)
+        public AcceptOk(Deps deps)
         {
-            this.txnId = txnId;
             this.deps = deps;
         }
 
@@ -133,24 +175,30 @@ public class Accept extends TxnRequest.WithUnsync<Keys>
         }
 
         @Override
+        public Outcome outcome()
+        {
+            return SUCCESS;
+        }
+
+        @Override
         public String toString()
         {
-            return "AcceptOk{" +
-                    "txnId=" + txnId +
-                    ", deps=" + deps +
-                    '}';
+            return "AcceptOk{deps=" + deps + '}';
         }
     }
 
-    public static class AcceptNack implements AcceptReply
+    public static class AcceptNack extends AcceptReply
     {
-        public final TxnId txnId;
-        public final Timestamp reject;
+        public static final AcceptNack REDUNDANT = new AcceptNack(Outcome.REDUNDANT, null);
+        public static final AcceptNack INCOMPLETE = new AcceptNack(Outcome.INCOMPLETE, null);
 
-        public AcceptNack(TxnId txnId, Timestamp reject)
+        public final Outcome outcome;
+        public final Timestamp supersededBy;
+
+        public AcceptNack(Outcome outcome, Timestamp supersededBy)
         {
-            this.txnId = txnId;
-            this.reject = reject;
+            this.outcome = outcome;
+            this.supersededBy = supersededBy;
         }
 
         @Override
@@ -160,23 +208,15 @@ public class Accept extends TxnRequest.WithUnsync<Keys>
         }
 
         @Override
+        public Outcome outcome()
+        {
+            return outcome;
+        }
+
+        @Override
         public String toString()
         {
-            return "AcceptNack{" +
-                    "txnId=" + txnId +
-                    ", reject=" + reject +
-                    '}';
+            return "AcceptNack{" + outcome + ",supersededBy=" + supersededBy + '}';
         }
-    }
-
-    @Override
-    public String toString()
-    {
-        return "Accept{" +
-               "ballot: " + ballot +
-               ", txnId: " + txnId +
-               ", executeAt: " + executeAt +
-               ", deps: " + deps +
-               '}';
     }
 }

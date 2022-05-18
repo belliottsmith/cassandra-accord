@@ -17,7 +17,7 @@ public class Txn
         }
     }
 
-    final Kind kind;
+    public final Kind kind;
     // TODO (now): separate into read/write keys and routing keys (including homeKey, and potentially minimised)
     public final Keys keys;
     public final Read read;

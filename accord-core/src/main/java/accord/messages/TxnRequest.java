@@ -7,8 +7,9 @@ import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.AbstractKeys;
-import accord.primitives.AbstractKeys.Slicer;
+import accord.primitives.AbstractRoute;
 import accord.primitives.KeyRanges;
+import accord.primitives.PartialRoute;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.topology.Topologies;
@@ -17,22 +18,22 @@ import accord.primitives.TxnId;
 
 import static java.lang.Long.min;
 
-public abstract class TxnRequest<KS extends AbstractKeys<?, ?>> implements EpochRequest
+public abstract class TxnRequest implements EpochRequest
 {
-    public static abstract class WithUnsync<KS extends AbstractKeys<?, ?>> extends TxnRequest<KS>
+    public static abstract class WithUnsync extends TxnRequest
     {
         public final TxnId txnId;
         public final long minEpoch;
         protected final boolean doNotComputeProgressKey;
 
-        public <I extends AbstractKeys<?, ?>> WithUnsync(Id to, Topologies topologies, TxnId txnId, I keys, Slicer<I, KS> slicer)
+        public WithUnsync(Id to, Topologies topologies, TxnId txnId, Route route)
         {
-            this(to, topologies, txnId, keys, slicer, latestRelevantEpochIndex(to, topologies, keys));
+            this(to, topologies, txnId, route, latestRelevantEpochIndex(to, topologies, route));
         }
 
-        private <I extends AbstractKeys<?, ?>> WithUnsync(Id to, Topologies topologies, TxnId txnId, I keys, Slicer<I, KS> slicer, int startIndex)
+        private WithUnsync(Id to, Topologies topologies, TxnId txnId, Route route, int startIndex)
         {
-            super(to, topologies, keys, slicer, startIndex);
+            super(to, topologies, route, startIndex);
             this.txnId = txnId;
             this.minEpoch = topologies.oldestEpoch();
             this.doNotComputeProgressKey = waitForEpoch() < txnId.epoch && startIndex > 0
@@ -41,14 +42,14 @@ public abstract class TxnRequest<KS extends AbstractKeys<?, ?>> implements Epoch
             KeyRanges ranges = topologies.forEpoch(txnId.epoch).rangesForNode(to);
             if (doNotComputeProgressKey)
             {
-                Preconditions.checkState(ranges == null || !ranges.intersects(keys)); // confirm dest is not a replica on txnId.epoch
+                Preconditions.checkState(ranges == null || !ranges.intersects(route)); // confirm dest is not a replica on txnId.epoch
             }
             else
             {
-                boolean intersects = ranges != null && ranges.intersects(keys);
+                boolean intersects = ranges != null && ranges.intersects(route);
                 long progressEpoch = Math.min(waitForEpoch(), txnId.epoch);
                 KeyRanges computesRangesOn = topologies.forEpoch(progressEpoch).rangesForNode(to);
-                boolean check = computesRangesOn != null && computesRangesOn.intersects(keys);
+                boolean check = computesRangesOn != null && computesRangesOn.intersects(route);
                 if (check != intersects)
                     throw new IllegalStateException();
             }
@@ -62,7 +63,7 @@ public abstract class TxnRequest<KS extends AbstractKeys<?, ?>> implements Epoch
         }
 
         @VisibleForTesting
-        public WithUnsync(KS scope, long epoch, TxnId txnId)
+        public WithUnsync(PartialRoute scope, long epoch, TxnId txnId)
         {
             super(scope, epoch);
             this.txnId = txnId;
@@ -71,28 +72,28 @@ public abstract class TxnRequest<KS extends AbstractKeys<?, ?>> implements Epoch
         }
     }
 
-    protected final KS scope;
+    protected final PartialRoute scope;
     private final long waitForEpoch;
 
-    public <I extends AbstractKeys<?, ?>> TxnRequest(Node.Id to, Topologies topologies, I keys, Slicer<I, KS> slicer)
+    public TxnRequest(Node.Id to, Topologies topologies, AbstractRoute route)
     {
-        this(to, topologies, keys, slicer, 0);
+        this(to, topologies, route, 0);
     }
 
-    public <I extends AbstractKeys<?, ?>> TxnRequest(Node.Id to, Topologies topologies, I keys, Slicer<I, KS> slicer, int startIndex)
+    public TxnRequest(Node.Id to, Topologies topologies, AbstractRoute route, int startIndex)
     {
-        this(computeScope(to, topologies, keys, slicer, startIndex),
+        this(computeScope(to, topologies, route, startIndex),
              computeWaitForEpoch(to, topologies, startIndex));
     }
 
-    public TxnRequest(KS scope, long waitForEpoch)
+    public TxnRequest(PartialRoute scope, long waitForEpoch)
     {
         Preconditions.checkState(!scope.isEmpty());
         this.scope = scope;
         this.waitForEpoch = waitForEpoch;
     }
 
-    public KS scope()
+    public PartialRoute scope()
     {
         return scope;
     }
@@ -166,28 +167,27 @@ public abstract class TxnRequest<KS extends AbstractKeys<?, ?>> implements Epoch
 
     public static RoutingKeys computeScope(Node.Id node, Topologies topologies, Route keys)
     {
-        return computeScope(node, topologies, keys, Route.SLICER, latestRelevantEpochIndex(node, topologies, keys));
+        return computeScope(node, topologies, keys, latestRelevantEpochIndex(node, topologies, keys));
     }
 
-    public static <I extends AbstractKeys<?, ?>, O extends AbstractKeys<?, ?>> O computeScope(Node.Id node, Topologies topologies, I keys,
-                                                                                              Slicer<I, O> slicer, int startIndex)
+    public static PartialRoute computeScope(Node.Id node, Topologies topologies, AbstractRoute route, int startIndex)
     {
         KeyRanges last = null;
-        O scopeKeys = null;
+        PartialRoute scope = null;
         for (int i = startIndex, mi = topologies.size() ; i < mi ; ++i)
         {
             Topology topology = topologies.get(i);
             KeyRanges ranges = topology.rangesForNode(node);
             if (ranges != last && ranges != null && !ranges.equals(last))
             {
-                O add = slicer.slice(keys, ranges);
-                scopeKeys = scopeKeys == null ? add : slicer.merge(scopeKeys, add);
+                PartialRoute add = route.slice(ranges);
+                scope = scope == null ? add : scope.union(add);
             }
 
             last = ranges;
         }
-        if (scopeKeys == null)
+        if (scope == null)
             throw new IllegalArgumentException("No intersection");
-        return scopeKeys;
+        return scope;
     }
 }

@@ -20,6 +20,7 @@ import com.google.common.base.Preconditions;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -45,7 +46,9 @@ public abstract class CommandStore
     public interface RangesForEpoch
     {
         KeyRanges at(long epoch);
+        KeyRanges between(long fromInclusive, long toInclusive);
         KeyRanges since(long epoch);
+        boolean owns(long epoch, RoutingKey key);
         boolean intersects(long epoch, Keys keys);
     }
 
@@ -211,6 +214,18 @@ public abstract class CommandStore
     {
         for (CommandStore store : stores)
             store.process(consumer);
+    }
+
+    public static <T> T mapReduce(Collection<CommandStore> stores, Function<? super CommandStore, T> map, BiFunction<T, T, T> reduce)
+    {
+        T prev = null;
+        for (CommandStore store : stores)
+        {
+            T next = map.apply(store);
+            if (prev == null) prev = next;
+            else prev = reduce.apply(prev, next);
+        }
+        return prev;
     }
 
     <R> void processInternal(Function<? super CommandStore, R> function, Promise<R> promise)

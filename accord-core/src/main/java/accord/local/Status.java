@@ -7,7 +7,7 @@ public enum Status
     Accepted(20),
     AcceptedInvalidate(20),
     Committed(30),
-    ReadyToExecute(40),
+    ReadyToExecute(30),
     Executed(50),
     Applied(60),
     Invalidated(70);

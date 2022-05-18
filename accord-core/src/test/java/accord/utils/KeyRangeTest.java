@@ -233,20 +233,4 @@ public class KeyRangeTest
         Assertions.assertFalse(range.intersects(keys(50, 75, 250, 300)));
         Assertions.assertFalse(range.intersects(keys(250, 300)));
     }
-
-    @Test
-    void tryMergeTest()
-    {
-        // touching
-        Assertions.assertEquals(r(0, 100), r(0, 50).tryMerge(r(50, 100)));
-        Assertions.assertEquals(r(0, 100), r(50, 100).tryMerge(r(0, 50)));
-
-        // intersecting
-        Assertions.assertEquals(r(0, 100), r(0, 75).tryMerge(r(25, 100)));
-        Assertions.assertEquals(r(0, 100), r(25, 100).tryMerge(r(0, 75)));
-
-        // can't merge
-        Assertions.assertNull(r(0, 40).tryMerge(r(60, 100)));
-        Assertions.assertNull(r(60, 100).tryMerge(r(0, 40)));
-    }
 }

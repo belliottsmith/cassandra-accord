@@ -5,12 +5,13 @@ import java.util.List;
 import java.util.Objects;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.primitives.KeyRange;
 import accord.primitives.Keys;
 
-public class IntKey implements Key<IntKey>
+public class IntKey implements Key
 {
-    private static class Range extends KeyRange.EndInclusive<IntKey>
+    private static class Range extends KeyRange.EndInclusive
     {
         public Range(IntKey start, IntKey end)
         {
@@ -18,9 +19,9 @@ public class IntKey implements Key<IntKey>
         }
 
         @Override
-        public KeyRange<IntKey> subRange(IntKey start, IntKey end)
+        public KeyRange subRange(RoutingKey start, RoutingKey end)
         {
-            return new Range(start, end);
+            return new Range((IntKey)start, (IntKey)end);
         }
     }
 
@@ -32,9 +33,9 @@ public class IntKey implements Key<IntKey>
     }
 
     @Override
-    public int compareTo(IntKey that)
+    public int compareTo(RoutingKey that)
     {
-        return Integer.compare(this.key, that.key);
+        return Integer.compare(this.key, ((IntKey)that).key);
     }
 
     public static IntKey key(int k)
@@ -61,19 +62,19 @@ public class IntKey implements Key<IntKey>
         return new Keys(keys);
     }
 
-    public static KeyRange<IntKey> range(IntKey start, IntKey end)
+    public static KeyRange range(IntKey start, IntKey end)
     {
         return new Range(start, end);
     }
 
-    public static KeyRange<IntKey> range(int start, int end)
+    public static KeyRange range(int start, int end)
     {
         return range(key(start), key(end));
     }
 
-    public static KeyRange<IntKey>[] ranges(int count)
+    public static KeyRange[] ranges(int count)
     {
-        List<KeyRange<IntKey>> result = new ArrayList<>();
+        List<KeyRange> result = new ArrayList<>();
         long delta = (Integer.MAX_VALUE - (long)Integer.MIN_VALUE) / count;
         long start = Integer.MIN_VALUE;
         IntKey prev = new IntKey((int)start);

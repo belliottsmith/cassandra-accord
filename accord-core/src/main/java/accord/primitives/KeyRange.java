@@ -42,12 +42,6 @@ public abstract class KeyRange implements Comparable<RoutingKey>
         }
 
         @Override
-        public KeyRange tryMerge(KeyRange that)
-        {
-            return KeyRange.tryMergeExclusiveInclusive(this, that);
-        }
-
-        @Override
         public KeyRange subRange(RoutingKey start, RoutingKey end)
         {
             return new EndInclusive(start, end);
@@ -84,38 +78,10 @@ public abstract class KeyRange implements Comparable<RoutingKey>
         }
 
         @Override
-        public KeyRange tryMerge(KeyRange that)
-        {
-            return KeyRange.tryMergeExclusiveInclusive(this, that);
-        }
-
-        @Override
         public KeyRange subRange(RoutingKey start, RoutingKey end)
         {
             return new StartInclusive(start, end);
         }
-    }
-
-    private static KeyRange tryMergeExclusiveInclusive(KeyRange left, KeyRange right)
-    {
-        if (left.getClass() != right.getClass())
-            return null;
-
-        Preconditions.checkArgument(left instanceof EndInclusive || left instanceof StartInclusive);
-
-        int cmp = left.compareIntersecting(right);
-
-        if (cmp == 0)
-            return left.subRange(left.start.compareTo(right.start) < 0 ? left.start : right.start,
-                                 left.end.compareTo(right.end) > 0 ? left.end : right.end);
-
-        if (cmp > 0 && right.end.equals(left.start))
-            return left.subRange(right.start, left.end);
-
-        if (cmp < 0 && left.end.equals(right.start))
-            return left.subRange(left.start, right.end);
-
-        return null;
     }
 
     private final RoutingKey start;
@@ -124,6 +90,7 @@ public abstract class KeyRange implements Comparable<RoutingKey>
     private KeyRange(RoutingKey start, RoutingKey end)
     {
         Preconditions.checkArgument(start.compareTo(end) < 0);
+        Preconditions.checkState(startInclusive() != endInclusive()); // TODO: relax this restriction
         this.start = start;
         this.end = end;
     }
@@ -132,23 +99,16 @@ public abstract class KeyRange implements Comparable<RoutingKey>
     {
         return start;
     }
-
     public final RoutingKey end()
     {
         return end;
     }
 
     public abstract boolean startInclusive();
-
     public abstract boolean endInclusive();
 
-    /**
-     * Return a new range covering this and the given range if the ranges are intersecting or touching. That is,
-     * no keys can exist between the touching ends of the range.
-     */
-    public abstract KeyRange tryMerge(KeyRange that);
-
     public abstract KeyRange subRange(RoutingKey start, RoutingKey end);
+//    public abstract KeyRange
 
     @Override
     public boolean equals(Object o)

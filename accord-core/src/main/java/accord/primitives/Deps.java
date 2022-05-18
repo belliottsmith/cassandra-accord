@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -13,6 +14,7 @@ import java.util.function.Predicate;
 import com.google.common.base.Preconditions;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.utils.InlineHeap;
@@ -341,7 +343,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
     // first N entries are offsets for each src item, remainder are pointers into value set (either keys or txnIds)
     final int[] keyToTxnId; // Key -> [TxnId]
-    private int[] txnIdToKey; // TxnId -> [Key]
+    int[] txnIdToKey; // TxnId -> [Key]
 
     Deps(Keys keys, TxnId[] txnIds, int[] keyToTxnId)
     {
@@ -730,7 +732,27 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         return new Keys(result);
     }
 
-    private void ensureTxnIdToKey()
+    public PartialRoute someRoute(TxnId txnId)
+    {
+        int txnIdIndex = Arrays.binarySearch(txnIds, txnId);
+        if (txnIdIndex < 0)
+            throw new NoSuchElementException();
+
+        ensureTxnIdToKey();
+
+        int start = txnIdIndex == 0 ? txnIds.length : txnIdToKey[txnIdIndex - 1];
+        int end = txnIdToKey[txnIdIndex];
+        RoutingKey[] result = new Key[end - start];
+        for (int i = start ; i < end ; ++i)
+        {
+            result[i - start] = keys.get(txnIdToKey[i]);
+            if (i != start && result[i - (1 + start)] == result[i - start])
+                throw new AssertionError();
+        }
+        return new PartialRoute(result);
+    }
+
+    void ensureTxnIdToKey()
     {
         if (txnIdToKey != null)
             return;

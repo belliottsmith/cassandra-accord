@@ -379,6 +379,13 @@ public class Node implements ConfigurationService.Listener
         messageSink.reply(replyingToNode, replyContext, send);
     }
 
+    public <T> void reply(Id replyingToNode, ReplyContext replyContext, Reply send, Callback<T> callback)
+    {
+        if (send == null)
+            throw new NullPointerException();
+        messageSink.reply(replyingToNode, replyContext, send, callback);
+    }
+
     public TxnId nextTxnId()
     {
         return new TxnId(uniqueNow());

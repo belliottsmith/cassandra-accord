@@ -1,13 +1,16 @@
 package accord.primitives;
 
+import java.util.Arrays;
+import java.util.NoSuchElementException;
 import java.util.function.IntFunction;
 
 import com.google.common.base.Preconditions;
 
+import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.SortedArrays;
 
-public class PartialRoute extends RoutingKeys
+public class PartialRoute extends AbstractRoute
 {
     public final RoutingKey homeKey;
     public final KeyRanges covering;
@@ -17,6 +20,11 @@ public class PartialRoute extends RoutingKeys
         super(keys);
         this.covering = covering;
         this.homeKey = homeKey;
+    }
+
+    public PartialRoute slice(KeyRanges ranges)
+    {
+        return slice(ranges, factory());
     }
 
     public PartialRoute union(PartialRoute that)

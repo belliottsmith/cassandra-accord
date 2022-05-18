@@ -8,13 +8,13 @@ import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Apply;
-import accord.messages.Apply.ApplyOk;
+import accord.messages.Apply.ApplyReply;
 import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.messages.InformOfPersistence;
 import accord.primitives.Deps;
-import accord.primitives.PartialDeps;
 import accord.primitives.Route;
+import accord.primitives.Txn;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.primitives.Timestamp;
@@ -22,7 +22,7 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 
 // TODO: do not extend AsyncFuture, just use a simple BiConsumer callback
-public class Persist implements Callback<ApplyOk>
+public class Persist implements Callback<ApplyReply>
 {
     final Node node;
     final TxnId txnId;
@@ -38,7 +38,7 @@ public class Persist implements Callback<ApplyOk>
         node.send(topologies.nodes(), to -> new Apply(to, topologies, txnId, route, executeAt, deps, writes, result), persist);
     }
 
-    public static void persistAndCommit(Node node, TxnId txnId, Route route, Timestamp executeAt, PartialDeps deps, Writes writes, Result result)
+    public static void persistAndCommit(Node node, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
         Topologies persistTo = node.topology().preciseEpochs(route, executeAt.epoch);
         Persist persist = new Persist(node, persistTo, txnId, route, executeAt);
@@ -46,7 +46,7 @@ public class Persist implements Callback<ApplyOk>
         if (txnId.epoch != executeAt.epoch)
         {
             Topologies earlierTopologies = node.topology().preciseEpochs(route, txnId.epoch, executeAt.epoch - 1);
-            Commit.commit(node, earlierTopologies, persistTo, txnId, route, executeAt, deps);
+            Commit.commit(node, earlierTopologies, persistTo, txnId, txn, route, executeAt, deps);
         }
     }
 
@@ -61,7 +61,7 @@ public class Persist implements Callback<ApplyOk>
     }
 
     @Override
-    public void onSuccess(Id from, ApplyOk response)
+    public void onSuccess(Id from, ApplyReply response)
     {
         persistedOn.add(from);
         if (tracker.success(from) && !isDone)

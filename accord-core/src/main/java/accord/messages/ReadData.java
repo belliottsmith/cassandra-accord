@@ -12,8 +12,13 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.DeterministicIdentitySet;
 
-public class ReadData extends TxnRequest<PartialRoute>
+import static accord.messages.MessageType.READ_RSP;
+import static accord.messages.ReadData.ReadNack.NOT_COMMITTED;
+import static accord.messages.ReadData.ReadNack.REDUNDANT;
+
+public class ReadData extends TxnRequest
 {
+    // TODO: dedup - can currently have infinite pending reads that will be executed independently
     static class LocalRead implements Listener
     {
         final TxnId txnId;
@@ -74,39 +79,46 @@ public class ReadData extends TxnRequest<PartialRoute>
             if (!isObsolete)
             {
                 isObsolete = true;
-                node.reply(replyToNode, replyContext, new ReadNack());
+                node.reply(replyToNode, replyContext, REDUNDANT);
             }
         }
 
-        synchronized void setup(TxnId txnId, PartialRoute scope, Timestamp executeAt)
+        synchronized ReadNack setup(TxnId txnId, PartialRoute scope, Timestamp executeAt)
         {
             waitingOn = node.collectLocal(scope, executeAt, DeterministicIdentitySet::new);
             // FIXME: fix/check thread safety
-            CommandStore.onEach(waitingOn, instance -> {
+            return CommandStore.mapReduce(waitingOn, instance -> {
                 Command command = instance.command(txnId);
                 switch (command.status())
                 {
                     default:
+                        throw new IllegalStateException();
                     case NotWitnessed:
                     case PreAccepted:
                     case Accepted:
                     case AcceptedInvalidate:
+                        return NOT_COMMITTED;
+
                     case Committed:
                         instance.progressLog().waiting(txnId, scope);
                         command.addListener(this);
-                        break;
+                        return null;
 
                     case Executed:
                     case Applied:
                     case Invalidated:
-                        obsolete();
-                        break;
+                        isObsolete = true;
+                        return REDUNDANT;
 
                     case ReadyToExecute:
                         if (!isObsolete)
                             read(command);
+                        return null;
                 }
-            });
+            }, (r1, r2) -> r1 == null || r2 == null
+                           ? r1 == null ? r1 : r2
+                           : r1.compareTo(r2) >= 0 ? r1 : r2
+            );
         }
     }
 
@@ -115,15 +127,18 @@ public class ReadData extends TxnRequest<PartialRoute>
 
     public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt)
     {
-        super(to, topologies, route, Route.SLICER);
+        super(to, topologies, route);
         this.txnId = txnId;
         this.executeAt = executeAt;
     }
 
     public void process(Node node, Node.Id from, ReplyContext replyContext)
     {
-        new LocalRead(txnId, node, from, replyContext)
-            .setup(txnId, scope(), executeAt);
+        ReadNack nack = new LocalRead(txnId, node, from, replyContext)
+                        .setup(txnId, scope(), executeAt);
+
+        if (nack != null)
+            node.reply(from, replyContext, nack);
     }
 
     @Override
@@ -132,36 +147,47 @@ public class ReadData extends TxnRequest<PartialRoute>
         return MessageType.READ_REQ;
     }
 
-    public static class ReadReply implements Reply
+    public interface ReadReply extends Reply
     {
+        boolean isOk();
+    }
+
+    public enum ReadNack implements ReadReply
+    {
+        INVALID, NOT_COMMITTED, REDUNDANT;
+
+        @Override
+        public String toString()
+        {
+            switch (this)
+            {
+                default: throw new IllegalStateException();
+                case INVALID: return "ReadInvalid";
+                case NOT_COMMITTED: return "ReadNotCommitted";
+                case REDUNDANT: return "ReadRedundant";
+            }
+        }
+
         @Override
         public MessageType type()
         {
-            return MessageType.READ_RSP;
+            return READ_RSP;
         }
 
-        public boolean isOK()
-        {
-            return true;
-        }
-    }
-
-    public static class ReadNack extends ReadReply
-    {
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return false;
         }
 
         @Override
-        public String toString()
+        public boolean isFinal()
         {
-            return "ReadNack";
+            return this == REDUNDANT;
         }
     }
 
-    public static class ReadOk extends ReadReply
+    public static class ReadOk implements ReadReply
     {
         public final Data data;
         public ReadOk(Data data)
@@ -173,6 +199,17 @@ public class ReadData extends TxnRequest<PartialRoute>
         public String toString()
         {
             return "ReadOk{" + data + '}';
+        }
+
+        @Override
+        public MessageType type()
+        {
+            return READ_RSP;
+        }
+
+        public boolean isOk()
+        {
+            return true;
         }
     }
 

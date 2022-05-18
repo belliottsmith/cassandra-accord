@@ -20,12 +20,6 @@ import org.apache.cassandra.utils.concurrent.Inline;
 // TODO: check that foldl call-sites are inlined and optimised by HotSpot
 public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys<K, KS>> implements Iterable<K>
 {
-    public interface Slicer<I extends AbstractKeys<?, ?>, O extends AbstractKeys<?, ?>>
-    {
-        O slice(I in, KeyRanges ranges);
-        O merge(O a, O b); // TODO: this can be made more efficient since we can guarantee non-overlapping
-    }
-
     final K[] keys;
 
     protected AbstractKeys(K[] keys)

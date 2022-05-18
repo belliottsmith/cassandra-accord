@@ -8,13 +8,13 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.AbstractRoute;
 import accord.primitives.KeyRanges;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
-import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 import accord.primitives.Deps;
 import accord.primitives.TxnId;
@@ -25,6 +25,8 @@ public class Commit extends ReadData
     public final @Nullable PartialTxn partialTxn;
     public final PartialDeps deps;
     public final boolean read;
+
+    private transient Defer defer;
 
     public Commit(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, boolean read)
     {
@@ -43,6 +45,7 @@ public class Commit extends ReadData
     }
 
     // TODO (now): accept Topology not Topologies
+    // TODO: do not commit if we're already ready to execute (requires extra info in Accept responses)
     public static void commitAndRead(Node node, Topologies executeTopologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Set<Id> readSet, Callback<ReadReply> callback)
     {
         for (Node.Id to : executeTopologies.nodes())
@@ -87,26 +90,11 @@ public class Commit extends ReadData
         commit(node, commitTo, Collections.emptySet(), txnId, txn, route, executeAt, deps);
     }
 
-    public static void commitInvalidate(Node node, TxnId txnId, Keys someKeys, Timestamp until)
-    {
-        Topologies commitTo = node.topology().preciseEpochs(someKeys, txnId.epoch, until.epoch);
-        commitInvalidate(node, commitTo, txnId, someKeys);
-    }
-
-    public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, Keys someKeys)
-    {
-        for (Node.Id to : commitTo.nodes())
-        {
-            Invalidate send = new Invalidate(to, commitTo, txnId, someKeys);
-            node.send(to, send);
-        }
-    }
-
     public void process(Node node, Id from, ReplyContext replyContext)
     {
         RoutingKey progressKey = node.trySelectProgressKey(txnId, scope);
         node.forEachLocal(scope(), txnId.epoch, executeAt.epoch,
-                          instance -> instance.command(txnId).commit(partialTxn, scope.homeKey, progressKey, executeAt, deps));
+                          instance -> instance.command(txnId).commit(scope.homeKey, progressKey, executeAt, deps, partialTxn));
 
         if (read)
             super.process(node, from, replyContext);
@@ -129,14 +117,29 @@ public class Commit extends ReadData
     }
 
     // TODO: should use RoutingKeys or PartialRoute
-    public static class Invalidate extends TxnRequest<Keys>
+    public static class Invalidate extends TxnRequest
     {
         final TxnId txnId;
 
-        public Invalidate(Id to, Topologies topologies, TxnId txnId, Keys keys)
+        public Invalidate(Id to, Topologies topologies, TxnId txnId, AbstractRoute route)
         {
-            super(to, topologies, keys, Keys.SLICER);
+            super(to, topologies, route);
             this.txnId = txnId;
+        }
+
+        public static void commitInvalidate(Node node, TxnId txnId, AbstractRoute someRoute, Timestamp until)
+        {
+            Topologies commitTo = node.topology().preciseEpochs(someRoute, txnId.epoch, until.epoch);
+            commitInvalidate(node, commitTo, txnId, someRoute);
+        }
+
+        public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, AbstractRoute someRoute)
+        {
+            for (Node.Id to : commitTo.nodes())
+            {
+                Invalidate send = new Invalidate(to, commitTo, txnId, someRoute);
+                node.send(to, send);
+            }
         }
 
         public void process(Node node, Id from, ReplyContext replyContext)

@@ -1,8 +1,5 @@
 package accord.primitives;
 
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.SortedSet;
 import java.util.function.IntFunction;
 
 import accord.api.RoutingKey;

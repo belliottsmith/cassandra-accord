@@ -1,12 +1,14 @@
 package accord.burn;
 
-import accord.api.Key;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.api.TestableConfigurationService;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Status;
 import accord.primitives.Deps;
+import accord.primitives.PartialDeps;
+import accord.primitives.PartialTxn;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -40,12 +42,12 @@ public class TopologyUpdate
     {
         private final Status status;
         private final TxnId txnId;
-        private final Txn txn;
+        private final PartialTxn partialTxn;
         private final RoutingKey homeKey;
         private final Timestamp executeAt;
         private final long epoch;
 
-        private final Deps deps;
+        private final PartialDeps partialDeps;
         private final Writes writes;
         private final Result result;
 
@@ -54,11 +56,11 @@ public class TopologyUpdate
             // TODO (now): AcceptInvalidate and CommitInvalidate can leave these fields null
             Preconditions.checkArgument(command.hasBeen(Status.PreAccepted));
             this.txnId = command.txnId();
-            this.txn = command.txn();
+            this.partialTxn = command.partialTxn();
             this.homeKey = command.homeKey();
             this.status = command.status();
             this.executeAt = command.executeAt();
-            this.deps = command.savedDeps();
+            this.partialDeps = command.savedPartialDeps();
             this.writes = command.writes();
             this.result = command.result();
             this.epoch = epoch;
@@ -73,31 +75,9 @@ public class TopologyUpdate
                 return;
             }
 
-            Key progressKey = node.trySelectProgressKey(txnId, txn.keys, homeKey); // likely to be null, unless flip-flop of ownership
             // TODO: can skip the homeKey if it's not a participating key in the transaction
-            node.forEachLocalSince(txn.keys, epoch, commandStore -> {
-                switch (status)
-                {
-                    case AcceptedInvalidate:
-                        if (txn == null)
-                            break;
-                    case PreAccepted:
-                    case Accepted:
-                        commandStore.command(txnId).preaccept(txn, homeKey, progressKey);
-                        break;
-                    case Committed:
-                    case ReadyToExecute:
-                        commandStore.command(txnId).commit(txn, homeKey, progressKey, executeAt, deps);
-                        break;
-                    case Executed:
-                    case Applied:
-                        commandStore.command(txnId).apply(txn, homeKey, progressKey, executeAt, deps, writes, result);
-                        break;
-                    case Invalidated:
-                        commandStore.command(txnId).commitInvalidate();
-                    default:
-                        throw new IllegalStateException();
-                }
+            node.forEachLocalSince(partialTxn.keys, epoch, commandStore -> {
+                commandStore.command(txnId).propagate(epoch, status, partialTxn, partialDeps, homeKey, executeAt, writes, result);
             });
         }
     }
@@ -158,7 +138,7 @@ public class TopologyUpdate
     {
         Topology syncTopology = node.configService().getTopologyForEpoch(syncEpoch);
         Topology localTopology = syncTopology.forNode(node.id());
-        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().withUnsyncEpochs(cmd.txn, syncEpoch).nodes();
+        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().withUnsyncEpochs(cmd.partialTxn.keys, syncEpoch).nodes();
 
         KeyRanges ranges = localTopology.ranges();
         Stream<MessageTask> messageStream = Stream.empty();
@@ -178,8 +158,7 @@ public class TopologyUpdate
         Topology syncTopology = node.configService().getTopologyForEpoch(syncEpoch);
         Topology localTopology = syncTopology.forNode(node.id());
         Topology nextTopology = node.configService().getTopologyForEpoch(nextEpoch);
-        Function<CommandSync, Collection<Node.Id>> nextNodes = cmd -> allNodesFor(cmd.txn, nextTopology);
-        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().withUnsyncEpochs(cmd.txn, syncEpoch).nodes();
+        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().withUnsyncEpochs(cmd.partialTxn.keys, syncEpoch).nodes();
 
         // backfill new replicas with operations from prior epochs
         Stream<MessageTask> messageStream = Stream.empty();

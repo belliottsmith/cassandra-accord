@@ -8,26 +8,27 @@ import com.google.common.base.Preconditions;
 
 import accord.api.Key;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.coordinate.Invalidate.Outcome;
 import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.messages.BeginInvalidate;
-import accord.messages.BeginInvalidate.InvalidateNack;
-import accord.messages.BeginInvalidate.InvalidateOk;
+import accord.messages.BeginInvalidation;
+import accord.messages.BeginInvalidation.InvalidateNack;
+import accord.messages.BeginInvalidation.InvalidateOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.Callback;
-import accord.messages.Commit;
+import accord.primitives.PartialRoute;
 import accord.primitives.Route;
 import accord.topology.Shard;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedOrLater;
+import static accord.messages.Commit.Invalidate.commitInvalidate;
 
 public class Invalidate extends AsyncFuture<Outcome> implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
@@ -36,30 +37,29 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
     final Node node;
     final Ballot ballot;
     final TxnId txnId;
-    final Keys someKeys;
-    final Key someKey;
+    final PartialRoute someRoute;
+    final RoutingKey someKey;
 
-    final List<Id> invalidateOksFrom = new ArrayList<>();
     final List<InvalidateOk> invalidateOks = new ArrayList<>();
     final QuorumShardTracker preacceptTracker;
 
-    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, Keys someKeys, Key someKey)
+    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, PartialRoute someRoute, RoutingKey someKey)
     {
-        Preconditions.checkArgument(someKeys.contains(someKey));
+        Preconditions.checkArgument(someRoute.contains(someKey));
         this.node = node;
         this.ballot = ballot;
         this.txnId = txnId;
-        this.someKeys = someKeys;
+        this.someRoute = someRoute;
         this.someKey = someKey;
         this.preacceptTracker = new QuorumShardTracker(shard);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, Keys someKeys, Key someKey)
+    public static Invalidate invalidate(Node node, TxnId txnId, PartialRoute someRoute, RoutingKey someKey)
     {
         Ballot ballot = new Ballot(node.uniqueNow());
         Shard shard = node.topology().forEpochIfKnown(someKey, txnId.epoch);
-        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKeys, someKey);
-        node.send(shard.nodes, to -> new BeginInvalidate(txnId, someKey, ballot), invalidate);
+        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someRoute, someKey);
+        node.send(shard.nodes, to -> new BeginInvalidation(txnId, someKey, ballot), invalidate);
         return invalidate;
     }
 
@@ -72,20 +72,10 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
         if (!response.isOK())
         {
             InvalidateNack nack = (InvalidateNack) response;
-            if (nack.homeKey != null && nack.txn != null)
+            if (nack.homeKey != null)
             {
-                Key progressKey = node.trySelectProgressKey(txnId.epoch, nack.txn.keys, nack.homeKey);
-                // TODO (now): this shouldn't be ifLocalSince - should be range up to the blocked txn only (but consider more)
                 node.ifLocalSince(someKey, txnId, instance -> {
-                    instance.command(txnId).preaccept(nack.txn, nack.homeKey, progressKey);
-                    return null;
-                });
-            }
-            else if (nack.homeKey != null)
-            {
-                // TODO (now): this shouldn't be ifLocalSince - should be range up to the blocked txn only (but consider more)
-                node.ifLocalSince(someKey, txnId, instance -> {
-                    instance.command(txnId).homeKey(nack.homeKey);
+                    instance.command(txnId).updateHomeKey(nack.homeKey);
                     return null;
                 });
             }
@@ -95,7 +85,6 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
 
         InvalidateOk ok = (InvalidateOk) response;
         invalidateOks.add(ok);
-        invalidateOksFrom.add(from);
         if (preacceptTracker.success(from))
             invalidate();
     }
@@ -156,12 +145,8 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
             // TODO (now): error handling in other callbacks
             try
             {
-                Txn txn = invalidateOks.stream().map(ok -> ok.txn).reduce(null, (a, b) -> a != null ? a : b);
-                if (txn != null)
-                    node.agent().onInvalidate(node, txn);
-
-                Commit.commitInvalidate(node, txnId, someKeys, txnId);
-                node.forEachLocalSince(someKeys, txnId, instance -> {
+                commitInvalidate(node, txnId, someRoute, txnId);
+                node.forEachLocalSince(someRoute, txnId, instance -> {
                     instance.command(txnId).commitInvalidate();
                 });
             }

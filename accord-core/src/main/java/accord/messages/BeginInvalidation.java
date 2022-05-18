@@ -2,32 +2,23 @@ package accord.messages;
 
 import java.util.List;
 
-import accord.api.Key;
-import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
-import accord.messages.BeginRecovery.RecoverNack;
-import accord.messages.BeginRecovery.RecoverOk;
-import accord.messages.BeginRecovery.RecoverReply;
 import accord.primitives.Ballot;
-import accord.primitives.PartialDeps;
-import accord.primitives.PartialTxn;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
-import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.primitives.Writes;
 
-public class BeginInvalidate implements EpochRequest
+public class BeginInvalidation implements EpochRequest
 {
     final Ballot ballot;
     final TxnId txnId;
-    final Key someKey;
+    final RoutingKey someKey;
 
-    public BeginInvalidate(TxnId txnId, Key someKey, Ballot ballot)
+    public BeginInvalidation(TxnId txnId, RoutingKey someKey, Ballot ballot)
     {
         this.txnId = txnId;
         this.someKey = someKey;
@@ -36,14 +27,13 @@ public class BeginInvalidate implements EpochRequest
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        RecoverReply reply = node.ifLocal(someKey, txnId, instance -> {
+        InvalidateReply reply = node.ifLocal(someKey, txnId, instance -> {
             Command command = instance.command(txnId);
 
-            if (!command.preAcceptInvalidate(ballot))
+            if (!command.preacceptInvalidate(ballot))
                 return new InvalidateNack(command.promised(), command.homeKey());
 
-            return new InvalidateOk(txnId, command.status(), command.accepted(), command.executeAt(), command.savedPartialDeps(),
-                                    command.writes(), command.result(), command.routingKeys(), command.homeKey());
+            return new InvalidateOk(command.status(), command.routingKeys(), command.homeKey());
         });
 
         node.reply(replyToNode, replyContext, reply);
@@ -70,16 +60,20 @@ public class BeginInvalidate implements EpochRequest
                '}';
     }
 
-    public static class InvalidateOk extends RecoverOk
+    public interface InvalidateReply extends Reply
     {
-        public final PartialTxn txn;
+        boolean isOK();
+    }
+
+    public static class InvalidateOk implements InvalidateReply
+    {
+        public final Status status;
         public final RoutingKeys routingKeys;
         public final RoutingKey homeKey;
 
-        public InvalidateOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, PartialDeps deps, Writes writes, Result result, PartialTxn txn, RoutingKeys routingKeys, RoutingKey homeKey)
+        public InvalidateOk(Status status, RoutingKeys routingKeys, RoutingKey homeKey)
         {
-            super(txnId, status, accepted, executeAt, deps, null, null, false, writes, result);
-            this.txn = txn;
+            this.status = status;
             this.routingKeys = routingKeys;
             this.homeKey = homeKey;
         }
@@ -93,7 +87,13 @@ public class BeginInvalidate implements EpochRequest
         @Override
         public String toString()
         {
-            return toString("InvalidateOk");
+            return "InvalidateOk{" + status + ',' + routingKeys + ',' + homeKey + '}';
+        }
+
+        @Override
+        public MessageType type()
+        {
+            return MessageType.BEGIN_INVALIDATE_RSP;
         }
 
         public static Route findRoute(List<InvalidateOk> invalidateOks)
@@ -107,12 +107,13 @@ public class BeginInvalidate implements EpochRequest
         }
     }
 
-    public static class InvalidateNack extends RecoverNack
+    public static class InvalidateNack implements InvalidateReply
     {
+        public final Ballot supersededBy;
         public final RoutingKey homeKey;
         public InvalidateNack(Ballot supersededBy, RoutingKey homeKey)
         {
-            super(supersededBy);
+            this.supersededBy = supersededBy;
             this.homeKey = homeKey;
         }
 
@@ -126,6 +127,12 @@ public class BeginInvalidate implements EpochRequest
         public String toString()
         {
             return "InvalidateNack{supersededBy:" + supersededBy + '}';
+        }
+
+        @Override
+        public MessageType type()
+        {
+            return MessageType.BEGIN_INVALIDATE_RSP;
         }
     }
 }

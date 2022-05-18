@@ -20,13 +20,6 @@ public interface Agent
     void onRecover(Node node, Result success, Throwable fail);
 
     /**
-     * For use by implementations to decide what to do about aborted transactions.
-     *
-     * Note: this is not currently guaranteed to be invoked *anywhere*. It may be invoked, or it may not be.
-     */
-    void onInvalidate(Node node, Txn txn);
-
-    /**
      * For use by implementations to decide what to do about timestamp inconsistency, i.e. two different timestamps
      * committed for the same transaction. This is a protocol consistency violation, potentially leading to non-linearizable
      * histories. In test cases this is used to fail the transaction, whereas in real systems this likely will be used for

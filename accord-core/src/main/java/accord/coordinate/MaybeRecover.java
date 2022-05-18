@@ -2,7 +2,6 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
-import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Status;
@@ -10,6 +9,7 @@ import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.Commit;
+import accord.primitives.Route;
 import accord.topology.Shard;
 import accord.primitives.Ballot;
 import accord.primitives.Txn;
@@ -25,14 +25,16 @@ import static accord.local.Status.Accepted;
 public class MaybeRecover extends CheckShardStatus<CheckStatusOk> implements BiConsumer<Object, Throwable>
 {
     final Txn txn;
+    final Route route;
     final Status knownStatus;
     final Ballot knownPromised;
     final boolean knownPromisedHasBeenAccepted;
 
-    MaybeRecover(Node node, TxnId txnId, Txn txn, RoutingKey homeKey, Shard homeShard, long homeEpoch, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
+    MaybeRecover(Node node, TxnId txnId, Txn txn, Route route, Shard homeShard, long homeEpoch, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
     {
-        super(node, txnId, homeKey, homeShard, homeEpoch, IncludeInfo.OnlyIfExecuted);
+        super(node, txnId, route, homeShard, homeEpoch, IncludeInfo.OnlyIfExecuted);
         this.txn = txn;
+        this.route = route;
         this.knownStatus = knownStatus;
         this.knownPromised = knownPromised;
         this.knownPromisedHasBeenAccepted = knownPromiseHasBeenAccepted;

@@ -66,14 +66,14 @@ public class CheckOnCommitted extends CheckShardStatus<CheckStatusOkFull>
                 });
                 node.forEachLocal(max.txn.keys, txnId.epoch, max.executeAt.epoch - 1, commandStore -> {
                     Command command = commandStore.command(txnId);
-                    command.commit(max.txn, max.homeKey, progressKey, max.executeAt, max.deps);
+                    command.commit(max.homeKey, progressKey, max.executeAt, max.deps, max.txn);
                 });
                 break;
             case Committed:
             case ReadyToExecute:
                 node.forEachLocalSince(max.txn.keys, txnId.epoch, commandStore -> {
                     Command command = commandStore.command(txnId);
-                    command.commit(max.txn, max.homeKey, progressKey, max.executeAt, max.deps);
+                    command.commit(max.homeKey, progressKey, max.executeAt, max.deps, max.txn);
                 });
         }
     }

@@ -5,14 +5,14 @@ import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Callback;
-import accord.messages.InformOfTxn;
-import accord.messages.InformOfTxn.InformOfTxnReply;
+import accord.messages.InformOfTxnId;
+import accord.messages.InformOfTxnId.InformOfTxnIdReply;
 import accord.topology.Shard;
 import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
-public class InformHomeOfTxn extends AsyncFuture<Void> implements Callback<InformOfTxnReply>
+public class InformHomeOfTxn extends AsyncFuture<Void> implements Callback<InformOfTxnIdReply>
 {
     final TxnId txnId;
     final RoutingKey homeKey;
@@ -32,13 +32,13 @@ public class InformHomeOfTxn extends AsyncFuture<Void> implements Callback<Infor
         return node.withEpoch(txnId.epoch, () -> {
             Shard homeShard = node.topology().forEpoch(homeKey, txnId.epoch);
             InformHomeOfTxn inform = new InformHomeOfTxn(txnId, homeKey, homeShard);
-            node.send(homeShard.nodes, new InformOfTxn(txnId, homeKey), inform);
+            node.send(homeShard.nodes, new InformOfTxnId(txnId, homeKey), inform);
             return inform;
         });
     }
 
     @Override
-    public void onSuccess(Id from, InformOfTxnReply response)
+    public void onSuccess(Id from, InformOfTxnIdReply response)
     {
         if (response.isOk())
         {

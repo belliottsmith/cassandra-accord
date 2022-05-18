@@ -7,15 +7,15 @@ import accord.local.Node.Id;
 import accord.local.Status;
 import accord.primitives.TxnId;
 
-import static accord.messages.InformOfTxn.InformOfTxnNack.nack;
-import static accord.messages.InformOfTxn.InformOfTxnOk.ok;
+import static accord.messages.InformOfTxnId.InformOfTxnIdNack.nack;
+import static accord.messages.InformOfTxnId.InformOfTxnIdOk.ok;
 
-public class InformOfTxn implements EpochRequest
+public class InformOfTxnId implements EpochRequest
 {
     final TxnId txnId;
     final RoutingKey homeKey;
 
-    public InformOfTxn(TxnId txnId, RoutingKey homeKey)
+    public InformOfTxnId(TxnId txnId, RoutingKey homeKey)
     {
         this.txnId = txnId;
         this.homeKey = homeKey;
@@ -24,10 +24,12 @@ public class InformOfTxn implements EpochRequest
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
         Reply reply = node.ifLocal(homeKey, txnId, instance -> {
-            // TODO (now): we don't want to preaccept here, only mark it in the progress log
-            Command command = instance.ifPresent(txnId);
-            if (command == null || !command.hasBeen(Status.PreAccepted))
-                instance.progressLog().unwitnessed(txnId);
+            Command command = instance.command(txnId);
+            if (!command.hasBeen(Status.PreAccepted))
+            {
+                command.updateHomeKey(homeKey);
+                instance.progressLog().unwitnessed(txnId, true, true);
+            }
             return ok();
         });
 
@@ -43,27 +45,27 @@ public class InformOfTxn implements EpochRequest
         return "InformOfTxn{txnId:" + txnId + '}';
     }
 
-    public interface InformOfTxnReply extends Reply
+    public interface InformOfTxnIdReply extends Reply
     {
         boolean isOk();
     }
 
-    public static class InformOfTxnOk implements InformOfTxnReply
+    public static class InformOfTxnIdOk implements InformOfTxnIdReply
     {
-        private static final InformOfTxnOk instance = new InformOfTxnOk();
+        private static final InformOfTxnIdOk instance = new InformOfTxnIdOk();
 
         @Override
         public MessageType type()
         {
-            return MessageType.INFORM_RSP;
+            return MessageType.INFORM_TXNID_RSP;
         }
 
-        static InformOfTxnReply ok()
+        static InformOfTxnIdReply ok()
         {
             return instance;
         }
 
-        private InformOfTxnOk() { }
+        private InformOfTxnIdOk() { }
 
         @Override
         public boolean isOk()
@@ -78,22 +80,22 @@ public class InformOfTxn implements EpochRequest
         }
     }
 
-    public static class InformOfTxnNack implements InformOfTxnReply
+    public static class InformOfTxnIdNack implements InformOfTxnIdReply
     {
-        private static final InformOfTxnNack instance = new InformOfTxnNack();
+        private static final InformOfTxnIdNack instance = new InformOfTxnIdNack();
 
         @Override
         public MessageType type()
         {
-            return MessageType.INFORM_RSP;
+            return MessageType.INFORM_TXNID_RSP;
         }
 
-        static InformOfTxnReply nack()
+        static InformOfTxnIdReply nack()
         {
             return instance;
         }
 
-        private InformOfTxnNack() { }
+        private InformOfTxnIdNack() { }
 
         @Override
         public boolean isOk()
@@ -111,7 +113,7 @@ public class InformOfTxn implements EpochRequest
     @Override
     public MessageType type()
     {
-        return MessageType.INFORM_REQ;
+        return MessageType.INFORM_TXNID_REQ;
     }
 
     @Override
