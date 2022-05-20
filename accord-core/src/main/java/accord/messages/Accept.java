@@ -1,11 +1,7 @@
 package accord.messages;
 
-import java.util.IdentityHashMap;
-
 import accord.api.RoutingKey;
 import accord.local.Command.Outcome;
-import accord.local.CommandStore;
-import accord.local.Listener;
 import accord.local.Node.Id;
 import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
@@ -33,6 +29,7 @@ public class Accept extends TxnRequest.WithUnsync
     public final PartialDeps deps;
     public final Txn.Kind kindOfTxn;
 
+    @SuppressWarnings("MismatchedQueryAndUpdateOfCollection")
     private transient Defer defer;
 
     public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, Route route, Keys keys, Timestamp executeAt, Deps deps, Txn.Kind kindOfTxn)
@@ -64,10 +61,10 @@ public class Accept extends TxnRequest.WithUnsync
                 case REJECTED_BALLOT:
                     return new AcceptNack(outcome, command.promised());
                 case SUCCESS:
-                    return new AcceptOk(calculateDeps(instance, txnId, keys, kindOfTxn, executeAt));
+                    return new AcceptOk(calculateDeps(instance, txnId, keys, kindOfTxn, executeAt, Deps.builder(keys)));
             }
         }, (r1, r2) -> {
-            if (!r1.isOK() || !r2.isOK())
+            if (!r1.isOk() || !r2.isOk())
                 return r1.outcome().compareTo(r2.outcome()) >= 0 ? r1 : r2;
 
             AcceptOk ok1 = (AcceptOk) r1;
@@ -155,12 +152,13 @@ public class Accept extends TxnRequest.WithUnsync
             return MessageType.ACCEPT_RSP;
         }
 
-        public abstract boolean isOK();
+        public abstract boolean isOk();
         public abstract Outcome outcome();
     }
 
     public static class AcceptOk extends AcceptReply
     {
+        // TODO: migrate this to PartialDeps? Need to think carefully about semantics when ownership changes between txnId and executeAt
         public final Deps deps;
 
         public AcceptOk(Deps deps)
@@ -169,7 +167,7 @@ public class Accept extends TxnRequest.WithUnsync
         }
 
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return true;
         }
@@ -202,7 +200,7 @@ public class Accept extends TxnRequest.WithUnsync
         }
 
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return false;
         }

@@ -2,6 +2,7 @@ package accord.messages;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
+import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
@@ -54,11 +55,27 @@ public class BeginRecovery extends TxnRequest
         RecoverReply reply = node.mapReduceLocal(scope(), txnId.epoch, txnId.epoch, instance -> {
             Command command = instance.command(txnId);
 
-            if (!command.recover(txn, scope.homeKey, progressKey, allRoutingKeys, ballot))
-                return new RecoverNack(command.promised());
+            switch (command.recover(txn, scope.homeKey, progressKey, allRoutingKeys, ballot))
+            {
+                default:
+                    throw new IllegalStateException("Unhandled Outcome");
 
-            Deps deps = command.status() == PreAccepted ? calculateDeps(instance, txnId, txn.keys, txn.kind, txnId)
-                                                        : command.savedPartialDeps();
+                case REDUNDANT:
+                case INCOMPLETE:
+                    throw new IllegalStateException("Invalid Outcome");
+
+                case REJECTED_BALLOT:
+                    return new RecoverNack(command.promised());
+
+                case SUCCESS:
+            }
+
+            PartialDeps deps = command.savedPartialDeps();
+            if (command.status() == PreAccepted)
+            {
+                deps = calculateDeps(instance, txnId, txn.keys, txn.kind, txnId,
+                                     PartialDeps.builder(instance.ranges().at(txnId.epoch), txn.keys));
+            }
 
             boolean rejectsFastPath;
             Deps earlierCommittedWitness, earlierAcceptedNoWitness;
@@ -97,8 +114,8 @@ public class BeginRecovery extends TxnRequest
             // TODO: should not operate on dependencies directly here, as we only merge them;
             //       should have a cheaply mergeable variant (or should collect them before merging)
 
-            if (!r1.isOK()) return r1;
-            if (!r2.isOK()) return r2;
+            if (!r1.isOk()) return r1;
+            if (!r2.isOk()) return r2;
             RecoverOk ok1 = (RecoverOk) r1;
             RecoverOk ok2 = (RecoverOk) r2;
 
@@ -131,7 +148,7 @@ public class BeginRecovery extends TxnRequest
             }
 
             // ok1 and ok2 both PreAccepted
-            Deps deps = ok1.deps.with(ok2.deps);
+            PartialDeps deps = ok1.deps.with(ok2.deps);
             Deps earlierCommittedWitness = ok1.earlierCommittedWitness.with(ok2.earlierCommittedWitness);
             Deps earlierAcceptedNoWitness = ok1.earlierAcceptedNoWitness.with(ok2.earlierAcceptedNoWitness)
                                                                         .without(earlierCommittedWitness::contains);
@@ -173,7 +190,7 @@ public class BeginRecovery extends TxnRequest
             return MessageType.BEGIN_RECOVER_RSP;
         }
 
-        boolean isOK();
+        boolean isOk();
     }
 
     public static class RecoverOk implements RecoverReply
@@ -182,14 +199,14 @@ public class BeginRecovery extends TxnRequest
         public final Status status;
         public final Ballot accepted;
         public final Timestamp executeAt;
-        public final Deps deps;
+        public final PartialDeps deps;
         public final Deps earlierCommittedWitness;  // counter-point to earlierAcceptedNoWitness
         public final Deps earlierAcceptedNoWitness; // wait for these to commit
         public final boolean rejectsFastPath;
         public final Writes writes;
         public final Result result;
 
-        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, Deps deps, Deps earlierCommittedWitness, Deps earlierAcceptedNoWitness, boolean rejectsFastPath, Writes writes, Result result)
+        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, PartialDeps deps, Deps earlierCommittedWitness, Deps earlierAcceptedNoWitness, boolean rejectsFastPath, Writes writes, Result result)
         {
             this.txnId = txnId;
             this.accepted = accepted;
@@ -204,7 +221,7 @@ public class BeginRecovery extends TxnRequest
         }
 
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return true;
         }
@@ -236,21 +253,17 @@ public class BeginRecovery extends TxnRequest
             T max = null;
             for (T ok : recoverOks)
             {
-                if (ok.status.hasBeen(Accepted))
-                {
-                    if (max == null)
-                    {
-                        max = ok;
-                    }
-                    else
-                    {
-                        int c = max.status.logicalCompareTo(ok.status);
-                        if (c < 0) max = ok;
-                        else if (c == 0 && max.accepted.compareTo(ok.accepted) < 0) max = ok;
-                    }
-                }
+                if (!ok.status.hasBeen(Accepted))
+                    continue;
+
+                boolean update =     max == null
+                                  || max.status.compareTo(ok.status) < 0
+                                  || (ok.status == Accepted && max.accepted.compareTo(ok.accepted) < 0);
+                if (update)
+                    max = ok;
             }
             return max;
+
         }
     }
 
@@ -263,7 +276,7 @@ public class BeginRecovery extends TxnRequest
         }
 
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return false;
         }

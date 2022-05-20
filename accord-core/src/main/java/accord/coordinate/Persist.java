@@ -63,13 +63,22 @@ public class Persist implements Callback<ApplyReply>
     @Override
     public void onSuccess(Id from, ApplyReply response)
     {
-        persistedOn.add(from);
-        if (tracker.success(from) && !isDone)
+        switch (response)
         {
-            // TODO: send to non-home replicas also, so they may clear their log more easily?
-            Shard homeShard = node.topology().forEpochIfKnown(route.homeKey, txnId.epoch);
-            node.send(homeShard, new InformOfPersistence(txnId, route.homeKey, executeAt, persistedOn));
-            isDone = true;
+            default: throw new IllegalStateException();
+            case OK:
+                persistedOn.add(from);
+                if (tracker.success(from) && !isDone)
+                {
+                    // TODO: send to non-home replicas also, so they may clear their log more easily?
+                    Shard homeShard = node.topology().forEpochIfKnown(route.homeKey, txnId.epoch);
+                    node.send(homeShard, new InformOfPersistence(txnId, route.homeKey, executeAt, persistedOn));
+                    isDone = true;
+                }
+                break;
+            case INCOMPLETE:
+                // TODO (now): implement, must send at least routingKeys
+                throw new UnsupportedOperationException();
         }
     }
 

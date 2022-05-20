@@ -6,15 +6,10 @@ import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
-import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
-import accord.messages.Commit;
-import accord.primitives.Route;
-import accord.topology.Shard;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Ballot;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import org.apache.cassandra.utils.concurrent.Future;
 
 import static accord.local.Status.Accepted;
 
@@ -22,89 +17,88 @@ import static accord.local.Status.Accepted;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public class MaybeRecover extends CheckShardStatus<CheckStatusOk> implements BiConsumer<Object, Throwable>
+public class MaybeRecover extends CheckShards<CheckStatusOk> implements BiConsumer<Object, Throwable>
 {
-    final Txn txn;
-    final Route route;
+    final RoutingKey homeKey;
     final Status knownStatus;
     final Ballot knownPromised;
     final boolean knownPromisedHasBeenAccepted;
+    final BiConsumer<CheckStatusOk, Throwable> callback;
 
-    MaybeRecover(Node node, TxnId txnId, Txn txn, Route route, Shard homeShard, long homeEpoch, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
+    MaybeRecover(Node node, TxnId txnId, RoutingKey homeKey, long homeEpoch, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted, BiConsumer<CheckStatusOk, Throwable> callback)
     {
-        super(node, txnId, route, homeShard, homeEpoch, IncludeInfo.OnlyIfExecuted);
-        this.txn = txn;
-        this.route = route;
+        super(node, txnId, RoutingKeys.of(homeKey), homeEpoch, IncludeInfo.Route);
+        this.homeKey = homeKey;
         this.knownStatus = knownStatus;
         this.knownPromised = knownPromised;
         this.knownPromisedHasBeenAccepted = knownPromiseHasBeenAccepted;
+        this.callback = callback;
+    }
+
+    public static MaybeRecover maybeRecover(Node node, TxnId txnId, RoutingKey homeKey, long homeEpoch,
+                                                     Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted,
+                                                     BiConsumer<CheckStatusOk, Throwable> callback)
+    {
+        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, homeKey, homeEpoch, knownStatus, knownPromised, knownPromiseHasBeenAccepted, callback);
+        maybeRecover.start();
+        return maybeRecover;
     }
 
     @Override
     public void accept(Object unused, Throwable fail)
     {
-        if (fail != null) tryFailure(fail);
-        else trySuccess(null);
+        callback.accept(null, fail);
     }
 
     @Override
-    boolean hasMetSuccessCriteria()
+    boolean isSufficient(CheckStatusOk ok)
     {
-        return tracker.hasReachedQuorum() || hasMadeProgress();
+        return hasMadeProgress(ok);
     }
 
-    public boolean hasMadeProgress()
+    public boolean hasMadeProgress(CheckStatusOk ok)
     {
-        return max != null && (max.isCoordinating
-                               || max.status.compareTo(knownStatus) > 0
-                               || max.promised.compareTo(knownPromised) > 0
-                               || (!knownPromisedHasBeenAccepted && knownStatus == Accepted && max.accepted.equals(knownPromised)));
+        return ok != null && (ok.isCoordinating
+                              || ok.status.compareTo(knownStatus) > 0
+                              || ok.promised.compareTo(knownPromised) > 0
+                              || (!knownPromisedHasBeenAccepted && knownStatus == Accepted && ok.accepted.equals(knownPromised)));
     }
 
-    public static Future<CheckStatusOk> maybeRecover(Node node, TxnId txnId, Txn txn, RoutingKey homeKey, Shard homeShard, long homeEpoch,
-                                                     Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
+    @Override
+    void onDone(Done done, Throwable fail)
     {
-        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, txn, homeKey, homeShard, homeEpoch, knownStatus, knownPromised, knownPromiseHasBeenAccepted);
-        maybeRecover.start();
-        return maybeRecover;
-    }
-
-    void onSuccessCriteriaOrExhaustion()
-    {
-        switch (max.status)
+        if (done == Done.Failed)
         {
-            default: throw new AssertionError();
-            case NotWitnessed:
-            case PreAccepted:
-            case Accepted:
-            case AcceptedInvalidate:
-            case Committed:
-            case ReadyToExecute:
-                if (hasMadeProgress())
-                {
-                    trySuccess(max);
-                }
-                else
-                {
-                    node.recover(txnId, txn, someKey)
-                        .addCallback(this);
-                }
-                break;
+            callback.accept(null, fail);
+        }
+        else if (merged == null)
+        {
+            callback.accept(null, new Timeout(txnId, homeKey));
+        }
+        else
+        {
+            switch (merged.status)
+            {
+                default: throw new AssertionError();
+                case NotWitnessed:
+                    Invalidate.invalidate(node, txnId, someKeys, homeKey)
+                              .addCallback(this);
+                    break;
+                case PreAccepted:
+                case Accepted:
+                case AcceptedInvalidate:
+                case Committed:
+                case ReadyToExecute:
+                case Executed:
+                case Applied:
+                    // TODO (now): may not have route if we contact only executeAt.epoch
+                    if (hasMadeProgress(merged)) callback.accept(merged, null);
+                    else node.recover(txnId, merged.route).addCallback(this);
+                    break;
 
-            case Executed:
-            case Applied:
-                CheckStatusOkFull full = (CheckStatusOkFull) max;
-                node.withEpoch(full.executeAt.epoch, () -> {
-                    if (!max.hasExecutedOnAllShards)
-                        Persist.persistAndCommit(node, txnId, someKey, txn, full.executeAt, full.deps, full.writes, full.result);
-                    else // TODO (now): we shouldn't need to do this?
-                        Commit.commit(node, txnId, txn, full.homeKey, full.executeAt, full.deps);
-                });
-                trySuccess(full);
-                break;
-
-            case Invalidated:
-                trySuccess(max);
+                case Invalidated:
+                    callback.accept(merged, null);
+            }
         }
     }
 }

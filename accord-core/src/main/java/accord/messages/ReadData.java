@@ -13,8 +13,8 @@ import accord.primitives.TxnId;
 import accord.utils.DeterministicIdentitySet;
 
 import static accord.messages.MessageType.READ_RSP;
-import static accord.messages.ReadData.ReadNack.NOT_COMMITTED;
-import static accord.messages.ReadData.ReadNack.REDUNDANT;
+import static accord.messages.ReadData.ReadNack.NotCommitted;
+import static accord.messages.ReadData.ReadNack.Redundant;
 
 public class ReadData extends TxnRequest
 {
@@ -79,7 +79,7 @@ public class ReadData extends TxnRequest
             if (!isObsolete)
             {
                 isObsolete = true;
-                node.reply(replyToNode, replyContext, REDUNDANT);
+                node.reply(replyToNode, replyContext, Redundant);
             }
         }
 
@@ -97,7 +97,7 @@ public class ReadData extends TxnRequest
                     case PreAccepted:
                     case Accepted:
                     case AcceptedInvalidate:
-                        return NOT_COMMITTED;
+                        return NotCommitted;
 
                     case Committed:
                         instance.progressLog().waiting(txnId, scope);
@@ -108,7 +108,7 @@ public class ReadData extends TxnRequest
                     case Applied:
                     case Invalidated:
                         isObsolete = true;
-                        return REDUNDANT;
+                        return Redundant;
 
                     case ReadyToExecute:
                         if (!isObsolete)
@@ -154,18 +154,12 @@ public class ReadData extends TxnRequest
 
     public enum ReadNack implements ReadReply
     {
-        INVALID, NOT_COMMITTED, REDUNDANT;
+        Invalid, NotCommitted, Redundant;
 
         @Override
         public String toString()
         {
-            switch (this)
-            {
-                default: throw new IllegalStateException();
-                case INVALID: return "ReadInvalid";
-                case NOT_COMMITTED: return "ReadNotCommitted";
-                case REDUNDANT: return "ReadRedundant";
-            }
+            return "Read" + name();
         }
 
         @Override
@@ -183,7 +177,7 @@ public class ReadData extends TxnRequest
         @Override
         public boolean isFinal()
         {
-            return this == REDUNDANT;
+            return this == Redundant;
         }
     }
 

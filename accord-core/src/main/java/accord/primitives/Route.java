@@ -24,8 +24,16 @@ public class Route extends AbstractRoute
         throw new UnsupportedOperationException();
     }
 
-    public PartialRoute slice(KeyRanges covering)
+    public PartialRoute slice(KeyRanges newRange)
     {
+        newRange = newRange.maximalSlices(this);
+        RoutingKey[] keys = slice(newRange, RoutingKey[]::new);
+        return new PartialRoute(newRange, homeKey, keys);
+    }
 
+    @Override
+    public String toString()
+    {
+        return "{homeKey:" + homeKey + ',' + super.toString() + '}';
     }
 }

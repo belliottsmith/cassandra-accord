@@ -3,6 +3,7 @@ package accord.local;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -26,6 +27,8 @@ import accord.api.ProgressLog;
 import accord.api.Scheduler;
 import accord.api.DataStore;
 import accord.coordinate.Recover;
+import accord.coordinate.Recover.Outcome;
+import accord.coordinate.RecoverWithRoute;
 import accord.messages.Callback;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.ReplyContext;
@@ -45,6 +48,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.SortedArrays;
+import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
 public class Node implements ConfigurationService.Listener
@@ -114,7 +118,7 @@ public class Node implements ConfigurationService.Listener
     // TODO: this really needs to be thought through some more, as it needs to be per-instance in some cases, and per-node in others
     private final Scheduler scheduler;
 
-    private final Map<TxnId, Future<Result>> coordinating = new ConcurrentHashMap<>();
+    private final Map<TxnId, Future<?>> coordinating = new ConcurrentHashMap<>();
 
     public Node(Id id, MessageSink messageSink, ConfigurationService configService, LongSupplier nowSupplier,
                 Supplier<DataStore> dataSupplier, Agent agent, Random random, Scheduler scheduler,
@@ -474,34 +478,82 @@ public class Node implements ConfigurationService.Listener
         return range.endInclusive() ? range.end() : range.start();
     }
 
+    static class RecoverFuture<T> extends AsyncFuture<T> implements BiConsumer<T, Throwable>
+    {
+        @Override
+        public void accept(T success, Throwable fail)
+        {
+            if (fail != null) tryFailure(fail);
+            else trySuccess(success);
+        }
+    }
+
     // TODO: encapsulate in Coordinate, so we can request that e.g. commits be re-sent?
-    public Future<Result> recover(TxnId txnId, Txn txn, Route route)
+    public Future<Outcome> recover(TxnId txnId, Txn txn, Route route)
     {
         {
-            Future<Result> result = coordinating.get(txnId);
+            Future<Outcome> result = existingRecover(txnId);
             if (result != null)
                 return result;
         }
 
-        Future<Result> result = withEpoch(txnId.epoch, () -> Recover.recover(this, txnId, txn, route));
+        Future<Outcome> result = withEpoch(txnId.epoch, () -> {
+            RecoverFuture<Outcome> future = new RecoverFuture();
+            Recover.recover(this, txnId, txn, route, future);
+            return future;
+        });
         coordinating.putIfAbsent(txnId, result);
         result.addCallback((success, fail) -> {
             coordinating.remove(txnId, result);
-            agent.onRecover(this, success, fail);
             // TODO: if we fail, nominate another node to try instead
         });
         return result;
     }
 
+    public Future<Outcome> recover(TxnId txnId, Route route)
+    {
+        {
+            Future<Outcome> result = existingRecover(txnId);
+            if (result != null)
+                return result;
+        }
+
+        Future<Outcome> result = withEpoch(txnId.epoch, () -> {
+            RecoverFuture<Outcome> future = new RecoverFuture();
+            RecoverWithRoute.recover(this, txnId, route, future);
+            return future;
+        });
+        coordinating.putIfAbsent(txnId, result);
+        result.addCallback((success, fail) -> {
+            coordinating.remove(txnId, result);
+            // TODO: if we fail, nominate another node to try instead
+        });
+        return result;
+    }
+
+    private Future<Outcome> existingRecover(TxnId txnId)
+    {
+        Future<?> result = coordinating.get(txnId);
+        if (result == null)
+            return null;
+
+        if (result instanceof Coordinate)
+            return result.map(ignore -> Outcome.EXECUTED);
+        else
+            return (Future<Outcome>)result;
+    }
+
     // TODO: coalesce other maybeRecover calls also? perhaps have mutable knownStatuses so we can inject newer ones?
-    public Future<CheckStatusOk> maybeRecover(TxnId txnId, Txn txn, RoutingKey homeKey, Shard homeShard, long homeEpoch,
+    public Future<CheckStatusOk> maybeRecover(TxnId txnId, RoutingKey homeKey, long homeEpoch,
                                               Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
     {
-        Future<Result> result = coordinating.get(txnId);
+        Future<?> result = coordinating.get(txnId);
         if (result != null)
             return result.map(r -> null);
 
-        return MaybeRecover.maybeRecover(this, txnId, txn, homeKey, homeShard, homeEpoch, knownStatus, knownPromised, knownPromiseHasBeenAccepted);
+        RecoverFuture<CheckStatusOk> future = new RecoverFuture<>();
+        MaybeRecover.maybeRecover(this, txnId, homeKey, homeEpoch, knownStatus, knownPromised, knownPromiseHasBeenAccepted, future);
+        return future;
     }
 
     public void receive(Request request, Id from, ReplyContext replyContext)

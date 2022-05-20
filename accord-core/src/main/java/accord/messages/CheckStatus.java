@@ -1,5 +1,9 @@
 package accord.messages;
 
+import javax.annotation.Nullable;
+
+import com.google.common.base.Preconditions;
+
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.local.Command;
@@ -9,67 +13,73 @@ import accord.local.Status;
 import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
+import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
+import accord.topology.Topologies;
+
+import static accord.messages.TxnRequest.computeScope;
 
 public class CheckStatus implements Request
 {
     // order is important
     public enum IncludeInfo
     {
-        No, OnlyIfExecuted, Always;
-        boolean include(Status status)
-        {
-            switch (this)
-            {
-                default: throw new IllegalStateException();
-                case No: return false;
-                case Always: return true;
-                case OnlyIfExecuted: return status.hasBeen(Status.Executed);
-            }
-        }
+        No, Route, All
     }
 
     final TxnId txnId;
-    final RoutingKey someKey; // the key's commandStore to consult - not necessarily the homeKey
+    final RoutingKeys someKeys;
     final long epoch;
     final IncludeInfo includeInfo;
 
-    public CheckStatus(TxnId txnId, RoutingKey someKey, long epoch, IncludeInfo includeInfo)
+    public CheckStatus(TxnId txnId, RoutingKeys someKeys, long epoch, IncludeInfo includeInfo)
     {
         this.txnId = txnId;
-        this.someKey = someKey;
+        this.someKeys = someKeys;
         this.epoch = epoch;
+        this.includeInfo = includeInfo;
+    }
+
+    public CheckStatus(Id to, Topologies topologies, TxnId txnId, RoutingKeys someKeys, IncludeInfo includeInfo)
+    {
+        Preconditions.checkState(topologies.currentEpoch() == topologies.oldestEpoch());
+        this.txnId = txnId;
+        this.someKeys = computeScope(to, topologies, someKeys, 0, RoutingKeys::slice, RoutingKeys::union);
+        this.epoch = topologies.currentEpoch();
         this.includeInfo = includeInfo;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        Reply reply = node.ifLocal(someKey, epoch, instance -> {
+        Reply reply = node.mapReduceLocal(someKeys, epoch, instance -> {
             Command command = instance.command(txnId);
-            boolean includeInfo = this.includeInfo.include(command.status());
-            if (includeInfo)
+            Route route = null;
+            if (includeInfo != IncludeInfo.No)
             {
-                return (CheckStatusReply) new CheckStatusOkFull(command.status(),
-                                                                command.promised(),
-                                                                command.accepted(),
-                                                                node.isCoordinating(txnId, command.promised()),
-                                                                command.isGloballyPersistent(),
-                                                                command.partialTxn(),
-                                                                command.routingKeys(),
-                                                                command.homeKey(),
-                                                                command.executeAt(),
-                                                                command.savedPartialDeps(),
-                                                                command.writes(),
-                                                                command.result());
+                RoutingKeys keys = command.routingKeys();
+                if (keys != null)
+                    route = keys.toRoute(command.homeKey());
             }
-
-            return new CheckStatusOk(command.status(), command.promised(), command.accepted(),
-                                     node.isCoordinating(txnId, command.promised()),
-                                     command.isGloballyPersistent());
-        });
+            switch (includeInfo)
+            {
+                default: throw new IllegalStateException();
+                case No:
+                case Route:
+                    return new CheckStatusOk(command.status(), command.promised(), command.accepted(),
+                                             node.isCoordinating(txnId, command.promised()),
+                                             command.isGloballyPersistent(), route);
+                case All:
+                    return new CheckStatusOkFull(command.status(), command.promised(), command.accepted(),
+                                                 node.isCoordinating(txnId, command.promised()),
+                                                 command.isGloballyPersistent(), route,
+                                                 command.partialTxn(), command.routingKeys(), command.homeKey(),
+                                                 command.executeAt(), command.savedPartialDeps(),
+                                                 command.writes(), command.result());
+            }
+        }, CheckStatusOk::merge);
 
         if (reply == null)
             reply = CheckStatusNack.nack();
@@ -89,14 +99,16 @@ public class CheckStatus implements Request
         public final Ballot accepted;
         public final boolean isCoordinating;
         public final boolean hasExecutedOnAllShards;
+        public final @Nullable Route route;
 
-        CheckStatusOk(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards)
+        CheckStatusOk(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, @Nullable Route route)
         {
             this.status = status;
             this.promised = promised;
             this.accepted = accepted;
             this.isCoordinating = isCoordinating;
             this.hasExecutedOnAllShards = hasExecutedOnAllShards;
+            this.route = route;
         }
 
         @Override
@@ -151,7 +163,7 @@ public class CheckStatus implements Request
 
             boolean isCoordinating = maxPromised == prefer ? prefer.isCoordinating : defer.isCoordinating;
             return new CheckStatusOk(maxStatus.status, maxPromised.promised, maxAccepted.accepted,
-                                     isCoordinating, maxHasExecuted.hasExecutedOnAllShards);
+                                     isCoordinating, maxHasExecuted.hasExecutedOnAllShards, route);
         }
 
         @Override
@@ -171,10 +183,10 @@ public class CheckStatus implements Request
         public final Writes writes;
         public final Result result;
 
-        CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards,
+        CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, Route route,
                           PartialTxn txn, RoutingKeys routingKeys, RoutingKey homeKey, Timestamp executeAt, PartialDeps deps, Writes writes, Result result)
         {
-            super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards);
+            super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards, route);
             this.txn = txn;
             this.routingKeys = routingKeys;
             this.homeKey = homeKey;

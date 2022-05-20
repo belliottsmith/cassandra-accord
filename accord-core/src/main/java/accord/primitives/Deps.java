@@ -5,7 +5,6 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -14,7 +13,6 @@ import java.util.function.Predicate;
 import com.google.common.base.Preconditions;
 
 import accord.api.Key;
-import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.utils.InlineHeap;
@@ -28,7 +26,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 {
     public static final Deps NONE = new Deps(Keys.EMPTY, new TxnId[0], new int[0]);
 
-    public static class Builder
+    public static abstract class AbstractBuilder<T extends Deps>
     {
         final Keys keys;
         final Map<TxnId, Integer> txnIdLookup = new HashMap<>(); // TODO: primitive map
@@ -36,7 +34,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         final int[][] keysToTxnId;
         final int[] keysToTxnIdCounts;
 
-        public Builder(Keys keys)
+        public AbstractBuilder(Keys keys)
         {
             this.keys = keys;
             this.keysToTxnId = new int[keys.size()][4];
@@ -48,7 +46,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             return Arrays.stream(keysToTxnIdCounts).allMatch(i -> i == 0);
         }
 
-        public Builder add(Command command)
+        public void add(Command command)
         {
             int idx = ensureTxnIdx(command.txnId());
             keys.foldlIntersect(command.partialTxn().keys, (li, ri, k, p, v) -> {
@@ -57,10 +55,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 keysToTxnId[li][keysToTxnIdCounts[li]++] = idx;
                 return 0;
             }, 0, 0, 1);
-            return this;
         }
 
-        public Builder add(Key key, TxnId txnId)
+        public void add(Key key, TxnId txnId)
         {
             int txnIdx = ensureTxnIdx(txnId);
             int keyIdx = keys.indexOf(key);
@@ -68,7 +65,6 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             if (keysToTxnIdCounts[keyIdx] == keysToTxnId[keyIdx].length)
                 keysToTxnId[keyIdx] = Arrays.copyOf(keysToTxnId[keyIdx], Math.max(4, keysToTxnIdCounts[keyIdx] * 2));
             keysToTxnId[keyIdx][keysToTxnIdCounts[keyIdx]++] = txnIdx;
-            return this;
         }
 
         public boolean contains(TxnId txnId)
@@ -90,7 +86,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             });
         }
 
-        public Deps build()
+        abstract T build(Keys keys, TxnId[] txnIds, int[] keysToTxnIds);
+
+        public T build()
         {
             TxnId[] txnIds = txnIdLookup.keySet().toArray(TxnId[]::new);
             Arrays.sort(txnIds, TxnId::compareTo);
@@ -146,7 +144,21 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 keys = new Keys(newKeys);
             }
 
-            return new Deps(keys, txnIds, result);
+            return build(keys, txnIds, result);
+        }
+    }
+
+    public static class Builder extends AbstractBuilder<Deps>
+    {
+        public Builder(Keys keys)
+        {
+            super(keys);
+        }
+
+        @Override
+        Deps build(Keys keys, TxnId[] txnIds, int[] keysToTxnIds)
+        {
+            return new Deps(keys, txnIds, keysToTxnIds);
         }
     }
 
@@ -354,6 +366,11 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
     }
 
     public PartialDeps slice(KeyRanges ranges)
+    {
+        return sliceMaximal(ranges.maximalSlices(keys));
+    }
+
+    PartialDeps sliceMaximal(KeyRanges ranges)
     {
         if (isEmpty())
             return new PartialDeps(ranges, keys, txnIds, keyToTxnId);
@@ -732,24 +749,24 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         return new Keys(result);
     }
 
-    public PartialRoute someRoute(TxnId txnId)
+    public RoutingKeys someRoutingKeys(TxnId txnId)
     {
         int txnIdIndex = Arrays.binarySearch(txnIds, txnId);
         if (txnIdIndex < 0)
-            throw new NoSuchElementException();
+            return RoutingKeys.EMPTY;
 
         ensureTxnIdToKey();
 
         int start = txnIdIndex == 0 ? txnIds.length : txnIdToKey[txnIdIndex - 1];
         int end = txnIdToKey[txnIdIndex];
-        RoutingKey[] result = new Key[end - start];
+        Key[] result = new Key[end - start];
         for (int i = start ; i < end ; ++i)
         {
             result[i - start] = keys.get(txnIdToKey[i]);
             if (i != start && result[i - (1 + start)] == result[i - start])
                 throw new AssertionError();
         }
-        return new PartialRoute(result);
+        return new Keys(result);
     }
 
     void ensureTxnIdToKey()

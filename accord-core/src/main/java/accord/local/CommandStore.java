@@ -5,6 +5,7 @@ import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.local.CommandStores.ShardedRanges;
 import accord.api.ProgressLog;
+import accord.primitives.AbstractKeys;
 import accord.primitives.KeyRange;
 import accord.api.DataStore;
 import accord.primitives.KeyRanges;
@@ -49,7 +50,7 @@ public abstract class CommandStore
         KeyRanges between(long fromInclusive, long toInclusive);
         KeyRanges since(long epoch);
         boolean owns(long epoch, RoutingKey key);
-        boolean intersects(long epoch, Keys keys);
+        boolean intersects(long epoch, AbstractKeys<?, ?> keys);
     }
 
     private final int generation;

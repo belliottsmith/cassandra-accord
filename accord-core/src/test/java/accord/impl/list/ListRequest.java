@@ -2,8 +2,8 @@ package accord.impl.list;
 
 import java.util.function.BiConsumer;
 
-import accord.api.Key;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.coordinate.CheckOnCommitted;
 import accord.coordinate.CoordinateFailed;
 import accord.impl.basic.Cluster;
@@ -13,6 +13,7 @@ import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.MessageType;
 import accord.messages.ReplyContext;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Txn;
 import accord.messages.Request;
 import accord.primitives.TxnId;
@@ -47,11 +48,10 @@ public class ListRequest implements Request
                 ((Cluster)node.scheduler()).onDone(() -> {
                     RoutingKey homeKey = ((CoordinateFailed) fail).homeKey;
                     TxnId txnId = ((CoordinateFailed) fail).txnId;
-                    CheckOnCommitted.checkOnCommitted(node, txnId, homeKey, node.topology().forEpoch(homeKey, txnId.epoch), txnId.epoch)
-                                    .addCallback((s, f) -> {
-                                        if (s.status == Status.Invalidated)
-                                            node.reply(client, replyContext, new ListResult(client, ((Packet)replyContext).requestId, null, null, null));
-                                    });
+                    CheckOnCommitted.checkOnCommitted(node, txnId, RoutingKeys.of(homeKey), txnId.epoch, (s, f) -> {
+                        if (s.status == Status.Invalidated)
+                            node.reply(client, replyContext, new ListResult(client, ((Packet)replyContext).requestId, null, null, null));
+                    });
                 });
             }
         }

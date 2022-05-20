@@ -1,5 +1,6 @@
 package accord.primitives;
 
+import java.util.Arrays;
 import java.util.function.IntFunction;
 
 import accord.api.RoutingKey;
@@ -15,6 +16,11 @@ public class RoutingKeys extends AbstractKeys<RoutingKey, RoutingKeys>
         super(keys);
     }
 
+    public static RoutingKeys of(RoutingKey ... keys)
+    {
+        return new RoutingKeys(sort(keys));
+    }
+
     public RoutingKeys union(RoutingKeys that)
     {
         return wrap(SortedArrays.linearUnion(keys, that.keys, factory()), that);
@@ -28,6 +34,11 @@ public class RoutingKeys extends AbstractKeys<RoutingKey, RoutingKeys>
     public RoutingKeys slice(KeyRanges ranges)
     {
         return wrap(slice(ranges, factory()));
+    }
+
+    public RoutingKeys with(RoutingKey addKey)
+    {
+        return wrap(SortedArrays.insert(keys, addKey, RoutingKey[]::new));
     }
 
     private RoutingKeys wrap(RoutingKey[] wrap, RoutingKeys that)
@@ -48,5 +59,11 @@ public class RoutingKeys extends AbstractKeys<RoutingKey, RoutingKeys>
     private static IntFunction<RoutingKey[]> factory()
     {
         return RoutingKey[]::new;
+    }
+
+    private static RoutingKey[] sort(RoutingKey[] keys)
+    {
+        Arrays.sort(keys);
+        return keys;
     }
 }

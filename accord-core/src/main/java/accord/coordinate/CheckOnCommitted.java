@@ -1,12 +1,14 @@
 package accord.coordinate;
 
-import accord.api.Key;
+import java.util.function.BiConsumer;
+
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
+import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
-import accord.topology.Shard;
+import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 
 import static accord.local.Status.Executed;
@@ -17,29 +19,33 @@ import static accord.local.Status.Executed;
  *
  * Updates local command stores based on the obtained information.
  */
-public class CheckOnCommitted extends CheckShardStatus<CheckStatusOkFull>
+public class CheckOnCommitted extends CheckShards<CheckStatusOkFull>
 {
-    CheckOnCommitted(Node node, TxnId txnId, Key someKey, Shard someShard, long someEpoch)
+    final BiConsumer<CheckStatusOkFull, Throwable> callback;
+
+    CheckOnCommitted(Node node, TxnId txnId, RoutingKeys someKeys, long someEpoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        super(node, txnId, someKey, someShard, someEpoch, IncludeInfo.Always);
+        super(node, txnId, someKeys, someEpoch, IncludeInfo.All);
+        this.callback = callback;
     }
 
-    public static CheckOnCommitted checkOnCommitted(Node node, TxnId txnId, Key someKey, Shard someShard, long shardEpoch)
+    public static CheckOnCommitted checkOnCommitted(Node node, TxnId txnId, RoutingKeys someKeys, long epoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        CheckOnCommitted checkOnCommitted = new CheckOnCommitted(node, txnId, someKey, someShard, shardEpoch);
+        CheckOnCommitted checkOnCommitted = new CheckOnCommitted(node, txnId, someKeys, epoch, callback);
         checkOnCommitted.start();
         return checkOnCommitted;
     }
 
     @Override
-    boolean hasMetSuccessCriteria()
+    boolean isSufficient(CheckStatusOk ok)
     {
-        return tracker.hasReachedQuorum() || hasApplied();
+        return ok.status.hasBeen(Executed);
     }
 
-    public boolean hasApplied()
+    @Override
+    void onDone(Done done, Throwable failure)
     {
-        return max != null && max.status.hasBeen(Executed);
+
     }
 
     void onSuccessCriteriaOrExhaustion(CheckStatusOkFull max)
@@ -76,21 +82,5 @@ public class CheckOnCommitted extends CheckShardStatus<CheckStatusOkFull>
                     command.commit(max.homeKey, progressKey, max.executeAt, max.deps, max.txn);
                 });
         }
-    }
-
-    @Override
-    void onSuccessCriteriaOrExhaustion()
-    {
-        CheckStatusOkFull full = (CheckStatusOkFull)max;
-        try
-        {
-            onSuccessCriteriaOrExhaustion(full);
-        }
-        catch (Throwable t)
-        {
-            trySuccess(full);
-            throw t;
-        }
-        trySuccess(full);
     }
 }

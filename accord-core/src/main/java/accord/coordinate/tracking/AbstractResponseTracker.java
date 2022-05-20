@@ -78,7 +78,7 @@ public abstract class AbstractResponseTracker<T extends AbstractResponseTracker.
         return topologies;
     }
 
-    protected void forEachTrackerForNode(Node.Id node, BiConsumer<T, Node.Id> consumer)
+    protected void forEachTrackerForNode(Node.Id node, BiConsumer<? super T, Node.Id> consumer)
     {
         this.topologies.forEach((i, topology) -> {
             int offset = topologyOffset(i);
@@ -86,7 +86,7 @@ public abstract class AbstractResponseTracker<T extends AbstractResponseTracker.
         });
     }
 
-    protected boolean anyForNode(Node.Id node, BiPredicate<T, Node.Id> consumer)
+    protected boolean anyForNode(Node.Id node, BiPredicate<? super T, Node.Id> consumer)
     {
         return matchingTrackersForNode(node, consumer, 1) == 1;
     }
@@ -96,17 +96,17 @@ public abstract class AbstractResponseTracker<T extends AbstractResponseTracker.
         return nonMatchingTrackersForNode(node, consumer, Integer.MAX_VALUE) == 0;
     }
 
-    protected int nonMatchingTrackersForNode(Node.Id node, BiPredicate<T, Node.Id> consumer, int limit)
+    protected int nonMatchingTrackersForNode(Node.Id node, BiPredicate<? super T, Node.Id> consumer, int limit)
     {
         return foldlForNode(node, (shardIndex, shard, v) -> consumer.test(trackers[shardIndex], node) ? v : v + 1, 0, limit);
     }
 
-    protected int matchingTrackersForNode(Node.Id node, BiPredicate<T, Node.Id> consumer, int limit)
+    protected int matchingTrackersForNode(Node.Id node, BiPredicate<? super T, Node.Id> consumer, int limit)
     {
         return foldlForNode(node, (shardIndex, shard, v) -> consumer.test(trackers[shardIndex], node) ? v + 1 : v, 0, limit);
     }
 
-    protected int matchingTrackersForNode(Node.Id node, Predicate<T> consumer)
+    protected int matchingTrackersForNode(Node.Id node, Predicate<? super T> consumer)
     {
         return foldlForNode(node, (shardIndex, shard, v) -> consumer.test(trackers[shardIndex]) ? v + 1 : v, 0, Integer.MAX_VALUE);
     }
@@ -154,6 +154,11 @@ public abstract class AbstractResponseTracker<T extends AbstractResponseTracker.
         if (shardIdx >= topologyLength(topologyIdx))
             throw new IndexOutOfBoundsException();
         return trackers[topologyOffset(topologyIdx) + shardIdx];
+    }
+
+    int trackerCount()
+    {
+        return trackers.length;
     }
 
     public T unsafeGet(int i)

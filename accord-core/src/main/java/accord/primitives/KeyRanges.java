@@ -70,6 +70,10 @@ public class KeyRanges implements Iterable<KeyRange>
         return rangeIndexForKey(key) >= 0;
     }
 
+    public boolean containsAll(AbstractKeys<?, ?> keys)
+    {
+    }
+
     public int size()
     {
         return ranges.length;
@@ -328,6 +332,30 @@ public class KeyRanges implements Iterable<KeyRange>
             result = Arrays.copyOf(result, resultCount);
 
         return new KeyRanges(result);
+    }
+
+    /**
+     * Yield the maximal ranges that are covered by selecting those supplied keys that intersect with {@code this},
+     * assuming these keys cover the range provided
+     */
+    public KeyRanges maximalSlices(KeyRanges covering, AbstractKeys<?, ?> keys)
+    {
+        KeyRange[] is = ranges, js = covering.ranges;
+        RoutingKey[] ks = keys.keys;
+        int i = 0, j = 0, k = 0;
+        while (true)
+        {
+
+        }
+    }
+
+    /**
+     * Yield the maximal ranges that are covered by selecting those supplied keys that intersect with {@code this},
+     * assuming these keys cover the entire range of RoutingKey
+     */
+    public KeyRanges maximalSlices(AbstractKeys<?, ?> keys)
+    {
+
     }
 
     public KeyRanges mergeTouching()

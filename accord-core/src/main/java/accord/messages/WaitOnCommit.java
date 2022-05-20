@@ -6,11 +6,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import accord.local.*;
 import accord.local.Node.Id;
-import accord.primitives.PartialRoute;
-import accord.topology.Topologies;
+import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
+import accord.topology.Topology;
 
-public class WaitOnCommit extends TxnRequest
+public class WaitOnCommit implements EpochRequest
 {
     static class LocalWait implements Listener
     {
@@ -42,10 +42,10 @@ public class WaitOnCommit extends TxnRequest
                     return;
 
                 case Committed:
+                case ReadyToExecute:
                 case Executed:
                 case Applied:
                 case Invalidated:
-                case ReadyToExecute:
             }
 
             command.removeListener(this);
@@ -58,7 +58,7 @@ public class WaitOnCommit extends TxnRequest
                 node.reply(replyToNode, replyContext, WaitOnCommitOk.INSTANCE);
         }
 
-        void setup(PartialRoute scope, CommandStore instance)
+        void setup(RoutingKeys scope, CommandStore instance)
         {
             Command command = instance.command(txnId);
             switch (command.status())
@@ -80,7 +80,7 @@ public class WaitOnCommit extends TxnRequest
             }
         }
 
-        synchronized void setup(PartialRoute scope)
+        synchronized void setup(RoutingKeys scope)
         {
             List<CommandStore> instances = node.collectLocal(scope, txnId, ArrayList::new);
             waitingOn.set(instances.size());
@@ -89,16 +89,17 @@ public class WaitOnCommit extends TxnRequest
     }
 
     public final TxnId txnId;
+    public final RoutingKeys scope;
 
-    public WaitOnCommit(Id to, Topologies topologies, TxnId txnId, PartialRoute route)
+    public WaitOnCommit(Id to, Topology topologies, TxnId txnId, RoutingKeys someKeys)
     {
-        super(to, topologies, route);
         this.txnId = txnId;
+        this.scope = someKeys.slice(topologies.rangesForNode(to));
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        new LocalWait(node, replyToNode, txnId, replyContext).setup(scope());
+        new LocalWait(node, replyToNode, txnId, replyContext).setup(scope);
     }
 
     @Override
@@ -118,5 +119,11 @@ public class WaitOnCommit extends TxnRequest
         {
             return MessageType.WAIT_ON_COMMIT_RSP;
         }
+    }
+
+    @Override
+    public long waitForEpoch()
+    {
+        return txnId.epoch;
     }
 }

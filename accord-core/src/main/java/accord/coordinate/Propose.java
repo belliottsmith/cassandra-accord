@@ -150,7 +150,7 @@ class Propose implements Callback<AcceptReply>
             if (isDone())
                 return;
 
-            if (!reply.isOK())
+            if (!reply.isOk())
             {
                 tryFailure(new Preempted(txnId, null));
                 return;

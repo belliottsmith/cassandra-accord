@@ -12,6 +12,7 @@ import accord.local.CommandStore;
 import accord.local.CommandsForKey;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
@@ -64,14 +65,15 @@ public class PreAccept extends TxnRequest.WithUnsync
 
                 case SUCCESS:
                 case REDUNDANT:
-                    return new PreAcceptOk(txnId, command.executeAt(), calculateDeps(instance, txnId, txn.keys, txn.kind, txnId));
+                    return new PreAcceptOk(txnId, command.executeAt(), calculateDeps(instance, txnId, txn.keys, txn.kind, txnId,
+                                                                                     PartialDeps.builder(instance.ranges().at(txnId.epoch), txn.keys)));
 
                 case REJECTED_BALLOT:
                     return PreAcceptNack.INSTANCE;
             }
         }, (r1, r2) -> {
-            if (!r1.isOK()) return r1;
-            if (!r2.isOK()) return r2;
+            if (!r1.isOk()) return r1;
+            if (!r2.isOk()) return r2;
             PreAcceptOk ok1 = (PreAcceptOk) r1;
             PreAcceptOk ok2 = (PreAcceptOk) r2;
             PreAcceptOk okMax = ok1.witnessedAt.compareTo(ok2.witnessedAt) >= 0 ? ok1 : ok2;
@@ -96,7 +98,7 @@ public class PreAccept extends TxnRequest.WithUnsync
             return MessageType.PREACCEPT_RSP;
         }
 
-        boolean isOK();
+        boolean isOk();
     }
 
     public static class PreAcceptOk implements PreAcceptReply
@@ -113,7 +115,7 @@ public class PreAccept extends TxnRequest.WithUnsync
         }
 
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return true;
         }
@@ -151,7 +153,7 @@ public class PreAccept extends TxnRequest.WithUnsync
         private PreAcceptNack() {}
 
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return false;
         }
@@ -163,18 +165,17 @@ public class PreAccept extends TxnRequest.WithUnsync
         }
     }
 
-    static Deps calculateDeps(CommandStore commandStore, TxnId txnId, Keys keys, Txn.Kind kindOfTxn, Timestamp executeAt)
+    static <T extends Deps> T calculateDeps(CommandStore commandStore, TxnId txnId, Keys keys, Txn.Kind kindOfTxn, Timestamp executeAt, Deps.AbstractBuilder<T> builder)
     {
-        // TODO (now): do not use Txn
-        Deps.Builder deps = Deps.builder(keys);
+        // TODO (now): we should only adopt dependency edges where one or the other modifies *a given key*
         forEachConflictThatMayExecuteBefore(commandStore, executeAt, keys, conflict -> {
             if (conflict.txnId().equals(txnId))
                 return;
 
             if (kindOfTxn.isWrite() || conflict.partialTxn().isWrite())
-                deps.add(conflict);
+                builder.add(conflict);
         });
-        return deps.build();
+        return builder.build();
     }
 
     @Override

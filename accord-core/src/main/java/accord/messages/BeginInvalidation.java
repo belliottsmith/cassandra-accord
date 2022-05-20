@@ -2,6 +2,8 @@ package accord.messages;
 
 import java.util.List;
 
+import javax.annotation.Nullable;
+
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
@@ -62,16 +64,16 @@ public class BeginInvalidation implements EpochRequest
 
     public interface InvalidateReply extends Reply
     {
-        boolean isOK();
+        boolean isOk();
     }
 
     public static class InvalidateOk implements InvalidateReply
     {
         public final Status status;
-        public final RoutingKeys routingKeys;
+        public final @Nullable RoutingKeys routingKeys;
         public final RoutingKey homeKey;
 
-        public InvalidateOk(Status status, RoutingKeys routingKeys, RoutingKey homeKey)
+        public InvalidateOk(Status status, @Nullable RoutingKeys routingKeys, RoutingKey homeKey)
         {
             this.status = status;
             this.routingKeys = routingKeys;
@@ -79,7 +81,7 @@ public class BeginInvalidation implements EpochRequest
         }
 
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return true;
         }
@@ -103,7 +105,17 @@ public class BeginInvalidation implements EpochRequest
                 if (ok.routingKeys != null)
                     return ok.routingKeys.toRoute(ok.homeKey);
             }
-            throw new IllegalStateException();
+            return null;
+        }
+
+        public static RoutingKey findHomeKey(List<InvalidateOk> invalidateOks)
+        {
+            for (InvalidateOk ok : invalidateOks)
+            {
+                if (ok.homeKey != null)
+                    return ok.homeKey;
+            }
+            return null;
         }
     }
 
@@ -118,7 +130,7 @@ public class BeginInvalidation implements EpochRequest
         }
 
         @Override
-        public boolean isOK()
+        public boolean isOk()
         {
             return false;
         }

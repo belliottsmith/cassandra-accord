@@ -9,21 +9,6 @@ import accord.utils.SortedArrays;
 
 public class Keys extends AbstractKeys<Key, Keys>
 {
-    public static final Slicer<Keys, Keys> SLICER = new Slicer<>()
-    {
-        @Override
-        public Keys slice(Keys in, KeyRanges ranges)
-        {
-            return in.slice(ranges);
-        }
-
-        @Override
-        public Keys merge(Keys a, Keys b)
-        {
-            return a.union(b);
-        }
-    };
-
     public static final Keys EMPTY = new Keys(new Key[0]);
 
     public Keys(SortedSet<? extends Key> keys)
@@ -98,11 +83,6 @@ public class Keys extends AbstractKeys<Key, Keys>
     public static Keys of(Key ... keys)
     {
         return new Keys(sort(keys));
-    }
-
-    public static Keys union(Keys left, Keys right)
-    {
-        return left == null ? right : right == null ? left : left.union(right);
     }
 
     private static Key[] sort(Key[] array)

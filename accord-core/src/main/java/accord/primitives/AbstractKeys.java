@@ -36,11 +36,6 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
         return Arrays.equals(keys, that.keys);
     }
 
-//    public abstract KS union(KS that);
-//    public abstract KS intersect(KS that);
-//    public abstract KS slice(KeyRanges ranges);
-//    abstract KS empty();
-
     @Override
     public int hashCode()
     {

@@ -1,6 +1,7 @@
 package accord.messages;
 
 import java.util.IdentityHashMap;
+import java.util.function.Function;
 
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -9,10 +10,16 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
 
+import static accord.messages.Defer.Ready.Expired;
+import static accord.messages.Defer.Ready.No;
+import static accord.messages.Defer.Ready.Yes;
+
 // TODO: use something more efficient? could probably assign each CommandStore a unique ascending integer and use an int[]
 class Defer extends IdentityHashMap<CommandStore, Boolean> implements Listener
 {
-    final Status waitUntil;
+    public enum Ready { No, Yes, Expired }
+
+    final Function<Command, Ready> waitUntil;
     final Request request;
     final Node node;
     final Node.Id replyToNode;
@@ -20,6 +27,16 @@ class Defer extends IdentityHashMap<CommandStore, Boolean> implements Listener
     boolean isDone;
 
     Defer(Status waitUntil, Request request, Node node, Id replyToNode, ReplyContext replyContext)
+    {
+        this(command -> {
+            int c = command.status().logicalCompareTo(waitUntil);
+            if (c < 0) return No;
+            if (c > 0) return Expired;
+            return Yes;
+        }, request, node, replyToNode, replyContext);
+    }
+
+    Defer(Function<Command, Ready> waitUntil, Request request, Node node, Id replyToNode, ReplyContext replyContext)
     {
         this.waitUntil = waitUntil;
         this.request = request;
@@ -40,10 +57,10 @@ class Defer extends IdentityHashMap<CommandStore, Boolean> implements Listener
     @Override
     public void onChange(Command command)
     {
-        int c = command.status().logicalCompareTo(waitUntil);
-        if (c < 0) return;
+        Ready ready = waitUntil.apply(command);
+        if (ready == No) return;
         command.removeListener(this);
-        if (c > 0) return;
+        if (ready == Expired) return;
 
         remove(command.commandStore);
         if (isEmpty())

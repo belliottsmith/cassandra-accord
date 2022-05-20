@@ -1,5 +1,7 @@
 package accord.messages;
 
+import java.util.function.BiFunction;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
@@ -172,16 +174,22 @@ public abstract class TxnRequest implements EpochRequest
 
     public static PartialRoute computeScope(Node.Id node, Topologies topologies, AbstractRoute route, int startIndex)
     {
+        return computeScope(node, topologies, route, startIndex, AbstractRoute::slice, PartialRoute::union);
+    }
+
+    // TODO (now): move to Topologies
+    public static <I extends AbstractKeys<?, ?>, O extends AbstractKeys<?, ?>> O computeScope(Node.Id node, Topologies topologies, I keys, int startIndex, BiFunction<I, KeyRanges, O> slice, BiFunction<O, O, O> merge)
+    {
         KeyRanges last = null;
-        PartialRoute scope = null;
+        O scope = null;
         for (int i = startIndex, mi = topologies.size() ; i < mi ; ++i)
         {
             Topology topology = topologies.get(i);
             KeyRanges ranges = topology.rangesForNode(node);
             if (ranges != last && ranges != null && !ranges.equals(last))
             {
-                PartialRoute add = route.slice(ranges);
-                scope = scope == null ? add : scope.union(add);
+                O add = slice.apply(keys, ranges);
+                scope = scope == null ? add : merge.apply(scope, add);
             }
 
             last = ranges;

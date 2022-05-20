@@ -6,59 +6,54 @@ import java.util.function.BiConsumer;
 
 import com.google.common.base.Preconditions;
 
-import accord.api.Key;
-import accord.api.Result;
 import accord.api.RoutingKey;
-import accord.coordinate.Invalidate.Outcome;
+import accord.coordinate.Recover.Outcome;
 import accord.coordinate.tracking.AbstractQuorumTracker.QuorumShardTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.Status;
 import accord.messages.BeginInvalidation;
 import accord.messages.BeginInvalidation.InvalidateNack;
 import accord.messages.BeginInvalidation.InvalidateOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.Callback;
-import accord.primitives.PartialRoute;
 import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
 import accord.topology.Shard;
 import accord.primitives.Ballot;
-import accord.primitives.Keys;
 import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
-import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedOrLater;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 
-public class Invalidate extends AsyncFuture<Outcome> implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
+public class Invalidate extends AsyncFuture<Outcome> implements Callback<RecoverReply>, BiConsumer<Outcome, Throwable>
 {
-    public enum Outcome { PREEMPTED, EXECUTED, INVALIDATED }
-
     final Node node;
     final Ballot ballot;
     final TxnId txnId;
-    final PartialRoute someRoute;
+    final RoutingKeys someKeys;
     final RoutingKey someKey;
 
     final List<InvalidateOk> invalidateOks = new ArrayList<>();
     final QuorumShardTracker preacceptTracker;
 
-    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, PartialRoute someRoute, RoutingKey someKey)
+    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey)
     {
-        Preconditions.checkArgument(someRoute.contains(someKey));
+        Preconditions.checkArgument(someKeys.contains(someKey));
         this.node = node;
         this.ballot = ballot;
         this.txnId = txnId;
-        this.someRoute = someRoute;
+        this.someKeys = someKeys;
         this.someKey = someKey;
         this.preacceptTracker = new QuorumShardTracker(shard);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, PartialRoute someRoute, RoutingKey someKey)
+    public static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey)
     {
         Ballot ballot = new Ballot(node.uniqueNow());
         Shard shard = node.topology().forEpochIfKnown(someKey, txnId.epoch);
-        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someRoute, someKey);
+        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKeys, someKey);
         node.send(shard.nodes, to -> new BeginInvalidation(txnId, someKey, ballot), invalidate);
         return invalidate;
     }
@@ -69,7 +64,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
         if (isDone() || preacceptTracker.hasReachedQuorum())
             return;
 
-        if (!response.isOK())
+        if (!response.isOk())
         {
             InvalidateNack nack = (InvalidateNack) response;
             if (nack.homeKey != null)
@@ -92,45 +87,50 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
     private void invalidate()
     {
         // first look to see if it has already been
-        InvalidateOk acceptOrCommit = maxAcceptedOrLater(invalidateOks);
-        if (acceptOrCommit != null)
+        Status maxStatus = invalidateOks.stream().map(ok -> ok.status).max(Comparable::compareTo).orElseThrow();
+        switch (maxStatus)
         {
-            switch (acceptOrCommit.status)
+            default: throw new IllegalStateException();
+            case NotWitnessed:
+            case PreAccepted:
+                throw new IllegalStateException("Should only have Accepted or later statuses here");
+
+            case Accepted:
+            case Committed:
+            case ReadyToExecute:
+            case Executed:
+            case Applied:
+                Route route = InvalidateOk.findRoute(invalidateOks);
+                RoutingKey homeKey = route == null ? InvalidateOk.findHomeKey(invalidateOks) : null;
+
+                if (route != null)
+                {
+                    RecoverWithRoute.recover(node, ballot, txnId, route, this);
+                }
+                else if (homeKey != null && homeKey.equals(someKey))
+                {
+                    throw new IllegalStateException("Received a response from a node that must have known the route, but that did not include it");
+                }
+                else if (homeKey != null)
+                {
+                    RecoverWithHomeKey.recover(node, txnId, homeKey, this);
+                }
+                else
+                {
+                    throw new IllegalStateException("Received a response from a node that must have known the homeKey, but that did not include it");
+                }
+                return;
+
+            case AcceptedInvalidate:
             {
-                default: throw new IllegalStateException();
-                case NotWitnessed:
-                case PreAccepted:
-                    throw new IllegalStateException("Should only have Accepted or later statuses here");
-                case Accepted:
-                    // note: we do not propagate our responses to the Recover instance to avoid mistakes;
-                    //       since invalidate contacts only one key, only responses from nodes that replicate
-                    //       *only* that key for the transaction will be valid, as the shards on the replica
-                    //       that own the other keys may not have responded. It would be possible to filter
-                    //       replies now that we have the transaction, but safer to just start from scratch.
-                    Recover.recover(node, ballot, txnId, acceptOrCommit.txn, findRoute())
-                           .addCallback(this);
-                    return;
-                case AcceptedInvalidate:
-                    break; // latest accept also invalidating, so we're on the same page and should finish our invalidation
-                case Committed:
-                case ReadyToExecute:
-                    node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
-                        Execute.execute(node, txnId, acceptOrCommit.txn, findRoute(), acceptOrCommit.executeAt,
-                                        acceptOrCommit.deps, this);
-                    });
-                    return;
-                case Executed:
-                case Applied:
-                    node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
-                        Persist.persistAndCommit(node, txnId, acceptOrCommit.homeKey, acceptOrCommit.txn, acceptOrCommit.executeAt,
-                                        acceptOrCommit.deps, acceptOrCommit.writes, acceptOrCommit.result);
-                        trySuccess(Outcome.EXECUTED);
-                    });
-                    return;
-                case Invalidated:
-                    trySuccess(Outcome.INVALIDATED);
-                    return;
+                break; // latest accept also invalidating, so we're on the same page and should finish our invalidation
             }
+            case Invalidated:
+                node.forEachLocalSince(someKeys, txnId, instance -> {
+                    instance.command(txnId).commitInvalidate();
+                });
+                trySuccess(Outcome.INVALIDATED);
+                return;
         }
 
         // if we have witnessed the transaction, but are able to invalidate, do we want to proceed?
@@ -145,8 +145,12 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
             // TODO (now): error handling in other callbacks
             try
             {
-                commitInvalidate(node, txnId, someRoute, txnId);
-                node.forEachLocalSince(someRoute, txnId, instance -> {
+                Route route = InvalidateOk.findRoute(invalidateOks);
+                // TODO: commitInvalidate (and others) should skip the network for local applications,
+                //  so we do not need to explicitly do so here before notifying the waiter
+                commitInvalidate(node, txnId, route != null ? route : someKeys, txnId);
+                // TODO: pick a reasonable upper bound, so we don't invalidate into an epoch/commandStore that no longer cares about this command
+                node.forEachLocalSince(someKeys, txnId, instance -> {
                     instance.command(txnId).commitInvalidate();
                 });
             }
@@ -155,11 +159,6 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                 trySuccess(Outcome.INVALIDATED);
             }
         });
-    }
-
-    private Route findRoute()
-    {
-
     }
 
     @Override
@@ -179,17 +178,9 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
     }
 
     @Override
-    public void accept(Result result, Throwable fail)
+    public void accept(Outcome success, Throwable fail)
     {
-        if (fail != null)
-        {
-            if (fail instanceof Invalidated) trySuccess(Outcome.INVALIDATED);
-            else tryFailure(fail);
-        }
-        else
-        {
-            node.agent().onRecover(node, result, fail);
-            trySuccess(Outcome.EXECUTED);
-        }
+        if (success != null) trySuccess(success);
+        else tryFailure(fail);
     }
 }

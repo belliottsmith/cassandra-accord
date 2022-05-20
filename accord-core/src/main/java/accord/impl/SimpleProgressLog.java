@@ -7,16 +7,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
 import com.google.common.base.Preconditions;
 
-import accord.api.Key;
 import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.api.RoutingKey;
-import accord.coordinate.CheckOnCommitted;
 import accord.coordinate.Invalidate;
 import accord.impl.SimpleProgressLog.HomeState.LocalStatus;
 import accord.local.Command;
@@ -27,16 +26,17 @@ import accord.local.Status;
 import accord.messages.Apply;
 import accord.messages.Callback;
 import accord.messages.CheckStatus.CheckStatusOk;
+import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.MessageType;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
+import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
-import accord.primitives.Keys;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
@@ -63,6 +63,7 @@ import static accord.impl.SimpleProgressLog.Progress.NoProgress;
 import static accord.impl.SimpleProgressLog.Progress.NoneExpected;
 import static accord.impl.SimpleProgressLog.Progress.advance;
 import static accord.local.Status.Executed;
+import static accord.utils.Functions.notNullOrMerge;
 
 public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 {
@@ -283,17 +284,13 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         // must also be committed, as at the time of writing we do not guarantee dissemination of Commit
                         // records to the home shard, so we only know the executeAt shards will have witnessed this
                         // if the home shard is at an earlier phase, it must run recovery
-                        RoutingKey homeKey = command.homeKey();
-                        long homeEpoch = command.executeAt().epoch;
-
-                        node.withEpoch(homeEpoch, () -> {
-                            Shard homeShard = node.topology().forEpoch(homeKey, homeEpoch);
-                            debugInvestigating = checkOnCommitted(node, txnId, homeKey, homeShard, command.executeAt().epoch)
-                                                 .addCallback((success, fail) -> {
-                                                     // should have found enough information to apply the result, but in case we did not reset progress
-                                                     if (localProgress == Investigating)
-                                                         localProgress = Expected;
-                                                 });
+                        long epoch = command.executeAt().epoch;
+                        node.withEpoch(epoch, () -> {
+                            debugInvestigating = checkOnCommitted(node, txnId, command.routingKeys(), command.executeAt().epoch, (success, fail) -> {
+                                // should have found enough information to apply the result, but in case we did not reset progress
+                                if (localProgress == Investigating)
+                                    localProgress = Expected;
+                            });
                         });
                     }
                     else
@@ -302,10 +299,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         long homeEpoch = (local.isAtMost(Uncommitted) ? txnId : command.executeAt()).epoch;
 
                         node.withEpoch(homeEpoch, () -> {
-                            Shard homeShard = node.topology().forEpoch(homeKey, homeEpoch);
 
-                            Future<CheckStatusOk> recover = node.maybeRecover(txnId, command.txn(),
-                                                                              homeKey, homeShard, homeEpoch,
+                            Future<CheckStatusOk> recover = node.maybeRecover(txnId, homeKey, homeEpoch,
                                                                               maxStatus, maxPromised, maxPromiseHasBeenAccepted);
                             recover.addCallback((success, fail) -> {
                                 if (local.isAtMost(ReadyToExecute) && localProgress == Investigating)
@@ -370,16 +365,14 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
     {
         Status blockedOn = Status.NotWitnessed;
         Progress progress = NoneExpected;
-        Keys someKeys;
+        RoutingKeys someKeys;
         Command blocking;
 
         Object debugInvestigating;
 
-        void recordBlocking(Command blocking, Keys someKeys)
+        void recordBlocking(Command blocking, RoutingKeys someKeys)
         {
             this.blocking = blocking;
-            if (blocking.txn() != null && !blocking.txn().keys.containsAll(someKeys))
-                throw new IllegalStateException();
             switch (blocking.status())
             {
                 default: throw new IllegalStateException();
@@ -428,17 +421,13 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             // 2. otherwise record the homeKey for future reference and set the status based on whether progress has been made
             long onEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
             node.withEpoch(onEpoch, () -> {
-                Key someKey; Keys someKeys; {
-                    Keys tmpKeys = Keys.union(this.someKeys, command.someKeys());
+                RoutingKey someKey; RoutingKeys someKeys; {
+                    RoutingKeys tmpKeys = notNullOrMerge(this.someKeys, command.someRoutingKeys(), RoutingKeys::union);
                     someKey = command.homeKey() == null ? tmpKeys.get(0) : command.homeKey();
                     someKeys = tmpKeys.with(someKey);
                 }
 
-                Shard someShard = node.topology().forEpoch(someKey, onEpoch);
-                CheckOnCommitted check = blockedOn == Executed ? checkOnCommitted(node, txnId, someKey, someShard, onEpoch)
-                                                               : checkOnUncommitted(node, txnId, someKeys, someKey, someShard, onEpoch);
-                debugInvestigating = check;
-                check.addCallback((success, fail) -> {
+                BiConsumer<CheckStatusOkFull, Throwable> callback = (success, fail) -> {
                     if (progress != Investigating)
                         return;
 
@@ -461,20 +450,20 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                             // TODO: this should instead invalidate the transaction on this shard, which invalidates it for all shards,
                             //       but we need to first support invalidation
                             debugInvestigating = Invalidate.invalidate(node, txnId, someKeys, someKey)
-                                      .addCallback((success2, fail2) -> {
-                                          if (progress != Investigating) return;
-                                          if (fail2 != null) progress = Expected;
-                                          else switch (success2)
-                                          {
-                                              default: throw new IllegalStateException();
-                                              case PREEMPTED:
-                                                  progress = Expected;
-                                                  break;
-                                              case EXECUTED:
-                                              case INVALIDATED:
-                                                  progress = Done;
-                                          }
-                                      });
+                                                           .addCallback((success2, fail2) -> {
+                                                               if (progress != Investigating) return;
+                                                               if (fail2 != null) progress = Expected;
+                                                               else switch (success2)
+                                                               {
+                                                                   default: throw new IllegalStateException();
+                                                                   case PREEMPTED:
+                                                                       progress = Expected;
+                                                                       break;
+                                                                   case EXECUTED:
+                                                                   case INVALIDATED:
+                                                                       progress = Done;
+                                                               }
+                                                           });
                             break;
                         case PreAccepted:
                         case Accepted:
@@ -492,7 +481,9 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         case Invalidated:
                             progress = Done;
                     }
-                });
+                };
+                debugInvestigating = blockedOn == Executed ? checkOnCommitted(node, txnId, someKeys, onEpoch, callback)
+                                                           : checkOnUncommitted(node, txnId, someKeys, onEpoch, callback);
             });
         }
 
@@ -522,7 +513,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             this.command = command;
         }
 
-        void recordBlocking(Command blockedByCommand, Keys someKeys)
+        void recordBlocking(Command blockedByCommand, RoutingKeys someKeys)
         {
             Preconditions.checkArgument(blockedByCommand.txnId().equals(txnId));
             if (blockingState == null)
@@ -626,6 +617,13 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         }
 
         @Override
+        public void unwitnessed(TxnId txnId, boolean isProgressShard, boolean isHomeShard)
+        {
+            if (isHomeShard)
+                ensure(txnId).ensureAtLeast(Uncommitted, Expected, node);
+        }
+
+        @Override
         public void preaccept(TxnId txnId, boolean isProgressShard, boolean isHomeShard)
         {
             if (isProgressShard)
@@ -722,7 +720,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         }
 
         @Override
-        public void waiting(TxnId blockedBy, Keys someKeys)
+        public void waiting(TxnId blockedBy, RoutingKeys someKeys)
         {
             Command blockedByCommand = commandStore.command(blockedBy);
             if (!blockedByCommand.hasBeen(Executed))
@@ -795,20 +793,20 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
     static class ApplyAndCheck extends Apply
     {
         final Set<Id> notPersisted;
-        ApplyAndCheck(Id id, Topologies topologies, TxnId txnId, Txn txn, RoutingKey homeKey, Deps deps, Timestamp executeAt, Writes writes, Result result, Set<Id> notPersisted)
+        ApplyAndCheck(Id id, Topologies topologies, TxnId txnId, Route route, Deps deps, Timestamp executeAt, Writes writes, Result result, Set<Id> notPersisted)
         {
-            super(id, topologies, txnId, txn, homeKey, executeAt, deps, writes, result);
+            super(id, topologies, txnId, route, executeAt, deps, writes, result);
             this.notPersisted = notPersisted;
         }
 
         @Override
         public void process(Node node, Id from, ReplyContext replyContext)
         {
-            RoutingKey progressKey = node.trySelectProgressKey(txnId, txn.keys, homeKey);
+            RoutingKey progressKey = node.trySelectProgressKey(txnId, scope);
             node.reply(from, replyContext, node.mapReduceLocalSince(scope(), executeAt, instance -> {
                 Command command = instance.command(txnId);
-                command.apply(txn, homeKey, progressKey, executeAt, deps, writes, result);
-                if (homeKey.equals(progressKey) && command.owns(txnId.epoch, progressKey))
+                command.apply(scope.homeKey, progressKey, executeAt, deps, writes, result);
+                if (scope.homeKey.equals(progressKey) && command.owns(txnId.epoch, progressKey))
                 {
                     SimpleProgressLog.Instance log = ((SimpleProgressLog.Instance)instance.progressLog());
                     State state = log.stateMap.get(txnId);
@@ -839,7 +837,6 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         {
             return "SendAndCheck{" +
                    "txnId:" + txnId +
-                   ", txn:" + txn +
                    ", deps:" + deps +
                    ", executeAt:" + executeAt +
                    ", writes:" + writes +

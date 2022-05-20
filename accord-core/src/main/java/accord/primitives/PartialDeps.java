@@ -1,14 +1,29 @@
 package accord.primitives;
 
-import java.util.Arrays;
-import java.util.NoSuchElementException;
-
-import accord.api.Key;
-import accord.api.RoutingKey;
-
 public class PartialDeps extends Deps
 {
     public static final PartialDeps NONE = new PartialDeps(KeyRanges.EMPTY, Deps.NONE.keys, Deps.NONE.txnIds, Deps.NONE.keyToTxnId);
+
+    public static class Builder extends AbstractBuilder<PartialDeps>
+    {
+        final KeyRanges covering;
+        public Builder(KeyRanges covering, Keys keys)
+        {
+            super(keys);
+            this.covering = covering;
+        }
+
+        @Override
+        PartialDeps build(Keys keys, TxnId[] txnIds, int[] keysToTxnIds)
+        {
+            return new PartialDeps(covering, keys, txnIds, keysToTxnIds);
+        }
+    }
+
+    public static Builder builder(KeyRanges ranges, Keys keys)
+    {
+        return new Builder(ranges, keys);
+    }
 
     public final KeyRanges covering;
 
@@ -23,34 +38,26 @@ public class PartialDeps extends Deps
         return covering.contains(ranges);
     }
 
-    public PartialDeps slice(KeyRanges ranges)
+    public boolean covers(AbstractKeys<?, ?> keys)
     {
-
+        return covering.containsAll(keys);
     }
 
-    public PartialRoute someRoute(TxnId txnId)
+    public PartialDeps slice(KeyRanges ranges)
     {
-        int txnIdIndex = Arrays.binarySearch(txnIds, txnId);
-        if (txnIdIndex < 0)
-            throw new NoSuchElementException();
-
-        ensureTxnIdToKey();
-
-        int start = txnIdIndex == 0 ? txnIds.length : txnIdToKey[txnIdIndex - 1];
-        int end = txnIdToKey[txnIdIndex];
-        RoutingKey[] result = new Key[end - start];
-        for (int i = start ; i < end ; ++i)
-        {
-            result[i - start] = keys.get(txnIdToKey[i]);
-            if (i != start && result[i - (1 + start)] == result[i - start])
-                throw new AssertionError();
-        }
-        return new PartialRoute(result);
+        return sliceMaximal(ranges.maximalSlices(covering, keys));
     }
 
     public PartialDeps with(PartialDeps that)
     {
         Deps merged = with((Deps) that);
         return new PartialDeps(covering.union(that.covering), merged.keys, merged.txnIds, merged.keyToTxnId);
+    }
+
+    public Deps reconstitute(Route route)
+    {
+        if (!covers(route))
+            throw new IllegalStateException();
+        return new Deps(keys, txnIds, keyToTxnId);
     }
 }

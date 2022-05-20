@@ -255,6 +255,10 @@ public class SortedArrays
         return result;
     }
 
+    /**
+     * Copy-on-write insert into the provided array; returns the same array if item already present, or a new array
+     * with the item in the correct position if not. Linear time complexity.
+     */
     public static <T extends Comparable<? super T>> T[] insert(T[] src, T item, IntFunction<T[]> factory)
     {
         int insertPos = Arrays.binarySearch(src, item);

@@ -5,19 +5,24 @@ import java.util.Set;
 
 import javax.annotation.Nullable;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.RoutingKey;
+import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.primitives.AbstractRoute;
 import accord.primitives.KeyRanges;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
 import accord.primitives.Timestamp;
 import accord.primitives.Deps;
 import accord.primitives.TxnId;
+
+import static accord.local.Status.PreAccepted;
 
 // TODO: CommitOk responses, so we can send again if no reply received? Or leave to recovery?
 public class Commit extends ReadData
@@ -26,6 +31,7 @@ public class Commit extends ReadData
     public final PartialDeps deps;
     public final boolean read;
 
+    @SuppressWarnings("MismatchedQueryAndUpdateOfCollection")
     private transient Defer defer;
 
     public Commit(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, boolean read)
@@ -93,10 +99,30 @@ public class Commit extends ReadData
     public void process(Node node, Id from, ReplyContext replyContext)
     {
         RoutingKey progressKey = node.trySelectProgressKey(txnId, scope);
-        node.forEachLocal(scope(), txnId.epoch, executeAt.epoch,
-                          instance -> instance.command(txnId).commit(scope.homeKey, progressKey, executeAt, deps, partialTxn));
+        ReadNack reply = node.mapReduceLocal(scope(), txnId.epoch, executeAt.epoch, instance -> {
+            Command command = instance.command(txnId);
+            switch (command.commit(scope.homeKey, progressKey, executeAt, deps, partialTxn))
+            {
+                default:
+                case REJECTED_BALLOT:
+                    throw new IllegalStateException();
 
-        if (read)
+                case SUCCESS:
+                case REDUNDANT:
+                    return null;
+
+                case INCOMPLETE:
+                    Preconditions.checkState(!command.hasBeen(PreAccepted));
+                    if (defer == null)
+                        defer = new Defer(PreAccepted, this, node, from, replyContext);
+                    defer.add(command, instance);
+                    return ReadNack.NotCommitted;
+            }
+        }, (r1, r2) -> r1 != null ? r1 : r2);
+
+        if (reply != null)
+            node.reply(from, replyContext, reply);
+        else if (read)
             super.process(node, from, replyContext);
     }
 
@@ -116,35 +142,46 @@ public class Commit extends ReadData
                '}';
     }
 
-    // TODO: should use RoutingKeys or PartialRoute
-    public static class Invalidate extends TxnRequest
+    public static class Invalidate implements EpochRequest
     {
-        final TxnId txnId;
-
-        public Invalidate(Id to, Topologies topologies, TxnId txnId, AbstractRoute route)
+        public static void commitInvalidate(Node node, TxnId txnId, RoutingKeys someKeys, Timestamp until)
         {
-            super(to, topologies, route);
-            this.txnId = txnId;
+            Topologies commitTo = node.topology().preciseEpochs(someKeys, txnId.epoch, until.epoch);
+            commitInvalidate(node, commitTo, txnId, someKeys);
         }
 
-        public static void commitInvalidate(Node node, TxnId txnId, AbstractRoute someRoute, Timestamp until)
-        {
-            Topologies commitTo = node.topology().preciseEpochs(someRoute, txnId.epoch, until.epoch);
-            commitInvalidate(node, commitTo, txnId, someRoute);
-        }
-
-        public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, AbstractRoute someRoute)
+        public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, RoutingKeys someKeys)
         {
             for (Node.Id to : commitTo.nodes())
             {
-                Invalidate send = new Invalidate(to, commitTo, txnId, someRoute);
+                Invalidate send = new Invalidate(to, commitTo, txnId, someKeys);
                 node.send(to, send);
             }
         }
 
+        final TxnId txnId;
+        final RoutingKeys scope;
+        final long waitForEpoch;
+        final long invalidateUntilEpoch;
+
+        public Invalidate(Id to, Topologies topologies, TxnId txnId, RoutingKeys someKeys)
+        {
+            this.txnId = txnId;
+            this.invalidateUntilEpoch = topologies.currentEpoch();
+            int latestRelevantIndex = latestRelevantEpochIndex(to, topologies, someKeys);
+            this.waitForEpoch = computeWaitForEpoch(to, topologies, latestRelevantIndex);
+            this.scope = computeScope(to, topologies, someKeys, latestRelevantIndex, RoutingKeys::slice, RoutingKeys::union);
+        }
+
+        @Override
+        public long waitForEpoch()
+        {
+            return waitForEpoch;
+        }
+
         public void process(Node node, Id from, ReplyContext replyContext)
         {
-            node.forEachLocal(scope(), txnId.epoch, instance -> instance.command(txnId).commitInvalidate());
+            node.forEachLocal(scope, txnId.epoch, invalidateUntilEpoch, instance -> instance.command(txnId).commitInvalidate());
         }
 
         @Override

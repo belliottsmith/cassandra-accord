@@ -28,6 +28,11 @@ public class PartialTxn extends Txn
         return covering.contains(ranges);
     }
 
+    public boolean covers(AbstractKeys<?, ?> keys)
+    {
+        return covering.containsAll(keys);
+    }
+
     // TODO: merge efficient merge when more than one input
     public PartialTxn with(PartialTxn add)
     {
@@ -50,5 +55,15 @@ public class PartialTxn extends Txn
                 return add;
         }
         return new PartialTxn(covering, kind, keys, read, query, update);
+    }
+
+    // TODO: override toString
+
+    public Txn reconstitute(Route route)
+    {
+        if (!covers(route))
+            throw new IllegalStateException("Incomplete PartialTxn: " + this + ", route: " + route);
+
+        return new Txn(keys, read, query, update);
     }
 }

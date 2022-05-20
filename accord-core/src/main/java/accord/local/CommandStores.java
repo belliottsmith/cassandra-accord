@@ -349,7 +349,13 @@ public abstract class CommandStores
             }
 
             @Override
-            public boolean intersects(long epoch, Keys keys)
+            public boolean owns(long epoch, RoutingKey key)
+            {
+                return current.ranges[generation].rangesForEpoch(epoch).contains(key);
+            }
+
+            @Override
+            public boolean intersects(long epoch, AbstractKeys<?, ?> keys)
             {
                 return at(epoch).intersects(keys);
             }

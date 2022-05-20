@@ -1,11 +1,12 @@
 package accord.coordinate;
 
-import accord.api.Key;
+import java.util.function.BiConsumer;
+
 import accord.local.Command;
 import accord.local.Node;
+import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
-import accord.topology.Shard;
-import accord.primitives.Keys;
+import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 
 import static accord.local.Status.Committed;
@@ -18,29 +19,40 @@ import static accord.local.Status.Committed;
  */
 public class CheckOnUncommitted extends CheckOnCommitted
 {
-    final Keys someKeys;
-    CheckOnUncommitted(Node node, TxnId txnId, Keys someKeys, Key someKey, Shard someShard, long shardEpoch)
+    CheckOnUncommitted(Node node, TxnId txnId, RoutingKeys someKeys, long shardEpoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        super(node, txnId, someKey, someShard, shardEpoch);
-        this.someKeys = someKeys;
+        super(node, txnId, someKeys, shardEpoch, callback);
     }
 
-    public static CheckOnUncommitted checkOnUncommitted(Node node, TxnId txnId, Keys someKeys, Key someKey, Shard someShard, long shardEpoch)
+    public static CheckOnUncommitted checkOnUncommitted(Node node, TxnId txnId, RoutingKeys someKeys, long epoch,
+                                                        BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        CheckOnUncommitted checkOnUncommitted = new CheckOnUncommitted(node, txnId, someKeys, someKey, someShard, shardEpoch);
+        CheckOnUncommitted checkOnUncommitted = new CheckOnUncommitted(node, txnId, someKeys, epoch, callback);
         checkOnUncommitted.start();
         return checkOnUncommitted;
     }
 
     @Override
-    boolean hasMetSuccessCriteria()
+    boolean isSufficient(CheckStatusOk ok)
     {
-        return tracker.hasReachedQuorum() || hasCommitted();
+        return ok.status.hasBeen(Committed);
     }
 
-    public boolean hasCommitted()
+    @Override
+    void onDone(Done done, Throwable failure)
     {
-        return max != null && max.status.hasBeen(Committed);
+        switch (done)
+        {
+            case Failed:
+                callback.accept(null, failure);
+                return;
+            case Success:
+                break;
+            case Exhausted:
+            case ReachedQuorum:
+
+
+        }
     }
 
     @Override
@@ -49,12 +61,6 @@ public class CheckOnUncommitted extends CheckOnCommitted
         switch (full.status)
         {
             default: throw new IllegalStateException();
-            case Invalidated:
-                node.forEachLocalSince(someKeys, txnId.epoch, commandStore -> {
-                    Command command = commandStore.ifPresent(txnId);
-                    if (command != null)
-                        command.commitInvalidate();
-                });
             case NotWitnessed:
             case AcceptedInvalidate:
                 break;
@@ -71,6 +77,12 @@ public class CheckOnUncommitted extends CheckOnCommitted
             case Committed:
             case ReadyToExecute:
                 super.onSuccessCriteriaOrExhaustion(full);
+            case Invalidated:
+                node.forEachLocalSince(someKeys, txnId.epoch, commandStore -> {
+                    Command command = commandStore.ifPresent(txnId);
+                    if (command != null)
+                        command.commitInvalidate();
+                });
         }
     }
 }

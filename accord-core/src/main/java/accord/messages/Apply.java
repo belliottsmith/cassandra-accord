@@ -13,7 +13,6 @@ import accord.primitives.Timestamp;
 import accord.primitives.Writes;
 import accord.primitives.TxnId;
 
-import static accord.local.Status.Committed;
 import static accord.messages.MessageType.APPLY_REQ;
 import static accord.messages.MessageType.APPLY_RSP;
 
@@ -25,12 +24,11 @@ public class Apply extends TxnRequest
     public final Writes writes;
     public final Result result;
 
-    private transient Defer defer;
-
     public Apply(Node.Id to, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
         super(to, topologies, route);
         this.txnId = txnId;
+        // TODO: we shouldn't send deps unless we need to (but need to implement fetching them if they're not present)
         this.deps = deps.slice(scope.covering);
         this.executeAt = executeAt;
         this.writes = writes;
@@ -49,10 +47,7 @@ public class Apply extends TxnRequest
                 case REJECTED_BALLOT:
                     throw new IllegalStateException();
                 case INCOMPLETE:
-                    if (defer == null)
-                        defer = new Defer(Committed, this, node, replyToNode, replyContext);
-                    defer.add(command, instance);
-                    return ApplyReply.INCOMPLETE;
+                    throw new UnsupportedOperationException();
                 case REDUNDANT:
                 case SUCCESS:
                     return ApplyReply.OK;

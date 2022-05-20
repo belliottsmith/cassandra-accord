@@ -2,14 +2,11 @@ package accord.api;
 
 import java.util.Set;
 
-import javax.annotation.Nullable;
-
 import accord.coordinate.CheckOnUncommitted;
 import accord.coordinate.InformHomeOfTxn;
 import accord.local.CommandStore;
 import accord.local.Node.Id;
-import accord.primitives.Keys;
-import accord.primitives.PartialRoute;
+import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 
 /**
@@ -80,14 +77,6 @@ public interface ProgressLog
     void commit(TxnId txnId, boolean isProgressShard, boolean isHomeShard);
 
     /**
-     * Has committed, but lacks sufficient information to execute
-     *
-     * A home shard should monitor this transaction for global progress.
-     * A non-home shard can safely ignore this transaction, as it has been witnessed by a majority of the home shard.
-     */
-    void partialCommit(TxnId txnId, boolean isProgressShard, boolean isHomeShard);
-
-    /**
      * The transaction is waiting to make progress, as all local dependencies have applied.
      *
      * A home shard should monitor this transaction for global progress.
@@ -137,5 +126,5 @@ public interface ProgressLog
      *
      * In all other scenarios, the implementation is free to choose its course of action.
      */
-    void waiting(TxnId blockedBy, PartialRoute someRoute);
+    void waiting(TxnId blockedBy, RoutingKeys someKeys);
 }

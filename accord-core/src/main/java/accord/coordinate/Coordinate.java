@@ -33,6 +33,7 @@ import org.apache.cassandra.utils.concurrent.Future;
  */
 public class Coordinate extends AsyncFuture<Result> implements Callback<PreAcceptReply>, BiConsumer<Result, Throwable>
 {
+
     static class ShardTracker extends FastPathTracker.FastPathShardTracker
     {
         public ShardTracker(Shard shard)
@@ -212,7 +213,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         if (isPreAccepted)
             return;
 
-        if (!receive.isOK())
+        if (!receive.isOk())
         {
             // we've been preempted by a recovery coordinator; defer to it, and wait to hear any result
             tryFailure(new Preempted(txnId, route.homeKey));
@@ -268,6 +269,9 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
     @Override
     public void accept(Result success, Throwable failure)
     {
+        if (failure instanceof Timeout)
+            failure = ((Timeout) failure).with(txnId, route.homeKey);
+
         if (success != null) trySuccess(success);
         else tryFailure(failure);
     }
