@@ -4,6 +4,7 @@ import java.util.function.BiConsumer;
 
 import accord.local.Command;
 import accord.local.Node;
+import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.primitives.RoutingKeys;
@@ -33,25 +34,30 @@ public class CheckOnUncommitted extends CheckOnCommitted
     }
 
     @Override
-    boolean isSufficient(CheckStatusOk ok)
+    boolean isSufficient(Id from, CheckStatusOk ok)
     {
         return ok.status.hasBeen(Committed);
     }
 
     @Override
-    void onDone(Done done, Throwable failure)
+    void onDone(Done done, Throwable fail)
     {
-        switch (done)
+        if (fail != null)
         {
-            case Failed:
-                callback.accept(null, failure);
-                return;
-            case Success:
-                break;
-            case Exhausted:
-            case ReachedQuorum:
+            callback.accept(null, fail);
+        }
+        else
+        {
+            switch (done)
+            {
+                default: throw new IllegalStateException();
+                case Success:
+                    break;
+                case Exhausted:
+                case ReachedQuorum:
 
 
+            }
         }
     }
 
@@ -66,7 +72,7 @@ public class CheckOnUncommitted extends CheckOnCommitted
                 break;
             case PreAccepted:
             case Accepted:
-                node.forEachLocalSince(full.txn.keys, txnId.epoch, commandStore -> {
+                node.forEachLocalSince(full.partialTxn.keys, txnId.epoch, commandStore -> {
                     Command command = commandStore.ifPresent(txnId);
                     if (command != null)
                         command.updateHomeKey(full.homeKey);

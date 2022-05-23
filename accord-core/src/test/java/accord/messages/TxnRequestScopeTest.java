@@ -19,7 +19,7 @@ public class TxnRequestScopeTest
     void createDisjointScopeTest()
     {
         Keys keys = keys(150);
-        Route route = new Route(keys.get(0).toRoutingKey(), keys.toRoutingKeys());
+        Route route = keys.toRoute(keys.get(0).toRoutingKey());
         KeyRange range = range(100, 200);
         Topology topology1 = topology(1, shard(range, idList(1, 2, 3), idSet(1, 2)));
         Topology topology2 = topology(2, shard(range, idList(4, 5, 6), idSet(4, 5)));
@@ -38,7 +38,7 @@ public class TxnRequestScopeTest
     void movingRangeTest()
     {
         Keys keys = keys(150, 250);
-        Route route = new Route(keys.get(0).toRoutingKey(), keys.toRoutingKeys());
+        Route route = keys.toRoute(keys.get(0).toRoutingKey());
 
         KeyRange range1 = range(100, 200);
         KeyRange range2 = range(200, 300);

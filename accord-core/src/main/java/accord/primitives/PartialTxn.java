@@ -9,13 +9,6 @@ public class PartialTxn extends Txn
     public final KeyRanges covering;
     public final Kind kind; // TODO: we do not need to take a write-edge dependency on every key
 
-    public PartialTxn(KeyRanges covering, Kind kind, Keys keys, Read read, Query query)
-    {
-        super(keys, read, query);
-        this.covering = covering;
-        this.kind = kind;
-    }
-
     public PartialTxn(KeyRanges covering, Kind kind, Keys keys, Read read, Query query, Update update)
     {
         super(keys, read, query, update);

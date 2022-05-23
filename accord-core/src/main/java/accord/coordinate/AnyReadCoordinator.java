@@ -12,7 +12,7 @@ import accord.topology.Topologies;
 
 abstract class AnyReadCoordinator<Reply> implements Callback<Reply>
 {
-    enum Outcome { Abort, TryAlternative, Accept, Success }
+    enum Action { Abort, TryAlternative, Accept, Success }
 
     final Node node;
     final TxnId txnId;
@@ -38,7 +38,7 @@ abstract class AnyReadCoordinator<Reply> implements Callback<Reply>
     }
 
     abstract void contact(Set<Id> nodes);
-    abstract Outcome process(Id from, Reply reply);
+    abstract Action process(Id from, Reply reply);
     abstract void onSuccess();
     abstract void onFailure(Throwable t);
 
@@ -94,7 +94,6 @@ abstract class AnyReadCoordinator<Reply> implements Callback<Reply>
         if (isDone)
             return;
 
-        // TODO: if we fail, nominate another coordinator from the homeKey shard to try
         if (tracker.recordReadFailure(from))
         {
             if (this.failure == null) this.failure = failure;

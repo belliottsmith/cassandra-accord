@@ -31,33 +31,91 @@ public class Keys extends AbstractKeys<Key, Keys>
         return wrap(SortedArrays.linearUnion(keys, that.keys, factory()), that);
     }
 
-    public Keys intersect(Keys that)
-    {
-        return wrap(SortedArrays.linearIntersection(keys, that.keys, factory()), that);
-    }
-
     public Keys slice(KeyRanges ranges)
     {
         return wrap(slice(ranges, factory()));
     }
 
-    public RoutingKey[] toRoutingKeys()
+    public Route toRoute(RoutingKey homeKey)
     {
         if (isEmpty())
-            return new RoutingKey[0];
+            return new Route(homeKey, new RoutingKey[] { homeKey });
 
-        RoutingKey[] result = new RoutingKey[keys.length];
-        result[0] = keys[0].toRoutingKey();
-        int resultCount = 1;
-        for (int i = 1 ; i < keys.length ; ++i)
+        RoutingKey[] result = toRoutingKeysArray(homeKey);
+        int pos = Arrays.binarySearch(result, homeKey);
+        return new Route(result[pos], result);
+    }
+
+    public PartialRoute toPartialRoute(KeyRanges ranges, RoutingKey homeKey)
+    {
+        if (isEmpty())
+            return new PartialRoute(ranges, homeKey, new RoutingKey[] { homeKey });
+
+        RoutingKey[] result = toRoutingKeysArray(homeKey);
+        int pos = Arrays.binarySearch(result, homeKey);
+        return new PartialRoute(ranges, result[pos], result);
+    }
+
+    private RoutingKey[] toRoutingKeysArray(RoutingKey homeKey)
+    {
+        RoutingKey[] result;
+        int resultCount;
+        int insertPos = Arrays.binarySearch(keys, homeKey);
+        if (insertPos > 0)
         {
-            RoutingKey next = keys[i].toRoutingKey();
-            if (!next.equals(result[resultCount - 1]))
-                result[resultCount++] = next;
+            result = new RoutingKey[keys.length];
+            resultCount = copyToRoutingKeys(keys, 0, result, 0, keys.length);
         }
+        else
+        {
+            insertPos = -1 - insertPos;
+            result = new RoutingKey[keys.length];
+            resultCount = copyToRoutingKeys(keys, 0, result, 0, insertPos);
+            if (resultCount == 0 || !homeKey.equals(result[resultCount - 1]))
+                result[resultCount++] = homeKey;
+            resultCount += copyToRoutingKeys(keys, insertPos, result, resultCount, keys.length - insertPos);
+        }
+
         if (resultCount < result.length)
             result = Arrays.copyOf(result, resultCount);
+
         return result;
+    }
+
+    public RoutingKeys toRoutingKeys()
+    {
+        if (isEmpty())
+            return RoutingKeys.EMPTY;
+
+        RoutingKey[] result = new RoutingKey[keys.length];
+        int resultCount = copyToRoutingKeys(keys, 0, result, 0, keys.length);
+        if (resultCount < result.length)
+            result = Arrays.copyOf(result, resultCount);
+        return new RoutingKeys(result);
+    }
+
+    private static int copyToRoutingKeys(Key[] keys, int srcPos, RoutingKey[] trg, int trgPos, int count)
+    {
+        if (count == 0)
+            return 0;
+
+        int trgStart = trgPos;
+        int i = 0;
+        if (trgPos == 0)
+        {
+            trg[trgPos++] = keys[srcPos++].toRoutingKey();
+            ++i;
+        }
+
+        while (i < count)
+        {
+            RoutingKey next = keys[srcPos + i].toRoutingKey();
+            if (!next.equals(trg[trgPos - 1]))
+                trg[trgPos++] = next;
+            ++i;
+        }
+
+        return trgPos - trgStart;
     }
 
     private Keys wrap(Key[] wrap, Keys that)

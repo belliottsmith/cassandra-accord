@@ -14,6 +14,7 @@ import accord.local.Node.Id;
 import accord.primitives.KeyRanges;
 import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
@@ -21,10 +22,6 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 
-import static accord.local.Command.Outcome.INCOMPLETE;
-import static accord.local.Command.Outcome.REDUNDANT;
-import static accord.local.Command.Outcome.REJECTED_BALLOT;
-import static accord.local.Command.Outcome.SUCCESS;
 import static accord.local.Status.Accepted;
 import static accord.local.Status.AcceptedInvalidate;
 import static accord.local.Status.Applied;
@@ -38,16 +35,38 @@ import static accord.local.Status.ReadyToExecute;
 // TODO: this needs to be backed by persistent storage
 public class Command implements Listener, Consumer<Listener>
 {
-    public enum Outcome
-    {
-        SUCCESS, REDUNDANT, INCOMPLETE, REJECTED_BALLOT
-    }
-
     public final CommandStore commandStore;
     private final TxnId txnId;
+
+    /**
+     * homeKey is a global value that defines the home shard - the one tasked with ensuring the transaction is finished.
+     * progressKey is a local value that defines the local shard responsible for ensuring progress on the transaction.
+     * This will be homeKey if it is owned by the node, and some other key otherwise. If not the home shard, the progress
+     * shard has much weaker responsibilities, only ensuring that the home shard has durably witnessed the txnId.
+     */
     private RoutingKey homeKey, progressKey;
-    private @Nullable RoutingKeys routingKeys; // usually set only on home shard
-    private PartialTxn partialTxn; // WARNING: if ownership *expands* for execution, this may be incomplete
+
+    /**
+     * For simplicity we require this be set on the home shard for all states > NotWitnessed
+     */
+    private @Nullable RoutingKeys routingKeys;
+
+    /**
+     * While !hasBeen(Committed), contains the portion of a transaction that applies on this node as of txnId.epoch
+     * If hasBeen(Committed) and !hasBeen(Executed), represents the portion that applies as of txnId.epoch AND executeAt.epoch
+     * If hasBeen(Executed) MAY BE NULL, or may cover only txnId.epoch; no point requiring this be populated at execution
+     */
+    private PartialTxn partialTxn;
+
+    /**
+     * While !hasBeen(Committed), used only as a register for Accept state, used by Recovery
+     * If hasBeen(Committed), represents the full deps owned by this range for execution at both txnId.epoch
+     * AND executeAt.epoch so that it may be used for Recovery (which contacts only txnId.epoch topology),
+     * but also for execution.
+     *
+     * At present, Deps contain every declare key in the range, however this should not be relied upon
+     * TODO: routeForKeysOwnedAtExecution relies on this for correctness.
+     */
     private PartialDeps partialDeps = PartialDeps.NONE;
     private Ballot promised = Ballot.ZERO, accepted = Ballot.ZERO;
     private Timestamp executeAt;
@@ -55,7 +74,7 @@ public class Command implements Listener, Consumer<Listener>
     private Result result;
 
     private Status status = NotWitnessed;
-    private boolean isGloballyPersistent; // only set on home shard
+    private boolean isGloballyPersistent;
 
     private NavigableMap<TxnId, Command> waitingOnCommit;
     private NavigableMap<Timestamp, Command> waitingOnApply;
@@ -81,6 +100,11 @@ public class Command implements Listener, Consumer<Listener>
     public RoutingKeys routingKeys()
     {
         return routingKeys;
+    }
+
+    public void routingKeys(RoutingKeys routingKeys)
+    {
+        this.routingKeys = routingKeys;
     }
 
     public Ballot promised()
@@ -143,13 +167,19 @@ public class Command implements Listener, Consumer<Listener>
         isGloballyPersistent = true;
     }
 
-    public Outcome preaccept(PartialTxn partialTxn, RoutingKey homeKey, @Nullable RoutingKey progressKey, @Nullable RoutingKeys routingKeys)
+    public enum AcceptOutcome
+    {
+        Success, Insufficient, Redundant, RejectedBallot
+    }
+
+
+    public AcceptOutcome preaccept(PartialTxn partialTxn, RoutingKey homeKey, @Nullable RoutingKey progressKey, @Nullable RoutingKeys routingKeys)
     {
         if (promised.compareTo(Ballot.ZERO) > 0)
-            return Outcome.REJECTED_BALLOT;
+            return AcceptOutcome.RejectedBallot;
 
         if (hasBeen(PreAccepted))
-            return REDUNDANT;
+            return AcceptOutcome.Redundant;
 
         boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
         boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
@@ -181,7 +211,7 @@ public class Command implements Listener, Consumer<Listener>
         this.status = PreAccepted;
         this.commandStore.progressLog().preaccept(txnId, isProgressShard, isHomeShard);
         this.listeners.forEach(this);
-        return SUCCESS;
+        return AcceptOutcome.Success;
     }
 
     public boolean preacceptInvalidate(Ballot ballot)
@@ -193,24 +223,27 @@ public class Command implements Listener, Consumer<Listener>
         return true;
     }
 
-    public Outcome accept(Ballot ballot, RoutingKey homeKey, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps)
+    public AcceptOutcome accept(Ballot ballot, RoutingKey homeKey, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps)
     {
         if (this.promised.compareTo(ballot) > 0)
-            return Outcome.REJECTED_BALLOT;
+            return AcceptOutcome.RejectedBallot;
 
         if (hasBeen(Committed))
-            return REDUNDANT;
+            return AcceptOutcome.Redundant;
+
+        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
+        boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
+
+        if (isHomeShard && routingKeys == null)
+            return AcceptOutcome.Insufficient;
 
         KeyRanges ranges = commandStore.ranges().at(txnId.epoch);
         if (!partialDeps.covers(ranges))
             throw new IllegalArgumentException("Incomplete partialDeps received for " + txnId + " covering " + partialDeps.covering + " which does not span " + ranges);
 
-        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
-        boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
-
         updatePartialTxn(partialTxn, ranges, isHomeShard);
         updateHomeKey(homeKey);
-        this.partialDeps = partialDeps.slice(ranges);
+        setPartialDeps(partialDeps, ranges);
         this.executeAt = executeAt;
         this.promised = this.accepted = ballot;
         this.status = Accepted;
@@ -218,50 +251,55 @@ public class Command implements Listener, Consumer<Listener>
         this.commandStore.progressLog().accept(txnId, isProgressShard, isHomeShard);
         this.listeners.forEach(this);
 
-        return SUCCESS;
+        return AcceptOutcome.Success;
     }
 
-    public Outcome acceptInvalidate(Ballot ballot)
+    public AcceptOutcome acceptInvalidate(Ballot ballot)
     {
         if (this.promised.compareTo(ballot) > 0)
-            return REJECTED_BALLOT;
+            return AcceptOutcome.RejectedBallot;
 
         if (hasBeen(Committed))
-            return REDUNDANT;
+            return AcceptOutcome.Redundant;
 
         promised = accepted = ballot;
         status = AcceptedInvalidate;
 
         listeners.forEach(this);
-        return SUCCESS;
+        return AcceptOutcome.Success;
     }
 
+    public enum CommitOutcome { Success, Redundant, Insufficient }
+
     // relies on mutual exclusion for each key
-    public Outcome commit(RoutingKey homeKey, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps, @Nullable PartialTxn partialTxn)
+    public CommitOutcome commit(RoutingKey homeKey, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps, @Nullable PartialTxn partialTxn)
     {
         if (hasBeen(Committed))
         {
             if (executeAt.equals(this.executeAt) && status != Invalidated)
-                return REDUNDANT;
+                return CommitOutcome.Redundant;
 
             commandStore.agent().onInconsistentTimestamp(this, (status == Invalidated ? Timestamp.NONE : this.executeAt), executeAt);
         }
 
-        // TODO (now): we want ideally to only require executeAt.epoch info here, but this might affect a CheckStatusOk response
-        //             that expects anything >= PreAccept to know the PreAccept txn and deps
+        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
+        boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
+
+        // TODO: we want ideally to only require executeAt.epoch info here, but this might affect a CheckStatusOk response
+        //       that expects anything >= PreAccept to know the PreAccept txn and deps
         KeyRanges ranges = commandStore.ranges().between(txnId.epoch, executeAt.epoch);
         if (!willCover(partialTxn, ranges))
-            return INCOMPLETE;
+            return CommitOutcome.Insufficient;
+
+        if (isHomeShard && routingKeys == null)
+            return CommitOutcome.Insufficient;
 
         if (!partialDeps.covers(ranges))
             throw new IllegalArgumentException("Incomplete partialDeps received for " + txnId + " covering " + partialDeps.covering + " which does not span " + ranges);
 
-        boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
-        boolean isHomeShard = isProgressShard && progressKey.equals(homeKey);
-
         updateHomeKey(homeKey);
         updatePartialTxn(partialTxn, ranges, isHomeShard);
-        this.partialDeps = partialDeps.slice(ranges);
+        setPartialDeps(partialDeps, ranges);
         this.executeAt = executeAt;
         this.status = Committed;
         populateWaitingOn();
@@ -270,7 +308,7 @@ public class Command implements Listener, Consumer<Listener>
 
         maybeExecute(false);
         listeners.forEach(this);
-        return SUCCESS;
+        return CommitOutcome.Success;
     }
 
     private void populateWaitingOn()
@@ -313,14 +351,14 @@ public class Command implements Listener, Consumer<Listener>
         }
     }
 
-    public Outcome commitInvalidate()
+    public void commitInvalidate()
     {
         if (hasBeen(Committed))
         {
             if (!hasBeen(Invalidated))
                 commandStore.agent().onInconsistentTimestamp(this, Timestamp.NONE, executeAt);
 
-            return REDUNDANT;
+            return;
         }
 
         status = Invalidated;
@@ -328,24 +366,17 @@ public class Command implements Listener, Consumer<Listener>
         commandStore.progressLog().invalidate(txnId, isProgressShard, isProgressShard && progressKey.equals(homeKey));
 
         listeners.forEach(this);
-        return SUCCESS;
     }
 
-    public Outcome apply(RoutingKey homeKey, RoutingKey progressKey, Timestamp executeAt, @Nullable PartialDeps partialDeps, Writes writes, Result result)
+    public enum ApplyOutcome { Success, Redundant, Insufficient, Partial }
+
+    public ApplyOutcome apply(RoutingKey homeKey, RoutingKey progressKey, Timestamp executeAt, @Nullable PartialDeps partialDeps, Writes writes, Result result)
     {
         if (hasBeen(Executed) && executeAt.equals(this.executeAt))
         {
-            return REDUNDANT;
+            return ApplyOutcome.Redundant;
         }
-        else if (!hasBeen(Committed))
-        {
-            if (partialDeps == null)
-                return INCOMPLETE;
-
-            if (owns(txnId.epoch, homeKey) && routingKeys == null)
-                return INCOMPLETE;
-        }
-        else if (!executeAt.equals(this.executeAt))
+        else if (hasBeen(Committed) && !executeAt.equals(this.executeAt))
         {
             commandStore.agent().onInconsistentTimestamp(this, this.executeAt, executeAt);
         }
@@ -353,22 +384,26 @@ public class Command implements Listener, Consumer<Listener>
         KeyRanges ranges = commandStore.ranges().between(txnId.epoch, executeAt.epoch);
         if (this.partialDeps == null || !this.partialDeps.covers(ranges))
         {
-            if (this.partialDeps == null && partialDeps == null)
-                throw new IllegalStateException("Invalid status with missing partialDeps: " + status);
-
             if (partialDeps == null)
-                return INCOMPLETE;
+                return ApplyOutcome.Insufficient;
 
+            updatePartialDeps(partialDeps, ranges);
             if (!partialDeps.covers(ranges))
-                throw new IllegalArgumentException("Incomplete partialDeps received for " + txnId + " covering " + this.partialDeps.covering + " which does not span " + ranges);
-
-            this.partialDeps = partialDeps.slice(ranges);
+            {
+                // TODO: partial application of writes/result
+                this.writes = writes;
+                this.result = result;
+                return ApplyOutcome.Partial;
+            }
         }
 
+        if (!hasBeen(Committed) && routingKeys == null && owns(txnId.epoch, homeKey))
+            return ApplyOutcome.Insufficient;
+
         updateHomeKey(homeKey);
-        this.executeAt = executeAt;
         this.writes = writes;
         this.result = result;
+        this.executeAt = executeAt;
         this.status = Executed;
         populateWaitingOn();
 
@@ -378,38 +413,45 @@ public class Command implements Listener, Consumer<Listener>
 
         maybeExecute(false);
         this.listeners.forEach(this);
-        return SUCCESS;
+        return ApplyOutcome.Success;
     }
 
-    public Outcome recover(PartialTxn txn, RoutingKey homeKey, @Nullable RoutingKey progressKey, @Nullable RoutingKeys routingKeys, Ballot ballot)
+    public AcceptOutcome recover(PartialTxn txn, RoutingKey homeKey, @Nullable RoutingKey progressKey, @Nullable RoutingKeys routingKeys, Ballot ballot)
     {
         if (this.promised.compareTo(ballot) > 0)
-            return REJECTED_BALLOT;
+            return AcceptOutcome.RejectedBallot;
 
         if (status == NotWitnessed)
         {
-            Outcome outcome = preaccept(txn, homeKey, progressKey, routingKeys);
-            if (outcome != SUCCESS)
-                return outcome;
+            switch (preaccept(txn, homeKey, progressKey, routingKeys))
+            {
+                default:
+                case RejectedBallot:
+                case Insufficient:
+                    throw new IllegalStateException();
+
+                case Redundant:
+                case Success:
+            }
         }
 
         this.promised = ballot;
-        return SUCCESS;
+        return AcceptOutcome.Success;
     }
 
-    public Outcome propagate(long epoch, Status status, PartialTxn partialTxn, PartialDeps partialDeps, RoutingKey homeKey, Timestamp executeAt, Writes writes, Result result)
+    public void propagate(long epoch, Status status, PartialTxn partialTxn, PartialDeps partialDeps, RoutingKey homeKey, Timestamp executeAt, Writes writes, Result result)
     {
         switch (status)
         {
             case Invalidated:
                 this.status = Invalidated;
-                return SUCCESS;
+                return;
             case AcceptedInvalidate:
                 if (partialTxn != null)
                     break;
                 if (homeKey != null)
                     updateHomeKey(homeKey);
-                return SUCCESS;
+                return;
         }
 
         Status prev = this.status;
@@ -438,6 +480,7 @@ public class Command implements Listener, Consumer<Listener>
                 if (this.partialDeps == null) this.partialDeps = partialDeps;
                 else if (partialDeps != null) this.partialDeps = this.partialDeps.with(partialDeps.slice(ranges));
 
+                // TODO (now): this is probably broken, as we may have received pre-commit partialDeps
                 if (!this.partialDeps.covers(ranges))
                     return INCOMPLETE;
 
@@ -529,7 +572,7 @@ public class Command implements Listener, Consumer<Listener>
             BlockedBy blockedBy = blockedBy();
             if (blockedBy != null)
             {
-                commandStore.progressLog().waiting(blockedBy.txnId, blockedBy.someRoutingKeys);
+                commandStore.progressLog().waiting(blockedBy.txnId, blockedBy.someKeys);
                 return;
             }
             assert waitingOnApply == null;
@@ -581,16 +624,15 @@ public class Command implements Listener, Consumer<Listener>
         }
     }
 
-    // TEMPORARY: once we can invalidate commands that have not been witnessed on any shard, we do not need to know the home shard
     static class BlockedBy
     {
         final TxnId txnId;
-        final RoutingKeys someRoutingKeys;
+        final RoutingKeys someKeys; // some keys we know to be associated with this txnId, unlikely to be exhaustive
 
-        BlockedBy(TxnId txnId, RoutingKeys someRoutingKeys)
+        BlockedBy(TxnId txnId, RoutingKeys someKeys)
         {
             this.txnId = txnId;
-            this.someRoutingKeys = someRoutingKeys;
+            this.someKeys = someKeys;
         }
     }
 
@@ -608,10 +650,10 @@ public class Command implements Listener, Consumer<Listener>
             cur = next;
         }
 
-        RoutingKeys someRoute = cur.someRoutingKeys();
-        if (someRoute == null)
-            someRoute = prev.partialDeps.someRoutingKeys(cur.txnId);
-        return new BlockedBy(cur.txnId, someRoute);
+        RoutingKeys someKeys = cur.someRoutingKeys();
+        if (someKeys == null)
+            someKeys = prev.partialDeps.someRoutingKeys(cur.txnId);
+        return new BlockedBy(cur.txnId, someKeys);
     }
 
     /**
@@ -651,12 +693,35 @@ public class Command implements Listener, Consumer<Listener>
             return routingKeys;
 
         if (partialTxn != null)
-            return partialTxn.keys;
+            return partialTxn.keys.toRoutingKeys();
 
         if (partialDeps != null)
-            return partialDeps.keys();
+            return partialDeps.keys().toRoutingKeys();
 
         return null;
+    }
+
+    public PartialRoute routeForKeysOwnedAtExecution()
+    {
+        if (!hasBeen(Committed))
+            throw new IllegalStateException("May only be invoked on commands whose execution time is known");
+
+        if (homeKey == null)
+            throw new IllegalStateException();
+
+        KeyRanges ranges = commandStore.ranges().at(executeAt.epoch);
+        if (routingKeys != null)
+            return routingKeys.toRoute(homeKey).slice(ranges);
+
+        if (partialTxn != null && partialTxn.covers(ranges))
+            return partialTxn.keys.toPartialRoute(partialTxn.covering, homeKey);
+
+        if (partialDeps == null || !partialDeps.covers(ranges))
+            throw new IllegalStateException();
+
+        // TODO: we should not rely on partialDeps containing all keys, we should have a separate stash of routingKeys
+        //       used only when execution does not receive the txn
+        return partialDeps.keys().toPartialRoute(partialDeps.covering, homeKey);
     }
 
     /**
@@ -682,7 +747,7 @@ public class Command implements Listener, Consumer<Listener>
         if (partialTxn == null)
             return;
 
-        // TODO (now): slice/trim the partialTxn
+        // TODO (now): slice needs to apply hashIntersects restriction
         if (this.partialTxn == null)
         {
             this.partialTxn = partialTxn.slice(ranges, isHomeShard);
@@ -700,6 +765,25 @@ public class Command implements Listener, Consumer<Listener>
             }, 0, 0, 1);
             this.partialTxn = this.partialTxn.with(partialTxn.slice(ranges, isHomeShard));
         }
+    }
+
+    private void setPartialDeps(PartialDeps partialDeps, KeyRanges ranges)
+    {
+        if (partialDeps == null)
+            return;
+
+        // TODO (now): slice needs to apply hashIntersects restriction
+        this.partialDeps = partialDeps.slice(ranges);
+    }
+
+    private void updatePartialDeps(PartialDeps partialDeps, KeyRanges ranges)
+    {
+        if (partialDeps == null)
+            return;
+
+        // TODO (now): slice needs to apply hashIntersects restriction
+        if (this.partialDeps == null) this.partialDeps = partialDeps.slice(ranges);
+        else this.partialDeps = this.partialDeps.with(partialDeps.slice(ranges));
     }
 
     private boolean willCover(PartialTxn partialTxn, KeyRanges ranges)

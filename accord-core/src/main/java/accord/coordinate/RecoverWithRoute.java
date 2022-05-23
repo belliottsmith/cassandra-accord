@@ -5,39 +5,31 @@ import java.util.function.BiConsumer;
 
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.Status;
 import accord.messages.CheckStatus;
+import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
-import accord.messages.CheckStatus.CheckStatusReply;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.Commit;
 import accord.primitives.Ballot;
+import accord.primitives.Deps;
 import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
-import static accord.coordinate.AnyReadCoordinator.Outcome.Accept;
-import static accord.coordinate.Recover.Outcome.EXECUTED;
-import static accord.coordinate.Recover.Outcome.INVALIDATED;
+import static accord.coordinate.Recover.Outcome.Executed;
+import static accord.coordinate.Recover.Outcome.Invalidated;
 
-public class RecoverWithRoute extends AnyReadCoordinator<CheckStatusReply>
+public class RecoverWithRoute extends CheckShards
 {
-    static class NotWitnessed extends RuntimeException {}
-
     final Ballot ballot;
     final Route route;
     final BiConsumer<Recover.Outcome, Throwable> callback;
 
-    CheckStatusOkFull merged;
-
-    public RecoverWithRoute(Node node, Ballot ballot, TxnId txnId, Route route, BiConsumer<Recover.Outcome, Throwable> callback)
-    {
-        this(node, node.topology().forEpoch(route, txnId.epoch), ballot, txnId, route, callback);
-    }
-
     private RecoverWithRoute(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Route route, BiConsumer<Recover.Outcome, Throwable> callback)
     {
-        super(node, topologies, txnId);
+        super(node, txnId, route, txnId.epoch, IncludeInfo.All);
         this.ballot = ballot;
         this.route = route;
         this.callback = callback;
@@ -63,7 +55,7 @@ public class RecoverWithRoute extends AnyReadCoordinator<CheckStatusReply>
     public static RecoverWithRoute recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Route route, BiConsumer<Recover.Outcome, Throwable> callback)
     {
         RecoverWithRoute recover = new RecoverWithRoute(node, topologies, ballot, txnId, route, callback);
-        recover.start(topologies.nodes());
+        recover.start();
         return recover;
     }
 
@@ -74,63 +66,74 @@ public class RecoverWithRoute extends AnyReadCoordinator<CheckStatusReply>
     }
 
     @Override
-    Outcome process(Id from, CheckStatusReply response)
+    boolean isSufficient(Id from, CheckStatusOk ok)
     {
-        if (!response.isOk())
-        {
-            callback.accept(null, new IllegalStateException());
-            return Outcome.Abort;
-        }
-
-        CheckStatusOkFull ok = (CheckStatusOkFull) response;
-        if (ok.txn == null)
-            throw new NotWitnessed();
-
-        //  TODO (now): validate the new response covers the full owned range of the replica
-        if (merged == null) merged = ok;
-        else merged = (CheckStatusOkFull) merged.merge(ok);
-        return Accept;
+        CheckStatusOkFull full = (CheckStatusOkFull)ok;
+        if (full.partialTxn == null)
+            return false;
+        if (full.status.compareTo(Status.Executed) < 0)
+            return true;
+        return full.partialTxn.covers(tracker.topologies().forEpoch(txnId.epoch).rangesForNode(from));
     }
 
     @Override
-    void onSuccess()
+    void onDone(Done done, Throwable failure)
     {
-        if (merged.homeKey == null)
-            throw new IllegalStateException();
-        if (merged.routingKeys == null)
-            throw new IllegalStateException();
+        if (failure != null)
+        {
+            callback.accept(null, failure);
+            return;
+        }
 
-        Route route = merged.routingKeys.toRoute(merged.homeKey);
+        CheckStatusOkFull merged = (CheckStatusOkFull) this.merged;
         switch (merged.status)
         {
             case NotWitnessed:
+            {
                 Invalidate.invalidate(node, txnId, route, route.homeKey)
                           .addCallback(callback);
                 break;
+            }
             case PreAccepted:
             case Accepted:
             case AcceptedInvalidate:
+            {
+                if (!merged.partialTxn.covers(route))
+                {
+                    // could not assemble the full transaction, so invalidate
+                    Invalidate.invalidate(node, txnId, route, route.homeKey)
+                              .addCallback(callback);
+                    break;
+                }
+            }
             case Committed:
             case ReadyToExecute:
-                Txn txn = merged.txn.reconstitute(route);
+            {
+                Txn txn = merged.partialTxn.reconstitute(route);
                 Recover.recover(node, txnId, txn, route, callback);
                 break;
+            }
             case Executed:
             case Applied:
-                // TODO (now): we should persistAndCommit even with a PartialTxn that does not cover the whole range
-                //             to do this we need to support Command.commit with txn that only covers executeAt
-                Persist.persistAndCommit(node, txnId, route, merged.executeAt, merged.deps.reconstitute(route), merged.writes, merged.result);
-                callback.accept(EXECUTED, null);
+            {
+                // TODO: we might not be able to reconstitute Txn if we have GC'd on some shards
+                Txn txn = merged.partialTxn.reconstitute(route);
+                if (merged.committedDeps.covers(route))
+                {
+                    Deps deps = merged.committedDeps.reconstitute(route);
+                    Persist.persistAndCommit(node, txnId, txn, route, merged.executeAt, deps, merged.writes, merged.result);
+                    callback.accept(Executed, null);
+                    break;
+                }
+                Recover.recover(node, txnId, txn, route, callback);
                 break;
+            }
             case Invalidated:
+            {
                 Commit.Invalidate.commitInvalidate(node, txnId, route, merged.executeAt);
-                callback.accept(INVALIDATED, null);
+                callback.accept(Invalidated, null);
+            }
         }
-    }
 
-    @Override
-    void onFailure(Throwable fail)
-    {
-        callback.accept(null, fail);
     }
 }

@@ -29,7 +29,7 @@ public class CoordinateTest
             TxnId txnId = new TxnId(1, 100, 0, node.id());
             Keys keys = keys(10);
             Txn txn = writeTxn(keys);
-            Route route = new Route(keys.get(0).toRoutingKey(), keys.toRoutingKeys());
+            Route route = keys.toRoute(keys.get(0).toRoutingKey());
             Result result = Coordinate.coordinate(node, txnId, txn, route).get();
             Assertions.assertEquals(MockStore.RESULT, result);
         }

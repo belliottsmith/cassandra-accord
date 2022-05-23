@@ -1,7 +1,8 @@
 package accord.primitives;
 
-import accord.api.Key;
 import accord.api.RoutingKey;
+import accord.utils.SortedArrays;
+import accord.utils.SortedArrays.Search;
 
 import com.google.common.base.Preconditions;
 
@@ -196,11 +197,11 @@ public abstract class KeyRange implements Comparable<RoutingKey>
     /**
      * returns the index of the first key larger than what's covered by this range
      */
-    public int higherKeyIndex(AbstractKeys<?, ?> keys, int lowerBound, int upperBound)
+    public int higherKeyIndex(AbstractKeys<?, ?> keys, int from, int to)
     {
-        int i = keys.search(lowerBound, upperBound, this,
-                            (k, r) -> ((KeyRange) r).compareKey((Key) k) <= 0 ? -1 : 1);
+        int i = SortedArrays.exponentialSearch(keys.keys, from, to, this, KeyRange::compareTo, Search.FLOOR);
         if (i < 0) i = -1 - i;
+        else i += 1;
         return i;
     }
 

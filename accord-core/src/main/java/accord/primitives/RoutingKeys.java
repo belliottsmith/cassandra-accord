@@ -3,6 +3,8 @@ package accord.primitives;
 import java.util.Arrays;
 import java.util.function.IntFunction;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.RoutingKey;
 import accord.utils.SortedArrays;
 
@@ -24,11 +26,6 @@ public class RoutingKeys extends AbstractKeys<RoutingKey, RoutingKeys>
     public RoutingKeys union(RoutingKeys that)
     {
         return wrap(SortedArrays.linearUnion(keys, that.keys, factory()), that);
-    }
-
-    public RoutingKeys intersect(RoutingKeys that)
-    {
-        return wrap(SortedArrays.linearIntersection(keys, that.keys, factory()), that);
     }
 
     public RoutingKeys slice(KeyRanges ranges)
@@ -53,6 +50,7 @@ public class RoutingKeys extends AbstractKeys<RoutingKey, RoutingKeys>
 
     public Route toRoute(RoutingKey homeKey)
     {
+        Preconditions.checkNotNull(homeKey);
         return new Route(homeKey, keys);
     }
 

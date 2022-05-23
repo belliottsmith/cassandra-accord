@@ -15,7 +15,7 @@ import accord.primitives.TxnId;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public abstract class CheckShards<T extends CheckStatusOk> extends QuorumReadCoordinator<CheckStatusReply>
+public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply>
 {
     final RoutingKeys someKeys;
     final long epoch;
@@ -37,10 +37,10 @@ public abstract class CheckShards<T extends CheckStatusOk> extends QuorumReadCoo
         node.send(nodes, new CheckStatus(txnId, someKeys, epoch, includeInfo), this);
     }
 
-    abstract boolean isSufficient(CheckStatusOk ok);
+    abstract boolean isSufficient(Id from, CheckStatusOk ok);
 
     @Override
-    Outcome process(Id from, CheckStatusReply reply)
+    Action process(Id from, CheckStatusReply reply)
     {
         if (reply.isOk())
         {
@@ -48,15 +48,15 @@ public abstract class CheckShards<T extends CheckStatusOk> extends QuorumReadCoo
             if (merged == null) merged = ok;
             else merged = merged.merge(ok);
 
-            if (isSufficient(ok))
-                return Outcome.AcceptFinal;
+            if (isSufficient(from, ok))
+                return Action.Accept;
 
-            return Outcome.Accept;
+            return Action.AcceptQuorum;
         }
         else
         {
             onFailure(from, new IllegalStateException("Submitted command to a replica that did not own the range"));
-            return Outcome.Abort;
+            return Action.Abort;
         }
     }
 }

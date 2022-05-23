@@ -13,11 +13,13 @@ import accord.utils.IndexedFold;
 import accord.utils.IndexedFoldIntersectToLong;
 import accord.utils.IndexedFoldToLong;
 import accord.utils.IndexedPredicate;
+import accord.utils.IndexedRangeFoldToLong;
 import accord.utils.SortedArrays;
 import org.apache.cassandra.utils.concurrent.Inline;
 
 @SuppressWarnings("rawtypes")
 // TODO: check that foldl call-sites are inlined and optimised by HotSpot
+// TODO (now): randomised testing
 public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys<K, KS>> implements Iterable<K>
 {
     final K[] keys;
@@ -126,52 +128,9 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
         return stream().map(Object::toString).collect(Collectors.joining(",", "[", "]"));
     }
 
-    // TODO: optimise for case where nothing is modified
-    // TODO: generalise and move to SortedArrays
     protected K[] slice(KeyRanges ranges, IntFunction<K[]> factory)
     {
-        K[] result = null;
-        int resultSize = 0;
-
-        int keyLB = 0;
-        int keyHB = keys.length;
-        int rangeLB = 0;
-        int rangeHB = ranges.rangeIndexForKey(keys[keyHB-1]);
-        rangeHB = rangeHB < 0 ? -1 - rangeHB : rangeHB + 1;
-
-        for (;rangeLB<rangeHB && keyLB<keyHB;)
-        {
-            K key = keys[keyLB];
-            rangeLB = ranges.rangeIndexForKey(rangeLB, ranges.size(), key);
-
-            if (rangeLB < 0)
-            {
-                rangeLB = -1 -rangeLB;
-                if (rangeLB >= rangeHB)
-                    break;
-                keyLB = ranges.get(rangeLB).lowKeyIndex(this, keyLB, keyHB);
-            }
-            else
-            {
-                if (result == null)
-                    result = factory.apply(keyHB - keyLB);
-                KeyRange range = ranges.get(rangeLB);
-                int highKey = range.higherKeyIndex(this, keyLB, keyHB);
-                int size = highKey - keyLB;
-                System.arraycopy(keys, keyLB, result, resultSize, size);
-                keyLB = highKey;
-                resultSize += size;
-                rangeLB++;
-            }
-
-            if (keyLB < 0)
-                keyLB = -1 - keyLB;
-        }
-
-        if (result != null && resultSize < result.length)
-            result = Arrays.copyOf(result, resultSize);
-
-        return result;
+        return SortedArrays.sliceWithOverlaps(keys, ranges.ranges, factory, (k, r) -> r.compareTo(k), KeyRange::compareTo);
     }
 
     /**
@@ -191,15 +150,15 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
             ai = (int)(ari >>> 32);
             ri = (int)ari;
             KeyRange range = rs.get(ri);
-            do
+            int nextai = range.higherKeyIndex(this, ai + 1, keys.length);
+            while (ai < nextai)
             {
                 accumulator = fold.apply(ai, get(ai), accumulator);
                 ++ai;
-            } while (ai < size() && range.containsKey(get(ai)));
+            }
         }
 
         return accumulator;
-
     }
 
     public boolean any(KeyRanges ranges, Predicate<K> predicate)
@@ -225,13 +184,40 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
             ai = (int)(ari >>> 32);
             ri = (int)ari;
             KeyRange range = rs.get(ri);
-            do
+            int nextai = range.higherKeyIndex(this, ai + 1, keys.length);
+            while (ai < nextai)
             {
                 initialValue = fold.apply(ai, get(ai), param, initialValue);
                 if (initialValue == terminalValue)
                     break done;
                 ++ai;
-            } while (ai < size() && range.containsKey(get(ai)));
+            }
+        }
+
+        return initialValue;
+    }
+
+    /**
+     * A fold variation permitting more efficient operation over indices only, by providing ranges of matching indices
+     */
+    @Inline
+    public long rangeFoldl(KeyRanges rs, IndexedRangeFoldToLong fold, long param, long initialValue, long terminalValue)
+    {
+        int ai = 0, ri = 0;
+        while (true)
+        {
+            long ari = rs.findNextIntersection(ri, this, ai);
+            if (ari < 0)
+                break;
+
+            ai = (int)(ari >>> 32);
+            ri = (int)ari;
+            KeyRange range = rs.get(ri);
+            int nextai = range.higherKeyIndex(this, ai + 1, keys.length);
+            initialValue = fold.apply(ai, nextai, param, initialValue);
+            if (initialValue == terminalValue)
+                break;
+            ai = nextai;
         }
 
         return initialValue;
@@ -254,6 +240,10 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
         return foldlIntersect(ranges, keys, (li, ri, k, p, v) -> 1, 0, 0, 1) == 1;
     }
 
+    /**
+     * A fold variation that intersects two key sets for some set of ranges, invoking the fold function only on those
+     * items that are members of both sets (with their corresponding indices).
+     */
     @Inline
     public long foldlIntersect(KeyRanges rs, AbstractKeys<K, ?> intersect, IndexedFoldIntersectToLong<K> fold, long param, long initialValue, long terminalValue)
     {
@@ -261,6 +251,7 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
         int ai = 0, bi = 0, ri = 0;
         done: while (true)
         {
+            // first, find the next intersecting range with each key, looping until they match the same range
             long ari = rs.findNextIntersection(ri, as, ai);
             if (ari < 0)
                 break;
@@ -273,23 +264,27 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
             bi = (int) (bri >>> 32);
             if ((int)ari == (int)bri)
             {
+                // once a matching range is found, find the upper limit key index, and loop intersecting on keys until we exceed this point
                 ri = (int)ari;
-                KeyRange range = rs.get(ri);
-                do
+                int endai = rs.get(ri).higherKeyIndex(this, ai + 1, keys.length);
+                while (true)
                 {
-                    initialValue = fold.apply(ai, bi, as.get(ai), param, initialValue);
-                    if (initialValue == terminalValue)
-                        break done;
-
-                    ++ai;
-                    ++bi;
                     long abi = as.findNextIntersection(ai, bs, bi);
                     if (abi < 0)
                         break done;
 
                     ai = (int)(abi >>> 32);
                     bi = (int)abi;
-                } while (range.containsKey(as.get(ai)));
+                    if (ai >= endai)
+                        break;
+
+                    initialValue = fold.apply(ai, bi, as.get(ai), param, initialValue);
+                    if (initialValue == terminalValue)
+                        break done;
+
+                    ++ai;
+                    ++bi;
+                }
             }
             else
             {
@@ -300,6 +295,10 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
         return initialValue;
     }
 
+    /**
+     * A fold variation that intersects two key sets, invoking the fold function only on those
+     * items that are members of both sets (with their corresponding indices).
+     */
     @Inline
     public long foldlIntersect(AbstractKeys<K, ?> intersect, IndexedFoldIntersectToLong<K> fold, long param, long initialValue, long terminalValue)
     {
@@ -325,6 +324,10 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
         return initialValue;
     }
 
+    /**
+     * A fold variation that invokes the fold function only on those items that are members of this set
+     * and NOT the provided set.
+     */
     @Inline
     public long foldlDifference(AbstractKeys<K, ?> subtract, IndexedFoldToLong<K> fold, long param, long initialValue, long terminalValue)
     {

@@ -5,9 +5,9 @@ import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.api.Result;
+import accord.primitives.AbstractRoute;
 import accord.primitives.Deps;
 import accord.primitives.PartialDeps;
-import accord.primitives.Route;
 import accord.topology.Topologies;
 import accord.primitives.Timestamp;
 import accord.primitives.Writes;
@@ -24,7 +24,7 @@ public class Apply extends TxnRequest
     public final Writes writes;
     public final Result result;
 
-    public Apply(Node.Id to, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public Apply(Node.Id to, Topologies topologies, TxnId txnId, AbstractRoute route, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
         super(to, topologies, route);
         this.txnId = txnId;
@@ -44,12 +44,11 @@ public class Apply extends TxnRequest
             switch (command.apply(scope.homeKey, progressKey, executeAt, deps, writes, result))
             {
                 default:
-                case REJECTED_BALLOT:
-                    throw new IllegalStateException();
-                case INCOMPLETE:
-                    throw new UnsupportedOperationException();
-                case REDUNDANT:
-                case SUCCESS:
+                case Partial:
+                case Insufficient:
+                    return ApplyReply.INSUFFICIENT;
+                case Redundant:
+                case Success:
                     return ApplyReply.OK;
             }
         }, (r1, r2) -> r2.isOk() ? r1 : r2);
@@ -64,7 +63,7 @@ public class Apply extends TxnRequest
 
     public enum ApplyReply implements Reply
     {
-        OK, INCOMPLETE;
+        OK, INSUFFICIENT;
 
         public boolean isOk()
         {

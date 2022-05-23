@@ -47,7 +47,6 @@ import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.utils.SortedArrays;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
@@ -419,14 +418,10 @@ public class Node implements ConfigurationService.Listener
 
     public Route computeRoute(TxnId txnId, Keys keys)
     {
-        RoutingKey[] routingKeys = keys.toRoutingKeys();
-        RoutingKey homeKey = trySelectHomeKey(txnId, routingKeys);
+        RoutingKey homeKey = trySelectHomeKey(txnId, keys);
         if (homeKey == null)
-        {
             homeKey = selectRandomHomeKey(txnId);
-            routingKeys = SortedArrays.insert(routingKeys, homeKey, RoutingKey[]::new);
-        }
-        return new Route(homeKey, routingKeys);
+        return keys.toRoute(homeKey);
     }
 
     @VisibleForTesting
@@ -434,6 +429,12 @@ public class Node implements ConfigurationService.Listener
     {
         int i = topology().localForEpoch(txnId.epoch).ranges().findFirstKey(keys);
         return i >= 0 ? keys[i] : null;
+    }
+
+    private @Nullable RoutingKey trySelectHomeKey(TxnId txnId, Keys keys)
+    {
+        int i = topology().localForEpoch(txnId.epoch).ranges().findFirstKey(keys);
+        return i >= 0 ? keys.get(i).toRoutingKey() : null;
     }
 
     public RoutingKey selectProgressKey(TxnId txnId, PartialRoute route)
@@ -538,7 +539,7 @@ public class Node implements ConfigurationService.Listener
             return null;
 
         if (result instanceof Coordinate)
-            return result.map(ignore -> Outcome.EXECUTED);
+            return result.map(ignore -> Outcome.Executed);
         else
             return (Future<Outcome>)result;
     }

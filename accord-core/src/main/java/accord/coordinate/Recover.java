@@ -40,7 +40,7 @@ import static accord.messages.Commit.Invalidate.commitInvalidate;
 // TODO: rename to Recover (verb); rename Recover message to not clash
 public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
-    public enum Outcome { PREEMPTED, EXECUTED, INVALIDATED }
+    public enum Outcome { Preempted, Executed, Invalidated }
 
     class AwaitCommit extends AsyncFuture<Timestamp> implements Callback<WaitOnCommitOk>
     {
@@ -154,7 +154,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     public void accept(Result result, Throwable failure)
     {
         isDone = true;
-        callback.accept(Outcome.EXECUTED, failure);
+        if (failure == null) callback.accept(Outcome.Executed, null);
+        else callback.accept(null, failure);
         node.agent().onRecover(node, result, null);
     }
 
@@ -240,7 +241,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                         {
                             commitInvalidate(node, txnId, route, recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max));
                             isDone = true;
-                            callback.accept(Outcome.INVALIDATED, null);
+                            callback.accept(Outcome.Invalidated, null);
                         }
                     });
                     return;
@@ -258,7 +259,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     node.withEpoch(invalidateUntil.epoch, () -> {
                         commitInvalidate(node, txnId, route, invalidateUntil);
                     });
-                    accept(null, new Invalidated());
+                    isDone = true;
+                    callback.accept(Outcome.Invalidated, null);
                     return;
             }
         }

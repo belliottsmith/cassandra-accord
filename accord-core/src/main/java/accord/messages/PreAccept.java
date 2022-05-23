@@ -60,15 +60,15 @@ public class PreAccept extends TxnRequest.WithUnsync
             switch (command.preaccept(txn, scope.homeKey, progressKey, allRoutingKeys))
             {
                 default:
-                case INCOMPLETE:
+                case Insufficient:
                     throw new IllegalStateException();
 
-                case SUCCESS:
-                case REDUNDANT:
+                case Success:
+                case Redundant:
                     return new PreAcceptOk(txnId, command.executeAt(), calculateDeps(instance, txnId, txn.keys, txn.kind, txnId,
                                                                                      PartialDeps.builder(instance.ranges().at(txnId.epoch), txn.keys)));
 
-                case REJECTED_BALLOT:
+                case RejectedBallot:
                     return PreAcceptNack.INSTANCE;
             }
         }, (r1, r2) -> {

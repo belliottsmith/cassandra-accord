@@ -8,6 +8,7 @@ import com.google.common.collect.Iterators;
 
 import java.util.*;
 
+// TODO (now): randomised testing
 public class KeyRanges implements Iterable<KeyRange>
 {
     public static final KeyRanges EMPTY = new KeyRanges(new KeyRange[0]);
@@ -72,6 +73,7 @@ public class KeyRanges implements Iterable<KeyRange>
 
     public boolean containsAll(AbstractKeys<?, ?> keys)
     {
+        return keys.rangeFoldl(this, (from, to, v, p) -> v + (to - from), 0, 0, 0) == keys.size();
     }
 
     public int size()
@@ -355,7 +357,11 @@ public class KeyRanges implements Iterable<KeyRange>
      */
     public KeyRanges maximalSlices(AbstractKeys<?, ?> keys)
     {
+        int ri = 0, ki = 0;
+        while (true)
+        {
 
+        }
     }
 
     public KeyRanges mergeTouching()
@@ -371,7 +377,6 @@ public class KeyRanges implements Iterable<KeyRange>
         return new KeyRanges(result);
     }
 
-    // TODO (now): testing
     private static int copyAndMergeTouching(KeyRange[] src, int srcPosition, KeyRange[] trg, int trgPosition, int srcCount)
     {
         if (srcCount == 0)

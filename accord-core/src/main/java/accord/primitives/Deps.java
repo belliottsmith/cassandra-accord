@@ -13,6 +13,7 @@ import java.util.function.Predicate;
 import com.google.common.base.Preconditions;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.utils.InlineHeap;
@@ -21,7 +22,7 @@ import accord.utils.SortedArrays;
 import static accord.utils.SortedArrays.remap;
 import static accord.utils.SortedArrays.remapper;
 
-// TODO (now): switch to RoutingKey?
+// TODO: switch to RoutingKey? Would mean adopting execution dependencies less precisely
 public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 {
     public static final Deps NONE = new Deps(Keys.EMPTY, new TxnId[0], new int[0]);
@@ -379,7 +380,6 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         if (select.isEmpty())
             return PartialDeps.NONE;
 
-        // TODO (now): maximise ranges relative to deps
         if (select.size() == keys.size())
             return new PartialDeps(ranges, keys, txnIds, keyToTxnId);
 
@@ -739,13 +739,12 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         int start = txnIdIndex == 0 ? txnIds.length : txnIdToKey[txnIdIndex - 1];
         int end = txnIdToKey[txnIdIndex];
+        if (start == end)
+            return Keys.EMPTY;
+
         Key[] result = new Key[end - start];
         for (int i = start ; i < end ; ++i)
-        {
             result[i - start] = keys.get(txnIdToKey[i]);
-            if (i != start && result[i - (1 + start)] == result[i - start])
-                throw new AssertionError();
-        }
         return new Keys(result);
     }
 
@@ -759,14 +758,22 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         int start = txnIdIndex == 0 ? txnIds.length : txnIdToKey[txnIdIndex - 1];
         int end = txnIdToKey[txnIdIndex];
-        Key[] result = new Key[end - start];
-        for (int i = start ; i < end ; ++i)
+        RoutingKey[] result = new RoutingKey[end - start];
+        if (start == end)
+            return RoutingKeys.EMPTY;
+
+        result[0] = keys.get(txnIdToKey[start]).toRoutingKey();
+        int resultCount = 1;
+        for (int i = start + 1 ; i < end ; ++i)
         {
-            result[i - start] = keys.get(txnIdToKey[i]);
-            if (i != start && result[i - (1 + start)] == result[i - start])
-                throw new AssertionError();
+            RoutingKey next = keys.get(txnIdToKey[i]).toRoutingKey();
+            if (!next.equals(result[resultCount - 1]))
+                result[resultCount++] = next;
         }
-        return new Keys(result);
+
+        if (resultCount < result.length)
+            result = Arrays.copyOf(result, resultCount);
+        return new RoutingKeys(result);
     }
 
     void ensureTxnIdToKey()

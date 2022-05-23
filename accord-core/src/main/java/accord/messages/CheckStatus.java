@@ -70,13 +70,13 @@ public class CheckStatus implements Request
                 case Route:
                     return new CheckStatusOk(command.status(), command.promised(), command.accepted(),
                                              node.isCoordinating(txnId, command.promised()),
-                                             command.isGloballyPersistent(), route);
+                                             command.isGloballyPersistent(), route, command.homeKey());
                 case All:
+                    PartialDeps committedDeps = command.status().compareTo(Status.Committed) >= 0 ? command.savedPartialDeps() : null;
                     return new CheckStatusOkFull(command.status(), command.promised(), command.accepted(),
                                                  node.isCoordinating(txnId, command.promised()),
-                                                 command.isGloballyPersistent(), route,
-                                                 command.partialTxn(), command.routingKeys(), command.homeKey(),
-                                                 command.executeAt(), command.savedPartialDeps(),
+                                                 command.isGloballyPersistent(), route, command.homeKey(),
+                                                 command.partialTxn(), command.executeAt(), committedDeps,
                                                  command.writes(), command.result());
             }
         }, CheckStatusOk::merge);
@@ -92,7 +92,7 @@ public class CheckStatus implements Request
         boolean isOk();
     }
 
-    public static class CheckStatusOk implements CheckStatusReply, Comparable<CheckStatusOk>
+    public static class CheckStatusOk implements CheckStatusReply
     {
         public final Status status;
         public final Ballot promised;
@@ -100,8 +100,9 @@ public class CheckStatus implements Request
         public final boolean isCoordinating;
         public final boolean hasExecutedOnAllShards;
         public final @Nullable Route route;
+        public final @Nullable RoutingKey homeKey;
 
-        CheckStatusOk(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, @Nullable Route route)
+        CheckStatusOk(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, @Nullable Route route, @Nullable RoutingKey homeKey)
         {
             this.status = status;
             this.promised = promised;
@@ -109,6 +110,7 @@ public class CheckStatus implements Request
             this.isCoordinating = isCoordinating;
             this.hasExecutedOnAllShards = hasExecutedOnAllShards;
             this.route = route;
+            this.homeKey = homeKey;
         }
 
         @Override
@@ -126,18 +128,9 @@ public class CheckStatus implements Request
                    ", accepted:" + accepted +
                    ", hasExecutedOnAllShards:" + hasExecutedOnAllShards +
                    ", isCoordinating:" + isCoordinating +
+                   ", route:" + route +
+                   ", homeKey:" + homeKey +
                    '}';
-        }
-
-        @Override
-        public int compareTo(CheckStatusOk that)
-        {
-            int c = this.promised.compareTo(that.promised);
-            if (c == 0) c = this.status.compareTo(that.status);
-            if (c == 0) c = this.accepted.compareTo(that.accepted);
-            if (c == 0 && this.hasExecutedOnAllShards != that.hasExecutedOnAllShards)
-                return this.hasExecutedOnAllShards ? 1 : -1;
-            return c;
         }
 
         public CheckStatusOk merge(CheckStatusOk that)
@@ -154,16 +147,20 @@ public class CheckStatus implements Request
             CheckStatusOk maxPromised = prefer.promised.compareTo(defer.promised) >= 0 ? prefer : defer;
             CheckStatusOk maxAccepted = prefer.accepted.compareTo(defer.accepted) >= 0 ? prefer : defer;
             CheckStatusOk maxHasExecuted = !defer.hasExecutedOnAllShards || prefer.hasExecutedOnAllShards ? prefer : defer;
+            CheckStatusOk maxRoute = prefer.route != null || defer.route == null ? prefer : defer;
+            CheckStatusOk maxHomeKey = prefer.homeKey != null || defer.homeKey == null ? prefer : defer;
 
             // if the maximum (or preferred equal) is the same on all dimensions, return it
-            if (maxStatus == maxPromised && maxStatus == maxAccepted && maxStatus == maxHasExecuted)
+            if (maxStatus == maxPromised && maxStatus == maxAccepted && maxStatus == maxHasExecuted
+                && maxStatus == maxRoute && maxStatus == maxHomeKey)
+            {
                 return maxStatus;
+            }
 
             // otherwise assemble the maximum of each, and propagate isCoordinating from the origin we selected the promise from
-
             boolean isCoordinating = maxPromised == prefer ? prefer.isCoordinating : defer.isCoordinating;
-            return new CheckStatusOk(maxStatus.status, maxPromised.promised, maxAccepted.accepted,
-                                     isCoordinating, maxHasExecuted.hasExecutedOnAllShards, route);
+            return new CheckStatusOk(maxStatus.status, maxPromised.promised, maxAccepted.accepted, isCoordinating,
+                                     maxHasExecuted.hasExecutedOnAllShards, maxRoute.route, maxHomeKey.homeKey);
         }
 
         @Override
@@ -175,23 +172,19 @@ public class CheckStatus implements Request
 
     public static class CheckStatusOkFull extends CheckStatusOk
     {
-        public final PartialTxn txn;
-        public final RoutingKeys routingKeys;
-        public final RoutingKey homeKey;
+        public final PartialTxn partialTxn;
         public final Timestamp executeAt;
-        public final PartialDeps deps;
+        public final PartialDeps committedDeps; // only set if status >= Committed
         public final Writes writes;
         public final Result result;
 
         CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, Route route,
-                          PartialTxn txn, RoutingKeys routingKeys, RoutingKey homeKey, Timestamp executeAt, PartialDeps deps, Writes writes, Result result)
+                          RoutingKey homeKey, PartialTxn partialTxn, Timestamp executeAt, PartialDeps committedDeps, Writes writes, Result result)
         {
-            super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards, route);
-            this.txn = txn;
-            this.routingKeys = routingKeys;
-            this.homeKey = homeKey;
+            super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards, route, homeKey);
+            this.partialTxn = partialTxn;
             this.executeAt = executeAt;
-            this.deps = deps;
+            this.committedDeps = committedDeps;
             this.writes = writes;
             this.result = result;
         }
@@ -206,16 +199,15 @@ public class CheckStatus implements Request
                    ", executeAt:" + executeAt +
                    ", hasExecutedOnAllShards:" + hasExecutedOnAllShards +
                    ", isCoordinating:" + isCoordinating +
-                   ", deps:" + deps +
+                   ", deps:" + committedDeps +
                    ", writes:" + writes +
                    ", result:" + result +
                    '}';
         }
 
         /**
-         * This method assumes parameter is of the same type and has the same additional info.
-         * If parameters have different info, it is undefined which properties will be returned - no effort
-         * is made to merge different info.
+         * This method assumes parameter is of the same type and has the same additional info (modulo partial replication).
+         * If parameters have different info, it is undefined which properties will be returned.
          *
          * This method is NOT guaranteed to return CheckStatusOkFull unless the parameter is also CheckStatusOkFull.
          * This method is NOT guaranteed to return either parameter: it may merge the two to represent the maximum
@@ -232,9 +224,21 @@ public class CheckStatus implements Request
             if (!(maxSrc instanceof CheckStatusOkFull))
                 return max;
 
-            CheckStatusOkFull src = (CheckStatusOkFull) maxSrc;
-            return new CheckStatusOkFull(max.status, max.promised, max.accepted, max.isCoordinating,
-                                         max.hasExecutedOnAllShards, src.txn, routingKeys, src.homeKey, src.executeAt, src.deps, src.writes, src.result);
+            CheckStatusOkFull fullMax = (CheckStatusOkFull) maxSrc;
+            CheckStatusOk minSrc = maxSrc == this ? that : this;
+            if (!(minSrc instanceof CheckStatusOkFull))
+            {
+                return new CheckStatusOkFull(max.status, max.promised, max.accepted, max.isCoordinating, max.hasExecutedOnAllShards, max.route,
+                                             max.homeKey, fullMax.partialTxn, fullMax.executeAt, fullMax.committedDeps, fullMax.writes, fullMax.result);
+            }
+
+            CheckStatusOkFull fullMin = (CheckStatusOkFull) minSrc;
+            PartialDeps committedDeps = null;
+            if (fullMin.committedDeps != null) committedDeps = fullMax.committedDeps.with(fullMin.committedDeps);
+            else if (fullMax.committedDeps != null) committedDeps = fullMax.committedDeps;
+
+            return new CheckStatusOkFull(max.status, max.promised, max.accepted, max.isCoordinating, max.hasExecutedOnAllShards, max.route,
+                                         max.homeKey, fullMax.partialTxn.with(fullMin.partialTxn), fullMax.executeAt, committedDeps, fullMax.writes, fullMax.result);
         }
     }
 

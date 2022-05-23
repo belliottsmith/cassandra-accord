@@ -76,7 +76,7 @@ public class Persist implements Callback<ApplyReply>
                     isDone = true;
                 }
                 break;
-            case INCOMPLETE:
+            case INSUFFICIENT:
                 // TODO (now): implement, must send at least routingKeys
                 throw new UnsupportedOperationException();
         }

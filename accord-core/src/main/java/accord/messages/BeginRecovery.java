@@ -60,14 +60,14 @@ public class BeginRecovery extends TxnRequest
                 default:
                     throw new IllegalStateException("Unhandled Outcome");
 
-                case REDUNDANT:
-                case INCOMPLETE:
+                case Insufficient:
+                case Redundant:
                     throw new IllegalStateException("Invalid Outcome");
 
-                case REJECTED_BALLOT:
+                case RejectedBallot:
                     return new RecoverNack(command.promised());
 
-                case SUCCESS:
+                case Success:
             }
 
             PartialDeps deps = command.savedPartialDeps();

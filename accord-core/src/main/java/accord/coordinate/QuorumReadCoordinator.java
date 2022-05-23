@@ -15,9 +15,9 @@ import accord.topology.Topologies;
 
 abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
 {
-    enum Outcome { Abort, Continue, Accept, AcceptFinal, Success }
+    enum Action { Abort, Continue, AcceptQuorum, Accept, Success }
 
-    enum Done { Failed, Exhausted, ReachedQuorum, Success }
+    enum Done { Exhausted, ReachedQuorum, Success }
 
     static class QuorumReadShardTracker extends ReadShardTracker
     {
@@ -49,11 +49,6 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
         {
             return responseCount >= shard.slowPathQuorumSize;
         }
-
-        public boolean hasInFlight()
-        {
-            return inflight > 0;
-        }
     }
 
     static class Tracker extends ReadTracker<QuorumReadShardTracker>
@@ -74,11 +69,6 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
         public boolean hasReachedQuorum()
         {
             return all(QuorumReadShardTracker::hasReachedQuorum);
-        }
-
-        public boolean hasInFlight()
-        {
-            return any(QuorumReadShardTracker::hasInFlight);
         }
     }
 
@@ -101,7 +91,7 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
     }
 
     abstract void contact(Set<Id> nodes);
-    abstract Outcome process(Id from, Reply reply);
+    abstract Action process(Id from, Reply reply);
 
     abstract void onDone(Done done, Throwable failure);
 
@@ -123,7 +113,7 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
                 case Continue:
                     break;
 
-                case Accept:
+                case AcceptQuorum:
                     tracker.recordReadResponse(from);
                     if (tracker.hasReachedQuorum())
                     {
@@ -132,7 +122,7 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
                     }
                     break;
 
-                case AcceptFinal:
+                case Accept:
                     tracker.recordReadSuccess(from);
                     if (!tracker.hasCompletedRead())
                         break;

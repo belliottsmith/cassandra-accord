@@ -20,7 +20,7 @@ import accord.messages.Commit;
 import accord.messages.ReadData;
 import accord.messages.ReadData.ReadOk;
 
-import static accord.coordinate.AnyReadCoordinator.Outcome.Accept;
+import static accord.coordinate.AnyReadCoordinator.Action.Accept;
 
 class Execute extends AnyReadCoordinator<ReadReply>
 {
@@ -62,7 +62,7 @@ class Execute extends AnyReadCoordinator<ReadReply>
     }
 
     @Override
-    Outcome process(Id from, ReadReply reply)
+    Action process(Id from, ReadReply reply)
     {
         if (reply.isOk())
         {
@@ -77,16 +77,16 @@ class Execute extends AnyReadCoordinator<ReadReply>
             default: throw new IllegalStateException();
             case Redundant:
                 callback.accept(null, new Preempted(txnId, route.homeKey));
-                return Outcome.Abort;
+                return Action.Abort;
             case NotCommitted:
                 node.send(from, new PreAccept(from, topologies, txnId, txn, route));
                 // we already sent the commit, but it might have been lost through shedding or some other reason, so re-send
                 node.send(from, new Commit(from, topologies, txnId, txn, route, executeAt, deps, false));
                 // also try sending a read command to another replica, in case they're ready to serve a response
-                return Outcome.TryAlternative;
+                return Action.TryAlternative;
             case Invalid:
                 onFailure(from, new IllegalStateException("Submitted a read command to a replica that did not own the range"));
-                return Outcome.Abort;
+                return Action.Abort;
         }
     }
 

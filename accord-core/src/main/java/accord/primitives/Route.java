@@ -19,11 +19,6 @@ public class Route extends AbstractRoute
     }
 
     @Override
-    public RoutingKeys intersect(RoutingKeys that)
-    {
-        throw new UnsupportedOperationException();
-    }
-
     public PartialRoute slice(KeyRanges newRange)
     {
         newRange = newRange.maximalSlices(this);

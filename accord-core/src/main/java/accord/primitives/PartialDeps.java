@@ -45,6 +45,8 @@ public class PartialDeps extends Deps
 
     public PartialDeps slice(KeyRanges ranges)
     {
+        if (!covers(ranges))
+            throw new IndexOutOfBoundsException();
         return sliceMaximal(ranges.maximalSlices(covering, keys));
     }
 

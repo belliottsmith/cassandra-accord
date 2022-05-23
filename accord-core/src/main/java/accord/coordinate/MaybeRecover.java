@@ -4,6 +4,7 @@ import java.util.function.BiConsumer;
 
 import accord.api.RoutingKey;
 import accord.local.Node;
+import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
@@ -17,7 +18,7 @@ import static accord.local.Status.Accepted;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public class MaybeRecover extends CheckShards<CheckStatusOk> implements BiConsumer<Object, Throwable>
+public class MaybeRecover extends CheckShards implements BiConsumer<Object, Throwable>
 {
     final RoutingKey homeKey;
     final Status knownStatus;
@@ -51,7 +52,7 @@ public class MaybeRecover extends CheckShards<CheckStatusOk> implements BiConsum
     }
 
     @Override
-    boolean isSufficient(CheckStatusOk ok)
+    boolean isSufficient(Id from, CheckStatusOk ok)
     {
         return hasMadeProgress(ok);
     }
@@ -67,7 +68,7 @@ public class MaybeRecover extends CheckShards<CheckStatusOk> implements BiConsum
     @Override
     void onDone(Done done, Throwable fail)
     {
-        if (done == Done.Failed)
+        if (fail != null)
         {
             callback.accept(null, fail);
         }

@@ -69,7 +69,7 @@ public class MaelstromRequest extends Body implements Request
             {
                 out.beginArray();
                 out.value("r");
-                key.write(out);
+                key.datum.write(out);
                 out.nullValue();
                 out.endArray();
             }
@@ -77,7 +77,7 @@ public class MaelstromRequest extends Body implements Request
             {
                 out.beginArray();
                 out.value("append");
-                key.write(out);
+                key.datum.write(out);
                 update.get(key).write(out);
                 out.endArray();
             }

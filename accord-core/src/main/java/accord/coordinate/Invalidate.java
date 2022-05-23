@@ -27,6 +27,7 @@ import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 
+// TODO (now): switch to callback like others
 public class Invalidate extends AsyncFuture<Outcome> implements Callback<RecoverReply>, BiConsumer<Outcome, Throwable>
 {
     final Node node;
@@ -74,7 +75,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                     return null;
                 });
             }
-            trySuccess(Outcome.PREEMPTED);
+            trySuccess(Outcome.Preempted);
             return;
         }
 
@@ -129,7 +130,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                 node.forEachLocalSince(someKeys, txnId, instance -> {
                     instance.command(txnId).commitInvalidate();
                 });
-                trySuccess(Outcome.INVALIDATED);
+                trySuccess(Outcome.Invalidated);
                 return;
         }
 
@@ -156,7 +157,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
             }
             finally
             {
-                trySuccess(Outcome.INVALIDATED);
+                trySuccess(Outcome.Invalidated);
             }
         });
     }

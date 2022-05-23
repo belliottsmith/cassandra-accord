@@ -1,8 +1,9 @@
 package accord.utils;
 
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.function.IntFunction;
+
+import org.apache.cassandra.utils.concurrent.Inline;
 
 import static java.util.Arrays.*;
 
@@ -11,6 +12,8 @@ public class SortedArrays
     /**
      * Given two sorted arrays, return an array containing the elements present in either, preferentially returning one
      * of the inputs if it contains all elements of the other.
+     *
+     * TODO: introduce exponential search optimised version
      */
     public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, IntFunction<T[]> allocate)
     {
@@ -117,7 +120,10 @@ public class SortedArrays
     /**
      * Given two sorted arrays, return the elements present only in both, preferentially returning one of the inputs if
      * it contains no elements not present in the other.
+     *
+     * TODO: introduce exponential search optimised version
      */
+    @SuppressWarnings("unused") // was used until recently, might be used again?
     public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, IntFunction<T[]> allocate)
     {
         int leftIdx = 0;
@@ -199,6 +205,7 @@ public class SortedArrays
      * Given two sorted arrays, return the elements present only in the first, preferentially returning the first array
      * itself if possible
      */
+    @SuppressWarnings("unused") // was used until recently, might be used again?
     public static <T extends Comparable<? super T>> T[] linearDifference(T[] left, T[] right, IntFunction<T[]> allocate)
     {
         int rightIdx = 0;
@@ -255,6 +262,56 @@ public class SortedArrays
         return result;
     }
 
+    public static <A, R> A[] sliceWithOverlaps(A[] slice, R[] select, IntFunction<A[]> factory, AsymmetricComparator<A, R> cmp1, AsymmetricComparator<R, A> cmp2)
+    {
+        A[] result;
+        int resultCount;
+        int ai = 0, ri = 0;
+        while (true)
+        {
+            long ari = findNextIntersection(slice, ai, select, ri, cmp1, cmp2, Search.CEIL);
+            if (ari < 0)
+            {
+                if (ai == slice.length)
+                    return slice;
+
+                return Arrays.copyOf(slice, ai);
+            }
+
+            int nextai = (int)(ari >>> 32);
+            if (ai != nextai)
+            {
+                resultCount = ai;
+                result = factory.apply(ai + (slice.length - nextai));
+                System.arraycopy(slice, 0, result, 0, resultCount);
+                ai = nextai;
+                break;
+            }
+
+            ri = (int)ari;
+            ai = exponentialSearch(slice, ai, slice.length, select[ri], cmp2, Search.FLOOR) + 1;
+        }
+
+        while (true)
+        {
+            int nextai = exponentialSearch(slice, ai, slice.length, select[ri], cmp2, Search.FLOOR) + 1;
+            while (ai < nextai)
+                result[resultCount++] = slice[ai++];
+
+            long ari = findNextIntersection(slice, ai, select, ri, cmp1, cmp2, Search.CEIL);
+            if (ari < 0)
+            {
+                if (resultCount < result.length)
+                    result = Arrays.copyOf(result, resultCount);
+
+                return result;
+            }
+
+            ai = (int)(ari >>> 32);
+            ri = (int)ari;
+        }
+    }
+
     /**
      * Copy-on-write insert into the provided array; returns the same array if item already present, or a new array
      * with the item in the correct position if not. Linear time complexity.
@@ -281,126 +338,123 @@ public class SortedArrays
      */
     public static <T1, T2 extends Comparable<? super T1>> int exponentialSearch(T1[] in, int from, int to, T2 find)
     {
-        int step = 0;
-        while (from + step < to)
-        {
-            int i = from + step;
-            int c = find.compareTo(in[i]);
-            if (c < 0)
-            {
-                to = i;
-                break;
-            }
-            if (c == 0)
-                return i;
-            from = i + 1;
-            step = step * 2 + 1; // jump in perfect binary search increments
-        }
-        return Arrays.binarySearch(in, from, to, find);
+        return exponentialSearch(in, from, to, find, Comparable::compareTo, Search.FAST);
     }
 
-    public static <T> int exponentialSearch(T[] in, int from, int to, T find, Comparator<T> comparator)
+    // TODO: check inlining elides this
+    public enum Search { FLOOR, CEIL, FAST }
+
+    @Inline
+    public static <T1, T2> int exponentialSearch(T2[] in, int from, int to, T1 find, AsymmetricComparator<T1, T2> comparator, Search op)
     {
         int step = 0;
-        while (from + step < to)
+        loop: while (from + step < to)
         {
             int i = from + step;
             int c = comparator.compare(find, in[i]);
             if (c < 0)
             {
-                to = i;
+                to = i - 1;
                 break;
             }
-            if (c == 0)
-                return i;
-            from = i + 1;
-            step = step * 2 + 1; // jump in perfect binary search increments
-        }
-        return Arrays.binarySearch(in, from, to, find, comparator);
-    }
-
-    public static <T1, T2 extends Comparable<? super T1>> int exponentialSearchCeil(T2[] in, int from, int to, T1 find)
-    {
-        int step = 0;
-        while (from + step < to)
-        {
-            int i = from + step;
-            int c = in[i].compareTo(find);
-            if (c >= 0)
+            if (c > 0)
             {
-                if (c == 0 && step == 0)
-                    return from;
-                to = i;
-                break;
+                from = i + 1;
             }
-            from = i + 1;
+            else
+            {
+                switch (op)
+                {
+                    case FAST:
+                        return i;
+
+                    case CEIL:
+                        if (step == 0)
+                            return from;
+                        to = i + 1; // could in theory avoid one extra comparison in this case, but would uglify things
+                        break loop;
+
+                    case FLOOR:
+                        from = i;
+                }
+            }
             step = step * 2 + 1; // jump in perfect binary search increments
         }
-        return binarySearchCeil(in, from, to, find);
+        return binarySearch(in, from, to, find, comparator, op);
     }
 
-    public static <T1, T2 extends Comparable<? super T1>> int binarySearchCeil(T2[] in, int from, int to, T1 find)
+    @Inline
+    public static <T1, T2> int binarySearch(T2[] in, int from, int to, T1 find, AsymmetricComparator<T1, T2> comparator, Search op)
     {
         boolean found = false;
         while (from < to)
         {
-            int m = (from + to) >>> 1;
-            int c = in[m].compareTo(find);
-            if (c >= 0)
+            int i = (from + to) >>> 1;
+            int c = comparator.compare(find, in[i]);
+            if (c < 0)
             {
-                to = m;
-                found = c == 0;
+                to = i - 1;
             }
-            else from = m + 1;
+            else if (c > 0)
+            {
+                from = i + 1;
+            }
+            else
+            {
+                switch (op)
+                {
+                    default: throw new IllegalStateException();
+                    case FAST:
+                        return i;
+
+                    case CEIL:
+                        to = i;
+                        break;
+
+                    case FLOOR:
+                        from = i;
+                }
+                found = true;
+            }
         }
         return found ? to : -1 - to;
     }
 
-    public static <T1, T2 extends Comparable<? super T1>> int exponentialSearchCeil2(T1[] in, int from, int to, T2 find)
+    public static <T1, T2 extends Comparable<T1>> long findNextIntersectionWithOverlaps(T1[] as, int ai, T2[] bs, int bi)
     {
-        int step = 0;
-        while (from + step < to)
-        {
-            int i = from + step;
-            int c = find.compareTo(in[i]);
-            if (c <= 0)
-            {
-                if (c == 0 && step == 0)
-                    return from;
-                to = i;
-                break;
-            }
-            from = i + 1;
-            step = step * 2 + 1; // jump in perfect binary search increments
-        }
-        return binarySearchCeil2(in, from, to, find);
+        return findNextIntersectionWithOverlaps(as, ai, bs, bi, (a, b) -> b.compareTo(a), Comparable::compareTo);
     }
 
-    public static <T1, T2 extends Comparable<? super T1>> int binarySearchCeil2(T1[] in, int from, int to, T2 find)
+    public static <T1, T2> long findNextIntersectionWithOverlaps(T1[] as, int ai, T2[] bs, int bi, AsymmetricComparator<T1, T2> cmp1, AsymmetricComparator<T2, T1> cmp2)
     {
-        boolean found = false;
-        while (from < to)
-        {
-            int m = (from + to) >>> 1;
-            int c = find.compareTo(in[m]);
-            if (c <= 0)
-            {
-                to = m;
-                found = c == 0;
-            }
-            else from = m + 1;
-        }
-        return found ? to : -1 - to;
+        return findNextIntersection(as, ai, bs, bi, cmp1, cmp2, Search.CEIL);
     }
 
-    public static <T1, T2 extends Comparable<? super T1>> long findNextIntersectionWithOverlaps(T1[] as, int ai, T2[] bs, int bi)
+    public static <T extends Comparable<? super T>> long findNextIntersection(T[] as, int ai, T[] bs, int bi)
+    {
+        return findNextIntersection(as, ai, bs, bi, Comparable::compareTo);
+    }
+
+    public static <T> long findNextIntersection(T[] as, int ai, T[] bs, int bi, AsymmetricComparator<T, T> comparator)
+    {
+        return findNextIntersection(as, ai, bs, bi, comparator, comparator, Search.FAST);
+    }
+
+    /**
+     * Given two sorted arrays, find the next index in each array containing an equal item.
+     *
+     * Works with CEIL or FAST; FAST to be used if precisely one match for each item in either list, CEIL if one item
+     *
+     * in either list may be matched to multiple in the other list.
+     */
+    private static <T1, T2> long findNextIntersection(T1[] as, int ai, T2[] bs, int bi, AsymmetricComparator<T1, T2> cmp1, AsymmetricComparator<T2, T1> cmp2, Search op)
     {
         if (ai == as.length)
             return -1;
 
         while (true)
         {
-            bi = SortedArrays.exponentialSearchCeil(bs, bi, bs.length, as[ai]);
+            bi = SortedArrays.exponentialSearch(bs, bi, bs.length, as[ai], cmp1, op);
             if (bi >= 0)
                 break;
 
@@ -408,59 +462,7 @@ public class SortedArrays
             if (bi == bs.length)
                 return -1;
 
-            ai = SortedArrays.exponentialSearchCeil2(as, ai, as.length, bs[bi]);
-            if (ai >= 0)
-                break;
-
-            ai = -1 -ai;
-            if (ai == as.length)
-                return -1;
-        }
-        return ((long)ai << 32) | bi;
-    }
-
-    public static <T1 extends Comparable<? super T1>> long findNextIntersection(T1[] as, int ai, T1[] bs, int bi)
-    {
-        if (ai == as.length)
-            return -1;
-
-        while (true)
-        {
-            bi = SortedArrays.exponentialSearch(bs, bi, bs.length, as[ai]);
-            if (bi >= 0)
-                break;
-
-            bi = -1 - bi;
-            if (bi == bs.length)
-                return -1;
-
-            ai = SortedArrays.exponentialSearch(as, ai, as.length, bs[bi]);
-            if (ai >= 0)
-                break;
-
-            ai = -1 -ai;
-            if (ai == as.length)
-                return -1;
-        }
-        return ((long)ai << 32) | bi;
-    }
-
-    public static <T> long findNextIntersection(T[] as, int ai, T[] bs, int bi, Comparator<T> comparator)
-    {
-        if (ai == as.length)
-            return -1;
-
-        while (true)
-        {
-            bi = SortedArrays.exponentialSearch(bs, bi, bs.length, as[ai], comparator);
-            if (bi >= 0)
-                break;
-
-            bi = -1 - bi;
-            if (bi == bs.length)
-                return -1;
-
-            ai = SortedArrays.exponentialSearch(as, ai, as.length, bs[bi], comparator);
+            ai = SortedArrays.exponentialSearch(as, ai, as.length, bs[bi], cmp2, op);
             if (ai >= 0)
                 break;
 

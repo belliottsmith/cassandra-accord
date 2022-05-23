@@ -9,6 +9,7 @@ import com.google.common.base.Preconditions;
 
 import accord.api.RoutingKey;
 import accord.local.Command;
+import accord.local.Command.CommitOutcome;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.KeyRanges;
@@ -104,14 +105,11 @@ public class Commit extends ReadData
             switch (command.commit(scope.homeKey, progressKey, executeAt, deps, partialTxn))
             {
                 default:
-                case REJECTED_BALLOT:
-                    throw new IllegalStateException();
-
-                case SUCCESS:
-                case REDUNDANT:
+                case Success:
+                case Redundant:
                     return null;
 
-                case INCOMPLETE:
+                case Insufficient:
                     Preconditions.checkState(!command.hasBeen(PreAccepted));
                     if (defer == null)
                         defer = new Defer(PreAccepted, this, node, from, replyContext);

@@ -77,15 +77,15 @@ class Propose implements Callback<AcceptReply>
         switch (reply.outcome())
         {
             default: throw new IllegalStateException();
-            case REDUNDANT:
-            case REJECTED_BALLOT:
+            case Redundant:
+            case RejectedBallot:
                 isDone = true;
                 callback.accept(null, new Preempted(txnId, route.homeKey));
                 break;
-            case INCOMPLETE:
+            case Insufficient:
                 node.send(from, new PreAccept(from, node.topology().preciseEpochs(route, txnId.epoch, executeAt.epoch), txnId, txn, route));
                 break;
-            case SUCCESS:
+            case Success:
                 AcceptOk ok = (AcceptOk) reply;
                 acceptOks.add(ok);
                 if (acceptTracker.success(from))

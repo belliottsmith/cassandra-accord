@@ -1,7 +1,7 @@
 package accord.messages;
 
 import accord.api.RoutingKey;
-import accord.local.Command.Outcome;
+import accord.local.Command.AcceptOutcome;
 import accord.local.Node.Id;
 import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
@@ -15,8 +15,8 @@ import accord.local.Command;
 import accord.primitives.Deps;
 import accord.primitives.TxnId;
 
-import static accord.local.Command.Outcome.REJECTED_BALLOT;
-import static accord.local.Command.Outcome.SUCCESS;
+import static accord.local.Command.AcceptOutcome.RejectedBallot;
+import static accord.local.Command.AcceptOutcome.Success;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.PreAccept.calculateDeps;
 
@@ -47,20 +47,19 @@ public class Accept extends TxnRequest.WithUnsync
         RoutingKey progressKey = progressKey(node, scope.homeKey);
         node.reply(replyToNode, replyContext, node.mapReduceLocal(scope(), minEpoch, executeAt.epoch, instance -> {
             Command command = instance.command(txnId);
-            Outcome outcome = command.accept(ballot, scope.homeKey, progressKey, executeAt, deps);
-            switch (outcome)
+            switch (command.accept(ballot, scope.homeKey, progressKey, executeAt, deps))
             {
                 default: throw new IllegalStateException();
-                case REDUNDANT:
+                case Redundant:
                     return AcceptNack.REDUNDANT;
-                case INCOMPLETE:
+                case Insufficient:
                     if (defer == null)
                         defer = new Defer(PreAccepted, this, node, replyToNode, replyContext);
                     defer.add(command, instance);
-                    return AcceptNack.INCOMPLETE;
-                case REJECTED_BALLOT:
-                    return new AcceptNack(outcome, command.promised());
-                case SUCCESS:
+                    return AcceptNack.INSUFFICIENT;
+                case RejectedBallot:
+                    return new AcceptNack(RejectedBallot, command.promised());
+                case Success:
                     return new AcceptOk(calculateDeps(instance, txnId, keys, kindOfTxn, executeAt, Deps.builder(keys)));
             }
         }, (r1, r2) -> {
@@ -113,14 +112,14 @@ public class Accept extends TxnRequest.WithUnsync
                 switch (command.acceptInvalidate(ballot))
                 {
                     default:
-                    case INCOMPLETE:
+                    case Insufficient:
                         throw new IllegalStateException();
-                    case REDUNDANT:
+                    case Redundant:
                         return AcceptNack.REDUNDANT;
-                    case SUCCESS:
+                    case Success:
                         return new AcceptOk(null);
-                    case REJECTED_BALLOT:
-                       return new AcceptNack(REJECTED_BALLOT, command.promised());
+                    case RejectedBallot:
+                       return new AcceptNack(RejectedBallot, command.promised());
                 }
             }));
         }
@@ -153,7 +152,7 @@ public class Accept extends TxnRequest.WithUnsync
         }
 
         public abstract boolean isOk();
-        public abstract Outcome outcome();
+        public abstract AcceptOutcome outcome();
     }
 
     public static class AcceptOk extends AcceptReply
@@ -173,9 +172,9 @@ public class Accept extends TxnRequest.WithUnsync
         }
 
         @Override
-        public Outcome outcome()
+        public AcceptOutcome outcome()
         {
-            return SUCCESS;
+            return Success;
         }
 
         @Override
@@ -187,13 +186,13 @@ public class Accept extends TxnRequest.WithUnsync
 
     public static class AcceptNack extends AcceptReply
     {
-        public static final AcceptNack REDUNDANT = new AcceptNack(Outcome.REDUNDANT, null);
-        public static final AcceptNack INCOMPLETE = new AcceptNack(Outcome.INCOMPLETE, null);
+        public static final AcceptNack REDUNDANT = new AcceptNack(AcceptOutcome.Redundant, null);
+        public static final AcceptNack INSUFFICIENT = new AcceptNack(AcceptOutcome.Insufficient, null);
 
-        public final Outcome outcome;
+        public final AcceptOutcome outcome;
         public final Timestamp supersededBy;
 
-        public AcceptNack(Outcome outcome, Timestamp supersededBy)
+        public AcceptNack(AcceptOutcome outcome, Timestamp supersededBy)
         {
             this.outcome = outcome;
             this.supersededBy = supersededBy;
@@ -206,7 +205,7 @@ public class Accept extends TxnRequest.WithUnsync
         }
 
         @Override
-        public Outcome outcome()
+        public AcceptOutcome outcome()
         {
             return outcome;
         }

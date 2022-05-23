@@ -5,6 +5,7 @@ import java.util.function.BiConsumer;
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
+import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
@@ -19,7 +20,7 @@ import static accord.local.Status.Executed;
  *
  * Updates local command stores based on the obtained information.
  */
-public class CheckOnCommitted extends CheckShards<CheckStatusOkFull>
+public class CheckOnCommitted extends CheckShards
 {
     final BiConsumer<CheckStatusOkFull, Throwable> callback;
 
@@ -37,7 +38,7 @@ public class CheckOnCommitted extends CheckShards<CheckStatusOkFull>
     }
 
     @Override
-    boolean isSufficient(CheckStatusOk ok)
+    boolean isSufficient(Id from, CheckStatusOk ok)
     {
         return ok.status.hasBeen(Executed);
     }
@@ -60,26 +61,26 @@ public class CheckOnCommitted extends CheckShards<CheckStatusOkFull>
                 return;
         }
 
-        RoutingKey progressKey = node.trySelectProgressKey(txnId, max.txn.keys, max.homeKey);
+        RoutingKey progressKey = node.trySelectProgressKey(txnId, max.partialTxn.keys, max.homeKey);
         switch (max.status)
         {
             default: throw new IllegalStateException();
             case Executed:
             case Applied:
-                node.forEachLocalSince(max.txn.keys, max.executeAt.epoch, commandStore -> {
+                node.forEachLocalSince(max.partialTxn.keys, max.executeAt.epoch, commandStore -> {
                     Command command = commandStore.command(txnId);
-                    command.apply(max.homeKey, progressKey, max.executeAt, max.deps, max.writes, max.result);
+                    command.apply(max.homeKey, progressKey, max.executeAt, max.committedDeps, max.writes, max.result);
                 });
-                node.forEachLocal(max.txn.keys, txnId.epoch, max.executeAt.epoch - 1, commandStore -> {
+                node.forEachLocal(max.partialTxn.keys, txnId.epoch, max.executeAt.epoch - 1, commandStore -> {
                     Command command = commandStore.command(txnId);
-                    command.commit(max.homeKey, progressKey, max.executeAt, max.deps, max.txn);
+                    command.commit(max.homeKey, progressKey, max.executeAt, max.committedDeps, max.partialTxn);
                 });
                 break;
             case Committed:
             case ReadyToExecute:
-                node.forEachLocalSince(max.txn.keys, txnId.epoch, commandStore -> {
+                node.forEachLocalSince(max.partialTxn.keys, txnId.epoch, commandStore -> {
                     Command command = commandStore.command(txnId);
-                    command.commit(max.homeKey, progressKey, max.executeAt, max.deps, max.txn);
+                    command.commit(max.homeKey, progressKey, max.executeAt, max.committedDeps, max.partialTxn);
                 });
         }
     }

@@ -4,6 +4,7 @@ import java.util.function.BiConsumer;
 
 import accord.api.RoutingKey;
 import accord.local.Node;
+import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.primitives.RoutingKeys;
@@ -13,7 +14,7 @@ import accord.primitives.TxnId;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public class RecoverWithHomeKey extends CheckShards<CheckStatusOk> implements BiConsumer<Object, Throwable>
+public class RecoverWithHomeKey extends CheckShards implements BiConsumer<Object, Throwable>
 {
     final RoutingKey homeKey;
     final BiConsumer<Recover.Outcome, Throwable> callback;
@@ -39,7 +40,7 @@ public class RecoverWithHomeKey extends CheckShards<CheckStatusOk> implements Bi
     }
 
     @Override
-    boolean isSufficient(CheckStatusOk ok)
+    boolean isSufficient(Id from, CheckStatusOk ok)
     {
         return ok.route != null;
     }
@@ -47,7 +48,7 @@ public class RecoverWithHomeKey extends CheckShards<CheckStatusOk> implements Bi
     @Override
     void onDone(Done done, Throwable fail)
     {
-        if (done == Done.Failed)
+        if (fail != null)
         {
             callback.accept(null, fail);
         }
@@ -60,12 +61,22 @@ public class RecoverWithHomeKey extends CheckShards<CheckStatusOk> implements Bi
                     callback.accept(null, new Timeout(txnId, homeKey));
                     return;
                 case Success:
-                case ReachedQuorum:
                     callback.accept(null, new IllegalStateException());
+                    return;
+                case ReachedQuorum:
+                    Invalidate.invalidate(node, txnId, someKeys, homeKey)
+                              .addCallback(callback);
             }
         }
         else
         {
+            // save routingKeys
+            node.ifLocalSince(merged.route.homeKey, txnId, instance -> {
+                instance.command(txnId).routingKeys(merged.route);
+                return null;
+            });
+
+            // start recovery
             node.recover(txnId, merged.route).addCallback(callback);
         }
     }
