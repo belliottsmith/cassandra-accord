@@ -38,7 +38,7 @@ public class BeginRecovery extends TxnRequest
     final TxnId txnId;
     final PartialTxn txn;
     final Ballot ballot;
-    final @Nullable RoutingKeys allRoutingKeys;
+    final @Nullable Route allRoutingKeys;
 
     public BeginRecovery(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route, Ballot ballot)
     {
@@ -55,7 +55,7 @@ public class BeginRecovery extends TxnRequest
         RecoverReply reply = node.mapReduceLocal(scope(), txnId.epoch, txnId.epoch, instance -> {
             Command command = instance.command(txnId);
 
-            switch (command.recover(txn, scope.homeKey, progressKey, allRoutingKeys, ballot))
+            switch (command.recover(txn, scope, progressKey, allRoutingKeys, ballot))
             {
                 default:
                     throw new IllegalStateException("Unhandled Outcome");

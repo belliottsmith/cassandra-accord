@@ -10,4 +10,9 @@ public abstract class AbstractRoute extends RoutingKeys
     }
 
     public abstract PartialRoute slice(KeyRanges ranges);
+
+    /**
+     * Requires that the ranges are fully covered by this collection
+     */
+    public abstract PartialRoute sliceStrict(KeyRanges ranges);
 }

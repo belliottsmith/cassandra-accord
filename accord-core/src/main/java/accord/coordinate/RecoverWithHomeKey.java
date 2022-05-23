@@ -70,9 +70,9 @@ public class RecoverWithHomeKey extends CheckShards implements BiConsumer<Object
         }
         else
         {
-            // save routingKeys
-            node.ifLocalSince(merged.route.homeKey, txnId, instance -> {
-                instance.command(txnId).routingKeys(merged.route);
+            // save route
+            node.ifLocal(merged.route.homeKey, txnId, instance -> {
+                instance.command(txnId).saveRoute(merged.route);
                 return null;
             });
 

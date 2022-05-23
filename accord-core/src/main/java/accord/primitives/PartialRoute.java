@@ -7,6 +7,9 @@ import com.google.common.base.Preconditions;
 import accord.api.RoutingKey;
 import accord.utils.SortedArrays;
 
+/**
+ * A slice of a Route that covers
+ */
 public class PartialRoute extends AbstractRoute
 {
     public final RoutingKey homeKey;
@@ -19,9 +22,17 @@ public class PartialRoute extends AbstractRoute
         this.homeKey = homeKey;
     }
 
+    public PartialRoute sliceStrict(KeyRanges newRange)
+    {
+        if (!covering.contains(newRange))
+            throw new IllegalArgumentException("Not covered");
+
+        RoutingKey[] keys = slice(covering, RoutingKey[]::new);
+        return new PartialRoute(covering, homeKey, keys);
+    }
+
     public PartialRoute slice(KeyRanges newRange)
     {
-        newRange = newRange.maximalSlices(covering, this);
         if (newRange.contains(covering))
             return this;
 

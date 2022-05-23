@@ -366,12 +366,8 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         Preconditions.checkState(keys.isEmpty() || keyToTxnId[keys.size() - 1] == keyToTxnId.length);
     }
 
+    // TODO: offer option of computing the maximal KeyRanges that covers the same set of keys as covered by the parameter
     public PartialDeps slice(KeyRanges ranges)
-    {
-        return sliceMaximal(ranges.maximalSlices(keys));
-    }
-
-    PartialDeps sliceMaximal(KeyRanges ranges)
     {
         if (isEmpty())
             return new PartialDeps(ranges, keys, txnIds, keyToTxnId);

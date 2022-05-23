@@ -10,8 +10,10 @@ import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
+import accord.primitives.AbstractRoute;
 import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
@@ -47,7 +49,10 @@ public class CheckStatus implements Request
     {
         Preconditions.checkState(topologies.currentEpoch() == topologies.oldestEpoch());
         this.txnId = txnId;
-        this.someKeys = computeScope(to, topologies, someKeys, 0, RoutingKeys::slice, RoutingKeys::union);
+        if (someKeys instanceof AbstractRoute)
+            this.someKeys = computeScope(to, topologies, (AbstractRoute) someKeys, 0, AbstractRoute::sliceStrict, PartialRoute::union);
+        else
+            this.someKeys = computeScope(to, topologies, someKeys, 0, RoutingKeys::slice, RoutingKeys::union);
         this.epoch = topologies.currentEpoch();
         this.includeInfo = includeInfo;
     }
@@ -59,7 +64,7 @@ public class CheckStatus implements Request
             Route route = null;
             if (includeInfo != IncludeInfo.No)
             {
-                RoutingKeys keys = command.routingKeys();
+                RoutingKeys keys = command.route();
                 if (keys != null)
                     route = keys.toRoute(command.homeKey());
             }

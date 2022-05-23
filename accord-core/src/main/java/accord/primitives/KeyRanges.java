@@ -336,34 +336,6 @@ public class KeyRanges implements Iterable<KeyRange>
         return new KeyRanges(result);
     }
 
-    /**
-     * Yield the maximal ranges that are covered by selecting those supplied keys that intersect with {@code this},
-     * assuming these keys cover the range provided
-     */
-    public KeyRanges maximalSlices(KeyRanges covering, AbstractKeys<?, ?> keys)
-    {
-        KeyRange[] is = ranges, js = covering.ranges;
-        RoutingKey[] ks = keys.keys;
-        int i = 0, j = 0, k = 0;
-        while (true)
-        {
-
-        }
-    }
-
-    /**
-     * Yield the maximal ranges that are covered by selecting those supplied keys that intersect with {@code this},
-     * assuming these keys cover the entire range of RoutingKey
-     */
-    public KeyRanges maximalSlices(AbstractKeys<?, ?> keys)
-    {
-        int ri = 0, ki = 0;
-        while (true)
-        {
-
-        }
-    }
-
     public KeyRanges mergeTouching()
     {
         if (ranges.length == 0)

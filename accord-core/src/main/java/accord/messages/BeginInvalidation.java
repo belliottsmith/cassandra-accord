@@ -35,7 +35,7 @@ public class BeginInvalidation implements EpochRequest
             if (!command.preacceptInvalidate(ballot))
                 return new InvalidateNack(command.promised(), command.homeKey());
 
-            return new InvalidateOk(command.status(), command.routingKeys(), command.homeKey());
+            return new InvalidateOk(command.status(), command.route(), command.homeKey());
         });
 
         node.reply(replyToNode, replyContext, reply);

@@ -47,7 +47,7 @@ public class Accept extends TxnRequest.WithUnsync
         RoutingKey progressKey = progressKey(node, scope.homeKey);
         node.reply(replyToNode, replyContext, node.mapReduceLocal(scope(), minEpoch, executeAt.epoch, instance -> {
             Command command = instance.command(txnId);
-            switch (command.accept(ballot, scope.homeKey, progressKey, executeAt, deps))
+            switch (command.accept(ballot, scope, progressKey, executeAt, deps))
             {
                 default: throw new IllegalStateException();
                 case Redundant:

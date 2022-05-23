@@ -19,11 +19,15 @@ public class Route extends AbstractRoute
     }
 
     @Override
-    public PartialRoute slice(KeyRanges newRange)
+    public PartialRoute slice(KeyRanges ranges)
     {
-        newRange = newRange.maximalSlices(this);
-        RoutingKey[] keys = slice(newRange, RoutingKey[]::new);
-        return new PartialRoute(newRange, homeKey, keys);
+        return new PartialRoute(ranges, homeKey, slice(ranges, RoutingKey[]::new));
+    }
+
+    @Override
+    public PartialRoute sliceStrict(KeyRanges ranges)
+    {
+        return slice(ranges);
     }
 
     @Override

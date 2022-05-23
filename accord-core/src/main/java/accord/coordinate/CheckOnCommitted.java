@@ -46,7 +46,7 @@ public class CheckOnCommitted extends CheckShards
     @Override
     void onDone(Done done, Throwable failure)
     {
-
+        TO DO COMPILE ERROR
     }
 
     void onSuccessCriteriaOrExhaustion(CheckStatusOkFull max)
@@ -61,6 +61,7 @@ public class CheckOnCommitted extends CheckShards
                 return;
         }
 
+        // TODO (now): is this safe? Need to make sure we have invoked with a complete PartialRoute
         RoutingKey progressKey = node.trySelectProgressKey(txnId, max.partialTxn.keys, max.homeKey);
         switch (max.status)
         {
