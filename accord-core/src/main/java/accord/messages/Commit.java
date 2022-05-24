@@ -9,7 +9,6 @@ import com.google.common.base.Preconditions;
 
 import accord.api.RoutingKey;
 import accord.local.Command;
-import accord.local.Command.CommitOutcome;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.KeyRanges;
@@ -102,7 +101,7 @@ public class Commit extends ReadData
         RoutingKey progressKey = node.trySelectProgressKey(txnId, scope);
         ReadNack reply = node.mapReduceLocal(scope(), txnId.epoch, executeAt.epoch, instance -> {
             Command command = instance.command(txnId);
-            switch (command.commit(scope.homeKey, progressKey, executeAt, deps, partialTxn))
+            switch (command.commit(scope, progressKey, executeAt, deps, partialTxn))
             {
                 default:
                 case Success:

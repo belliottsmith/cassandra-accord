@@ -5,7 +5,6 @@ import accord.api.RoutingKey;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
-import accord.primitives.RoutingKeys;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
 
@@ -38,7 +37,7 @@ public class BeginRecovery extends TxnRequest
     final TxnId txnId;
     final PartialTxn txn;
     final Ballot ballot;
-    final @Nullable Route allRoutingKeys;
+    final @Nullable Route route;
 
     public BeginRecovery(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route, Ballot ballot)
     {
@@ -46,7 +45,7 @@ public class BeginRecovery extends TxnRequest
         this.txnId = txnId;
         this.txn = txn.slice(scope.covering, scope.contains(scope.homeKey));
         this.ballot = ballot;
-        this.allRoutingKeys = scope.contains(scope.homeKey) ? route : null;
+        this.route = scope.contains(scope.homeKey) ? route : null;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
@@ -55,7 +54,7 @@ public class BeginRecovery extends TxnRequest
         RecoverReply reply = node.mapReduceLocal(scope(), txnId.epoch, txnId.epoch, instance -> {
             Command command = instance.command(txnId);
 
-            switch (command.recover(txn, scope, progressKey, allRoutingKeys, ballot))
+            switch (command.recover(txn, route != null ? route : scope, progressKey, ballot))
             {
                 default:
                     throw new IllegalStateException("Unhandled Outcome");

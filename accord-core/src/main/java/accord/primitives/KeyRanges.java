@@ -260,6 +260,7 @@ public class KeyRanges implements Iterable<KeyRange>
      */
     public KeyRanges union(KeyRanges that)
     {
+        if (this == that) return this;
         if (this.isEmpty()) return that;
         if (that.isEmpty()) return this;
 

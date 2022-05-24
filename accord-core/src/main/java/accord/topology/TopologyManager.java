@@ -4,9 +4,11 @@ import accord.api.ConfigurationService;
 import accord.api.RoutingKey;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
+import accord.local.Node.Id;
 import accord.messages.EpochRequest;
 import accord.messages.Request;
 import accord.primitives.AbstractKeys;
+import accord.primitives.KeyRanges;
 import accord.topology.Topologies.Single;
 import accord.primitives.Timestamp;
 import com.google.common.annotations.VisibleForTesting;
@@ -353,6 +355,19 @@ public class TopologyManager implements ConfigurationService.Listener
     public Topology localForEpoch(long epoch)
     {
         return epochs.get(epoch).local();
+    }
+
+    public KeyRanges localRangesForEpoch(long epoch)
+    {
+        return epochs.get(epoch).local().rangesForNode(node);
+    }
+
+    public KeyRanges localRangesForEpochs(long start, long end)
+    {
+        KeyRanges ranges = localRangesForEpoch(start);
+        for (long i = start + 1; i <= end ; ++i)
+            ranges = ranges.union(localRangesForEpoch(i));
+        return ranges;
     }
 
     public Topology globalForEpoch(long epoch)

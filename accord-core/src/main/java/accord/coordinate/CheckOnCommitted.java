@@ -9,16 +9,18 @@ import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
+import accord.primitives.AbstractRoute;
+import accord.primitives.KeyRanges;
 import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 
 import static accord.local.Status.Executed;
 
 /**
- * Check on the status of a locally-uncommitted transaction. Returns early if any result indicates Committed, otherwise
- * waits only for a quorum and returns the maximum result.
+ * Check on the status of a locally-committed transaction. Returns early if any result indicates Executed, otherwise
+ * waits only for a quorum and returns the maximum result. Updates local command stores based on the obtained information.
  *
- * Updates local command stores based on the obtained information.
+ * If a command is durable (i.e. executed on a majority on all shards) this is sufficient to replicate the command locally.
  */
 public class CheckOnCommitted extends CheckShards
 {
@@ -46,12 +48,20 @@ public class CheckOnCommitted extends CheckShards
     @Override
     void onDone(Done done, Throwable failure)
     {
-        TO DO COMPILE ERROR
+        if (failure != null)
+        {
+            callback.accept(null, failure);
+        }
+        else
+        {
+            super.onDone(done, failure);
+            onSuccessCriteriaOrExhaustion((CheckStatusOkFull) merged);
+        }
     }
 
-    void onSuccessCriteriaOrExhaustion(CheckStatusOkFull max)
+    void onSuccessCriteriaOrExhaustion(CheckStatusOkFull full)
     {
-        switch (max.status)
+        switch (full.status)
         {
             case NotWitnessed:
             case PreAccepted:
@@ -61,28 +71,53 @@ public class CheckOnCommitted extends CheckShards
                 return;
         }
 
-        // TODO (now): is this safe? Need to make sure we have invoked with a complete PartialRoute
-        RoutingKey progressKey = node.trySelectProgressKey(txnId, max.partialTxn.keys, max.homeKey);
-        switch (max.status)
+        KeyRanges coordinateRanges = node.topology().localRangesForEpoch(txnId.epoch);
+        KeyRanges executeRanges = node.topology().localRangesForEpoch(full.executeAt.epoch);
+        KeyRanges allRanges = coordinateRanges.union(executeRanges);
+
+        AbstractRoute mergedRoute = someKeys instanceof AbstractRoute ? AbstractRoute.merge(full.route, (AbstractRoute) someKeys) : full.route;
+        boolean canExecute = mergedRoute.covers(executeRanges);
+        boolean canCommit = mergedRoute.covers(coordinateRanges);
+
+        if (epoch == txnId.epoch && !canCommit)
+            throw new IllegalStateException();
+
+        if (epoch == full.executeAt.epoch && !canExecute)
+            throw new IllegalStateException();
+
+        boolean ownsHomeShard = coordinateRanges.contains(full.homeKey);
+        AbstractRoute route = ownsHomeShard ? mergedRoute : mergedRoute.slice(allRanges);
+        RoutingKey progressKey = node.trySelectProgressKey(txnId, route);
+
+        switch (full.status)
         {
             default: throw new IllegalStateException();
             case Executed:
             case Applied:
-                node.forEachLocalSince(max.partialTxn.keys, max.executeAt.epoch, commandStore -> {
-                    Command command = commandStore.command(txnId);
-                    command.apply(max.homeKey, progressKey, max.executeAt, max.committedDeps, max.writes, max.result);
-                });
-                node.forEachLocal(max.partialTxn.keys, txnId.epoch, max.executeAt.epoch - 1, commandStore -> {
-                    Command command = commandStore.command(txnId);
-                    command.commit(max.homeKey, progressKey, max.executeAt, max.committedDeps, max.partialTxn);
-                });
+                if (canExecute)
+                {
+                    node.forEachLocalSince(route, full.executeAt.epoch, commandStore -> {
+                        Command command = commandStore.command(txnId);
+                        command.apply(route, progressKey, full.executeAt, full.committedDeps, full.writes, full.result);
+                    });
+                }
+                if (canCommit)
+                {
+                    node.forEachLocal(route, txnId.epoch, full.executeAt.epoch - 1, commandStore -> {
+                        Command command = commandStore.command(txnId);
+                        command.commit(route, progressKey, full.executeAt, full.committedDeps, full.partialTxn);
+                    });
+                }
                 break;
             case Committed:
             case ReadyToExecute:
-                node.forEachLocalSince(max.partialTxn.keys, txnId.epoch, commandStore -> {
-                    Command command = commandStore.command(txnId);
-                    command.commit(max.homeKey, progressKey, max.executeAt, max.committedDeps, max.partialTxn);
-                });
+                if (canCommit)
+                {
+                    node.forEachLocalSince(route, txnId.epoch, commandStore -> {
+                        Command command = commandStore.command(txnId);
+                        command.commit(route, progressKey, full.executeAt, full.committedDeps, full.partialTxn);
+                    });
+                }
         }
     }
 }

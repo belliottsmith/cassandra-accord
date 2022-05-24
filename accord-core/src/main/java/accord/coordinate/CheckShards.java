@@ -2,6 +2,7 @@ package accord.coordinate;
 
 import java.util.Set;
 
+import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.CheckStatus;
@@ -38,6 +39,21 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
     }
 
     abstract boolean isSufficient(Id from, CheckStatusOk ok);
+
+    @Override
+    void onDone(Done done, Throwable failure)
+    {
+        if (failure != null) return;
+        if (merged.hasExecutedOnAllShards) return;
+        RoutingKey homeKey = merged.homeKey;
+        if (homeKey == null) return;
+        if (!node.topology().localRangesForEpoch(txnId.epoch).contains(homeKey)) return;
+
+        node.ifLocalSince(merged.homeKey, txnId, store -> {
+            store.progressLog().executedOnAllShards(txnId, null);
+            return null;
+        });
+    }
 
     @Override
     Action process(Id from, CheckStatusReply reply)

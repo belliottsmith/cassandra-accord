@@ -4,18 +4,21 @@ import accord.api.RoutingKey;
 
 public class Route extends AbstractRoute
 {
-    public final RoutingKey homeKey;
-
     public Route(RoutingKey homeKey, RoutingKey[] keys)
     {
-        super(keys);
-        this.homeKey = homeKey;
+        super(keys, homeKey);
     }
 
     @Override
     public RoutingKeys union(RoutingKeys that)
     {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean covers(KeyRanges ranges)
+    {
+        return true;
     }
 
     @Override

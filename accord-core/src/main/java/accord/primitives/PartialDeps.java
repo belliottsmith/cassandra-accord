@@ -43,13 +43,6 @@ public class PartialDeps extends Deps
         return covering.containsAll(keys);
     }
 
-    public PartialDeps slice(KeyRanges ranges)
-    {
-        if (!covers(ranges))
-            throw new IndexOutOfBoundsException();
-        return super.slice(ranges);
-    }
-
     public PartialDeps with(PartialDeps that)
     {
         Deps merged = with((Deps) that);

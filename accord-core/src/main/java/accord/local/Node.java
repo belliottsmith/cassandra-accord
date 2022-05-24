@@ -35,9 +35,9 @@ import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.messages.Reply;
 import accord.primitives.AbstractKeys;
+import accord.primitives.AbstractRoute;
 import accord.primitives.KeyRange;
 import accord.primitives.KeyRanges;
-import accord.primitives.PartialRoute;
 import accord.primitives.Route;
 import accord.topology.Shard;
 import accord.topology.Topology;
@@ -437,7 +437,7 @@ public class Node implements ConfigurationService.Listener
         return i >= 0 ? keys.get(i).toRoutingKey() : null;
     }
 
-    public RoutingKey selectProgressKey(TxnId txnId, PartialRoute route)
+    public RoutingKey selectProgressKey(TxnId txnId, AbstractRoute route)
     {
         return selectProgressKey(txnId, route, route.homeKey);
     }
@@ -450,7 +450,7 @@ public class Node implements ConfigurationService.Listener
         return progressKey;
     }
 
-    public RoutingKey trySelectProgressKey(TxnId txnId, PartialRoute route)
+    public RoutingKey trySelectProgressKey(TxnId txnId, AbstractRoute route)
     {
         return trySelectProgressKey(txnId, route, route.homeKey);
     }
@@ -545,7 +545,7 @@ public class Node implements ConfigurationService.Listener
     }
 
     // TODO: coalesce other maybeRecover calls also? perhaps have mutable knownStatuses so we can inject newer ones?
-    public Future<CheckStatusOk> maybeRecover(TxnId txnId, RoutingKey homeKey, long homeEpoch,
+    public Future<CheckStatusOk> maybeRecover(TxnId txnId, RoutingKey homeKey,
                                               Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
     {
         Future<?> result = coordinating.get(txnId);
@@ -553,7 +553,7 @@ public class Node implements ConfigurationService.Listener
             return result.map(r -> null);
 
         RecoverFuture<CheckStatusOk> future = new RecoverFuture<>();
-        MaybeRecover.maybeRecover(this, txnId, homeKey, homeEpoch, knownStatus, knownPromised, knownPromiseHasBeenAccepted, future);
+        MaybeRecover.maybeRecover(this, txnId, homeKey, knownStatus, knownPromised, knownPromiseHasBeenAccepted, future);
         return future;
     }
 
@@ -567,16 +567,6 @@ public class Node implements ConfigurationService.Listener
             return;
         }
         scheduler.now(() -> request.process(this, from, replyContext));
-    }
-
-    public boolean isReplicaOf(Timestamp at, Key key)
-    {
-        return topology().localForEpoch(at.epoch).ranges().contains(key);
-    }
-
-    public boolean isReplicaOf(long epoch, Key key)
-    {
-        return topology().localForEpoch(epoch).ranges().contains(key);
     }
 
     public Scheduler scheduler()

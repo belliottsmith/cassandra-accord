@@ -12,14 +12,12 @@ import accord.utils.SortedArrays;
  */
 public class PartialRoute extends AbstractRoute
 {
-    public final RoutingKey homeKey;
     public final KeyRanges covering;
 
     public PartialRoute(KeyRanges covering, RoutingKey homeKey, RoutingKey[] keys)
     {
-        super(keys);
+        super(keys, homeKey);
         this.covering = covering;
-        this.homeKey = homeKey;
     }
 
     public PartialRoute sliceStrict(KeyRanges newRange)
@@ -29,6 +27,12 @@ public class PartialRoute extends AbstractRoute
 
         RoutingKey[] keys = slice(covering, RoutingKey[]::new);
         return new PartialRoute(covering, homeKey, keys);
+    }
+
+    @Override
+    public boolean covers(KeyRanges ranges)
+    {
+        return covering.contains(ranges);
     }
 
     public PartialRoute slice(KeyRanges newRange)

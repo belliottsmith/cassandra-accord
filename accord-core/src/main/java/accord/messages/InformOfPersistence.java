@@ -8,8 +8,8 @@ import accord.local.Node.Id;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
-import static accord.messages.InformOfTxnId.InformOfTxnIdNack.nack;
-import static accord.messages.InformOfTxnId.InformOfTxnIdOk.ok;
+import static accord.messages.SimpleReply.nack;
+import static accord.messages.SimpleReply.ok;
 
 public class InformOfPersistence implements Request
 {

@@ -7,6 +7,7 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
+import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 
@@ -52,7 +53,7 @@ public class RecoverWithHomeKey extends CheckShards implements BiConsumer<Object
         {
             callback.accept(null, fail);
         }
-        else if (merged == null || merged.route == null)
+        else if (merged == null || !(merged.route instanceof Route))
         {
             switch (done)
             {
@@ -72,12 +73,12 @@ public class RecoverWithHomeKey extends CheckShards implements BiConsumer<Object
         {
             // save route
             node.ifLocal(merged.route.homeKey, txnId, instance -> {
-                instance.command(txnId).saveRoute(merged.route);
+                instance.command(txnId).saveRoute((Route) merged.route);
                 return null;
             });
 
             // start recovery
-            node.recover(txnId, merged.route).addCallback(callback);
+            node.recover(txnId, (Route) merged.route).addCallback(callback);
         }
     }
 }

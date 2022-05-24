@@ -6,7 +6,7 @@ import accord.api.TestableConfigurationService;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Status;
-import accord.primitives.Deps;
+import accord.primitives.AbstractRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Timestamp;
@@ -42,6 +42,7 @@ public class TopologyUpdate
     {
         private final Status status;
         private final TxnId txnId;
+        private final AbstractRoute route;
         private final PartialTxn partialTxn;
         private final RoutingKey homeKey;
         private final Timestamp executeAt;
@@ -56,6 +57,7 @@ public class TopologyUpdate
             // TODO (now): AcceptInvalidate and CommitInvalidate can leave these fields null
             Preconditions.checkArgument(command.hasBeen(Status.PreAccepted));
             this.txnId = command.txnId();
+            this.route = command.route();
             this.partialTxn = command.partialTxn();
             this.homeKey = command.homeKey();
             this.status = command.status();
@@ -75,9 +77,10 @@ public class TopologyUpdate
                 return;
             }
 
+            // TODO (now): how do we select the progress key?
             // TODO: can skip the homeKey if it's not a participating key in the transaction
             node.forEachLocalSince(partialTxn.keys, epoch, commandStore -> {
-                commandStore.command(txnId).propagate(epoch, status, partialTxn, partialDeps, homeKey, executeAt, writes, result);
+                commandStore.command(txnId).propagate(epoch, status, route, partialTxn, partialDeps, progressKey, executeAt, writes, result);
             });
         }
     }

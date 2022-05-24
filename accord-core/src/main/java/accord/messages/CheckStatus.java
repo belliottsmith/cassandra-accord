@@ -104,10 +104,10 @@ public class CheckStatus implements Request
         public final Ballot accepted;
         public final boolean isCoordinating;
         public final boolean hasExecutedOnAllShards;
-        public final @Nullable Route route;
+        public final @Nullable AbstractRoute route;
         public final @Nullable RoutingKey homeKey;
 
-        CheckStatusOk(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, @Nullable Route route, @Nullable RoutingKey homeKey)
+        CheckStatusOk(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, @Nullable AbstractRoute route, @Nullable RoutingKey homeKey)
         {
             this.status = status;
             this.promised = promised;
@@ -152,12 +152,12 @@ public class CheckStatus implements Request
             CheckStatusOk maxPromised = prefer.promised.compareTo(defer.promised) >= 0 ? prefer : defer;
             CheckStatusOk maxAccepted = prefer.accepted.compareTo(defer.accepted) >= 0 ? prefer : defer;
             CheckStatusOk maxHasExecuted = !defer.hasExecutedOnAllShards || prefer.hasExecutedOnAllShards ? prefer : defer;
-            CheckStatusOk maxRoute = prefer.route != null || defer.route == null ? prefer : defer;
             CheckStatusOk maxHomeKey = prefer.homeKey != null || defer.homeKey == null ? prefer : defer;
+            AbstractRoute mergedRoute = AbstractRoute.merge(prefer.route, defer.route);
 
             // if the maximum (or preferred equal) is the same on all dimensions, return it
             if (maxStatus == maxPromised && maxStatus == maxAccepted && maxStatus == maxHasExecuted
-                && maxStatus == maxRoute && maxStatus == maxHomeKey)
+                && maxStatus.route == mergedRoute && maxStatus == maxHomeKey)
             {
                 return maxStatus;
             }
@@ -165,7 +165,7 @@ public class CheckStatus implements Request
             // otherwise assemble the maximum of each, and propagate isCoordinating from the origin we selected the promise from
             boolean isCoordinating = maxPromised == prefer ? prefer.isCoordinating : defer.isCoordinating;
             return new CheckStatusOk(maxStatus.status, maxPromised.promised, maxAccepted.accepted, isCoordinating,
-                                     maxHasExecuted.hasExecutedOnAllShards, maxRoute.route, maxHomeKey.homeKey);
+                                     maxHasExecuted.hasExecutedOnAllShards, mergedRoute, maxHomeKey.homeKey);
         }
 
         @Override
@@ -183,7 +183,7 @@ public class CheckStatus implements Request
         public final Writes writes;
         public final Result result;
 
-        CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, Route route,
+        CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, AbstractRoute route,
                           RoutingKey homeKey, PartialTxn partialTxn, Timestamp executeAt, PartialDeps committedDeps, Writes writes, Result result)
         {
             super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards, route, homeKey);

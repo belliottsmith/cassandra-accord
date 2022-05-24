@@ -5,6 +5,7 @@ package accord.messages;
  */
 public enum MessageType
 {
+    SIMPLE_RSP,
     PREACCEPT_REQ,
     PREACCEPT_RSP,
     ACCEPT_REQ,
@@ -25,10 +26,8 @@ public enum MessageType
     WAIT_ON_COMMIT_REQ,
     WAIT_ON_COMMIT_RSP,
     INFORM_TXNID_REQ,
-    INFORM_TXNID_RSP,
-    INFORM_TXN_RSP,
     INFORM_PERSISTED_REQ,
-    INFORM_PERSISTED_RSP,
+    INFORM_ROUTE_REQ,
     CHECK_STATUS_REQ,
     CHECK_STATUS_RSP
 }

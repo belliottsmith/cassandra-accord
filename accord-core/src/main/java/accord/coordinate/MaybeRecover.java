@@ -2,12 +2,15 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
+import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Ballot;
 import accord.primitives.TxnId;
@@ -26,9 +29,9 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
     final boolean knownPromisedHasBeenAccepted;
     final BiConsumer<CheckStatusOk, Throwable> callback;
 
-    MaybeRecover(Node node, TxnId txnId, RoutingKey homeKey, long homeEpoch, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted, BiConsumer<CheckStatusOk, Throwable> callback)
+    MaybeRecover(Node node, TxnId txnId, RoutingKey homeKey, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted, BiConsumer<CheckStatusOk, Throwable> callback)
     {
-        super(node, txnId, RoutingKeys.of(homeKey), homeEpoch, IncludeInfo.Route);
+        super(node, txnId, RoutingKeys.of(homeKey), txnId.epoch, IncludeInfo.Route);
         this.homeKey = homeKey;
         this.knownStatus = knownStatus;
         this.knownPromised = knownPromised;
@@ -36,11 +39,11 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
         this.callback = callback;
     }
 
-    public static MaybeRecover maybeRecover(Node node, TxnId txnId, RoutingKey homeKey, long homeEpoch,
+    public static MaybeRecover maybeRecover(Node node, TxnId txnId, RoutingKey homeKey,
                                                      Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted,
                                                      BiConsumer<CheckStatusOk, Throwable> callback)
     {
-        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, homeKey, homeEpoch, knownStatus, knownPromised, knownPromiseHasBeenAccepted, callback);
+        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, homeKey, knownStatus, knownPromised, knownPromiseHasBeenAccepted, callback);
         maybeRecover.start();
         return maybeRecover;
     }
@@ -68,6 +71,7 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
     @Override
     void onDone(Done done, Throwable fail)
     {
+        super.onDone(done, fail);
         if (fail != null)
         {
             callback.accept(null, fail);
@@ -92,9 +96,9 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
                 case ReadyToExecute:
                 case Executed:
                 case Applied:
-                    // TODO (now): may not have route if we contact only executeAt.epoch
+                    Preconditions.checkState(merged.route instanceof Route);
                     if (hasMadeProgress(merged)) callback.accept(merged, null);
-                    else node.recover(txnId, merged.route).addCallback(this);
+                    else node.recover(txnId, (Route) merged.route).addCallback(this);
                     break;
 
                 case Invalidated:

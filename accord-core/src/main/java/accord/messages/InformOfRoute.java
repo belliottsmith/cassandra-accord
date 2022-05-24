@@ -4,32 +4,31 @@ import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.Status;
+import accord.primitives.AbstractRoute;
 import accord.primitives.TxnId;
 
 import static accord.messages.SimpleReply.nack;
 import static accord.messages.SimpleReply.ok;
 
-public class InformOfTxnId implements EpochRequest
+public class InformOfRoute implements EpochRequest
 {
     final TxnId txnId;
-    final RoutingKey homeKey;
+    final AbstractRoute route;
+    final long epoch;
 
-    public InformOfTxnId(TxnId txnId, RoutingKey homeKey)
+    public InformOfRoute(TxnId txnId, AbstractRoute route, long epoch)
     {
         this.txnId = txnId;
-        this.homeKey = homeKey;
+        this.route = route;
+        this.epoch = epoch;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        Reply reply = node.ifLocal(homeKey, txnId, instance -> {
+        RoutingKey progressKey = node.selectProgressKey(txnId, route);
+        Reply reply = node.ifLocal(progressKey, txnId, instance -> {
             Command command = instance.command(txnId);
-            if (!command.hasBeen(Status.PreAccepted))
-            {
-                command.updateHomeKey(homeKey);
-                instance.progressLog().unwitnessed(txnId, true, true);
-            }
+            command.informOfRoute(route, epoch, progressKey);
             return ok();
         });
 
@@ -42,18 +41,13 @@ public class InformOfTxnId implements EpochRequest
     @Override
     public String toString()
     {
-        return "InformOfTxn{txnId:" + txnId + '}';
-    }
-
-    public interface InformOfTxnIdReply extends Reply
-    {
-        boolean isOk();
+        return "InformOfRoute{txnId:" + txnId + ',' + "route:" + route + '}';
     }
 
     @Override
     public MessageType type()
     {
-        return MessageType.INFORM_TXNID_REQ;
+        return MessageType.INFORM_ROUTE_REQ;
     }
 
     @Override

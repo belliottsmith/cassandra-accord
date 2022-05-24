@@ -41,7 +41,7 @@ public class Apply extends TxnRequest
         // note, we do not also commit here if txnId.epoch != executeAt.epoch, as the scope() for a commit would be different
         node.mapReduceLocalSince(scope(), executeAt, instance -> {
             Command command = instance.command(txnId);
-            switch (command.apply(scope.homeKey, progressKey, executeAt, deps, writes, result))
+            switch (command.apply(scope, progressKey, executeAt, deps, writes, result))
             {
                 default:
                 case Partial:

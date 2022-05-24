@@ -2,6 +2,8 @@ package accord.api;
 
 import java.util.Set;
 
+import javax.annotation.Nullable;
+
 import accord.coordinate.CheckOnUncommitted;
 import accord.coordinate.InformHomeOfTxn;
 import accord.local.CommandStore;
@@ -108,7 +110,7 @@ public interface ProgressLog
      *
      * Otherwise, this transaction no longer needs to be monitored by either home or non-home shards.
      */
-    void executedOnAllShards(TxnId txnId, Set<Id> persistedOn);
+    void executedOnAllShards(TxnId txnId, @Nullable Set<Id> persistedOn);
 
     /**
      * The parameter is a command that some other command's execution is most proximally blocked by.

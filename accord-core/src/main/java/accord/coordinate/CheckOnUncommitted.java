@@ -40,28 +40,6 @@ public class CheckOnUncommitted extends CheckOnCommitted
     }
 
     @Override
-    void onDone(Done done, Throwable fail)
-    {
-        if (fail != null)
-        {
-            callback.accept(null, fail);
-        }
-        else
-        {
-            switch (done)
-            {
-                default: throw new IllegalStateException();
-                case Success:
-                    break;
-                case Exhausted:
-                case ReachedQuorum:
-                    TO DO COMPILE ERROR
-
-            }
-        }
-    }
-
-    @Override
     void onSuccessCriteriaOrExhaustion(CheckStatusOkFull full)
     {
         switch (full.status)
@@ -72,7 +50,7 @@ public class CheckOnUncommitted extends CheckOnCommitted
                 break;
             case PreAccepted:
             case Accepted:
-                node.forEachLocalSince(full.partialTxn.keys, txnId.epoch, commandStore -> {
+                node.forEachLocalSince(someKeys, txnId.epoch, commandStore -> {
                     Command command = commandStore.ifPresent(txnId);
                     if (command != null)
                         command.updateHomeKey(full.homeKey);
