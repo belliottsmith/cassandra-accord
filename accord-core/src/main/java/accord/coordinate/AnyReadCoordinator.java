@@ -48,34 +48,26 @@ abstract class AnyReadCoordinator<Reply> implements Callback<Reply>
         if (isDone)
             return;
 
-        try
+        switch (process(from, reply))
         {
-            switch (process(from, reply))
-            {
-                default: throw new IllegalStateException();
-                case Abort:
-                    isDone = true;
+            default: throw new IllegalStateException();
+            case Abort:
+                isDone = true;
+                break;
+
+            case TryAlternative:
+                onSlowResponse(from);
+                break;
+
+            case Accept:
+                if (!(tracker.recordReadSuccess(from) && tracker.hasCompletedRead()))
                     break;
 
-                case TryAlternative:
-                    onSlowResponse(from);
-                    break;
-
-                case Accept:
-                    tracker.recordReadSuccess(from);
-                    if (!tracker.hasCompletedRead())
-                        break;
-
-                case Success:
-                    isDone = true;
-                    onSuccess();
-                    if (failure != null)
-                        node.agent().onUncaughtException(failure); // TODO: introduce dedicated Agent method for this case
-            }
-        }
-        catch (Throwable t)
-        {
-            onFailure(from, t);
+            case Success:
+                isDone = true;
+                onSuccess();
+                if (failure != null)
+                    node.agent().onUncaughtException(failure); // TODO: introduce dedicated Agent method for this case
         }
     }
 

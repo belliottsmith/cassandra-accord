@@ -388,6 +388,32 @@ public class SortedArrays
     }
 
     @Inline
+    public static int exponentialSearch(int[] in, int from, int to, int find)
+    {
+        int step = 0;
+        while (from + step < to)
+        {
+            int i = from + step;
+            int c = Integer.compare(find, in[i]);
+            if (c < 0)
+            {
+                to = i;
+                break;
+            }
+            if (c > 0)
+            {
+                from = i + 1;
+            }
+            else
+            {
+                return i;
+            }
+            step = step * 2 + 1; // jump in perfect binary search increments
+        }
+        return Arrays.binarySearch(in, from, to, find);
+    }
+
+    @Inline
     public static <T1, T2> int binarySearch(T2[] in, int from, int to, T1 find, AsymmetricComparator<T1, T2> comparator, Search op)
     {
         int found = -1;

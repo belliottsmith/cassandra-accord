@@ -53,6 +53,12 @@ public class MockStore implements DataStore
             {
                 return MockStore.read(keys.union(other.keys()));
             }
+
+            @Override
+            public String toString()
+            {
+                return keys.toString();
+            }
         };
     }
 
@@ -82,6 +88,12 @@ public class MockStore implements DataStore
             public Update merge(Update other)
             {
                 return MockStore.update(keys.union(other.keys()));
+            }
+
+            @Override
+            public String toString()
+            {
+                return keys.toString();
             }
         };
     }

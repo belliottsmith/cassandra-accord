@@ -34,6 +34,7 @@ public class ReadTracker<T extends ReadShardTracker> extends AbstractResponseTra
         public void recordInflightRead(Id node)
         {
             ++contacted;
+            ++inflight;
         }
 
         public void recordSlowRead(Id node)

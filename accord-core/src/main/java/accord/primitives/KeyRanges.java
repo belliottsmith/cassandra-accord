@@ -198,6 +198,8 @@ public class KeyRanges implements Iterable<KeyRange>
      * attempts a linear merge where {@code as} is expected to be a superset of {@code bs},
      * terminating at the first indexes where this ceases to be true
      * @return index of {@code as} in upper 32bits, {@code bs} in lower 32bits
+     *
+     * TODO: better support for merging runs of overlapping or adjacent ranges
      */
     private static long supersetLinearMerge(KeyRange[] as, KeyRange[] bs)
     {
@@ -220,14 +222,16 @@ public class KeyRanges implements Iterable<KeyRange>
             {
                 break;
             }
-            else if (b.end().compareTo(a.end()) < 0)
+            else if ((c = b.end().compareTo(a.end())) <= 0)
             {
                 bi++;
+                if (c == 0) ai++;
             }
             else
             {
                 // use a temporary counter, so that if we don't find a run of ranges that enforce the superset
                 // condition we exit at the start of the mismatch run (and permit it to be merged)
+                // TODO: use exponentialSearch
                 int tmpai = ai;
                 do
                 {

@@ -15,6 +15,9 @@ import accord.utils.IndexedConsumer;
 import accord.utils.IndexedBiFunction;
 import accord.utils.IndexedIntFunction;
 import accord.utils.IndexedPredicate;
+import accord.utils.SortedArrays;
+
+import static accord.utils.SortedArrays.exponentialSearch;
 
 public class Topology extends AbstractCollection<Shard>
 {
@@ -236,7 +239,6 @@ public class Topology extends AbstractCollection<Shard>
 
     public void forEachOn(Id on, IndexedConsumer<Shard> consumer)
     {
-        // TODO: this can be done by divide-and-conquer splitting of the lists and recursion, which should be more efficient
         NodeInfo info = nodeLookup.get(on);
         if (info == null)
             return;
@@ -251,12 +253,12 @@ public class Topology extends AbstractCollection<Shard>
             }
             else if (a[ai] < b[bi])
             {
-                ai = Arrays.binarySearch(a, ai + 1, a.length, b[bi]);
+                ai = exponentialSearch(a, ai + 1, a.length, b[bi]);
                 if (ai < 0) ai = -1 -ai;
             }
             else
             {
-                bi = Arrays.binarySearch(b, bi + 1, b.length, a[ai]);
+                bi = exponentialSearch(b, bi + 1, b.length, a[ai]);
                 if (bi < 0) bi = -1 -bi;
             }
         }
@@ -281,12 +283,12 @@ public class Topology extends AbstractCollection<Shard>
             }
             else if (a[ai] < b[bi])
             {
-                ai = Arrays.binarySearch(a, ai + 1, a.length, b[bi]);
+                ai = exponentialSearch(a, ai + 1, a.length, b[bi]);
                 if (ai < 0) ai = -1 -ai;
             }
             else
             {
-                bi = Arrays.binarySearch(b, bi + 1, b.length, a[ai]);
+                bi = exponentialSearch(b, bi + 1, b.length, a[ai]);
                 if (bi < 0) bi = -1 -bi;
             }
         }
@@ -312,12 +314,12 @@ public class Topology extends AbstractCollection<Shard>
             }
             else if (a[ai] < b[bi])
             {
-                ai = Arrays.binarySearch(a, ai + 1, a.length, b[bi]);
+                ai = exponentialSearch(a, ai + 1, a.length, b[bi]);
                 if (ai < 0) ai = -1 -ai;
             }
             else
             {
-                bi = Arrays.binarySearch(b, bi + 1, b.length, a[ai]);
+                bi = exponentialSearch(b, bi + 1, b.length, a[ai]);
                 if (bi < 0) bi = -1 -bi;
             }
         }

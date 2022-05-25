@@ -86,11 +86,13 @@ public abstract class AbstractResponseTracker<T extends AbstractResponseTracker.
         });
     }
 
+    // does not abort early, to ensure all trackers are updated (introduce Lazy variant if necessary)
     protected boolean anyForNode(Node.Id node, BiPredicate<? super T, Node.Id> consumer)
     {
-        return matchingTrackersForNode(node, consumer, 1) == 1;
+        return matchingTrackersForNode(node, consumer, Integer.MAX_VALUE) > 0;
     }
 
+    // does not abort early, to ensure all trackers are updated (introduce Lazy variant if necessary)
     protected boolean allForNode(Node.Id node, BiPredicate<T, Node.Id> consumer)
     {
         return nonMatchingTrackersForNode(node, consumer, Integer.MAX_VALUE) == 0;
