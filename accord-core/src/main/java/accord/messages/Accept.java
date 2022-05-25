@@ -1,10 +1,13 @@
 package accord.messages;
 
+import javax.annotation.Nullable;
+
 import accord.api.RoutingKey;
 import accord.local.Command.AcceptOutcome;
 import accord.local.Node.Id;
 import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialTxn;
 import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
@@ -25,20 +28,23 @@ public class Accept extends TxnRequest.WithUnsync
 {
     public final Ballot ballot;
     public final Keys keys;
+    public final @Nullable PartialTxn partialTxn;
     public final Timestamp executeAt;
-    public final PartialDeps deps;
+    public final PartialDeps partialDeps;
     public final Txn.Kind kindOfTxn;
 
     @SuppressWarnings("MismatchedQueryAndUpdateOfCollection")
     private transient Defer defer;
 
-    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, Route route, Keys keys, Timestamp executeAt, Deps deps, Txn.Kind kindOfTxn)
+    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps, Txn.Kind kindOfTxn)
     {
         super(to, topologies, txnId, route);
         this.ballot = ballot;
-        this.keys = keys;
+        this.keys = txn.keys.slice(scope.covering);
         this.executeAt = executeAt;
-        this.deps = deps.slice(scope.covering);
+        // TODO (now): send minimal
+        this.partialTxn = txn.slice(scope.covering, topologies.oldest().nodes().contains(to));
+        this.partialDeps = deps.slice(scope.covering);
         this.kindOfTxn = kindOfTxn;
     }
 
@@ -47,7 +53,7 @@ public class Accept extends TxnRequest.WithUnsync
         RoutingKey progressKey = progressKey(node, scope.homeKey);
         node.reply(replyToNode, replyContext, node.mapReduceLocal(scope(), minEpoch, executeAt.epoch, instance -> {
             Command command = instance.command(txnId);
-            switch (command.accept(ballot, scope, progressKey, executeAt, deps))
+            switch (command.accept(ballot, scope, progressKey, partialTxn, executeAt, partialDeps))
             {
                 default: throw new IllegalStateException();
                 case Redundant:
@@ -82,7 +88,7 @@ public class Accept extends TxnRequest.WithUnsync
                "ballot: " + ballot +
                ", txnId: " + txnId +
                ", executeAt: " + executeAt +
-               ", deps: " + deps +
+               ", deps: " + partialDeps +
                '}';
     }
 

@@ -18,11 +18,6 @@ public class TestAgent implements Agent
     }
 
     @Override
-    public void onInvalidate(Node node, Txn txn)
-    {
-    }
-
-    @Override
     public void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next)
     {
         throw new AssertionError();

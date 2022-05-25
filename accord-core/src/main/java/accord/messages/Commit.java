@@ -116,7 +116,7 @@ public class Commit extends ReadData
         RoutingKey progressKey = node.trySelectProgressKey(txnId, scope);
         ReadNack reply = node.mapReduceLocal(scope(), txnId.epoch, executeAt.epoch, instance -> {
             Command command = instance.command(txnId);
-            switch (command.commit(route != null ? route : scope, progressKey, executeAt, partialDeps, partialTxn))
+            switch (command.commit(route != null ? route : scope, progressKey, partialTxn, executeAt, partialDeps))
             {
                 default:
                 case Success:

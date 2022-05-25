@@ -107,7 +107,7 @@ public abstract class TxnRequest implements EpochRequest
     // finds the first topology index that intersects with the node
     protected static int latestRelevantEpochIndex(Node.Id node, Topologies topologies, AbstractKeys<?, ?> keys)
     {
-        KeyRanges latest = topologies.get(0).rangesForNode(node);
+        KeyRanges latest = topologies.current().rangesForNode(node);
 
         if (latest != null && latest.intersects(keys))
             return 0;

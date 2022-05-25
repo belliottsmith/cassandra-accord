@@ -65,7 +65,7 @@ class Propose implements Callback<AcceptReply>
                                Timestamp executeAt, Deps deps, BiConsumer<Result, Throwable> callback)
     {
         Propose propose = new Propose(node, topologies, ballot, txnId, txn, route, deps, executeAt, callback);
-        node.send(propose.acceptTracker.nodes(), to -> new Accept(to, topologies, ballot, txnId, route, txn.keys, executeAt, deps, txn.kind), propose);
+        node.send(propose.acceptTracker.nodes(), to -> new Accept(to, topologies, ballot, txnId, route, txn, executeAt, deps, txn.kind), propose);
     }
 
     @Override

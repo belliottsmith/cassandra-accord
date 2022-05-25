@@ -49,7 +49,7 @@ public interface ProgressLog
     {
         Unsure, No, Local, Home;
         public boolean isHome() { return this == Home; }
-        public boolean isProgress() { return this != No; }
+        public boolean isProgress() { return this.compareTo(Local) >= 0; }
     }
 
     /**

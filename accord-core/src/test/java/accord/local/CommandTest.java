@@ -1,9 +1,14 @@
 package accord.local;
 
+import accord.api.RoutingKey;
 import accord.impl.IntKey;
 import accord.impl.TopologyFactory;
 import accord.impl.mock.MockCluster;
 import accord.impl.mock.MockStore;
+import accord.local.CommandStore.Synchronized;
+import accord.primitives.KeyRange;
+import accord.primitives.KeyRanges;
+import accord.primitives.Route;
 import accord.topology.Topology;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
@@ -26,8 +31,12 @@ public class CommandTest
     private static final Node.Id ID2 = id(2);
     private static final Node.Id ID3 = id(3);
     private static final List<Node.Id> IDS = List.of(ID1, ID2, ID3);
-    private static final Topology TOPOLOGY = TopologyFactory.toTopology(IDS, 3, IntKey.range(0, 100));
+    private static final KeyRange FULL_RANGE = IntKey.range(0, 100);
+    private static final KeyRanges FULL_RANGES = KeyRanges.single(FULL_RANGE);
+    private static final Topology TOPOLOGY = TopologyFactory.toTopology(IDS, 3, FULL_RANGE);
     private static final IntKey KEY = IntKey.key(10);
+    private static final RoutingKey HOME_KEY = KEY.toRoutingKey();
+    private static final Route ROUTE = new Route(KEY, new RoutingKey[] { KEY });
 
     private static class CommandStoreSupport
     {
@@ -49,7 +58,7 @@ public class CommandTest
     private static CommandStore createStore(CommandStoreSupport storeSupport)
     {
         return null;
-        // TODO (now)!
+        // TODO (now): !
 //        return new CommandStore.Synchronized(0,
 //                                             0,
 //                                             1,
@@ -74,7 +83,7 @@ public class CommandTest
         Assertions.assertEquals(Status.NotWitnessed, command.status());
         Assertions.assertNull(command.executeAt());
 
-        command.preaccept(txn, KEY, KEY);
+        command.preaccept(txn.slice(FULL_RANGES, true), ROUTE, HOME_KEY);
         Assertions.assertEquals(Status.PreAccepted, command.status());
         Assertions.assertEquals(txnId, command.executeAt());
     }
@@ -96,7 +105,7 @@ public class CommandTest
         setTopologyEpoch(support.local, 2);
         Timestamp expectedTimestamp = new Timestamp(2, 110, 0, ID1);
         support.nextTimestamp.set(expectedTimestamp);
-        commands.process((Consumer<? super CommandStore>) cstore -> command.preaccept(txn, KEY, KEY));
+        commands.process((Consumer<? super CommandStore>) cstore -> command.preaccept(txn.slice(FULL_RANGES, true), ROUTE, HOME_KEY));
         Assertions.assertEquals(Status.PreAccepted, command.status());
         Assertions.assertEquals(expectedTimestamp, command.executeAt());
     }

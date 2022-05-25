@@ -8,6 +8,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.IndexedFold;
 import accord.utils.IndexedFoldIntersectToLong;
@@ -130,7 +131,7 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
 
     protected K[] slice(KeyRanges ranges, IntFunction<K[]> factory)
     {
-        return SortedArrays.sliceWithOverlaps(keys, ranges.ranges, factory, (k, r) -> r.compareTo(k), KeyRange::compareTo);
+        return SortedArrays.sliceWithOverlaps(keys, ranges.ranges, factory, (k, r) -> -r.compareTo(k), KeyRange::compareTo);
     }
 
     /**
@@ -356,6 +357,85 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
             }
         }
         return initialValue;
+    }
+
+    public Route toRoute(RoutingKey homeKey)
+    {
+        if (isEmpty())
+            return new Route(homeKey, new RoutingKey[] { homeKey });
+
+        RoutingKey[] result = toRoutingKeysArray(homeKey);
+        int pos = Arrays.binarySearch(result, homeKey);
+        return new Route(result[pos], result);
+    }
+
+    public PartialRoute toPartialRoute(KeyRanges ranges, RoutingKey homeKey)
+    {
+        if (isEmpty())
+            return new PartialRoute(ranges, homeKey, new RoutingKey[] { homeKey });
+
+        RoutingKey[] result = toRoutingKeysArray(homeKey);
+        int pos = Arrays.binarySearch(result, homeKey);
+        return new PartialRoute(ranges, result[pos], result);
+    }
+
+    private RoutingKey[] toRoutingKeysArray(RoutingKey homeKey)
+    {
+        RoutingKey[] result;
+        int resultCount;
+        int insertPos = Arrays.binarySearch(keys, homeKey);
+        if (insertPos >= 0)
+        {
+            result = new RoutingKey[keys.length];
+            resultCount = copyToRoutingKeys(keys, 0, result, 0, keys.length);
+        }
+        else
+        {
+            insertPos = -1 - insertPos;
+            result = new RoutingKey[keys.length];
+            resultCount = copyToRoutingKeys(keys, 0, result, 0, insertPos);
+            if (resultCount == 0 || !homeKey.equals(result[resultCount - 1]))
+                result[resultCount++] = homeKey;
+            resultCount += copyToRoutingKeys(keys, insertPos, result, resultCount, keys.length - insertPos);
+        }
+
+        if (resultCount < result.length)
+            result = Arrays.copyOf(result, resultCount);
+
+        return result;
+    }
+
+    public RoutingKeys toRoutingKeys()
+    {
+        if (isEmpty())
+            return RoutingKeys.EMPTY;
+
+        RoutingKey[] result = new RoutingKey[keys.length];
+        int resultCount = copyToRoutingKeys(keys, 0, result, 0, keys.length);
+        if (resultCount < result.length)
+            result = Arrays.copyOf(result, resultCount);
+        return new RoutingKeys(result);
+    }
+
+    private static <K extends RoutingKey> int copyToRoutingKeys(K[] src, int srcPos, RoutingKey[] trg, int trgPos, int count)
+    {
+        if (count == 0)
+            return 0;
+
+        int srcEnd = srcPos + count;
+        int trgStart = trgPos;
+        int i = 0;
+        if (trgPos == 0)
+            trg[trgPos++] = src[srcPos++].toRoutingKey();
+
+        while (srcPos < srcEnd)
+        {
+            RoutingKey next = src[srcPos++].toRoutingKey();
+            if (!next.equals(trg[trgPos - 1]))
+                trg[trgPos++] = next;
+        }
+
+        return trgPos - trgStart;
     }
 
     public int[] remapper(KS target, boolean isTargetKnownSuperset)

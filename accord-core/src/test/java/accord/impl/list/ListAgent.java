@@ -29,13 +29,6 @@ public class ListAgent implements Agent
     }
 
     @Override
-    public void onInvalidate(Node node, Txn txn)
-    {
-        ListQuery query = (ListQuery)txn.query;
-        node.reply(query.client, Network.replyCtxFor(query.requestId), new ListResult(query.client, query.requestId, null, null, null));
-    }
-
-    @Override
     public void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next)
     {
         throw new AssertionError("Inconsistent execution timestamp detected for txnId " + command.txnId() + ": " + prev + " != " + next);

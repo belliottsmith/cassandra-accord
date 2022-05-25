@@ -8,6 +8,8 @@ import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.primitives.KeyRange;
 import accord.primitives.Keys;
+import accord.primitives.PartialRoute;
+import accord.primitives.RoutingKeys;
 
 public class IntKey implements Key
 {
@@ -51,6 +53,11 @@ public class IntKey implements Key
             keys[i + 1] = new IntKey(kn[i]);
 
         return new Keys(keys);
+    }
+
+    public static RoutingKeys scope(int k0, int... kn)
+    {
+        return keys(k0, kn).toRoutingKeys();
     }
 
     public static Keys keys(int[] keyArray)

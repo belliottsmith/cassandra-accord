@@ -15,6 +15,8 @@ public interface Topologies
 
     Topology forEpoch(long epoch);
 
+    Topology oldest();
+
     long oldestEpoch();
 
     default long currentEpoch()
@@ -126,6 +128,12 @@ public interface Topologies
         }
 
         @Override
+        public Topology oldest()
+        {
+            return current();
+        }
+
+        @Override
         public long oldestEpoch()
         {
             return currentEpoch();
@@ -220,6 +228,12 @@ public interface Topologies
         public Topology current()
         {
             return get(0);
+        }
+
+        @Override
+        public Topology oldest()
+        {
+            return get(size() - 1);
         }
 
         @Override

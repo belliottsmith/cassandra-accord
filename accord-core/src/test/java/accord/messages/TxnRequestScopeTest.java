@@ -12,6 +12,7 @@ import static accord.Utils.*;
 import static accord.Utils.idSet;
 import static accord.impl.IntKey.keys;
 import static accord.impl.IntKey.range;
+import static accord.impl.IntKey.scope;
 
 public class TxnRequestScopeTest
 {
@@ -28,9 +29,9 @@ public class TxnRequestScopeTest
         topologies.add(topology2);
         topologies.add(topology1);
 
-        Assertions.assertEquals(keys(150), TxnRequest.computeScope(id(1), topologies, route));
+        Assertions.assertEquals(scope(150), TxnRequest.computeScope(id(1), topologies, route).toRoutingKeys());
         Assertions.assertEquals(1, TxnRequest.computeWaitForEpoch(id(1), topologies, keys));
-        Assertions.assertEquals(keys(150), TxnRequest.computeScope(id(4), topologies, route));
+        Assertions.assertEquals(scope(150), TxnRequest.computeScope(id(4), topologies, route).toRoutingKeys());
         Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(4), topologies, keys));
     }
 
@@ -54,9 +55,9 @@ public class TxnRequestScopeTest
         topologies.add(topology2);
         topologies.add(topology1);
 
-        Assertions.assertEquals(keys(150, 250), TxnRequest.computeScope(id(1), topologies, route));
+        Assertions.assertEquals(scope(150, 250), TxnRequest.computeScope(id(1), topologies, route).toRoutingKeys());
         Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(1), topologies, keys));
-        Assertions.assertEquals(keys(150, 250), TxnRequest.computeScope(id(4), topologies, route));
+        Assertions.assertEquals(scope(150, 250), TxnRequest.computeScope(id(4), topologies, route).toRoutingKeys());
         Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(4), topologies, keys));
     }
 }

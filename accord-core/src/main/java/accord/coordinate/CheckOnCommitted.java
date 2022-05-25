@@ -118,12 +118,12 @@ public class CheckOnCommitted extends CheckShards
                     //  (i.e. those covered by Route)
                     node.forEachLocal(route, txnId.epoch, full.executeAt.epoch - 1, commandStore -> {
                         Command command = commandStore.command(txnId);
-                        command.commit(route, progressKey, full.executeAt, full.committedDeps, full.partialTxn);
+                        command.commit(route, progressKey, full.partialTxn, full.executeAt, full.committedDeps);
                     });
 
                     node.forEachLocalSince(route, full.executeAt.epoch, commandStore -> {
                         Command command = commandStore.command(txnId);
-                        command.commit(route, progressKey, full.executeAt, full.committedDeps, full.partialTxn);
+                        command.commit(route, progressKey, full.partialTxn, full.executeAt, full.committedDeps);
                         command.apply(route, full.executeAt, full.committedDeps, full.writes, full.result);
                     });
                     break;
@@ -132,7 +132,7 @@ public class CheckOnCommitted extends CheckShards
             case ReadyToExecute:
                 node.forEachLocalSince(route, txnId.epoch, commandStore -> {
                     Command command = commandStore.command(txnId);
-                    command.commit(route, progressKey, full.executeAt, full.committedDeps, full.partialTxn);
+                    command.commit(route, progressKey, full.partialTxn, full.executeAt, full.committedDeps);
                 });
         }
     }

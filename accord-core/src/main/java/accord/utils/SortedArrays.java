@@ -49,7 +49,9 @@ public class SortedArrays
             {
                 if (rightIdx == right.length)
                     return left;
-                result = allocate.apply(resultSize + (left.length - leftIdx) + (right.length - rightIdx));
+                result = allocate.apply(left.length + (right.length - rightIdx));
+                resultSize = leftIdx;
+                System.arraycopy(left, 0, result, 0, resultSize);
             }
         }
         else
@@ -76,7 +78,9 @@ public class SortedArrays
             {
                 if (leftIdx == left.length)
                     return right;
-                result = allocate.apply(resultSize + (left.length - leftIdx) + (right.length - rightIdx));
+                result = allocate.apply(right.length + (left.length - leftIdx));
+                resultSize = rightIdx;
+                System.arraycopy(right, 0, result, 0, resultSize);
             }
         }
 
@@ -289,7 +293,7 @@ public class SortedArrays
             }
 
             ri = (int)ari;
-            ai = exponentialSearch(slice, ai, slice.length, select[ri], cmp2, Search.FLOOR) + 1;
+            ai = exponentialSearch(slice, nextai, slice.length, select[ri], cmp2, Search.FLOOR) + 1;
         }
 
         while (true)
@@ -354,7 +358,7 @@ public class SortedArrays
             int c = comparator.compare(find, in[i]);
             if (c < 0)
             {
-                to = i - 1;
+                to = i;
                 break;
             }
             if (c > 0)
@@ -386,14 +390,14 @@ public class SortedArrays
     @Inline
     public static <T1, T2> int binarySearch(T2[] in, int from, int to, T1 find, AsymmetricComparator<T1, T2> comparator, Search op)
     {
-        boolean found = false;
+        int found = -1;
         while (from < to)
         {
             int i = (from + to) >>> 1;
             int c = comparator.compare(find, in[i]);
             if (c < 0)
             {
-                to = i - 1;
+                to = i;
             }
             else if (c > 0)
             {
@@ -408,21 +412,21 @@ public class SortedArrays
                         return i;
 
                     case CEIL:
-                        to = i;
+                        to = found = i;
                         break;
 
                     case FLOOR:
-                        from = i;
+                        found = i;
+                        from = i + 1;
                 }
-                found = true;
             }
         }
-        return found ? to : -1 - to;
+        return found >= 0 ? found : -1 - to;
     }
 
     public static <T1, T2 extends Comparable<T1>> long findNextIntersectionWithOverlaps(T1[] as, int ai, T2[] bs, int bi)
     {
-        return findNextIntersectionWithOverlaps(as, ai, bs, bi, (a, b) -> b.compareTo(a), Comparable::compareTo);
+        return findNextIntersectionWithOverlaps(as, ai, bs, bi, (a, b) -> -b.compareTo(a), Comparable::compareTo);
     }
 
     public static <T1, T2> long findNextIntersectionWithOverlaps(T1[] as, int ai, T2[] bs, int bi, AsymmetricComparator<T1, T2> cmp1, AsymmetricComparator<T2, T1> cmp2)
@@ -466,7 +470,7 @@ public class SortedArrays
             if (ai >= 0)
                 break;
 
-            ai = -1 -ai;
+            ai = -1 - ai;
             if (ai == as.length)
                 return -1;
         }

@@ -190,17 +190,21 @@ public class Command implements Listener, Consumer<Listener>
 
     public AcceptOutcome preaccept(PartialTxn partialTxn, AbstractRoute route, @Nullable RoutingKey progressKey)
     {
-        // update the state with partialTxn info etc whether or not we successfully preaccept
-        // (no point rejecting this info if we have accepted a higher ballot)
-        KeyRanges coordinateRanges = coordinateRanges();
-        ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
-        ensure(coordinateRanges, shard, route, partialTxn, Set, null, Ignore);
-
         if (promised.compareTo(Ballot.ZERO) > 0)
             return AcceptOutcome.RejectedBallot;
 
+        return preacceptInternal(partialTxn, route, progressKey);
+    }
+
+    private AcceptOutcome preacceptInternal(PartialTxn partialTxn, AbstractRoute route, @Nullable RoutingKey progressKey)
+    {
         if (hasBeen(PreAccepted))
             return AcceptOutcome.Redundant;
+
+        KeyRanges coordinateRanges = coordinateRanges();
+        ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
+        if (!validate(coordinateRanges, coordinateRanges, shard, route, partialTxn, Set, null, Ignore))
+            throw new IllegalStateException();
 
         Timestamp max = commandStore.maxConflict(partialTxn.keys);
         // unlike in the Accord paper, we partition shards within a node, so that to ensure a total order we must either:
@@ -208,8 +212,9 @@ public class Command implements Listener, Consumer<Listener>
         //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
         this.executeAt = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch()
                          ? txnId : commandStore.uniqueNow(max);
-
+        set(coordinateRanges, shard, route, partialTxn, Set, null, Ignore);
         this.status = PreAccepted;
+
         this.commandStore.progressLog().preaccept(txnId, shard);
         this.listeners.forEach(this);
         return AcceptOutcome.Success;
@@ -224,7 +229,7 @@ public class Command implements Listener, Consumer<Listener>
         return true;
     }
 
-    public AcceptOutcome accept(Ballot ballot, PartialRoute route, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps)
+    public AcceptOutcome accept(Ballot ballot, PartialRoute route, @Nullable RoutingKey progressKey, @Nullable PartialTxn partialTxn, Timestamp executeAt, PartialDeps partialDeps)
     {
         if (this.promised.compareTo(ballot) > 0)
             return AcceptOutcome.RejectedBallot;
@@ -233,13 +238,15 @@ public class Command implements Listener, Consumer<Listener>
             return AcceptOutcome.Redundant;
 
         KeyRanges coordinateRanges = coordinateRanges();
+        KeyRanges executeRanges = txnId.epoch == executeAt.epoch ? coordinateRanges : commandStore.ranges().at(executeAt.epoch);
         ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
 
-        if (!tryEnsure(coordinateRanges, coordinateRanges, shard, route, null, Ignore, partialDeps, Set))
+        if (!validate(coordinateRanges, executeRanges, shard, route, partialTxn, Add, partialDeps, Set))
             return AcceptOutcome.Insufficient;
 
         this.executeAt = executeAt;
         this.promised = this.accepted = ballot;
+        set(executeRanges, shard, route, partialTxn, Check, partialDeps, Set);
         this.status = Accepted;
 
         this.commandStore.progressLog().accept(txnId, shard);
@@ -266,7 +273,7 @@ public class Command implements Listener, Consumer<Listener>
     public enum CommitOutcome { Success, Redundant, Insufficient }
 
     // relies on mutual exclusion for each key
-    public CommitOutcome commit(AbstractRoute route, @Nullable RoutingKey progressKey, Timestamp executeAt, PartialDeps partialDeps, @Nullable PartialTxn partialTxn)
+    public CommitOutcome commit(AbstractRoute route, @Nullable RoutingKey progressKey, @Nullable PartialTxn partialTxn, Timestamp executeAt, PartialDeps partialDeps)
     {
         if (hasBeen(Committed))
         {
@@ -277,13 +284,15 @@ public class Command implements Listener, Consumer<Listener>
         }
 
         KeyRanges coordinateRanges = coordinateRanges();
-        KeyRanges executeRanges = executeRanges(executeAt, coordinateRanges);
+        KeyRanges executeRanges = executeRanges(executeAt);
         ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
 
-        if (!tryEnsure(coordinateRanges, executeRanges, shard, route, partialTxn, Add, partialDeps, Set))
+        if (!validate(coordinateRanges, executeRanges, shard, route, partialTxn, Add, partialDeps, Set))
             return CommitOutcome.Insufficient;
 
         this.executeAt = executeAt;
+        set(executeRanges, shard, route, partialTxn, Add, partialDeps, Set);
+
         this.status = Committed;
         populateWaitingOn();
 
@@ -369,15 +378,17 @@ public class Command implements Listener, Consumer<Listener>
         }
 
         KeyRanges coordinateRanges = coordinateRanges();
-        KeyRanges executeRanges = executeRanges(executeAt, coordinateRanges);
+        KeyRanges executeRanges = executeRanges(executeAt);
         ProgressShard shard = progressShard(route, coordinateRanges);
 
-        if (!tryEnsure(coordinateRanges, executeRanges, shard, route, null, Check, partialDeps, hasBeen(Committed) ? Add : TrySet))
+        if (!validate(coordinateRanges, executeRanges, shard, route, null, Check, partialDeps, hasBeen(Committed) ? Add : TrySet))
             return ApplyOutcome.Insufficient; // TODO: this should probably be an assertion failure if !TrySet
 
         this.writes = writes;
         this.result = result;
         this.executeAt = executeAt;
+        set(executeRanges, shard, route, null, Check, partialDeps, hasBeen(Committed) ? Add : TrySet);
+
         if (!hasBeen(Committed))
             populateWaitingOn();
         this.status = Executed;
@@ -401,9 +412,9 @@ public class Command implements Listener, Consumer<Listener>
                 default:
                 case RejectedBallot:
                 case Insufficient:
+                case Redundant:
                     throw new IllegalStateException();
 
-                case Redundant:
                 case Success:
             }
         }
@@ -425,7 +436,7 @@ public class Command implements Listener, Consumer<Listener>
                 break;
             case Committed:
             case ReadyToExecute:
-                commandStore.command(txnId).commit(route, progressKey, executeAt, partialDeps, partialTxn);
+                commandStore.command(txnId).commit(route, progressKey, partialTxn, executeAt, partialDeps);
                 break;
             case Executed:
             case Applied:
@@ -646,7 +657,7 @@ public class Command implements Listener, Consumer<Listener>
             cur = next;
         }
 
-        RoutingKeys someKeys = cur.someRoutingKeys();
+        RoutingKeys someKeys = cur.someRoute();
         if (someKeys == null)
             someKeys = prev.partialDeps.someRoutingKeys(cur.txnId);
         return new BlockedBy(cur.txnId, someKeys);
@@ -716,29 +727,9 @@ public class Command implements Listener, Consumer<Listener>
         return commandStore.ranges().at(txnId.epoch);
     }
 
-    private KeyRanges executeRanges(Timestamp executeAt, KeyRanges coordinateRanges)
+    private KeyRanges executeRanges(Timestamp executeAt)
     {
-        return executeRanges(executeAt.epoch, coordinateRanges);
-    }
-
-    private KeyRanges executeRanges(long executeEpoch, KeyRanges coordinateRanges)
-    {
-        if (txnId.epoch == executeEpoch)
-            return coordinateRanges;
-
-        return commandStore.ranges().at(executeEpoch);
-    }
-
-    private void ensure(KeyRanges coordinateRanges, ProgressShard shard, AbstractRoute route,
-                        @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
-                        @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
-    {
-        if (!tryEnsure(coordinateRanges, coordinateRanges, shard, route,
-                       partialTxn, ensurePartialTxn,
-                       partialDeps, ensurePartialDeps))
-        {
-            throw new IllegalStateException();
-        }
+        return commandStore.ranges().since(executeAt.epoch);
     }
 
     enum EnsureAction { Ignore, Check, Add, TrySet, Set }
@@ -747,39 +738,30 @@ public class Command implements Listener, Consumer<Listener>
      * Validate we have sufficient information for the route, partialTxn and partialDeps fields, and if so update them;
      * otherwise return false (or throw an exception if an illegal state is encountered)
      */
-    private boolean tryEnsure(KeyRanges coordinateRanges, KeyRanges executeRanges, ProgressShard shard, AbstractRoute route,
+    private boolean validate(KeyRanges coordinateRanges, KeyRanges executeRanges, ProgressShard shard, AbstractRoute route,
                               @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
                               @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
     {
         if (shard == Unsure)
             return false;
 
-        boolean updateRoute = false;
         // first validate route
         if (shard.isProgress())
         {
             // validate route
             if (shard.isHome())
             {
-                if (!(this.route instanceof Route))
-                {
-                    if (!(route instanceof Route))
-                        return false;
-
-                    updateRoute = true;
-                }
+                if (!(this.route instanceof Route) && !(route instanceof Route))
+                    return false;
             }
             else if (this.route == null || (coordinateRanges != executeRanges && !this.route.covers(executeRanges)))
             {
                 // failing any of these tests is always an illegal state
-
                 if (!route.covers(coordinateRanges))
                     throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + coordinateRanges);
 
                 if (coordinateRanges != executeRanges && !route.covers(executeRanges))
                     throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + executeRanges);
-
-                updateRoute = true;
             }
         }
 
@@ -804,9 +786,15 @@ public class Command implements Listener, Consumer<Listener>
             return false;
         }
 
-        // finally, update all three
-        if (updateRoute)
-            this.route = route;
+        return true;
+    }
+
+    private void set(KeyRanges executeRanges, ProgressShard shard, AbstractRoute route,
+                     @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
+                     @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
+    {
+        if (shard.isProgress())
+            this.route = AbstractRoute.merge(this.route, route);
 
         // TODO (now): apply hashIntersects
         switch (ensurePartialTxn)
@@ -824,7 +812,7 @@ public class Command implements Listener, Consumer<Listener>
                 break;
 
             case Set:
-                this.partialTxn = partialTxn.slice(coordinateRanges, shard.isHome());
+                this.partialTxn = partialTxn.slice(executeRanges, shard.isHome());
                 partialTxn.keys().forEach(key -> {
                     if (commandStore.hashIntersects(key))
                         commandStore.commandsForKey(key).register(this);
@@ -843,11 +831,9 @@ public class Command implements Listener, Consumer<Listener>
                 break;
 
             case Set:
-                this.partialDeps = partialDeps.slice(coordinateRanges);
+                this.partialDeps = partialDeps.slice(executeRanges);
                 break;
         }
-
-        return true;
     }
 
     private static boolean validate(EnsureAction action, KeyRanges coordinateRanges, KeyRanges executeRanges, KeyRanges existing, KeyRanges adding, String kind, Object obj)
@@ -904,16 +890,16 @@ public class Command implements Listener, Consumer<Listener>
     }
 
     // TODO: callers should try to consult the local progress shard (if any) to obtain the full set of keys owned locally
-    public RoutingKeys someRoutingKeys()
+    public AbstractRoute someRoute()
     {
         if (route != null)
             return route;
 
         if (partialTxn != null)
-            return partialTxn.keys.toRoutingKeys();
+            return partialTxn.keys.toRoute(homeKey);
 
         if (partialDeps != null)
-            return partialDeps.keys().toRoutingKeys();
+            return partialDeps.keys().toRoute(homeKey);
 
         return null;
     }

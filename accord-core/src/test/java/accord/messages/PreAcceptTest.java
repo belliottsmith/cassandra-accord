@@ -1,6 +1,5 @@
 package accord.messages;
 
-import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.impl.mock.*;
 import accord.impl.SimpleProgressLog;
@@ -9,7 +8,6 @@ import accord.local.Node.Id;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.impl.mock.MockCluster.Clock;
-import accord.primitives.KeyRange;
 import accord.primitives.KeyRange.StartInclusive;
 import accord.primitives.KeyRanges;
 import accord.primitives.PartialRoute;
