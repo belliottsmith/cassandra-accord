@@ -13,7 +13,6 @@ import accord.primitives.AbstractRoute;
 import accord.primitives.KeyRanges;
 import accord.primitives.PartialRoute;
 import accord.primitives.Route;
-import accord.primitives.RoutingKeys;
 import accord.topology.Topologies;
 import accord.topology.Topology;
 import accord.primitives.TxnId;
@@ -79,7 +78,7 @@ public abstract class TxnRequest implements EpochRequest
 
     public TxnRequest(Node.Id to, Topologies topologies, AbstractRoute route)
     {
-        this(to, topologies, route, 0);
+        this(to, topologies, route, latestRelevantEpochIndex(to, topologies, route));
     }
 
     public TxnRequest(Node.Id to, Topologies topologies, AbstractRoute route, int startIndex)
@@ -105,6 +104,7 @@ public abstract class TxnRequest implements EpochRequest
         return waitForEpoch;
     }
 
+    // finds the first topology index that intersects with the node
     protected static int latestRelevantEpochIndex(Node.Id node, Topologies topologies, AbstractKeys<?, ?> keys)
     {
         KeyRanges latest = topologies.get(0).rangesForNode(node);
@@ -167,7 +167,7 @@ public abstract class TxnRequest implements EpochRequest
         return topologies.get(i - 1).epoch();
     }
 
-    public static RoutingKeys computeScope(Node.Id node, Topologies topologies, Route keys)
+    public static PartialRoute computeScope(Node.Id node, Topologies topologies, Route keys)
     {
         return computeScope(node, topologies, keys, latestRelevantEpochIndex(node, topologies, keys));
     }
@@ -177,7 +177,7 @@ public abstract class TxnRequest implements EpochRequest
         return computeScope(node, topologies, route, startIndex, AbstractRoute::slice, PartialRoute::union);
     }
 
-    // TODO (now): move to Topologies
+    // TODO: move to Topologies
     public static <I extends AbstractKeys<?, ?>, O extends AbstractKeys<?, ?>> O computeScope(Node.Id node, Topologies topologies, I keys, int startIndex, BiFunction<I, KeyRanges, O> slice, BiFunction<O, O, O> merge)
     {
         KeyRanges last = null;

@@ -2,12 +2,13 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
-import accord.primitives.RoutingKeys;
+import accord.primitives.AbstractRoute;
 import accord.primitives.TxnId;
 
 import static accord.local.Status.Committed;
@@ -20,21 +21,21 @@ import static accord.local.Status.Committed;
  */
 public class CheckOnUncommitted extends CheckOnCommitted
 {
-    CheckOnUncommitted(Node node, TxnId txnId, RoutingKeys someKeys, long shardEpoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
+    CheckOnUncommitted(Node node, TxnId txnId, AbstractRoute route, long shardEpoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        super(node, txnId, someKeys, shardEpoch, callback);
+        super(node, txnId, route, shardEpoch, callback);
     }
 
-    public static CheckOnUncommitted checkOnUncommitted(Node node, TxnId txnId, RoutingKeys someKeys, long epoch,
+    public static CheckOnUncommitted checkOnUncommitted(Node node, TxnId txnId, AbstractRoute route, long epoch,
                                                         BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        CheckOnUncommitted checkOnUncommitted = new CheckOnUncommitted(node, txnId, someKeys, epoch, callback);
+        CheckOnUncommitted checkOnUncommitted = new CheckOnUncommitted(node, txnId, route, epoch, callback);
         checkOnUncommitted.start();
         return checkOnUncommitted;
     }
 
     @Override
-    boolean isSufficient(Id from, CheckStatusOk ok)
+    protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
         return ok.status.hasBeen(Committed);
     }
@@ -46,14 +47,13 @@ public class CheckOnUncommitted extends CheckOnCommitted
         {
             default: throw new IllegalStateException();
             case NotWitnessed:
-            case AcceptedInvalidate:
                 break;
-            case PreAccepted:
+            case AcceptedInvalidate:
             case Accepted:
-                node.forEachLocalSince(someKeys, txnId.epoch, commandStore -> {
-                    Command command = commandStore.ifPresent(txnId);
-                    if (command != null)
-                        command.updateHomeKey(full.homeKey);
+            case PreAccepted:
+                RoutingKey progressKey = node.trySelectProgressKey(txnId, full.route);
+                node.forEachLocal(someKeys, txnId.epoch, full.executeAt.epoch, commandStore -> {
+                    commandStore.command(txnId).preaccept(full.partialTxn, full.route, progressKey);
                 });
                 break;
             case Executed:

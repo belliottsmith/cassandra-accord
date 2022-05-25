@@ -251,7 +251,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     return;
                 case Executed:
                 case Applied:
-                    Persist.persistAndCommit(node, txnId, txn, route, acceptOrCommit.executeAt, assembleDeps(), acceptOrCommit.writes, acceptOrCommit.result);
+                    Persist.persistAndCommit(node, txnId, route, txn, acceptOrCommit.executeAt, assembleDeps(), acceptOrCommit.writes, acceptOrCommit.result);
                     accept(acceptOrCommit.result, null);
                     return;
                 case Invalidated:

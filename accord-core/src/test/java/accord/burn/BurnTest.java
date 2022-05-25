@@ -245,7 +245,7 @@ public class BurnTest
             {
                 List<Id> clients = generateIds(true, 1 + random.nextInt(4));
                 List<Id> nodes = generateIds(false, 5 + random.nextInt(5));
-                burn(random, new TopologyFactory<>(nodes.size() == 5 ? 3 : (2 + random.nextInt(3)), IntHashKey.ranges(4 + random.nextInt(12))),
+                burn(random, new TopologyFactory(nodes.size() == 5 ? 3 : (2 + random.nextInt(3)), IntHashKey.ranges(4 + random.nextInt(12))),
                      clients,
                      nodes,
                      5 + random.nextInt(15),

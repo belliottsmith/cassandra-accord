@@ -39,13 +39,12 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
         this.callback = callback;
     }
 
-    public static MaybeRecover maybeRecover(Node node, TxnId txnId, RoutingKey homeKey,
+    public static void maybeRecover(Node node, TxnId txnId, RoutingKey homeKey,
                                                      Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted,
                                                      BiConsumer<CheckStatusOk, Throwable> callback)
     {
         MaybeRecover maybeRecover = new MaybeRecover(node, txnId, homeKey, knownStatus, knownPromised, knownPromiseHasBeenAccepted, callback);
         maybeRecover.start();
-        return maybeRecover;
     }
 
     @Override
@@ -55,7 +54,7 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
     }
 
     @Override
-    boolean isSufficient(Id from, CheckStatusOk ok)
+    protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
         return hasMadeProgress(ok);
     }
@@ -69,7 +68,7 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
     }
 
     @Override
-    void onDone(Done done, Throwable fail)
+    protected void onDone(Done done, Throwable fail)
     {
         super.onDone(done, fail);
         if (fail != null)

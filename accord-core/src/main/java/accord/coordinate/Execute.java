@@ -6,7 +6,6 @@ import java.util.function.BiConsumer;
 import accord.api.Data;
 import accord.api.Result;
 import accord.local.Node;
-import accord.messages.PreAccept;
 import accord.messages.ReadData.ReadNack;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
@@ -21,6 +20,7 @@ import accord.messages.ReadData;
 import accord.messages.ReadData.ReadOk;
 
 import static accord.coordinate.AnyReadCoordinator.Action.Accept;
+import static accord.messages.Commit.Kind.Maximal;
 
 class Execute extends AnyReadCoordinator<ReadReply>
 {
@@ -79,9 +79,7 @@ class Execute extends AnyReadCoordinator<ReadReply>
                 callback.accept(null, new Preempted(txnId, route.homeKey));
                 return Action.Abort;
             case NotCommitted:
-                node.send(from, new PreAccept(from, topologies, txnId, txn, route));
-                // we already sent the commit, but it might have been lost through shedding or some other reason, so re-send
-                node.send(from, new Commit(from, topologies, txnId, txn, route, executeAt, deps, false));
+                node.send(from, new Commit(Maximal, from, topologies, txnId, txn, route, executeAt, deps, false));
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 return Action.TryAlternative;
             case Invalid:
@@ -95,7 +93,7 @@ class Execute extends AnyReadCoordinator<ReadReply>
     {
         Result result = txn.result(data);
         callback.accept(result, null);
-        Persist.persist(node, topologies, txnId, route, executeAt, deps, txn.execute(executeAt, data), result);
+        Persist.persist(node, topologies, txnId, route, txn, executeAt, deps, txn.execute(executeAt, data), result);
     }
 
     @Override

@@ -60,13 +60,13 @@ public class RecoverWithRoute extends CheckShards
     }
 
     @Override
-    void contact(Set<Id> nodes)
+    protected void contact(Set<Id> nodes)
     {
         node.send(nodes, to -> new CheckStatus(to, tracker.topologies(), txnId, route, IncludeInfo.All), this);
     }
 
     @Override
-    boolean isSufficient(Id from, CheckStatusOk ok)
+    protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
         CheckStatusOkFull full = (CheckStatusOkFull)ok;
         if (full.partialTxn == null)
@@ -77,7 +77,7 @@ public class RecoverWithRoute extends CheckShards
     }
 
     @Override
-    void onDone(Done done, Throwable failure)
+    protected void onDone(Done done, Throwable failure)
     {
         if (failure != null)
         {
@@ -121,7 +121,7 @@ public class RecoverWithRoute extends CheckShards
                 if (merged.committedDeps.covers(route))
                 {
                     Deps deps = merged.committedDeps.reconstitute(route);
-                    Persist.persistAndCommit(node, txnId, txn, route, merged.executeAt, deps, merged.writes, merged.result);
+                    Persist.persistAndCommit(node, txnId, route, txn, merged.executeAt, deps, merged.writes, merged.result);
                     callback.accept(Executed, null);
                     break;
                 }

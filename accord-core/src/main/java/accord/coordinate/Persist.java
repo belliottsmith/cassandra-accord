@@ -11,7 +11,8 @@ import accord.messages.Apply;
 import accord.messages.Apply.ApplyReply;
 import accord.messages.Callback;
 import accord.messages.Commit;
-import accord.messages.InformOfPersistence;
+import accord.messages.Commit.Kind;
+import accord.messages.InformHomeDurable;
 import accord.primitives.Deps;
 import accord.primitives.Route;
 import accord.primitives.Txn;
@@ -27,33 +28,37 @@ public class Persist implements Callback<ApplyReply>
     final Node node;
     final TxnId txnId;
     final Route route;
+    final Txn txn;
     final Timestamp executeAt;
+    final Deps deps;
     final QuorumTracker tracker;
     final Set<Id> persistedOn;
     boolean isDone;
 
-    public static void persist(Node node, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public static void persist(Node node, Topologies topologies, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        Persist persist = new Persist(node, topologies, txnId, route, executeAt);
+        Persist persist = new Persist(node, topologies, txnId, route, txn, executeAt, deps);
         node.send(topologies.nodes(), to -> new Apply(to, topologies, txnId, route, executeAt, deps, writes, result), persist);
     }
 
-    public static void persistAndCommit(Node node, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public static void persistAndCommit(Node node, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        Topologies persistTo = node.topology().preciseEpochs(route, executeAt.epoch);
-        Persist persist = new Persist(node, persistTo, txnId, route, executeAt);
+        Topologies persistTo = node.topology().forEpoch(route, executeAt.epoch);
+        Persist persist = new Persist(node, persistTo, txnId, route, txn, executeAt, deps);
         node.send(persistTo.nodes(), to -> new Apply(to, persistTo, txnId, route, executeAt, deps, writes, result), persist);
         if (txnId.epoch != executeAt.epoch)
         {
-            Topologies earlierTopologies = node.topology().preciseEpochs(route, txnId.epoch, executeAt.epoch - 1);
+            Topologies earlierTopologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch - 1);
             Commit.commit(node, earlierTopologies, persistTo, txnId, txn, route, executeAt, deps);
         }
     }
 
-    private Persist(Node node, Topologies topologies, TxnId txnId, Route route, Timestamp executeAt)
+    private Persist(Node node, Topologies topologies, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps)
     {
         this.node = node;
         this.txnId = txnId;
+        this.txn = txn;
+        this.deps = deps;
         this.route = route;
         this.tracker = new QuorumTracker(topologies);
         this.executeAt = executeAt;
@@ -72,13 +77,13 @@ public class Persist implements Callback<ApplyReply>
                 {
                     // TODO: send to non-home replicas also, so they may clear their log more easily?
                     Shard homeShard = node.topology().forEpochIfKnown(route.homeKey, txnId.epoch);
-                    node.send(homeShard, new InformOfPersistence(txnId, route.homeKey, executeAt, persistedOn));
+                    node.send(homeShard, new InformHomeDurable(txnId, route.homeKey, executeAt, persistedOn));
                     isDone = true;
                 }
                 break;
             case INSUFFICIENT:
-                // TODO (now): implement, must send at least routingKeys
-                throw new UnsupportedOperationException();
+                Topologies topologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch);
+                node.send(from, new Commit(Kind.Maximal, from, topologies, txnId, txn, route, executeAt, deps, false));
         }
     }
 

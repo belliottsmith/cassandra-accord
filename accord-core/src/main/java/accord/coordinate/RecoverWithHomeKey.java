@@ -41,13 +41,13 @@ public class RecoverWithHomeKey extends CheckShards implements BiConsumer<Object
     }
 
     @Override
-    boolean isSufficient(Id from, CheckStatusOk ok)
+    protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
         return ok.route != null;
     }
 
     @Override
-    void onDone(Done done, Throwable fail)
+    protected void onDone(Done done, Throwable fail)
     {
         if (fail != null)
         {

@@ -1,5 +1,7 @@
 package accord.primitives;
 
+import javax.annotation.Nullable;
+
 import accord.api.RoutingKey;
 
 public abstract class AbstractRoute extends RoutingKeys
@@ -21,7 +23,7 @@ public abstract class AbstractRoute extends RoutingKeys
      */
     public abstract PartialRoute sliceStrict(KeyRanges ranges);
 
-    public static AbstractRoute merge(AbstractRoute prefer, AbstractRoute defer)
+    public static AbstractRoute merge(@Nullable AbstractRoute prefer, @Nullable AbstractRoute defer)
     {
         if (prefer == null)
             return defer;

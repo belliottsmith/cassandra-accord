@@ -33,7 +33,6 @@ import org.apache.cassandra.utils.concurrent.Future;
  */
 public class Coordinate extends AsyncFuture<Result> implements Callback<PreAcceptReply>, BiConsumer<Result, Throwable>
 {
-
     static class ShardTracker extends FastPathTracker.FastPathShardTracker
     {
         public ShardTracker(Shard shard)
@@ -145,7 +144,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         this.txnId = txnId;
         this.txn = txn;
         this.route = route;
-        Topologies topologies = node.topology().withUnsyncEpochs(txn.keys(), txnId.epoch, txnId.epoch);
+        Topologies topologies = node.topology().forEpochRangeWithUnsync(txn.keys(), txnId.epoch, txnId.epoch);
         this.tracker = new PreacceptTracker(topologies);
     }
 
@@ -193,7 +192,7 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
     {
         if (!tracker.hasSupersedingEpoch())
             return;
-        Topologies newTopologies = node.topology().withUnsyncEpochs(txn.keys(), txnId.epoch, tracker.supersedingEpoch);
+        Topologies newTopologies = node.topology().forEpochRangeWithUnsync(txn.keys(), txnId.epoch, tracker.supersedingEpoch);
         if (newTopologies.currentEpoch() < tracker.supersedingEpoch)
             return;
         Set<Id> previousNodes = tracker.nodes();

@@ -44,7 +44,7 @@ public class TopologyUpdate
         private final TxnId txnId;
         private final AbstractRoute route;
         private final PartialTxn partialTxn;
-        private final RoutingKey homeKey;
+        private final RoutingKey progressKey;
         private final Timestamp executeAt;
         private final long epoch;
 
@@ -59,7 +59,7 @@ public class TopologyUpdate
             this.txnId = command.txnId();
             this.route = command.route();
             this.partialTxn = command.partialTxn();
-            this.homeKey = command.homeKey();
+            this.progressKey = command.progressKey();
             this.status = command.status();
             this.executeAt = command.executeAt();
             this.partialDeps = command.savedPartialDeps();
@@ -141,7 +141,7 @@ public class TopologyUpdate
     {
         Topology syncTopology = node.configService().getTopologyForEpoch(syncEpoch);
         Topology localTopology = syncTopology.forNode(node.id());
-        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().withUnsyncEpochs(cmd.partialTxn.keys, syncEpoch).nodes();
+        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().forEpochRangeWithUnsync(cmd.partialTxn.keys, syncEpoch).nodes();
 
         KeyRanges ranges = localTopology.ranges();
         Stream<MessageTask> messageStream = Stream.empty();
@@ -161,7 +161,7 @@ public class TopologyUpdate
         Topology syncTopology = node.configService().getTopologyForEpoch(syncEpoch);
         Topology localTopology = syncTopology.forNode(node.id());
         Topology nextTopology = node.configService().getTopologyForEpoch(nextEpoch);
-        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().withUnsyncEpochs(cmd.partialTxn.keys, syncEpoch).nodes();
+        Function<CommandSync, Collection<Node.Id>> allNodes = cmd -> node.topology().forEpochRangeWithUnsync(cmd.partialTxn.keys, syncEpoch).nodes();
 
         // backfill new replicas with operations from prior epochs
         Stream<MessageTask> messageStream = Stream.empty();

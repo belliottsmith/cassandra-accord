@@ -15,9 +15,9 @@ import accord.topology.Topologies;
 
 abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
 {
-    enum Action { Abort, Continue, AcceptQuorum, Accept, Success }
+    protected enum Action { Abort, Continue, AcceptQuorum, Accept, Success }
 
-    enum Done { Exhausted, ReachedQuorum, Success }
+    protected enum Done { Exhausted, ReachedQuorum, Success }
 
     static class QuorumReadShardTracker extends ReadShardTracker
     {
@@ -85,15 +85,15 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
         this.tracker = new Tracker(topologies);
     }
 
-    void start()
+     protected void start()
     {
         contact(tracker.computeMinimalReadSetAndMarkInflight());
     }
 
-    abstract void contact(Set<Id> nodes);
-    abstract Action process(Id from, Reply reply);
+    protected abstract void contact(Set<Id> nodes);
+    protected abstract Action process(Id from, Reply reply);
 
-    abstract void onDone(Done done, Throwable failure);
+    protected abstract void onDone(Done done, Throwable failure);
 
     @Override
     public void onSuccess(Id from, Reply reply)

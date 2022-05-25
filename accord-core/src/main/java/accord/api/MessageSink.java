@@ -11,5 +11,4 @@ public interface MessageSink
     void send(Id to, Request request);
     void send(Id to, Request request, Callback callback);
     void reply(Id replyingToNode, ReplyContext replyContext, Reply reply);
-    void reply(Id replyingToNode, ReplyContext replyContext, Reply reply, Callback callback);
 }

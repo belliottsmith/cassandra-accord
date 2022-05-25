@@ -1,6 +1,5 @@
 package accord.messages;
 
-import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -37,14 +36,12 @@ public class Apply extends TxnRequest
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        RoutingKey progressKey = node.trySelectProgressKey(txnId, scope, scope.homeKey);
         // note, we do not also commit here if txnId.epoch != executeAt.epoch, as the scope() for a commit would be different
         node.mapReduceLocalSince(scope(), executeAt, instance -> {
             Command command = instance.command(txnId);
-            switch (command.apply(scope, progressKey, executeAt, deps, writes, result))
+            switch (command.apply(scope, executeAt, deps, writes, result))
             {
                 default:
-                case Partial:
                 case Insufficient:
                     return ApplyReply.INSUFFICIENT;
                 case Redundant:

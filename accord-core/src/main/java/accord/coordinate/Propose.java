@@ -57,7 +57,7 @@ class Propose implements Callback<AcceptReply>
     public static void propose(Node node, Ballot ballot, TxnId txnId, Txn txn, Route route,
                                Timestamp executeAt, Deps deps, BiConsumer<Result, Throwable> callback)
     {
-        Topologies topologies = node.topology().withUnsyncEpochs(route, txnId, executeAt);
+        Topologies topologies = node.topology().forEpochRangeWithUnsync(route, txnId, executeAt);
         propose(node, topologies, ballot, txnId, txn, route, executeAt, deps, callback);
     }
 
@@ -83,7 +83,7 @@ class Propose implements Callback<AcceptReply>
                 callback.accept(null, new Preempted(txnId, route.homeKey));
                 break;
             case Insufficient:
-                node.send(from, new PreAccept(from, node.topology().preciseEpochs(route, txnId.epoch, executeAt.epoch), txnId, txn, route));
+                node.send(from, new PreAccept(from, node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch), txnId, txn, route));
                 break;
             case Success:
                 AcceptOk ok = (AcceptOk) reply;

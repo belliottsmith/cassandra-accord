@@ -1,6 +1,5 @@
 package accord.impl.mock;
 
-import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.*;

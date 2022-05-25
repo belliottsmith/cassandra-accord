@@ -16,7 +16,6 @@ import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
-import accord.primitives.RoutingKeys;
 import accord.topology.Topologies;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
@@ -28,7 +27,7 @@ import accord.primitives.TxnId;
 public class PreAccept extends TxnRequest.WithUnsync
 {
     public final PartialTxn txn;
-    public final @Nullable RoutingKeys allRoutingKeys; // ordinarily only set on home shard
+    public final @Nullable Route route; // ordinarily only set on home shard
     public final long maxEpoch;
 
     public PreAccept(Id to, Topologies topologies, TxnId txnId, Txn txn, Route route)
@@ -36,16 +35,16 @@ public class PreAccept extends TxnRequest.WithUnsync
         super(to, topologies, txnId, route);
         this.txn = txn.slice(scope.covering, route.contains(route.homeKey));
         this.maxEpoch = topologies.currentEpoch();
-        this.allRoutingKeys = scope.contains(scope.homeKey) ? route : null;
+        this.route = scope.contains(scope.homeKey) ? route : null;
     }
 
     @VisibleForTesting
-    public PreAccept(PartialRoute scope, long epoch, TxnId txnId, PartialTxn txn, @Nullable RoutingKeys allRoutingKeys)
+    public PreAccept(PartialRoute scope, long epoch, TxnId txnId, PartialTxn txn, @Nullable Route route)
     {
         super(scope, epoch, txnId);
         this.txn = txn;
         this.maxEpoch = epoch;
-        this.allRoutingKeys = allRoutingKeys;
+        this.route = route;
     }
 
     public void process(Node node, Id from, ReplyContext replyContext)
@@ -57,7 +56,7 @@ public class PreAccept extends TxnRequest.WithUnsync
             //       we PreAccept to both old and new topologies and require quorums in both.
             //       This necessitates sending to ALL replicas of old topology, not only electorate (as fast path may be unreachable).
             Command command = instance.command(txnId);
-            switch (command.preaccept(txn, scope.homeKey, progressKey, allRoutingKeys))
+            switch (command.preaccept(txn, route != null ? route : scope, progressKey))
             {
                 default:
                 case Insufficient:

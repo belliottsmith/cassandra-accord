@@ -2,6 +2,7 @@ package accord.topology;
 
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.KeyRanges;
 import accord.utils.IndexedConsumer;
 import com.google.common.base.Preconditions;
 
@@ -33,6 +34,10 @@ public interface Topologies
     Set<Node.Id> nodes();
 
     Set<Node.Id> copyOfNodes();
+
+    KeyRanges toRanges();
+
+    KeyRanges computeRangesForNode(Id node);
 
     default void forEach(IndexedConsumer<Topology> consumer)
     {
@@ -165,6 +170,18 @@ public interface Topologies
         }
 
         @Override
+        public KeyRanges toRanges()
+        {
+            return topology.ranges();
+        }
+
+        @Override
+        public KeyRanges computeRangesForNode(Id node)
+        {
+            return topology.rangesForNode(node);
+        }
+
+        @Override
         public boolean equals(Object obj)
         {
             return Topologies.equals(this, obj);
@@ -263,6 +280,24 @@ public interface Topologies
         public Set<Id> copyOfNodes()
         {
             return nodes();
+        }
+
+        @Override
+        public KeyRanges toRanges()
+        {
+            KeyRanges ranges = KeyRanges.EMPTY;
+            for (int i = 0, mi = size() ; i < mi ; i++)
+                ranges = ranges.union(get(i).ranges());
+            return ranges;
+        }
+
+        @Override
+        public KeyRanges computeRangesForNode(Id node)
+        {
+            KeyRanges ranges = KeyRanges.EMPTY;
+            for (int i = 0, mi = size() ; i < mi ; i++)
+                ranges = ranges.union(get(i).rangesForNode(node));
+            return ranges;
         }
 
         public void add(Topology topology)

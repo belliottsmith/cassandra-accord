@@ -4,13 +4,15 @@ import java.util.function.BiConsumer;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
-import accord.coordinate.CheckOnCommitted;
+import accord.coordinate.CheckShards;
 import accord.coordinate.CoordinateFailed;
 import accord.impl.basic.Cluster;
 import accord.impl.basic.Packet;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
+import accord.messages.CheckStatus.CheckStatusOk;
+import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.MessageType;
 import accord.messages.ReplyContext;
 import accord.primitives.RoutingKeys;
@@ -18,8 +20,38 @@ import accord.primitives.Txn;
 import accord.messages.Request;
 import accord.primitives.TxnId;
 
+import static accord.local.Status.Executed;
+
 public class ListRequest implements Request
 {
+    static class CheckOnResult extends CheckShards
+    {
+        final BiConsumer<CheckStatusOk, Throwable> callback;
+        protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<CheckStatusOk, Throwable> callback)
+        {
+            super(node, txnId, RoutingKeys.of(homeKey), txnId.epoch, IncludeInfo.All);
+            this.callback = callback;
+        }
+
+        static void checkOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<CheckStatusOk, Throwable> callback)
+        {
+            CheckOnResult result = new CheckOnResult(node, txnId, homeKey, callback);
+            result.start();
+        }
+
+        @Override
+        protected void onDone(Done done, Throwable failure)
+        {
+            super.onDone(done, failure);
+        }
+
+        @Override
+        protected boolean isSufficient(Id from, CheckStatusOk ok)
+        {
+            return ok.status.compareTo(Executed) >= 0;
+        }
+    }
+
     static class ResultCallback implements BiConsumer<Result, Throwable>
     {
         final Node node;
@@ -48,7 +80,7 @@ public class ListRequest implements Request
                 ((Cluster)node.scheduler()).onDone(() -> {
                     RoutingKey homeKey = ((CoordinateFailed) fail).homeKey;
                     TxnId txnId = ((CoordinateFailed) fail).txnId;
-                    CheckOnCommitted.checkOnCommitted(node, txnId, RoutingKeys.of(homeKey), txnId.epoch, (s, f) -> {
+                    CheckOnResult.checkOnResult(node, txnId, homeKey, (s, f) -> {
                         if (s.status == Status.Invalidated)
                             node.reply(client, replyContext, new ListResult(client, ((Packet)replyContext).requestId, null, null, null));
                     });

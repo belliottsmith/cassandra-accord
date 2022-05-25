@@ -11,6 +11,9 @@ import accord.messages.CheckStatus.CheckStatusReply;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
+import accord.topology.Topologies;
+
+import static accord.api.ProgressLog.ProgressShard.Home;
 
 /**
  * A result of null indicates the transaction is globally persistent
@@ -24,39 +27,49 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
 
     CheckStatusOk merged;
 
-    CheckShards(Node node, TxnId txnId, RoutingKeys someKeys, long epoch, IncludeInfo includeInfo)
+    protected CheckShards(Node node, TxnId txnId, RoutingKeys someKeys, long epoch, IncludeInfo includeInfo)
     {
-        super(node, node.topology().forEpoch(someKeys, epoch), txnId);
+        super(node, ensureSufficient(node, txnId, someKeys, epoch), txnId);
         this.epoch = epoch;
         this.someKeys = someKeys;
         this.includeInfo = includeInfo;
     }
 
+    private static Topologies ensureSufficient(Node node, TxnId txnId, RoutingKeys someKeys, long epoch)
+    {
+        return node.topology().forEpochRange(someKeys, txnId.epoch, epoch);
+    }
+
     @Override
-    void contact(Set<Id> nodes)
+    protected void contact(Set<Id> nodes)
     {
         node.send(nodes, new CheckStatus(txnId, someKeys, epoch, includeInfo), this);
     }
 
-    abstract boolean isSufficient(Id from, CheckStatusOk ok);
+    protected abstract boolean isSufficient(Id from, CheckStatusOk ok);
 
     @Override
-    void onDone(Done done, Throwable failure)
+    protected void onDone(Done done, Throwable failure)
     {
-        if (failure != null) return;
-        if (merged.hasExecutedOnAllShards) return;
-        RoutingKey homeKey = merged.homeKey;
-        if (homeKey == null) return;
-        if (!node.topology().localRangesForEpoch(txnId.epoch).contains(homeKey)) return;
+        if (failure != null)
+            return;
+        if (merged.hasExecutedOnAllShards)
+            return;
 
-        node.ifLocalSince(merged.homeKey, txnId, store -> {
-            store.progressLog().executedOnAllShards(txnId, null);
+        RoutingKey homeKey = merged.homeKey;
+        if (homeKey == null)
+            return;
+        if (!node.topology().localRangesForEpoch(txnId.epoch).contains(homeKey))
+            return;
+
+        node.ifLocal(merged.homeKey, txnId, store -> {
+            store.progressLog().durable(txnId, null, Home);
             return null;
         });
     }
 
     @Override
-    Action process(Id from, CheckStatusReply reply)
+    protected Action process(Id from, CheckStatusReply reply)
     {
         if (reply.isOk())
         {

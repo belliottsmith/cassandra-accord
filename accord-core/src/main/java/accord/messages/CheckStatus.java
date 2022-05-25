@@ -22,6 +22,9 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 
+import static accord.local.Status.Committed;
+import static accord.local.Status.NotWitnessed;
+import static accord.local.Status.PreAccepted;
 import static accord.messages.TxnRequest.computeScope;
 
 public class CheckStatus implements Request
@@ -59,7 +62,7 @@ public class CheckStatus implements Request
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        Reply reply = node.mapReduceLocal(someKeys, epoch, instance -> {
+        CheckStatusOk ok = node.mapReduceLocal(someKeys, epoch, instance -> {
             Command command = instance.command(txnId);
             Route route = null;
             if (includeInfo != IncludeInfo.No)
@@ -77,7 +80,7 @@ public class CheckStatus implements Request
                                              node.isCoordinating(txnId, command.promised()),
                                              command.isGloballyPersistent(), route, command.homeKey());
                 case All:
-                    PartialDeps committedDeps = command.status().compareTo(Status.Committed) >= 0 ? command.savedPartialDeps() : null;
+                    PartialDeps committedDeps = command.status().compareTo(Committed) >= 0 ? command.savedPartialDeps() : null;
                     return new CheckStatusOkFull(command.status(), command.promised(), command.accepted(),
                                                  node.isCoordinating(txnId, command.promised()),
                                                  command.isGloballyPersistent(), route, command.homeKey(),
@@ -86,10 +89,17 @@ public class CheckStatus implements Request
             }
         }, CheckStatusOk::merge);
 
-        if (reply == null)
-            reply = CheckStatusNack.nack();
+        if (ok == null)
+        {
+            node.reply(replyToNode, replyContext, CheckStatusNack.nack());
+        }
+        else
+        {
+            if (ok instanceof CheckStatusOkFull)
+                ok = ((CheckStatusOkFull) ok).covering(someKeys);
+            node.reply(replyToNode, replyContext, ok);
+        }
 
-        node.reply(replyToNode, replyContext, reply);
     }
 
     public interface CheckStatusReply extends Reply
@@ -183,7 +193,7 @@ public class CheckStatus implements Request
         public final Writes writes;
         public final Result result;
 
-        CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, AbstractRoute route,
+        protected CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, AbstractRoute route,
                           RoutingKey homeKey, PartialTxn partialTxn, Timestamp executeAt, PartialDeps committedDeps, Writes writes, Result result)
         {
             super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards, route, homeKey);
@@ -192,6 +202,51 @@ public class CheckStatus implements Request
             this.committedDeps = committedDeps;
             this.writes = writes;
             this.result = result;
+        }
+
+        /**
+         * If multiple shards have been merged, the maximum status will have been adopted, however not all shards may
+         * have had this status. This method picks the highest status we have complete data covering a provided set of keys.
+         */
+        public CheckStatusOkFull covering(RoutingKeys keys)
+        {
+            Status newStatus = status;
+            switch (newStatus)
+            {
+                default: throw new IllegalStateException();
+                case Invalidated:
+                    break;
+                case Applied:
+                case Executed:
+                    if (writes != null && result != null
+                        && committedDeps != null && !committedDeps.covers(keys))
+                        break;
+                    newStatus = Committed;
+                case ReadyToExecute:
+                case Committed:
+                    if (committedDeps != null && !committedDeps.covers(keys)
+                        && partialTxn != null && partialTxn.covers(keys))
+                        break;
+                    newStatus = PreAccepted;
+                case Accepted:
+                case AcceptedInvalidate:
+                case PreAccepted:
+                    if (partialTxn != null && partialTxn.covers(keys))
+                        break;
+                    // TODO (now): we should test Route presence here
+                    newStatus = NotWitnessed;
+                case NotWitnessed:
+            }
+
+            return withStatus(newStatus);
+        }
+
+        CheckStatusOkFull withStatus(Status newStatus)
+        {
+            if (newStatus == status)
+                return this;
+            return new CheckStatusOkFull(newStatus, promised, accepted, isCoordinating, hasExecutedOnAllShards, route,
+                                         homeKey, partialTxn, executeAt, committedDeps, writes, result);
         }
 
         @Override

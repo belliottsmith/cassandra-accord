@@ -4,7 +4,6 @@ import accord.api.ConfigurationService;
 import accord.api.RoutingKey;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
-import accord.local.Node.Id;
 import accord.messages.EpochRequest;
 import accord.messages.Request;
 import accord.primitives.AbstractKeys;
@@ -269,7 +268,7 @@ public class TopologyManager implements ConfigurationService.Listener
         return epochs.get(epoch);
     }
 
-    public Topologies withUnsyncEpochs(AbstractKeys<?, ?> keys, long minEpoch, long maxEpoch)
+    public Topologies forEpochRangeWithUnsync(AbstractKeys<?, ?> keys, long minEpoch, long maxEpoch)
     {
         Epochs snapshot = epochs;
 
@@ -296,7 +295,8 @@ public class TopologyManager implements ConfigurationService.Listener
         return topologies;
     }
 
-    public Topologies preciseEpochs(AbstractKeys<?, ?> keys, long minEpoch, long maxEpoch)
+    // TODO: in many cases we only need precisely two epochs, but we don't currently have a Topologies that supports this
+    public Topologies forEpochRange(AbstractKeys<?, ?> keys, long minEpoch, long maxEpoch)
     {
         Epochs snapshot = epochs;
 
@@ -309,11 +309,6 @@ public class TopologyManager implements ConfigurationService.Listener
             topologies.add(snapshot.get(minEpoch + i).global().forKeys(keys));
 
         return topologies;
-    }
-
-    public Topologies preciseEpochs(AbstractKeys<?, ?> keys, long epoch)
-    {
-        return preciseEpochs(keys, epoch, epoch);
     }
 
     public Topologies forEpoch(AbstractKeys<?, ?> keys, long epoch)
@@ -342,14 +337,14 @@ public class TopologyManager implements ConfigurationService.Listener
         return epochs.get(epoch) != null;
     }
 
-    public Topologies withUnsyncEpochs(AbstractKeys<?, ?> keys, long epoch)
+    public Topologies forEpochRangeWithUnsync(AbstractKeys<?, ?> keys, long epoch)
     {
-        return withUnsyncEpochs(keys, epoch, epoch);
+        return forEpochRangeWithUnsync(keys, epoch, epoch);
     }
 
-    public Topologies withUnsyncEpochs(AbstractKeys<?, ?> keys, Timestamp min, Timestamp max)
+    public Topologies forEpochRangeWithUnsync(AbstractKeys<?, ?> keys, Timestamp min, Timestamp max)
     {
-        return withUnsyncEpochs(keys, min.epoch, max.epoch);
+        return forEpochRangeWithUnsync(keys, min.epoch, max.epoch);
     }
 
     public Topology localForEpoch(long epoch)

@@ -7,6 +7,7 @@ import accord.local.Node.Id;
 import accord.local.Status;
 import accord.primitives.TxnId;
 
+import static accord.api.ProgressLog.ProgressShard.Home;
 import static accord.messages.SimpleReply.nack;
 import static accord.messages.SimpleReply.ok;
 
@@ -28,7 +29,7 @@ public class InformOfTxnId implements EpochRequest
             if (!command.hasBeen(Status.PreAccepted))
             {
                 command.updateHomeKey(homeKey);
-                instance.progressLog().unwitnessed(txnId, true, true);
+                instance.progressLog().unwitnessed(txnId, Home);
             }
             return ok();
         });

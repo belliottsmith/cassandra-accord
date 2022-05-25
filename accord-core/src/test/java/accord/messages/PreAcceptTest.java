@@ -13,6 +13,7 @@ import accord.primitives.KeyRange;
 import accord.primitives.KeyRange.StartInclusive;
 import accord.primitives.KeyRanges;
 import accord.primitives.PartialRoute;
+import accord.primitives.Route;
 import accord.topology.Topology;
 import accord.primitives.Deps;
 import accord.primitives.Txn;
@@ -67,7 +68,7 @@ public class PreAcceptTest
         RoutingKey[] routingKeys = new RoutingKey[txn.keys.size()];
         for (int i = 0 ; i < routingKeys.length ; ++i)
             routingKeys[i] = txn.keys.get(i).toRoutingKey();
-        return new PreAccept(new PartialRoute(FULL_RANGE, homeKey, routingKeys), txnId.epoch, txnId, txn.slice(FULL_RANGE, true));
+        return new PreAccept(new PartialRoute(FULL_RANGE, homeKey, routingKeys), txnId.epoch, txnId, txn.slice(FULL_RANGE, true), new Route(homeKey, routingKeys));
     }
 
     @Test
