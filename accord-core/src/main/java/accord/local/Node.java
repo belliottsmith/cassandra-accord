@@ -437,7 +437,12 @@ public class Node implements ConfigurationService.Listener
 
     public RoutingKey selectProgressKey(TxnId txnId, AbstractKeys<?, ?> keys, RoutingKey homeKey)
     {
-        RoutingKey progressKey = trySelectProgressKey(txnId, keys, homeKey);
+        return selectProgressKey(txnId.epoch, keys, homeKey);
+    }
+
+    public RoutingKey selectProgressKey(long epoch, AbstractKeys<?, ?> keys, RoutingKey homeKey)
+    {
+        RoutingKey progressKey = trySelectProgressKey(epoch, keys, homeKey);
         if (progressKey == null)
             throw new IllegalStateException();
         return progressKey;

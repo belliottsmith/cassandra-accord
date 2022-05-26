@@ -384,15 +384,17 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
         RoutingKey[] result;
         int resultCount;
         int insertPos = Arrays.binarySearch(keys, homeKey);
-        if (insertPos >= 0)
+        if (insertPos < 0)
+            insertPos = -1 - insertPos;
+
+        if (insertPos < keys.length && keys[insertPos].toRoutingKey().equals(homeKey))
         {
             result = new RoutingKey[keys.length];
             resultCount = copyToRoutingKeys(keys, 0, result, 0, keys.length);
         }
         else
         {
-            insertPos = -1 - insertPos;
-            result = new RoutingKey[keys.length];
+            result = new RoutingKey[1 + keys.length];
             resultCount = copyToRoutingKeys(keys, 0, result, 0, insertPos);
             if (resultCount == 0 || !homeKey.equals(result[resultCount - 1]))
                 result[resultCount++] = homeKey;
@@ -424,7 +426,6 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
 
         int srcEnd = srcPos + count;
         int trgStart = trgPos;
-        int i = 0;
         if (trgPos == 0)
             trg[trgPos++] = src[srcPos++].toRoutingKey();
 

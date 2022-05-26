@@ -2,6 +2,8 @@ package accord.primitives;
 
 import javax.annotation.Nullable;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.RoutingKey;
 
 public abstract class AbstractRoute extends RoutingKeys
@@ -11,6 +13,7 @@ public abstract class AbstractRoute extends RoutingKeys
     public AbstractRoute(RoutingKey[] keys, RoutingKey homeKey)
     {
         super(keys);
+        Preconditions.checkNotNull(homeKey);
         this.homeKey = homeKey;
     }
 

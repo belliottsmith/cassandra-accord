@@ -25,7 +25,9 @@ import static accord.utils.SortedArrays.remapper;
 // TODO: switch to RoutingKey? Would mean adopting execution dependencies less precisely
 public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 {
-    public static final Deps NONE = new Deps(Keys.EMPTY, new TxnId[0], new int[0]);
+    private static final TxnId[] NO_TXNIDS = new TxnId[0];
+    private static final int[] NO_INTS = new int[0];
+    public static final Deps NONE = new Deps(Keys.EMPTY, NO_TXNIDS, NO_INTS);
 
     public static abstract class AbstractBuilder<T extends Deps>
     {
@@ -374,7 +376,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         Keys select = keys.slice(ranges);
         if (select.isEmpty())
-            return PartialDeps.NONE;
+            return new PartialDeps(ranges, Keys.EMPTY, NO_TXNIDS, NO_INTS);
 
         if (select.size() == keys.size())
             return new PartialDeps(ranges, keys, txnIds, keyToTxnId);
@@ -660,6 +662,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
     private static int[] copy(int[] src, int to, int length)
     {
+        if (length == 0)
+            return NO_INTS;
+
         int[] result = new int[length];
         System.arraycopy(src, 0, result, 0, to);
         return result;
@@ -668,6 +673,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
     // TODO: optimise for case where none removed
     public Deps without(Predicate<TxnId> remove)
     {
+        if (isEmpty())
+            return this;
+
         int[] remapTxnIds = new int[txnIds.length];
         TxnId[] txnIds; {
             int count = 0;

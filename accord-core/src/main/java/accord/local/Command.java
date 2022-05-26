@@ -425,6 +425,7 @@ public class Command implements Listener, Consumer<Listener>
 
     public void propagate(long epoch, Status status, AbstractRoute route, PartialTxn partialTxn, PartialDeps partialDeps, RoutingKey progressKey, Timestamp executeAt, Writes writes, Result result)
     {
+        // TODO: support partial application
         switch (status)
         {
             case AcceptedInvalidate:
@@ -447,79 +448,6 @@ public class Command implements Listener, Consumer<Listener>
             default:
                 throw new IllegalStateException();
         }
-        // TODO: support partial application?
-//        switch (status)
-//        {
-//            case Invalidated:
-//                this.status = Invalidated;
-//                return;
-//            case AcceptedInvalidate:
-//                if (partialTxn != null)
-//                    break;
-//                if (homeKey != null)
-//                    updateHomeKey(homeKey);
-//                return;
-//        }
-//
-//        Status prev = this.status;
-//        try
-//        {
-//            KeyRanges ranges = commandStore.ranges().at(epoch);
-//            if (!hasBeen(PreAccepted))
-//            {
-//                // TODO: think about how this might work in a world where we have pre-accepted, but we adopt more ranges
-//                updateHomeKey(homeKey);
-//                updatePartialTxn(partialTxn, ranges, commandStore.ranges().owns(epoch, homeKey));
-//
-//                if (!this.partialTxn.covers(ranges))
-//                    return INCOMPLETE;
-//
-//                this.executeAt = executeAt;
-//                this.status = PreAccepted;
-//            }
-//
-//            // Accept is a no-op for propagation purposes, as the accept was for the prior epoch
-//            if (status.compareTo(AcceptedInvalidate) <= 0)
-//                return SUCCESS;
-//
-//            if (!hasBeen(Committed))
-//            {
-//                if (this.partialDeps == null) this.partialDeps = partialDeps;
-//                else if (partialDeps != null) this.partialDeps = this.partialDeps.with(partialDeps.slice(ranges));
-//
-//                // TODO (now): this is probably broken, as we may have received pre-commit partialDeps
-//                if (!this.partialDeps.covers(ranges))
-//                    return INCOMPLETE;
-//
-//                this.executeAt = executeAt;
-//                this.status = Committed;
-//
-//                populateWaitingOn();
-//                maybeExecute(false);
-//            }
-//            else if (this.executeAt != null && !this.executeAt.equals(executeAt))
-//            {
-//                commandStore.agent().onInconsistentTimestamp(this, this.executeAt, executeAt);
-//            }
-//
-//            if (status.compareTo(ReadyToExecute) <= 0)
-//                return SUCCESS;
-//
-//            if (!hasBeen(Executed))
-//            {
-//                this.writes = writes;
-//                this.result = result;
-//
-//                maybeExecute(false);
-//            }
-//
-//            return SUCCESS;
-//        }
-//        finally
-//        {
-//            if (prev != this.status)
-//                this.listeners.forEach(this);
-//        }
     }
 
     public boolean addListener(Listener listener)
@@ -657,7 +585,7 @@ public class Command implements Listener, Consumer<Listener>
             cur = next;
         }
 
-        RoutingKeys someKeys = cur.someRoute();
+        RoutingKeys someKeys = cur.someRoutingKeys();
         if (someKeys == null)
             someKeys = prev.partialDeps.someRoutingKeys(cur.txnId);
         return new BlockedBy(cur.txnId, someKeys);
@@ -739,8 +667,8 @@ public class Command implements Listener, Consumer<Listener>
      * otherwise return false (or throw an exception if an illegal state is encountered)
      */
     private boolean validate(KeyRanges coordinateRanges, KeyRanges executeRanges, ProgressShard shard, AbstractRoute route,
-                              @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
-                              @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
+                             @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
+                             @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
     {
         if (shard == Unsure)
             return false;
@@ -765,28 +693,14 @@ public class Command implements Listener, Consumer<Listener>
             }
         }
 
-        // validate new partial txn
-        if (!validate(ensurePartialTxn, coordinateRanges, executeRanges,
-                    this.partialTxn == null ? null : this.partialTxn.covering, partialTxn == null ? null : partialTxn.covering,
-                      "txn", partialTxn))
-        {
-            return false;
-        }
-
         // invalid to Add deps to Accepted or AcceptedInvalidate statuses, as Committed deps are not equivalent
         // and we may erroneously believe we have covered a wider range than we have infact covered
         if (ensurePartialDeps == Add)
             Preconditions.checkState(status != Accepted && status != AcceptedInvalidate);
 
-        // validate new partial deps
-        if (!validate(ensurePartialDeps, coordinateRanges, executeRanges,
-                    this.partialDeps == null ? null : this.partialDeps.covering, partialDeps == null ? null : partialDeps.covering,
-                      "deps", partialDeps))
-        {
-            return false;
-        }
-
-        return true;
+        // validate new partial txn
+        return validate(ensurePartialTxn, coordinateRanges, executeRanges, covers(this.partialTxn), covers(partialTxn), "txn", partialTxn)
+               && validate(ensurePartialDeps, coordinateRanges, executeRanges, covers(this.partialDeps), covers(partialDeps), "deps", partialDeps);
     }
 
     private void set(KeyRanges executeRanges, ProgressShard shard, AbstractRoute route,
@@ -892,6 +806,7 @@ public class Command implements Listener, Consumer<Listener>
     // TODO: callers should try to consult the local progress shard (if any) to obtain the full set of keys owned locally
     public AbstractRoute someRoute()
     {
+        Preconditions.checkState(homeKey != null);
         if (route != null)
             return route;
 
@@ -904,13 +819,18 @@ public class Command implements Listener, Consumer<Listener>
         return null;
     }
 
-    public PartialRoute routeForKeysOwnedAtExecution()
+    public RoutingKeys someRoutingKeys()
     {
-        Preconditions.checkState(hasBeen(Committed), "May only be invoked on commands whose execution time is known");
-        Preconditions.checkState(route != null);
+        if (route != null)
+            return route;
 
-        KeyRanges ranges = commandStore.ranges().at(executeAt.epoch);
-        return route.sliceStrict(ranges);
+        if (partialTxn != null)
+            return partialTxn.keys.toRoutingKeys();
+
+        if (partialDeps != null)
+            return partialDeps.keys().toRoutingKeys();
+
+        return null;
     }
 
     /**
@@ -986,5 +906,15 @@ public class Command implements Listener, Consumer<Listener>
                ", executeAt=" + executeAt +
                ", partialDeps=" + partialDeps +
                '}';
+    }
+
+    private static KeyRanges covers(@Nullable PartialTxn txn)
+    {
+        return txn == null ? null : txn.covering;
+    }
+
+    private static KeyRanges covers(@Nullable PartialDeps deps)
+    {
+        return deps == null ? null : deps.covering;
     }
 }

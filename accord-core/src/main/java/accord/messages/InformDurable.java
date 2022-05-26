@@ -10,9 +10,10 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
+import static accord.api.ProgressLog.ProgressShard.Adhoc;
 import static accord.api.ProgressLog.ProgressShard.Home;
 import static accord.api.ProgressLog.ProgressShard.Local;
-import static accord.messages.SimpleReply.ok;
+import static accord.messages.SimpleReply.Ok;
 
 public class InformDurable extends TxnRequest
 {
@@ -28,27 +29,33 @@ public class InformDurable extends TxnRequest
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-//        RoutingKey progressKey = node.trySelectProgressKey(txnId, scope);
-//        Timestamp at = txnId;
-//        if (progressKey == null)
-//        {
-//            at = executeAt;
-//            progressKey = node.selectProgressKey(executeAt.epoch, scope, scope.homeKey);
-//        }
-//
-//        ProgressShard shard = progressKey.equals(scope.homeKey) ? Home : Local;
-//        Reply reply = node.ifLocal(progressKey, at, instance -> {
-//            Command command = instance.command(txnId);
-//            command.informOfRoute(scope, executeAt.epoch, );
-//            command.setGloballyPersistent(scope.homeKey, executeAt);
-//            instance.progressLog().durable(txnId, null, shard);
-//            return ok();
-//        });
-//
-//        if (reply == null)
-//            throw new IllegalStateException();
-//
-//        node.reply(replyToNode, replyContext, reply);
+        Timestamp at = txnId;
+        RoutingKey progressKey = node.trySelectProgressKey(txnId, scope);
+        ProgressShard shard;
+        if (progressKey == null)
+        {
+            // we need to pick a progress log, but this node might not have participated in the coordination epoch
+            // in this rare circumstance we simply pick a key to select some progress log to coordinate this
+            at = executeAt;
+            progressKey = node.selectProgressKey(executeAt.epoch, scope, scope.homeKey);
+            shard = Adhoc;
+        }
+        else
+        {
+            shard = scope.homeKey.equals(progressKey) ? Home : Local;
+        }
+
+        Reply reply = node.ifLocal(progressKey, at, instance -> {
+            Command command = instance.command(txnId);
+            command.setGloballyPersistent(scope.homeKey, executeAt);
+            instance.progressLog().durable(txnId, scope, shard);
+            return Ok;
+        });
+
+        if (reply == null)
+            throw new IllegalStateException();
+
+        node.reply(replyToNode, replyContext, reply);
     }
 
     @Override

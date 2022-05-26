@@ -178,7 +178,7 @@ public class ReadData extends TxnRequest
         @Override
         public boolean isFinal()
         {
-            return this == Redundant;
+            return this != NotCommitted;
         }
     }
 

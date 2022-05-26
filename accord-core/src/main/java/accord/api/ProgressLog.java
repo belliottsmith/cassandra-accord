@@ -8,6 +8,7 @@ import accord.coordinate.CheckOnUncommitted;
 import accord.coordinate.InformHomeOfTxn;
 import accord.local.CommandStore;
 import accord.local.Node.Id;
+import accord.primitives.AbstractRoute;
 import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 
@@ -47,7 +48,20 @@ public interface ProgressLog
 
     enum ProgressShard
     {
-        Unsure, No, Local, Home;
+        /* We do not have enough information to say whether the shard is a progress shard or not */
+        Unsure,
+
+        /* This shard is not a progress shard */
+        No,
+
+        /* Adhoc Local Progress Shard, i.e. where the local node is not a replica for the coordination epoch */
+        Adhoc,
+
+        /* Designated Local Progress Shard (selected from keys replicated locally at coordination epoch) */
+        Local,
+
+        /* Designated Home (Global Progress) Shard (if local node is a replica of home key on coordination epoch) */
+        Home;
         public boolean isHome() { return this == Home; }
         public boolean isProgress() { return this.compareTo(Local) >= 0; }
     }
@@ -110,14 +124,31 @@ public interface ProgressLog
     void invalidate(TxnId txnId, ProgressShard shard);
 
     /**
-     * The transaction's outcome has been durably recorded (but not necessarily applied) at a quorum of all shards.
+     * The transaction's outcome has been durably recorded (but not necessarily applied) locally at all shards.
      *
-     * If this replica has not witnessed the outcome of the transaction, it should poll a majority of the home shard
+     * This is only invoked on the home shard, once all local shards have successfully applied.
+     */
+    void durableLocal(TxnId txnId);
+
+    /**
+     * The transaction's outcome has been durably recorded (but not necessarily applied) at a quorum of all shards,
+     * including at least those node's ids that are provided.
+     *
+     * If this replica has not witnessed the outcome of the transaction, it should poll a majority of each shard
      * for its outcome.
      *
-     * Otherwise, this transaction no longer needs to be monitored by either home or non-home shards.
+     * Otherwise, this transaction no longer needs to be monitored, but implementations may wish to ensure that
+     * the result is propagated to every live replica.
      */
-    void durable(TxnId txnId, @Nullable Set<Id> persistedOn, ProgressShard shard);
+    void durable(TxnId txnId, @Nullable Set<Id> persistedOn);
+
+    /**
+     * The transaction's outcome has been durably recorded (but not necessarily applied) at a quorum of all shards.
+     *
+     * If this replica has not witnessed the outcome of the transaction, it should poll a majority of each shard
+     * for its outcome, using the provided route (if any).
+     */
+    void durable(TxnId txnId, @Nullable AbstractRoute route, ProgressShard shard);
 
     /**
      * The parameter is a command that some other command's execution is most proximally blocked by.

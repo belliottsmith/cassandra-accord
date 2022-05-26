@@ -2,16 +2,11 @@ package accord.messages;
 
 import java.util.Set;
 
-import accord.api.ProgressLog.ProgressShard;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-
-import static accord.api.ProgressLog.ProgressShard.Home;
-import static accord.messages.SimpleReply.nack;
-import static accord.messages.SimpleReply.ok;
 
 public class InformHomeDurable implements Request
 {
@@ -30,24 +25,17 @@ public class InformHomeDurable implements Request
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        Reply reply = node.ifLocal(homeKey, txnId, instance -> {
+        node.ifLocal(homeKey, txnId, instance -> {
             instance.command(txnId).setGloballyPersistent(homeKey, executeAt);
-            instance.progressLog().durable(txnId, persistedOn, Home);
-            return ok();
+            instance.progressLog().durable(txnId, persistedOn);
+            return null;
         });
-
-        if (reply == null)
-            reply = nack();
-
-        node.reply(replyToNode, replyContext, reply);
     }
 
     @Override
     public String toString()
     {
-        return "InformOfPersistence{" +
-               "txnId:" + txnId +
-               '}';
+        return "InformHomeDurable{txnId:" + txnId + '}';
     }
 
     @Override

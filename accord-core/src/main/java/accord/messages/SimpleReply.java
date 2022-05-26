@@ -1,25 +1,19 @@
 package accord.messages;
 
-public class SimpleReply implements Reply
+public enum SimpleReply implements Reply
 {
-    private static final SimpleReply OK = new SimpleReply();
-    private static final SimpleReply NACK = new SimpleReply();
+    Ok, InProgress, Nack;
 
-    public static SimpleReply ok()
+    @Override
+    public boolean isFinal()
     {
-        return OK;
+        return this != InProgress;
     }
-
-    public static SimpleReply nack()
-    {
-        return NACK;
-    }
-
-    private SimpleReply() {}
 
     @Override
     public MessageType type()
     {
         return MessageType.SIMPLE_RSP;
     }
+
 }

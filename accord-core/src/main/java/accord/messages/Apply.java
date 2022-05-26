@@ -12,6 +12,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Writes;
 import accord.primitives.TxnId;
 
+import static accord.api.ProgressLog.ProgressShard.Home;
 import static accord.messages.MessageType.APPLY_REQ;
 import static accord.messages.MessageType.APPLY_RSP;
 
@@ -37,19 +38,26 @@ public class Apply extends TxnRequest
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
         // note, we do not also commit here if txnId.epoch != executeAt.epoch, as the scope() for a commit would be different
-        node.mapReduceLocalSince(scope(), executeAt, instance -> {
+        ApplyReply reply = node.mapReduceLocalSince(scope(), executeAt, instance -> {
             Command command = instance.command(txnId);
             switch (command.apply(scope, executeAt, deps, writes, result))
             {
                 default:
                 case Insufficient:
-                    return ApplyReply.INSUFFICIENT;
+                    return ApplyReply.Insufficient;
                 case Redundant:
+                    return ApplyReply.Redundant;
                 case Success:
-                    return ApplyReply.OK;
+                    return ApplyReply.Applied;
             }
-        }, (r1, r2) -> r2.isOk() ? r1 : r2);
-        node.reply(replyToNode, replyContext, ApplyReply.OK);
+        }, (r1, r2) -> r1.compareTo(r2) >= 0 ? r1 : r2);
+
+        if (reply == ApplyReply.Applied)
+        {
+            node.ifLocal(scope.homeKey, txnId, instance -> { instance.progressLog().execute(txnId, Home); return null; });
+        }
+
+        node.reply(replyToNode, replyContext, reply);
     }
 
     @Override
@@ -60,12 +68,7 @@ public class Apply extends TxnRequest
 
     public enum ApplyReply implements Reply
     {
-        OK, INSUFFICIENT;
-
-        public boolean isOk()
-        {
-            return this == OK;
-        }
+        Applied, Redundant, Insufficient;
 
         @Override
         public MessageType type()
@@ -76,13 +79,13 @@ public class Apply extends TxnRequest
         @Override
         public String toString()
         {
-            return isOk() ? "ApplyOk" : "ApplyIncomplete";
+            return "Apply" + name();
         }
 
         @Override
         public boolean isFinal()
         {
-            return isOk();
+            return this != Insufficient;
         }
     }
 

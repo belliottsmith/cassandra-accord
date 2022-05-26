@@ -55,4 +55,10 @@ public class PartialDeps extends Deps
             throw new IllegalStateException();
         return new Deps(keys, txnIds, keyToTxnId);
     }
+
+    @Override
+    public String toString()
+    {
+        return covering + ":" + super.toString();
+    }
 }

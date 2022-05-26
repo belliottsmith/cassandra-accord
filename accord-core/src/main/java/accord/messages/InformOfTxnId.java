@@ -8,8 +8,8 @@ import accord.local.Status;
 import accord.primitives.TxnId;
 
 import static accord.api.ProgressLog.ProgressShard.Home;
-import static accord.messages.SimpleReply.nack;
-import static accord.messages.SimpleReply.ok;
+import static accord.messages.SimpleReply.Nack;
+import static accord.messages.SimpleReply.Ok;
 
 public class InformOfTxnId implements EpochRequest
 {
@@ -31,11 +31,11 @@ public class InformOfTxnId implements EpochRequest
                 command.updateHomeKey(homeKey);
                 instance.progressLog().unwitnessed(txnId, Home);
             }
-            return ok();
+            return Ok;
         });
 
         if (reply == null)
-            reply = nack();
+            reply = Nack;
 
         node.reply(replyToNode, replyContext, reply);
     }
@@ -44,11 +44,6 @@ public class InformOfTxnId implements EpochRequest
     public String toString()
     {
         return "InformOfTxn{txnId:" + txnId + '}';
-    }
-
-    public interface InformOfTxnIdReply extends Reply
-    {
-        boolean isOk();
     }
 
     @Override

@@ -27,7 +27,11 @@ public class ListQuery implements Query
         ListRead read = (ListRead) untypedRead;
         int[][] values = new int[read.readKeys.size()][];
         for (Map.Entry<Key, int[]> e : ((ListData)data).entrySet())
-            values[read.readKeys.indexOf(e.getKey())] = e.getValue();
+        {
+            int i = read.readKeys.indexOf(e.getKey());
+            if (i >= 0)
+                values[i] = e.getValue();
+        }
         return new ListResult(client, requestId, read.keys, values, (ListUpdate) update);
     }
 }

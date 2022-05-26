@@ -6,13 +6,13 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Callback;
 import accord.messages.InformOfTxnId;
-import accord.messages.InformOfTxnId.InformOfTxnIdReply;
+import accord.messages.SimpleReply;
 import accord.topology.Shard;
 import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
-public class InformHomeOfTxn extends AsyncFuture<Void> implements Callback<InformOfTxnIdReply>
+public class InformHomeOfTxn extends AsyncFuture<Void> implements Callback<SimpleReply>
 {
     final TxnId txnId;
     final RoutingKey homeKey;
@@ -38,16 +38,22 @@ public class InformHomeOfTxn extends AsyncFuture<Void> implements Callback<Infor
     }
 
     @Override
-    public void onSuccess(Id from, InformOfTxnIdReply response)
+    public void onSuccess(Id from, SimpleReply response)
     {
-        if (response.isOk())
+        switch (response)
         {
-            if (tracker.success(from))
-                trySuccess(null);
-        }
-        else
-        {
-            onFailure(from, new StaleTopology());
+            default:
+            case InProgress:
+                throw new IllegalStateException();
+
+            case Ok:
+                if (tracker.success(from))
+                    trySuccess(null);
+                break;
+
+            case Nack:
+                // TODO: stale topology should be impossible right now
+                onFailure(from, new StaleTopology());
         }
     }
 

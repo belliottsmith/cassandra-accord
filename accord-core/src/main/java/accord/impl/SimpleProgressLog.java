@@ -34,6 +34,7 @@ import accord.primitives.KeyRanges;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Ballot;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.topology.Topology;
@@ -43,8 +44,9 @@ import static accord.coordinate.CheckOnCommitted.checkOnCommitted;
 import static accord.coordinate.CheckOnUncommitted.checkOnUncommitted;
 import static accord.coordinate.InformHomeOfTxn.inform;
 import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.Durable;
+import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.LocallyDurableOnly;
 import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.NotExecuted;
-import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.RemotelyDurable;
+import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.RemotelyDurableOnly;
 import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.Committed;
 import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.ReadyToExecute;
 import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.Uncommitted;
@@ -231,38 +233,30 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
     static class GlobalState
     {
-        enum GlobalStatus { NotExecuted, RemotelyDurable, LocallyDurable, Durable, Done }
+        enum GlobalStatus { NotExecuted, RemotelyDurableOnly, LocallyDurableOnly, Durable, Done }
 
         static class PendingDurable
         {
-            final Set<Id> fullyPersistedOn;
+            final Set<Id> persistedOn;
 
-            PendingDurable(Set<Id> fullyPersistedOn)
+            PendingDurable(Set<Id> persistedOn)
             {
-                this.fullyPersistedOn = fullyPersistedOn;
+                this.persistedOn = persistedOn;
             }
         }
 
-        // TODO: thread safety
+        // TODO: thread safety (schedule on progress log executor)
         class CoordinateAwareness implements Callback<SimpleReply>
         {
-            int count;
-            CoordinateAwareness(int count)
-            {
-                this.count = count;
-            }
-
-            // TODO: schedule on progressLog
             @Override
             public void onSuccess(Id from, SimpleReply response)
             {
-
+                notAwareOfDurability.remove(from);
             }
 
             @Override
             public void onFailure(Id from, Throwable failure)
             {
-
             }
 
             @Override
@@ -271,8 +265,6 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
         }
 
-        // TODO (now): we need to set this
-        boolean isAppliedLocally;
         GlobalStatus status = NotExecuted;
         Progress progress = NoneExpected;
         Set<Id> notAwareOfDurability;
@@ -282,23 +274,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         CoordinateAwareness investigating;
 
         private boolean refresh(@Nullable Node node, @Nullable Command command, @Nullable Id fullyPersistedOn,
-                                @Nullable Set<Id> fullyPersistedOns, @Nullable Set<Id> notPersistedOns)
+                                @Nullable Set<Id> persistedOns, @Nullable Set<Id> notPersistedOns)
         {
-            if (status == NotExecuted)
-                return false;
-
-            if (pendingDurable != null)
-            {
-                if (node == null || command == null || command.is(Status.NotWitnessed))
-                    return false;
-
-                if (fullyPersistedOns == null) fullyPersistedOns = pendingDurable.fullyPersistedOn;
-                else fullyPersistedOns.addAll(pendingDurable.fullyPersistedOn);
-
-                status = Durable;
-                progress = Expected;
-            }
-
             if (notPersisted == null)
             {
                 assert node != null && command != null;
@@ -307,58 +284,88 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
                 Topology topology = node.topology()
                                         .globalForEpoch(command.executeAt().epoch)
-                                        .forKeys(command.routeForKeysOwnedAtExecution());
+                                        .forKeys(command.route());
+
+                if (persistedOns == null) persistedOns = pendingDurable.persistedOn;
+                else persistedOns.addAll(pendingDurable.persistedOn);
+                pendingDurable = null;
+                if (status.compareTo(LocallyDurableOnly) >= 0)
+                    persistedOns.add(node.id());
 
                 notAwareOfDurability = new HashSet<>(topology.nodes());
                 notPersisted = new HashSet<>(topology.nodes());
-                if (isAppliedLocally) notPersisted.remove(node.id());
             }
-            if (notPersisted != null)
+
+            if (fullyPersistedOn != null)
             {
-                if (fullyPersistedOn != null)
-                {
-                    notPersisted.remove(fullyPersistedOn);
-                    notAwareOfDurability.remove(fullyPersistedOn);
-                }
-                if (fullyPersistedOns != null)
-                {
-                    notPersisted.removeAll(fullyPersistedOns);
-                    notAwareOfDurability.removeAll(fullyPersistedOns);
-                }
-                if (notPersistedOns != null)
-                {
-                    notPersisted.retainAll(notPersistedOns);
-                }
-                if (notPersisted.isEmpty())
-                {
-                    status = GlobalStatus.Done;
-                    progress = Done;
-                }
+                notPersisted.remove(fullyPersistedOn);
+                notAwareOfDurability.remove(fullyPersistedOn);
+            }
+            if (persistedOns != null)
+            {
+                notPersisted.removeAll(persistedOns);
+                notAwareOfDurability.removeAll(persistedOns);
+            }
+            if (notPersistedOns != null)
+            {
+                notPersisted.retainAll(notPersistedOns);
             }
 
             return true;
         }
 
-        void executedOnAllShards(Node node, Command command, Set<Id> persistedOn)
+        void durable(Node node, Command command, Set<Id> persistedOn)
         {
-            if (status == NotExecuted)
+            switch (status)
             {
-                status = RemotelyDurable;
-                progress = NoneExpected;
-                pendingDurable = new PendingDurable(persistedOn);
+                default: throw new IllegalStateException();
+                case Done:
+                    break;
+                case NotExecuted:
+                    status = RemotelyDurableOnly;
+                    progress = NoneExpected;
+                    pendingDurable = new PendingDurable(persistedOn);
+                    break;
+                case LocallyDurableOnly:
+                    status = Durable;
+                    progress = Expected;
+                case Durable:
+                case RemotelyDurableOnly:
+                    refresh(node, command, null, persistedOn, null);
             }
-            else if (status != GlobalStatus.Done)
+        }
+
+        void durableLocal(Node node, Command command)
+        {
+            switch (status)
             {
-                status = Durable;
-                progress = Expected;
-                refresh(node, command, null, persistedOn, null);
+                default: throw new IllegalStateException();
+                case Done:
+                case LocallyDurableOnly:
+                    break;
+                case NotExecuted:
+                    status = LocallyDurableOnly;
+                    break;
+                case RemotelyDurableOnly:
+                    status = Durable;
+                    progress = Expected;
+                    refresh(node, command, node.id(), null, null);
+                case Durable:
             }
         }
 
         void update(Node node, TxnId txnId, Command command)
         {
-            if (!refresh(node, command, null, null, null))
-                return;
+            switch (status)
+            {
+                default: throw new IllegalStateException();
+                case LocallyDurableOnly:
+                case NotExecuted:
+                case Done:
+                    return;
+                case Durable:
+                case RemotelyDurableOnly:
+            }
 
             if (progress != NoProgress)
             {
@@ -367,13 +374,19 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
 
             progress = Investigating;
-//            investigating = new CoordinateAwareness(notAwareOfDurability.size());
-//            Topologies topologies = node.topology().forEpoch(command.route(), )
-//            node.send(notAwareOfDurability, to -> new InformDurable(to, ));
-//            debugInvestigating = applyAndCheck(node, txnId, this, command.commandStore).addCallback((success, fail) -> {
-//                if (progress != Done)
-//                    progress = Expected;
-//            });
+            if (notAwareOfDurability.isEmpty())
+            {
+                // TODO: also track actual durability
+                status = GlobalStatus.Done;
+                progress = Done;
+                return;
+            }
+
+            Route route = (Route) command.route();
+            Timestamp executeAt = command.executeAt();
+            investigating = new CoordinateAwareness();
+            Topologies topologies = node.topology().forEpoch(route, executeAt.epoch);
+            node.send(notAwareOfDurability, to -> new InformDurable(to, topologies, route, txnId, executeAt), investigating);
         }
 
         @Override
@@ -448,9 +461,11 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             progress = Investigating;
 
             // first make sure we have enough information to obtain the command locally
-            long onEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
+            long srcEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
+            // TODO: compute fromEpoch, the epoch we already have this txn replicated until
+            long toEpoch = node.topology().epoch();
             AbstractRoute route = AbstractRoute.merge(command.route(), someKeys instanceof AbstractRoute ? (AbstractRoute) someKeys : null);
-            KeyRanges ranges = node.topology().localRangesForEpochs(txnId.epoch, onEpoch);
+            KeyRanges ranges = node.topology().localRangesForEpochs(txnId.epoch, toEpoch);
             if (route == null || !route.covers(ranges))
             {
                 Status blockedOn = this.blockedOn;
@@ -485,7 +500,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             // check status with the only keys we know, if any, then:
             // 1. if we cannot find any primary record of the transaction, then it cannot be a dependency so record this fact
             // 2. otherwise record the homeKey for future reference and set the status based on whether progress has been made
-            node.withEpoch(onEpoch, () -> {
+            node.withEpoch(srcEpoch, () -> {
                 BiConsumer<CheckStatusOkFull, Throwable> callback = (success, fail) -> {
                     if (progress != Investigating)
                         return;
@@ -517,8 +532,9 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                             progress = Done;
                     }
                 };
-                debugInvestigating = blockedOn == Executed ? checkOnCommitted(node, txnId, route, onEpoch, callback)
-                                                           : checkOnUncommitted(node, txnId, route, onEpoch, callback);
+
+                debugInvestigating = blockedOn == Executed ? checkOnCommitted(node, txnId, route, srcEpoch, callback)
+                                                           : checkOnUncommitted(node, txnId, route, srcEpoch, callback);
             });
         }
 
@@ -789,11 +805,23 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         }
 
         @Override
-        public void durable(TxnId txnId, Set<Id> persistedOn, ProgressShard shard)
+        public void durableLocal(TxnId txnId)
         {
             State state = ensure(txnId);
-            if (shard.isHome()) state.global().executedOnAllShards(node, state.command, persistedOn);
-            else state.recordBlocking(txnId, Executed, null);
+            ensure(txnId).global().durableLocal(node, state.command);
+        }
+
+        @Override
+        public void durable(TxnId txnId, Set<Id> persistedOn)
+        {
+            State state = ensure(txnId);
+            state.global().durable(node, state.command, persistedOn);
+        }
+
+        @Override
+        public void durable(TxnId txnId, AbstractRoute route, ProgressShard shard)
+        {
+            ensure(txnId).recordBlocking(txnId, Executed, null);
         }
 
         @Override
