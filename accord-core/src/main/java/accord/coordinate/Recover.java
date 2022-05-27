@@ -57,7 +57,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         }
 
         @Override
-        public synchronized void onSuccess(Id from, WaitOnCommitOk response)
+        public synchronized void onSuccess(Id from, WaitOnCommitOk reply)
         {
             if (isDone()) return;
 
@@ -188,32 +188,24 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     }
 
     @Override
-    public synchronized void onSuccess(Id from, RecoverReply response)
+    public synchronized void onSuccess(Id from, RecoverReply reply)
     {
         if (isDone || tracker.hasReachedQuorum())
             return;
 
-        if (!response.isOk())
+        if (!reply.isOk())
         {
             accept(null, new Preempted(txnId, route.homeKey));
             return;
         }
 
-        try
-        {
-            RecoverOk ok = (RecoverOk) response;
-            recoverOks.add(ok);
-            boolean fastPath = ok.executeAt.compareTo(txnId) == 0;
-            tracker.recordSuccess(from, fastPath);
+        RecoverOk ok = (RecoverOk) reply;
+        recoverOks.add(ok);
+        boolean fastPath = ok.executeAt.compareTo(txnId) == 0;
+        tracker.recordSuccess(from, fastPath);
 
-            if (tracker.hasReachedQuorum())
-                recover();
-        }
-        catch (Throwable t)
-        {
-            accept(null, t);
-            node.agent().onUncaughtException(t);
-        }
+        if (tracker.hasReachedQuorum())
+            recover();
     }
 
     private void recover()
@@ -331,5 +323,6 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     public void onCallbackFailure(Throwable failure)
     {
         accept(null, failure);
+        node.agent().onUncaughtException(failure);
     }
 }

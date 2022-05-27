@@ -15,7 +15,7 @@ import accord.local.Status;
 import accord.messages.BeginInvalidation;
 import accord.messages.BeginInvalidation.InvalidateNack;
 import accord.messages.BeginInvalidation.InvalidateOk;
-import accord.messages.BeginRecovery.RecoverReply;
+import accord.messages.BeginInvalidation.InvalidateReply;
 import accord.messages.Callback;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
@@ -28,7 +28,7 @@ import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 
 // TODO (now): switch to callback like others
-public class Invalidate extends AsyncFuture<Outcome> implements Callback<RecoverReply>, BiConsumer<Outcome, Throwable>
+public class Invalidate extends AsyncFuture<Outcome> implements Callback<InvalidateReply>, BiConsumer<Outcome, Throwable>
 {
     final Node node;
     final Ballot ballot;
@@ -60,14 +60,14 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
     }
 
     @Override
-    public synchronized void onSuccess(Id from, RecoverReply response)
+    public synchronized void onSuccess(Id from, InvalidateReply reply)
     {
         if (isDone() || preacceptTracker.hasReachedQuorum())
             return;
 
-        if (!response.isOk())
+        if (!reply.isOk())
         {
-            InvalidateNack nack = (InvalidateNack) response;
+            InvalidateNack nack = (InvalidateNack) reply;
             if (nack.homeKey != null)
             {
                 node.ifLocalSince(someKey, txnId, instance -> {
@@ -79,7 +79,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
             return;
         }
 
-        InvalidateOk ok = (InvalidateOk) response;
+        InvalidateOk ok = (InvalidateOk) reply;
         invalidateOks.add(ok);
         if (preacceptTracker.success(from))
             invalidate();
@@ -93,9 +93,8 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
         {
             default: throw new IllegalStateException();
             case NotWitnessed:
+                break;
             case PreAccepted:
-                throw new IllegalStateException("Should only have Accepted or later statuses here");
-
             case Accepted:
             case Committed:
             case ReadyToExecute:
@@ -110,7 +109,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                 }
                 else if (homeKey != null && homeKey.equals(someKey))
                 {
-                    throw new IllegalStateException("Received a response from a node that must have known the route, but that did not include it");
+                    throw new IllegalStateException("Received a reply from a node that must have known the route, but that did not include it");
                 }
                 else if (homeKey != null)
                 {
@@ -118,7 +117,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Recover
                 }
                 else
                 {
-                    throw new IllegalStateException("Received a response from a node that must have known the homeKey, but that did not include it");
+                    throw new IllegalStateException("Received a reply from a node that must have known the homeKey, but that did not include it");
                 }
                 return;
 

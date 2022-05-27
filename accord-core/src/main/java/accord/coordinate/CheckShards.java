@@ -7,13 +7,12 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOk;
+import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.CheckStatusReply;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
-
-import static accord.api.ProgressLog.ProgressShard.Home;
 
 /**
  * A result of null indicates the transaction is globally persistent
@@ -22,15 +21,19 @@ import static accord.api.ProgressLog.ProgressShard.Home;
 public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply>
 {
     final RoutingKeys someKeys;
-    final long epoch;
+
+    /**
+     * The epoch until which we want to fetch data from remotely
+     */
+    final long untilRemoteEpoch;
     final IncludeInfo includeInfo;
 
     CheckStatusOk merged;
 
-    protected CheckShards(Node node, TxnId txnId, RoutingKeys someKeys, long epoch, IncludeInfo includeInfo)
+    protected CheckShards(Node node, TxnId txnId, RoutingKeys someKeys, long untilRemoteEpoch, IncludeInfo includeInfo)
     {
-        super(node, ensureSufficient(node, txnId, someKeys, epoch), txnId);
-        this.epoch = epoch;
+        super(node, ensureSufficient(node, txnId, someKeys, untilRemoteEpoch), txnId);
+        this.untilRemoteEpoch = untilRemoteEpoch;
         this.someKeys = someKeys;
         this.includeInfo = includeInfo;
     }
@@ -43,7 +46,7 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
     @Override
     protected void contact(Set<Id> nodes)
     {
-        node.send(nodes, new CheckStatus(txnId, someKeys, epoch, includeInfo), this);
+        node.send(nodes, new CheckStatus(txnId, someKeys, untilRemoteEpoch, includeInfo), this);
     }
 
     protected abstract boolean isSufficient(Id from, CheckStatusOk ok);
@@ -53,6 +56,10 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
     {
         if (failure != null)
             return;
+
+        if (merged instanceof CheckStatusOkFull)
+            merged = ((CheckStatusOkFull) merged).covering(someKeys);
+
         if (merged.hasExecutedOnAllShards)
             return;
 

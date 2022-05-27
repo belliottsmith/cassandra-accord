@@ -182,7 +182,7 @@ public class BurnTest
                 logger.debug("{} at [{}, {}]", reply, start, end);
 
                 replies[(int)packet.replyId] = packet;
-                if (reply.keys == null)
+                if (reply.readKeys == null)
                 {
                     nacks.incrementAndGet();
                     return;
@@ -193,7 +193,7 @@ public class BurnTest
 
                 for (int i = 0 ; i < reply.read.length ; ++i)
                 {
-                    Key key = reply.keys.get(i);
+                    Key key = reply.readKeys.get(i);
                     int k = key(key);
 
                     int[] read = reply.read[i];

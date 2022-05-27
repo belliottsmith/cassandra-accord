@@ -39,4 +39,9 @@ public class ListAgent implements Agent
     {
         onFailure.accept(t);
     }
+
+    @Override
+    public void onHandledException(Throwable t)
+    {
+    }
 }

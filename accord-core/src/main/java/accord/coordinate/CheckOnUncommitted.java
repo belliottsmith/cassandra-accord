@@ -21,15 +21,15 @@ import static accord.local.Status.Committed;
  */
 public class CheckOnUncommitted extends CheckOnCommitted
 {
-    CheckOnUncommitted(Node node, TxnId txnId, AbstractRoute route, long shardEpoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
+    CheckOnUncommitted(Node node, TxnId txnId, AbstractRoute route, long srcEpoch, long trgEpoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        super(node, txnId, route, shardEpoch, callback);
+        super(node, txnId, route, srcEpoch, trgEpoch, callback);
     }
 
-    public static CheckOnUncommitted checkOnUncommitted(Node node, TxnId txnId, AbstractRoute route, long epoch,
+    public static CheckOnUncommitted checkOnUncommitted(Node node, TxnId txnId, AbstractRoute route, long srcEpoch, long trgEpoch,
                                                         BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        CheckOnUncommitted checkOnUncommitted = new CheckOnUncommitted(node, txnId, route, epoch, callback);
+        CheckOnUncommitted checkOnUncommitted = new CheckOnUncommitted(node, txnId, route, srcEpoch, trgEpoch, callback);
         checkOnUncommitted.start();
         return checkOnUncommitted;
     }
@@ -37,13 +37,13 @@ public class CheckOnUncommitted extends CheckOnCommitted
     @Override
     protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
-        return ok.status.hasBeen(Committed);
+        return ((CheckStatusOkFull)ok).fullStatus.hasBeen(Committed);
     }
 
     @Override
     void onSuccessCriteriaOrExhaustion(CheckStatusOkFull full)
     {
-        switch (full.status)
+        switch (full.fullStatus)
         {
             default: throw new IllegalStateException();
             case NotWitnessed:
@@ -52,7 +52,7 @@ public class CheckOnUncommitted extends CheckOnCommitted
             case Accepted:
             case PreAccepted:
                 RoutingKey progressKey = node.trySelectProgressKey(txnId, full.route);
-                node.forEachLocal(someKeys, txnId.epoch, full.executeAt.epoch, commandStore -> {
+                node.forEachLocal(someKeys, txnId, (full.executeAt == null ? txnId : full.executeAt), commandStore -> {
                     commandStore.command(txnId).preaccept(full.partialTxn, full.route, progressKey);
                 });
                 break;

@@ -207,19 +207,19 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
             onPreAccepted();
     }
 
-    public synchronized void onSuccess(Id from, PreAcceptReply receive)
+    public synchronized void onSuccess(Id from, PreAcceptReply reply)
     {
         if (isPreAccepted)
             return;
 
-        if (!receive.isOk())
+        if (!reply.isOk())
         {
             // we've been preempted by a recovery coordinator; defer to it, and wait to hear any result
             tryFailure(new Preempted(txnId, route.homeKey));
             return;
         }
 
-        PreAcceptOk ok = (PreAcceptOk) receive;
+        PreAcceptOk ok = (PreAcceptOk) reply;
         preAcceptOks.add(ok);
 
         boolean fastPath = ok.witnessedAt.compareTo(txnId) == 0;

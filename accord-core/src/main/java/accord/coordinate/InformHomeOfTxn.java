@@ -38,9 +38,9 @@ public class InformHomeOfTxn extends AsyncFuture<Void> implements Callback<Simpl
     }
 
     @Override
-    public void onSuccess(Id from, SimpleReply response)
+    public void onSuccess(Id from, SimpleReply reply)
     {
-        switch (response)
+        switch (reply)
         {
             default:
             case InProgress:

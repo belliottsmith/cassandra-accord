@@ -67,7 +67,7 @@ abstract class AnyReadCoordinator<Reply> implements Callback<Reply>
                 isDone = true;
                 onSuccess();
                 if (failure != null)
-                    node.agent().onUncaughtException(failure); // TODO: introduce dedicated Agent method for this case
+                    node.agent().onHandledException(failure); // TODO: introduce dedicated Agent method for this case
         }
     }
 

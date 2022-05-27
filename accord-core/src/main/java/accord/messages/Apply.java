@@ -18,15 +18,17 @@ import static accord.messages.MessageType.APPLY_RSP;
 
 public class Apply extends TxnRequest
 {
+    public final long untilEpoch;
     public final TxnId txnId;
     public final Timestamp executeAt;
     public final PartialDeps deps;
     public final Writes writes;
     public final Result result;
 
-    public Apply(Node.Id to, Topologies topologies, TxnId txnId, AbstractRoute route, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public Apply(Id to, Topologies topologies, long untilEpoch, TxnId txnId, AbstractRoute route, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
         super(to, topologies, route);
+        this.untilEpoch = untilEpoch;
         this.txnId = txnId;
         // TODO: we shouldn't send deps unless we need to (but need to implement fetching them if they're not present)
         this.deps = deps.slice(scope.covering);
@@ -38,9 +40,9 @@ public class Apply extends TxnRequest
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
         // note, we do not also commit here if txnId.epoch != executeAt.epoch, as the scope() for a commit would be different
-        ApplyReply reply = node.mapReduceLocalSince(scope(), executeAt, instance -> {
+        ApplyReply reply = node.mapReduceLocal(scope(), executeAt.epoch, untilEpoch, instance -> {
             Command command = instance.command(txnId);
-            switch (command.apply(scope, executeAt, deps, writes, result))
+            switch (command.apply(untilEpoch, scope, executeAt, deps, writes, result))
             {
                 default:
                 case Insufficient:
@@ -49,6 +51,8 @@ public class Apply extends TxnRequest
                     return ApplyReply.Redundant;
                 case Success:
                     return ApplyReply.Applied;
+                case OutOfRange:
+                    throw new IllegalStateException();
             }
         }, (r1, r2) -> r1.compareTo(r2) >= 0 ? r1 : r2);
 

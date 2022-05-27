@@ -51,7 +51,9 @@ public interface ProgressLog
         /* We do not have enough information to say whether the shard is a progress shard or not */
         Unsure,
 
-        /* This shard is not a progress shard */
+        /**
+         * This shard is not a progress shard
+         */
         No,
 
         /* Adhoc Local Progress Shard, i.e. where the local node is not a replica for the coordination epoch */

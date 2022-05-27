@@ -62,6 +62,9 @@ public class Command implements Listener, Consumer<Listener>
      * so that there is only one copy per node that can be consulted to construct the full set of involved keys.
      *
      * If hasBeen(Committed) this must contain the keys for both txnId.epoch and executeAt.epoch
+     *
+     * TODO: maybe set this for all local shards, but slice to only those participating keys
+     * (would probably need to remove hashIntersects)
      */
     private @Nullable AbstractRoute route;
 
@@ -203,7 +206,7 @@ public class Command implements Listener, Consumer<Listener>
 
         KeyRanges coordinateRanges = coordinateRanges();
         ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
-        if (!validate(coordinateRanges, coordinateRanges, shard, route, partialTxn, Set, null, Ignore))
+        if (!validate(KeyRanges.EMPTY, coordinateRanges, shard, route, partialTxn, Set, null, Ignore))
             throw new IllegalStateException();
 
         Timestamp max = commandStore.maxConflict(partialTxn.keys);
@@ -212,7 +215,7 @@ public class Command implements Listener, Consumer<Listener>
         //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
         this.executeAt = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch()
                          ? txnId : commandStore.uniqueNow(max);
-        set(coordinateRanges, shard, route, partialTxn, Set, null, Ignore);
+        set(KeyRanges.EMPTY, coordinateRanges, shard, route, partialTxn, Set, null, Ignore);
         this.status = PreAccepted;
 
         this.commandStore.progressLog().preaccept(txnId, shard);
@@ -246,7 +249,7 @@ public class Command implements Listener, Consumer<Listener>
 
         this.executeAt = executeAt;
         this.promised = this.accepted = ballot;
-        set(executeRanges, shard, route, partialTxn, Check, partialDeps, Set);
+        set(coordinateRanges, executeRanges, shard, route, partialTxn, Check, partialDeps, Set);
         this.status = Accepted;
 
         this.commandStore.progressLog().accept(txnId, shard);
@@ -284,6 +287,7 @@ public class Command implements Listener, Consumer<Listener>
         }
 
         KeyRanges coordinateRanges = coordinateRanges();
+        // TODO (now): consider ranges between coordinateRanges and executeRanges? Perhaps don't need them
         KeyRanges executeRanges = executeRanges(executeAt);
         ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
 
@@ -291,7 +295,7 @@ public class Command implements Listener, Consumer<Listener>
             return CommitOutcome.Insufficient;
 
         this.executeAt = executeAt;
-        set(executeRanges, shard, route, partialTxn, Add, partialDeps, Set);
+        set(coordinateRanges, executeRanges, shard, route, partialTxn, Add, partialDeps, Set);
 
         this.status = Committed;
         populateWaitingOn();
@@ -364,9 +368,9 @@ public class Command implements Listener, Consumer<Listener>
         listeners.forEach(this);
     }
 
-    public enum ApplyOutcome { Success, Redundant, Insufficient }
+    public enum ApplyOutcome { Success, Redundant, OutOfRange, Insufficient }
 
-    public ApplyOutcome apply(AbstractRoute route, Timestamp executeAt, @Nullable PartialDeps partialDeps, Writes writes, Result result)
+    public ApplyOutcome apply(long untilEpoch, AbstractRoute route, Timestamp executeAt, @Nullable PartialDeps partialDeps, Writes writes, Result result)
     {
         if (hasBeen(Executed) && executeAt.equals(this.executeAt))
         {
@@ -379,6 +383,14 @@ public class Command implements Listener, Consumer<Listener>
 
         KeyRanges coordinateRanges = coordinateRanges();
         KeyRanges executeRanges = executeRanges(executeAt);
+        if (untilEpoch < commandStore.latestEpoch())
+        {
+            // at present this should only happen if we receive an Apply message that was scoped to a node's earlier ownership
+            // in which case this might be routed to a new shard on the replica; it shouldn't imply any
+            KeyRanges expectedRanges = commandStore.ranges().between(executeAt.epoch, untilEpoch);
+            if (!expectedRanges.contains(executeRanges))
+                return ApplyOutcome.OutOfRange;
+        }
         ProgressShard shard = progressShard(route, coordinateRanges);
 
         if (!validate(coordinateRanges, executeRanges, shard, route, null, Check, partialDeps, hasBeen(Committed) ? Add : TrySet))
@@ -387,7 +399,7 @@ public class Command implements Listener, Consumer<Listener>
         this.writes = writes;
         this.result = result;
         this.executeAt = executeAt;
-        set(executeRanges, shard, route, null, Check, partialDeps, hasBeen(Committed) ? Add : TrySet);
+        set(coordinateRanges, executeRanges, shard, route, null, Check, partialDeps, hasBeen(Committed) ? Add : TrySet);
 
         if (!hasBeen(Committed))
             populateWaitingOn();
@@ -423,32 +435,79 @@ public class Command implements Listener, Consumer<Listener>
         return AcceptOutcome.Success;
     }
 
-    public void propagate(long epoch, Status status, AbstractRoute route, PartialTxn partialTxn, PartialDeps partialDeps, RoutingKey progressKey, Timestamp executeAt, Writes writes, Result result)
-    {
-        // TODO: support partial application
-        switch (status)
-        {
-            case AcceptedInvalidate:
-                if (partialTxn == null)
-                    break;
-            case PreAccepted:
-            case Accepted:
-                commandStore.command(txnId).preaccept(partialTxn, route, progressKey);
-                break;
-            case Committed:
-            case ReadyToExecute:
-                commandStore.command(txnId).commit(route, progressKey, partialTxn, executeAt, partialDeps);
-                break;
-            case Executed:
-            case Applied:
-                commandStore.command(txnId).apply(route, executeAt, partialDeps, writes, result);
-                break;
-            case Invalidated:
-                commandStore.command(txnId).commitInvalidate();
-            default:
-                throw new IllegalStateException();
-        }
-    }
+//    enum PropagateOutcome { Success, Insufficient, Require }
+//
+//    public boolean propagate(long epoch, CheckStatusOkFull full)
+//    {
+//        KeyRanges prev = commandStore.ranges().between(txnId.epoch, Math.max(txnId.epoch, epoch - 1));
+//        KeyRanges cur = commandStore.ranges().at(epoch);
+//        switch (full.status)
+//        {
+//            default:
+//                throw new IllegalStateException();
+//            case NotWitnessed:
+//                return true;
+//            case AcceptedInvalidate:
+//                if (full.homeKey == null)
+//                    return true;
+//            case PreAccepted:
+//            case Accepted:
+//                if (hasBeen(PreAccepted))
+//                    return true;
+//
+//                if (!prev.isEmpty())
+//                    return false;
+//
+//                validate(prev, cur, No, full.route, full.partialTxn, Add, null, Ignore);
+//                return true;
+//            case Committed:
+//            case ReadyToExecute:
+//            case Executed:
+//            case Applied:
+//                Status newStatus = full.status.compareTo(Executed) >= 0 ? Executed : Committed;
+//                if (this.status.compareTo(newStatus) >= 0)
+//                    return true;
+//                validate(prev, cur, No, full.route, full.partialTxn, Add, full.committedDeps, Add);
+//                this.executeAt = full.executeAt;
+//                this.writes = full.writes;
+//                this.result = full.result;
+//                set(prev, cur, No, full.route, full.partialTxn, Add, full.committedDeps, Add);
+//                if (!hasBeen(Committed))
+//                    populateWaitingOn();
+//                this.status = newStatus;
+//                maybeExecute(No, false);
+//                listeners.forEach(this);
+//                return true;
+//            case Invalidated:
+//                commitInvalidate();
+//                return true;
+//        }
+//    }
+//    public void propagate(long epoch, Status status, AbstractRoute route, PartialTxn partialTxn, PartialDeps partialDeps, RoutingKey progressKey, Timestamp executeAt, Writes writes, Result result)
+//    {
+//        switch (status)
+//        {
+//            case AcceptedInvalidate:
+//                if (partialTxn == null)
+//                    break;
+//            case PreAccepted:
+//            case Accepted:
+//                commandStore.command(txnId).preaccept(partialTxn, route, progressKey);
+//                break;
+//            case Committed:
+//            case ReadyToExecute:
+//                commandStore.command(txnId).commit(route, progressKey, partialTxn, executeAt, partialDeps);
+//                break;
+//            case Executed:
+//            case Applied:
+//                commandStore.command(txnId).apply(epoch, route, executeAt, partialDeps, writes, result);
+//                break;
+//            case Invalidated:
+//                commandStore.command(txnId).commitInvalidate();
+//            default:
+//                throw new IllegalStateException();
+//        }
+//    }
 
     public boolean addListener(Listener listener)
     {
@@ -666,7 +725,7 @@ public class Command implements Listener, Consumer<Listener>
      * Validate we have sufficient information for the route, partialTxn and partialDeps fields, and if so update them;
      * otherwise return false (or throw an exception if an illegal state is encountered)
      */
-    private boolean validate(KeyRanges coordinateRanges, KeyRanges executeRanges, ProgressShard shard, AbstractRoute route,
+    private boolean validate(KeyRanges existingRanges, KeyRanges additionalRanges, ProgressShard shard, AbstractRoute route,
                              @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
                              @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
     {
@@ -682,14 +741,24 @@ public class Command implements Listener, Consumer<Listener>
                 if (!(this.route instanceof Route) && !(route instanceof Route))
                     return false;
             }
-            else if (this.route == null || (coordinateRanges != executeRanges && !this.route.covers(executeRanges)))
+            else if (this.route == null)
             {
                 // failing any of these tests is always an illegal state
-                if (!route.covers(coordinateRanges))
-                    throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + coordinateRanges);
+                if (!route.covers(existingRanges))
+                    throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + existingRanges);
 
-                if (coordinateRanges != executeRanges && !route.covers(executeRanges))
-                    throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + executeRanges);
+                if (existingRanges != additionalRanges && !route.covers(additionalRanges))
+                    throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + additionalRanges);
+            }
+            else if (existingRanges != additionalRanges && !this.route.covers(additionalRanges))
+            {
+                if (!route.covers(additionalRanges))
+                    throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + additionalRanges);
+            }
+            else
+            {
+                if (!this.route.covers(existingRanges))
+                    throw new IllegalStateException();
             }
         }
 
@@ -699,34 +768,38 @@ public class Command implements Listener, Consumer<Listener>
             Preconditions.checkState(status != Accepted && status != AcceptedInvalidate);
 
         // validate new partial txn
-        return validate(ensurePartialTxn, coordinateRanges, executeRanges, covers(this.partialTxn), covers(partialTxn), "txn", partialTxn)
-               && validate(ensurePartialDeps, coordinateRanges, executeRanges, covers(this.partialDeps), covers(partialDeps), "deps", partialDeps);
+        return validate(ensurePartialTxn, existingRanges, additionalRanges, covers(this.partialTxn), covers(partialTxn), "txn", partialTxn)
+               && validate(ensurePartialDeps, existingRanges, additionalRanges, covers(this.partialDeps), covers(partialDeps), "deps", partialDeps);
     }
 
-    private void set(KeyRanges executeRanges, ProgressShard shard, AbstractRoute route,
+    private void set(KeyRanges existingRanges, KeyRanges additionalRanges, ProgressShard shard, AbstractRoute route,
                      @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
                      @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
     {
         if (shard.isProgress())
             this.route = AbstractRoute.merge(this.route, route);
 
+        KeyRanges allRanges = existingRanges.union(additionalRanges);
         // TODO (now): apply hashIntersects
         switch (ensurePartialTxn)
         {
             case Add:
-                if (partialTxn != null)
+                if (partialTxn == null)
+                    break;
+
+                if (this.partialTxn != null)
                 {
                     partialTxn.keys.foldlDifference(this.partialTxn.keys, (i, key, p, v) -> {
                         if (commandStore.hashIntersects(key))
                             commandStore.commandsForKey(key).register(this);
                         return v;
                     }, 0, 0, 1);
-                    this.partialTxn = this.partialTxn.with(partialTxn.slice(executeRanges, shard.isHome()));
+                    this.partialTxn = this.partialTxn.with(partialTxn.slice(allRanges, shard.isHome()));
+                    break;
                 }
-                break;
 
             case Set:
-                this.partialTxn = partialTxn.slice(executeRanges, shard.isHome());
+                this.partialTxn = partialTxn = partialTxn.slice(allRanges, shard.isHome());
                 partialTxn.keys().forEach(key -> {
                     if (commandStore.hashIntersects(key))
                         commandStore.commandsForKey(key).register(this);
@@ -738,19 +811,23 @@ public class Command implements Listener, Consumer<Listener>
         switch (ensurePartialDeps)
         {
             case Add:
-                if (partialDeps != null)
+                if (partialDeps == null)
+                    break;
+
+                if (this.partialDeps != null)
                 {
-                    this.partialDeps = this.partialDeps.with(partialDeps.slice(executeRanges));
+                    this.partialDeps = this.partialDeps.with(partialDeps.slice(allRanges));
+                    break;
                 }
-                break;
 
             case Set:
-                this.partialDeps = partialDeps.slice(executeRanges);
+                this.partialDeps = partialDeps.slice(allRanges);
                 break;
         }
     }
 
-    private static boolean validate(EnsureAction action, KeyRanges coordinateRanges, KeyRanges executeRanges, KeyRanges existing, KeyRanges adding, String kind, Object obj)
+    private static boolean validate(EnsureAction action, KeyRanges coordinateRanges, KeyRanges executeRanges,
+                                    KeyRanges existing, KeyRanges adding, String kind, Object obj)
     {
         switch (action)
         {

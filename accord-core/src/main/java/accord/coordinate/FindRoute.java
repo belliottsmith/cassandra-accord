@@ -5,10 +5,12 @@ import java.util.function.BiConsumer;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
 /**
@@ -16,14 +18,32 @@ import accord.primitives.TxnId;
  */
 public class FindRoute extends CheckShards
 {
-    final BiConsumer<Route, Throwable> callback;
-    FindRoute(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Route, Throwable> callback)
+    public static class Result
     {
-        super(node, txnId, RoutingKeys.of(homeKey), txnId.epoch, IncludeInfo.No);
+        public final Route route;
+        public final Timestamp executeAt;
+
+        public Result(Route route, Timestamp executeAt)
+        {
+            this.route = route;
+            this.executeAt = executeAt;
+        }
+
+        public Result(CheckStatusOk status)
+        {
+            this.route = (Route)status.route;
+            this.executeAt = status.status.compareTo(Status.Committed) >= 0 ? status.executeAt : null;
+        }
+    }
+
+    final BiConsumer<Result, Throwable> callback;
+    FindRoute(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Result, Throwable> callback)
+    {
+        super(node, txnId, RoutingKeys.of(homeKey), txnId.epoch, IncludeInfo.Route);
         this.callback = callback;
     }
 
-    public static FindRoute findRoute(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Route, Throwable> callback)
+    public static FindRoute findRoute(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Result, Throwable> callback)
     {
         FindRoute findRoute = new FindRoute(node, txnId, homeKey, callback);
         findRoute.start();
@@ -46,7 +66,7 @@ public class FindRoute extends CheckShards
         else
         {
             super.onDone(done, failure);
-            callback.accept(merged == null ? null : (Route)merged.route, null);
+            callback.accept(merged == null ? null : new Result(merged), null);
         }
     }
 }

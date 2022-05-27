@@ -334,28 +334,37 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
     {
         AbstractKeys<K, ?> as = this, bs = subtract;
         int ai = 0, bi = 0;
-        while (ai < as.size())
+        while (ai < as.size() && bi < bs.size())
         {
             long abi = as.findNextIntersection(ai, bs, bi);
             int next;
             if (abi < 0)
-            {
-                next = as.size();
-            }
-            else
-            {
-                next = (int)(abi >>> 32);
-                bi = (int)abi;
-            }
+                break;
+
+            // TODO: perform fast search for next different
+
+            next = (int)(abi >>> 32);
+            bi = (int)abi;
 
             while (ai < next)
             {
                 initialValue = fold.apply(ai, as.get(ai), param, initialValue);
                 if (initialValue == terminalValue)
-                    break;
+                    return initialValue;
+
                 ++ai;
             }
+
+            ++ai; ++bi;
         }
+
+        while (ai < as.size())
+        {
+            initialValue = fold.apply(ai, as.get(ai), param, initialValue);
+            if (initialValue == terminalValue)
+                break;
+        }
+
         return initialValue;
     }
 

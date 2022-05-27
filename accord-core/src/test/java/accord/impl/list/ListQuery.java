@@ -32,6 +32,6 @@ public class ListQuery implements Query
             if (i >= 0)
                 values[i] = e.getValue();
         }
-        return new ListResult(client, requestId, read.keys, values, (ListUpdate) update);
+        return new ListResult(client, requestId, read.readKeys, values, (ListUpdate) update);
     }
 }

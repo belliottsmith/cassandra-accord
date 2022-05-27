@@ -1,18 +1,18 @@
 package accord.impl.mock;
 
-import accord.api.RoutingKey;
-import accord.coordinate.CheckOnCommitted;
-import accord.coordinate.FindRoute;
+import accord.coordinate.FetchData;
+import accord.coordinate.FetchData.Outcome;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.*;
 import accord.messages.*;
 import accord.primitives.AbstractRoute;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies.Single;
 import accord.topology.Topology;
 
-import com.google.common.base.Preconditions;
 import org.apache.cassandra.utils.concurrent.AsyncPromise;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,7 +22,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 
 import static accord.impl.mock.MockCluster.configService;
-import static accord.local.Status.Committed;
+import static accord.messages.SimpleReply.Ok;
 
 public class EpochSync implements Runnable
 {
@@ -42,25 +42,30 @@ public class EpochSync implements Runnable
     private static class SyncCommitted implements Request
     {
         private final TxnId txnId;
-        private final RoutingKey homeKey;
+        private AbstractRoute route;
+        private final Timestamp executeAt;
         private final long epoch;
 
         public SyncCommitted(Command command, long epoch)
         {
             this.epoch = epoch;
             this.txnId = command.txnId();
-            this.homeKey = command.homeKey();
+            this.route = command.route();
+            this.executeAt = command.executeAt();
+        }
+
+        void update(Command command)
+        {
+            route = AbstractRoute.merge(route, command.route());
         }
 
         @Override
         public void process(Node node, Node.Id from, ReplyContext replyContext)
         {
-            FindRoute.findRoute(node, txnId, homeKey, (route, fail) -> {
-                Preconditions.checkState(route != null || fail != null);
-                CheckOnCommitted.checkOnCommitted(node, txnId, route, epoch, (ok, fail2) -> {
-                    if (ok != null && ok.status.hasBeen(Committed))
-                        node.reply(from, replyContext, SyncAck.INSTANCE);
-                });
+            FetchData.fetchCommitted(node, txnId, route, executeAt, epoch, (outcome, fail) -> {
+                if (fail != null) process(node, from, replyContext);
+                else if (outcome != Outcome.Success) throw new IllegalStateException();
+                else node.reply(from, replyContext, Ok);
             });
         }
 
@@ -71,19 +76,7 @@ public class EpochSync implements Runnable
         }
     }
 
-    private static class SyncAck implements Reply
-    {
-        private static final SyncAck INSTANCE = new SyncAck();
-        private SyncAck() {}
-
-        @Override
-        public MessageType type()
-        {
-            throw new UnsupportedOperationException();
-        }
-    }
-
-    private static class CommandSync extends AsyncPromise<Void> implements Callback<SyncAck>
+    private static class CommandSync extends AsyncPromise<Void> implements Callback<SimpleReply>
     {
         private final QuorumTracker tracker;
 
@@ -94,7 +87,7 @@ public class EpochSync implements Runnable
         }
 
         @Override
-        public synchronized void onSuccess(Node.Id from, SyncAck response)
+        public synchronized void onSuccess(Node.Id from, SimpleReply reply)
         {
             tracker.success(from);
             if (tracker.hasReachedQuorum())
@@ -166,29 +159,14 @@ public class EpochSync implements Runnable
         @Override
         public void run()
         {
-            class Send
-            {
-                final SyncCommitted message;
-                AbstractRoute route;
-
-                Send(SyncCommitted message)
-                {
-                    this.message = message;
-                }
-
-                void update(Command command)
-                {
-                    route = AbstractRoute.merge(route, command.someRoute());
-                }
-            }
-            Map<TxnId, Send> syncMessages = new ConcurrentHashMap<>();
-            Consumer<Command> commandConsumer = command -> syncMessages.computeIfAbsent(command.txnId(), id -> new Send(new SyncCommitted(command, syncEpoch)))
+            Map<TxnId, SyncCommitted> syncMessages = new ConcurrentHashMap<>();
+            Consumer<Command> commandConsumer = command -> syncMessages.computeIfAbsent(command.txnId(), id -> new SyncCommitted(command, syncEpoch))
                                                                .update(command);
 
             node.forEachLocal(commandStore -> commandStore.forCommittedInEpoch(syncTopology.ranges(), syncEpoch, commandConsumer));
 
-            for (Send send : syncMessages.values())
-                CommandSync.sync(node, send.route, send.message, nextTopology);
+            for (SyncCommitted send : syncMessages.values())
+                CommandSync.sync(node, send.route, send, nextTopology);
 
             // TODO (now): this needs to be made reliable; we need an Ack and retry
             SyncComplete syncComplete = new SyncComplete(syncEpoch);

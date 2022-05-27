@@ -40,17 +40,23 @@ public class CheckOnCommitted extends CheckShards
     }
 
     final BiConsumer<? super Result, Throwable> callback;
+    /**
+     * The epoch until which we want to persist any response for locally
+     */
+    final long untilLocalEpoch;
 
-    CheckOnCommitted(Node node, TxnId txnId, AbstractRoute route, long someEpoch, BiConsumer<? super Result, Throwable> callback)
+    CheckOnCommitted(Node node, TxnId txnId, AbstractRoute route, long untilRemoteEpoch, long untilLocalEpoch, BiConsumer<? super Result, Throwable> callback)
     {
         // TODO (now): restore behaviour of only collecting info if e.g. Committed or Executed
-        super(node, txnId, route, someEpoch, IncludeInfo.All);
+        super(node, txnId, route, untilRemoteEpoch, IncludeInfo.All);
         this.callback = callback;
+        this.untilLocalEpoch = untilLocalEpoch;
     }
 
-    public static CheckOnCommitted checkOnCommitted(Node node, TxnId txnId, AbstractRoute route, long epoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
+    // TODO (now): many callers only need to consult precisely executeAt.epoch remotely
+    public static CheckOnCommitted checkOnCommitted(Node node, TxnId txnId, AbstractRoute route, long untilRemoteEpoch, long untilLocalEpoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        CheckOnCommitted checkOnCommitted = new CheckOnCommitted(node, txnId, route, epoch, callback);
+        CheckOnCommitted checkOnCommitted = new CheckOnCommitted(node, txnId, route, untilRemoteEpoch, untilLocalEpoch, callback);
         checkOnCommitted.start();
         return checkOnCommitted;
     }
@@ -63,7 +69,7 @@ public class CheckOnCommitted extends CheckShards
     @Override
     protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
-        return ok.status.hasBeen(Executed);
+        return ((CheckStatusOkFull)ok).fullStatus.hasBeen(Executed);
     }
 
     @Override
@@ -82,15 +88,18 @@ public class CheckOnCommitted extends CheckShards
 
     void onSuccessCriteriaOrExhaustion(CheckStatusOkFull full)
     {
-        switch (full.status)
+        switch (full.fullStatus)
         {
+            case Invalidated:
+                node.forEachLocal(someKeys, txnId.epoch, untilLocalEpoch, commandStore -> {
+                    Command command = commandStore.command(txnId);
+                    command.commitInvalidate();
+                });
             case NotWitnessed:
             case PreAccepted:
             case Accepted:
             case AcceptedInvalidate:
                 return;
-            case Invalidated:
-                throw new IllegalStateException();
         }
 
         KeyRanges minCommitRanges = node.topology().localRangesForEpoch(txnId.epoch);
@@ -103,11 +112,11 @@ public class CheckOnCommitted extends CheckShards
         boolean canExecute = route.covers(minExecuteRanges);
 
         Preconditions.checkState(canCommit);
-        Preconditions.checkState(epoch < full.executeAt.epoch || canExecute);
+        Preconditions.checkState(untilRemoteEpoch < full.executeAt.epoch || canExecute);
         Preconditions.checkState(full.partialTxn.covers(route));
         Preconditions.checkState(full.committedDeps.covers(route));
 
-        switch (full.status)
+        switch (full.fullStatus)
         {
             default: throw new IllegalStateException();
             case Executed:
@@ -121,16 +130,16 @@ public class CheckOnCommitted extends CheckShards
                         command.commit(route, progressKey, full.partialTxn, full.executeAt, full.committedDeps);
                     });
 
-                    node.forEachLocalSince(route, full.executeAt.epoch, commandStore -> {
+                    node.forEachLocal(route, full.executeAt.epoch, untilLocalEpoch, commandStore -> {
                         Command command = commandStore.command(txnId);
                         command.commit(route, progressKey, full.partialTxn, full.executeAt, full.committedDeps);
-                        command.apply(route, full.executeAt, full.committedDeps, full.writes, full.result);
+                        command.apply(untilLocalEpoch, route, full.executeAt, full.committedDeps, full.writes, full.result);
                     });
                     break;
                 }
             case Committed:
             case ReadyToExecute:
-                node.forEachLocalSince(route, txnId.epoch, commandStore -> {
+                node.forEachLocal(route, txnId.epoch, untilLocalEpoch, commandStore -> {
                     Command command = commandStore.command(txnId);
                     command.commit(route, progressKey, full.partialTxn, full.executeAt, full.committedDeps);
                 });

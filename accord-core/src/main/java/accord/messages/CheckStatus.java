@@ -10,12 +10,12 @@ import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
+import accord.primitives.AbstractKeys;
 import accord.primitives.AbstractRoute;
 import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
-import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -64,28 +64,16 @@ public class CheckStatus implements Request
     {
         CheckStatusOk ok = node.mapReduceLocal(someKeys, epoch, instance -> {
             Command command = instance.command(txnId);
-            Route route = null;
-            if (includeInfo != IncludeInfo.No)
-            {
-                RoutingKeys keys = command.route();
-                if (keys != null)
-                    route = keys.toRoute(command.homeKey());
-            }
             switch (includeInfo)
             {
                 default: throw new IllegalStateException();
                 case No:
                 case Route:
-                    return new CheckStatusOk(command.status(), command.promised(), command.accepted(),
+                    return new CheckStatusOk(command.status(), command.promised(), command.accepted(), command.executeAt(),
                                              node.isCoordinating(txnId, command.promised()),
-                                             command.isGloballyPersistent(), route, command.homeKey());
+                                             command.isGloballyPersistent(), includeInfo == IncludeInfo.No ? null : command.route(), command.homeKey());
                 case All:
-                    PartialDeps committedDeps = command.status().compareTo(Committed) >= 0 ? command.savedPartialDeps() : null;
-                    return new CheckStatusOkFull(command.status(), command.promised(), command.accepted(),
-                                                 node.isCoordinating(txnId, command.promised()),
-                                                 command.isGloballyPersistent(), route, command.homeKey(),
-                                                 command.partialTxn(), command.executeAt(), committedDeps,
-                                                 command.writes(), command.result());
+                    return new CheckStatusOkFull(node, command);
             }
         }, CheckStatusOk::merge);
 
@@ -112,16 +100,26 @@ public class CheckStatus implements Request
         public final Status status;
         public final Ballot promised;
         public final Ballot accepted;
+        public final Timestamp executeAt;
         public final boolean isCoordinating;
         public final boolean hasExecutedOnAllShards;
         public final @Nullable AbstractRoute route;
         public final @Nullable RoutingKey homeKey;
 
-        CheckStatusOk(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, @Nullable AbstractRoute route, @Nullable RoutingKey homeKey)
+        public CheckStatusOk(Node node, Command command)
+        {
+            this(command.status(), command.promised(), command.accepted(), command.executeAt(),
+                 node.isCoordinating(command.txnId(), command.promised()), command.isGloballyPersistent(), command.route(), command.homeKey());
+        }
+
+        CheckStatusOk(Status status, Ballot promised, Ballot accepted, Timestamp executeAt,
+                      boolean isCoordinating, boolean hasExecutedOnAllShards,
+                      @Nullable AbstractRoute route, @Nullable RoutingKey homeKey)
         {
             this.status = status;
             this.promised = promised;
             this.accepted = accepted;
+            this.executeAt = executeAt;
             this.isCoordinating = isCoordinating;
             this.hasExecutedOnAllShards = hasExecutedOnAllShards;
             this.route = route;
@@ -141,6 +139,7 @@ public class CheckStatus implements Request
                    "status:" + status +
                    ", promised:" + promised +
                    ", accepted:" + accepted +
+                   ", executeAt:" + executeAt +
                    ", hasExecutedOnAllShards:" + hasExecutedOnAllShards +
                    ", isCoordinating:" + isCoordinating +
                    ", route:" + route +
@@ -174,8 +173,8 @@ public class CheckStatus implements Request
 
             // otherwise assemble the maximum of each, and propagate isCoordinating from the origin we selected the promise from
             boolean isCoordinating = maxPromised == prefer ? prefer.isCoordinating : defer.isCoordinating;
-            return new CheckStatusOk(maxStatus.status, maxPromised.promised, maxAccepted.accepted, isCoordinating,
-                                     maxHasExecuted.hasExecutedOnAllShards, mergedRoute, maxHomeKey.homeKey);
+            return new CheckStatusOk(maxStatus.status, maxPromised.promised, maxAccepted.accepted, maxStatus.executeAt,
+                                     isCoordinating, maxHasExecuted.hasExecutedOnAllShards, mergedRoute, maxHomeKey.homeKey);
         }
 
         @Override
@@ -187,82 +186,43 @@ public class CheckStatus implements Request
 
     public static class CheckStatusOkFull extends CheckStatusOk
     {
+        /**
+         * The maximum Status that the full contents represents for the keys provided to the merge/covering methods
+         * (or {@code status} otherwise). i.e., the maximum witnessed status for which there is sufficient data to
+         * replicate the state to a node that replicates a subset of the keys.
+         */
+        public final Status fullStatus;
         public final PartialTxn partialTxn;
-        public final Timestamp executeAt;
-        public final PartialDeps committedDeps; // only set if status >= Committed
+        public final PartialDeps committedDeps; // only set if status >= Committed, so safe to merge
         public final Writes writes;
         public final Result result;
+
+        public CheckStatusOkFull(Node node, Command command)
+        {
+            super(node, command);
+            this.partialTxn = command.partialTxn();
+            this.committedDeps = command.status().compareTo(Committed) >= 0 ? command.savedPartialDeps() : null;
+            this.writes = command.writes();
+            this.result = command.result();
+            this.fullStatus = status;
+        }
 
         protected CheckStatusOkFull(Status status, Ballot promised, Ballot accepted, boolean isCoordinating, boolean hasExecutedOnAllShards, AbstractRoute route,
                           RoutingKey homeKey, PartialTxn partialTxn, Timestamp executeAt, PartialDeps committedDeps, Writes writes, Result result)
         {
-            super(status, promised, accepted, isCoordinating, hasExecutedOnAllShards, route, homeKey);
+            this(status, status, promised, accepted, executeAt, isCoordinating, hasExecutedOnAllShards, route, homeKey, partialTxn, committedDeps, writes, result);
+        }
+
+        private CheckStatusOkFull(Status status, Status fullStatus, Ballot promised, Ballot accepted, Timestamp executeAt,
+                                  boolean isCoordinating, boolean hasExecutedOnAllShards, AbstractRoute route,
+                                  RoutingKey homeKey, PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, Result result)
+        {
+            super(status, promised, accepted, executeAt, isCoordinating, hasExecutedOnAllShards, route, homeKey);
+            this.fullStatus = fullStatus;
             this.partialTxn = partialTxn;
-            this.executeAt = executeAt;
             this.committedDeps = committedDeps;
             this.writes = writes;
             this.result = result;
-        }
-
-        /**
-         * If multiple shards have been merged, the maximum status will have been adopted, however not all shards may
-         * have had this status. This method picks the highest status we have complete data covering a provided set of keys.
-         */
-        public CheckStatusOkFull covering(RoutingKeys keys)
-        {
-            Status newStatus = status;
-            switch (newStatus)
-            {
-                default: throw new IllegalStateException();
-                case Invalidated:
-                    break;
-                case Applied:
-                case Executed:
-                    if (writes != null && result != null
-                        && committedDeps != null && !committedDeps.covers(keys))
-                        break;
-                    newStatus = Committed;
-                case ReadyToExecute:
-                case Committed:
-                    if (committedDeps != null && !committedDeps.covers(keys)
-                        && partialTxn != null && partialTxn.covers(keys))
-                        break;
-                    newStatus = PreAccepted;
-                case Accepted:
-                case AcceptedInvalidate:
-                case PreAccepted:
-                    if (partialTxn != null && partialTxn.covers(keys))
-                        break;
-                    // TODO (now): we should test Route presence here
-                    newStatus = NotWitnessed;
-                case NotWitnessed:
-            }
-
-            return withStatus(newStatus);
-        }
-
-        CheckStatusOkFull withStatus(Status newStatus)
-        {
-            if (newStatus == status)
-                return this;
-            return new CheckStatusOkFull(newStatus, promised, accepted, isCoordinating, hasExecutedOnAllShards, route,
-                                         homeKey, partialTxn, executeAt, committedDeps, writes, result);
-        }
-
-        @Override
-        public String toString()
-        {
-            return "CheckStatusOk{" +
-                   "status:" + status +
-                   ", promised:" + promised +
-                   ", accepted:" + accepted +
-                   ", executeAt:" + executeAt +
-                   ", hasExecutedOnAllShards:" + hasExecutedOnAllShards +
-                   ", isCoordinating:" + isCoordinating +
-                   ", deps:" + committedDeps +
-                   ", writes:" + writes +
-                   ", result:" + result +
-                   '}';
         }
 
         /**
@@ -276,6 +236,11 @@ public class CheckStatus implements Request
          * (e.g. Accepted executeAt is very different to Committed executeAt))
          */
         public CheckStatusOk merge(CheckStatusOk that)
+        {
+            return merge(that, null);
+        }
+
+        public CheckStatusOk merge(CheckStatusOk that, @Nullable AbstractKeys<?, ?> forKeys)
         {
             CheckStatusOk max = super.merge(that);
             if (this == max || that == max) return max;
@@ -293,12 +258,82 @@ public class CheckStatus implements Request
             }
 
             CheckStatusOkFull fullMin = (CheckStatusOkFull) minSrc;
+
+            PartialTxn partialTxn = fullMax.partialTxn.with(fullMin.partialTxn);
             PartialDeps committedDeps = null;
             if (fullMin.committedDeps != null) committedDeps = fullMax.committedDeps.with(fullMin.committedDeps);
             else if (fullMax.committedDeps != null) committedDeps = fullMax.committedDeps;
 
-            return new CheckStatusOkFull(max.status, max.promised, max.accepted, max.isCoordinating, max.hasExecutedOnAllShards, max.route,
-                                         max.homeKey, fullMax.partialTxn.with(fullMin.partialTxn), fullMax.executeAt, committedDeps, fullMax.writes, fullMax.result);
+            Status fullStatus = fullStatus(forKeys, max.status, partialTxn, committedDeps, writes, result);
+
+            return new CheckStatusOkFull(max.status, fullStatus, max.promised, max.accepted, fullMax.executeAt, max.isCoordinating, max.hasExecutedOnAllShards, max.route,
+                                         max.homeKey, partialTxn, committedDeps, fullMax.writes, fullMax.result);
+        }
+
+        /**
+         * If multiple shards have been merged, the maximum status will have been adopted, however not all shards may
+         * have had this status. This method picks the highest status we have complete data covering a provided set of keys.
+         *
+         * TODO: maybe refactor this to introduce a second lower-bound status that is updated on each merge?
+         */
+        public CheckStatusOkFull covering(RoutingKeys keys)
+        {
+            return withFullStatus(fullStatus(keys, status, partialTxn, committedDeps, writes, result));
+        }
+
+        private static Status fullStatus(AbstractKeys<?, ?> forKeys, Status maxStatus, PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, Result result)
+        {
+            switch (maxStatus)
+            {
+                default: throw new IllegalStateException();
+                case Invalidated:
+                    break;
+                case Applied:
+                case Executed:
+                    if (writes != null && result != null
+                        && committedDeps != null && !committedDeps.covers(forKeys))
+                        break;
+                    return Committed;
+                case ReadyToExecute:
+                case Committed:
+                    if (committedDeps != null && !committedDeps.covers(forKeys)
+                        && partialTxn != null && partialTxn.covers(forKeys))
+                        break;
+                    return PreAccepted;
+                case Accepted:
+                case AcceptedInvalidate:
+                case PreAccepted:
+                    if (partialTxn != null && partialTxn.covers(forKeys))
+                        break;
+                    // TODO (now): we should test Route presence here
+                    return NotWitnessed;
+                case NotWitnessed:
+            }
+            return maxStatus;
+        }
+
+        private CheckStatusOkFull withFullStatus(Status newFullStatus)
+        {
+            if (newFullStatus == fullStatus)
+                return this;
+            return new CheckStatusOkFull(status, newFullStatus, promised, accepted, executeAt, isCoordinating, hasExecutedOnAllShards, route,
+                                         homeKey, partialTxn, committedDeps, writes, result);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "CheckStatusOk{" +
+                   "status:" + status +
+                   ", promised:" + promised +
+                   ", accepted:" + accepted +
+                   ", executeAt:" + executeAt +
+                   ", hasExecutedOnAllShards:" + hasExecutedOnAllShards +
+                   ", isCoordinating:" + isCoordinating +
+                   ", deps:" + committedDeps +
+                   ", writes:" + writes +
+                   ", result:" + result +
+                   '}';
         }
     }
 

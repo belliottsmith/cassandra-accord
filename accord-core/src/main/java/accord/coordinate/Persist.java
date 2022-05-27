@@ -38,14 +38,14 @@ public class Persist implements Callback<ApplyReply>
     public static void persist(Node node, Topologies topologies, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
         Persist persist = new Persist(node, topologies, txnId, route, txn, executeAt, deps);
-        node.send(topologies.nodes(), to -> new Apply(to, topologies, txnId, route, executeAt, deps, writes, result), persist);
+        node.send(topologies.nodes(), to -> new Apply(to, topologies, executeAt.epoch, txnId, route, executeAt, deps, writes, result), persist);
     }
 
     public static void persistAndCommit(Node node, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
         Topologies persistTo = node.topology().forEpoch(route, executeAt.epoch);
         Persist persist = new Persist(node, persistTo, txnId, route, txn, executeAt, deps);
-        node.send(persistTo.nodes(), to -> new Apply(to, persistTo, txnId, route, executeAt, deps, writes, result), persist);
+        node.send(persistTo.nodes(), to -> new Apply(to, persistTo, executeAt.epoch, txnId, route, executeAt, deps, writes, result), persist);
         if (txnId.epoch != executeAt.epoch)
         {
             Topologies earlierTopologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch - 1);
@@ -66,9 +66,9 @@ public class Persist implements Callback<ApplyReply>
     }
 
     @Override
-    public void onSuccess(Id from, ApplyReply response)
+    public void onSuccess(Id from, ApplyReply reply)
     {
-        switch (response)
+        switch (reply)
         {
             default: throw new IllegalStateException();
             case Applied:

@@ -8,6 +8,7 @@ import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.primitives.RoutingKeys;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
 /**
@@ -22,11 +23,10 @@ public class FindHomeKey extends CheckShards
         this.callback = callback;
     }
 
-    public static FindHomeKey findHomeKey(Node node, TxnId txnId, RoutingKeys someKeys, BiConsumer<RoutingKey, Throwable> callback)
+    public static void findHomeKey(Node node, TxnId txnId, RoutingKeys someKeys, BiConsumer<RoutingKey, Throwable> callback)
     {
         FindHomeKey findHomeKey = new FindHomeKey(node, txnId, someKeys, callback);
         findHomeKey.start();
-        return findHomeKey;
     }
 
     @Override

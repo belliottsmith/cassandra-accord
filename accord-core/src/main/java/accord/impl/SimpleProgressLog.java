@@ -188,7 +188,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         long epoch = command.executeAt().epoch;
                         node.withEpoch(epoch, () -> {
                             // TODO (now): slice the route to only those owned locally
-                            debugInvestigating = checkOnCommitted(node, txnId, command.route(), command.executeAt().epoch, (success, fail) -> {
+                            debugInvestigating = checkOnCommitted(node, txnId, command.route(), epoch, epoch, (success, fail) -> {
                                 // should have found enough information to apply the result, but in case we did not reset progress
                                 if (progress == Investigating)
                                     progress = Expected;
@@ -249,7 +249,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         class CoordinateAwareness implements Callback<SimpleReply>
         {
             @Override
-            public void onSuccess(Id from, SimpleReply response)
+            public void onSuccess(Id from, SimpleReply reply)
             {
                 notAwareOfDurability.remove(from);
             }
@@ -273,7 +273,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
         CoordinateAwareness investigating;
 
-        private boolean refresh(@Nullable Node node, @Nullable Command command, @Nullable Id fullyPersistedOn,
+        private boolean refresh(@Nullable Node node, @Nullable Command command, @Nullable Id persistedOn,
                                 @Nullable Set<Id> persistedOns, @Nullable Set<Id> notPersistedOns)
         {
             if (notPersisted == null)
@@ -286,20 +286,26 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                                         .globalForEpoch(command.executeAt().epoch)
                                         .forKeys(command.route());
 
-                if (persistedOns == null) persistedOns = pendingDurable.persistedOn;
-                else persistedOns.addAll(pendingDurable.persistedOn);
-                pendingDurable = null;
-                if (status.compareTo(LocallyDurableOnly) >= 0)
-                    persistedOns.add(node.id());
+                if (pendingDurable != null)
+                {
+                    if (persistedOns == null) persistedOns = pendingDurable.persistedOn;
+                    else persistedOns.addAll(pendingDurable.persistedOn);
+                    pendingDurable = null;
+                }
 
                 notAwareOfDurability = new HashSet<>(topology.nodes());
                 notPersisted = new HashSet<>(topology.nodes());
+                if (status.compareTo(LocallyDurableOnly) >= 0)
+                {
+                    notAwareOfDurability.remove(node.id());
+                    notPersisted.remove(node.id());
+                }
             }
 
-            if (fullyPersistedOn != null)
+            if (persistedOn != null)
             {
-                notPersisted.remove(fullyPersistedOn);
-                notAwareOfDurability.remove(fullyPersistedOn);
+                notPersisted.remove(persistedOn);
+                notAwareOfDurability.remove(persistedOn);
             }
             if (persistedOns != null)
             {
@@ -309,6 +315,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             if (notPersistedOns != null)
             {
                 notPersisted.retainAll(notPersistedOns);
+                notAwareOfDurability.retainAll(notPersistedOns);
             }
 
             return true;
@@ -320,17 +327,26 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             {
                 default: throw new IllegalStateException();
                 case Done:
+                case RemotelyDurableOnly:
+                    if (persistedOn != null)
+                    {
+                        if (pendingDurable == null)
+                            pendingDurable = new PendingDurable(persistedOn);
+                        else
+                            pendingDurable.persistedOn.addAll(persistedOn);
+                    }
                     break;
                 case NotExecuted:
                     status = RemotelyDurableOnly;
                     progress = NoneExpected;
-                    pendingDurable = new PendingDurable(persistedOn);
+                    if (persistedOn != null)
+                        pendingDurable = new PendingDurable(persistedOn);
                     break;
                 case LocallyDurableOnly:
                     status = Durable;
                     progress = Expected;
+                    break;
                 case Durable:
-                case RemotelyDurableOnly:
                     refresh(node, command, null, persistedOn, null);
             }
         }
@@ -460,6 +476,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
             progress = Investigating;
 
+            // TODO: refactor to use FetchData
             // first make sure we have enough information to obtain the command locally
             long srcEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
             // TODO: compute fromEpoch, the epoch we already have this txn replicated until
@@ -469,20 +486,20 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             if (route == null || !route.covers(ranges))
             {
                 Status blockedOn = this.blockedOn;
-                BiConsumer<Route, Throwable> routeCallback = (newRoute, fail) -> {
+                BiConsumer<FindRoute.Result, Throwable> foundRoute = (findRoute, fail) -> {
                     if (progress == Investigating && blockedOn == this.blockedOn)
                     {
                         progress = Expected;
-                        if (newRoute != null && !(someKeys instanceof Route))
-                            someKeys = newRoute;
-                        if (newRoute == null && fail == null)
+                        if (findRoute != null && !(someKeys instanceof Route))
+                            someKeys = findRoute.route;
+                        if (findRoute == null && fail == null)
                             invalidate(node, command);
                     }
                 };
 
                 if (command.homeKey() != null)
                 {
-                    FindRoute.findRoute(node, txnId, command.homeKey(), routeCallback);
+                    FindRoute.findRoute(node, txnId, command.homeKey(), foundRoute);
                 }
                 else
                 {
@@ -490,7 +507,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         if (progress == Investigating && blockedOn == this.blockedOn)
                         {
                             if (fail != null) progress = Expected;
-                            else if (homeKey != null) FindRoute.findRoute(node, txnId, command.homeKey(), routeCallback);
+                            else if (homeKey != null) FindRoute.findRoute(node, txnId, command.homeKey(), foundRoute);
                             else invalidate(node, command);
                         }
                     });
@@ -533,8 +550,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     }
                 };
 
-                debugInvestigating = blockedOn == Executed ? checkOnCommitted(node, txnId, route, srcEpoch, callback)
-                                                           : checkOnUncommitted(node, txnId, route, srcEpoch, callback);
+                debugInvestigating = blockedOn == Executed ? checkOnCommitted(node, txnId, route, srcEpoch, toEpoch, callback)
+                                                           : checkOnUncommitted(node, txnId, route, srcEpoch, toEpoch, callback);
             });
         }
 

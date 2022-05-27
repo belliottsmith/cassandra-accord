@@ -3,7 +3,6 @@ package accord.api;
 import accord.local.Node;
 import accord.local.Command;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 
 /**
  * Facility for augmenting node behaviour at specific points
@@ -30,5 +29,7 @@ public interface Agent
     void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next);
 
     void onUncaughtException(Throwable t);
+
+    void onHandledException(Throwable t);
 
 }

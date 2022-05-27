@@ -30,6 +30,10 @@ public class MaelstromAgent implements Agent
     @Override
     public void onUncaughtException(Throwable t)
     {
+    }
 
+    @Override
+    public void onHandledException(Throwable t)
+    {
     }
 }
