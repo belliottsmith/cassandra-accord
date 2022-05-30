@@ -79,7 +79,7 @@ class Execute extends AnyReadCoordinator<ReadReply>
                 callback.accept(null, new Preempted(txnId, route.homeKey));
                 return Action.Abort;
             case NotCommitted:
-                node.send(from, new Commit(Maximal, from, topologies, txnId, txn, route, executeAt, deps, false));
+                node.send(from, new Commit(Maximal, from, node.topology().globalForEpoch(txnId.epoch), topologies, txnId, txn, route, executeAt, deps, false));
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 return Action.TryAlternative;
             case Invalid:

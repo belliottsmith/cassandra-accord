@@ -61,6 +61,7 @@ public class CheckOnUncommitted extends CheckOnCommitted
             case Committed:
             case ReadyToExecute:
                 super.onSuccessCriteriaOrExhaustion(full);
+                break;
             case Invalidated:
                 node.forEachLocalSince(someKeys, txnId.epoch, commandStore -> {
                     Command command = commandStore.ifPresent(txnId);

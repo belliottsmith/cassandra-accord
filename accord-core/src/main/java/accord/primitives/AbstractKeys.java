@@ -363,6 +363,7 @@ public abstract class AbstractKeys<K extends RoutingKey, KS extends AbstractKeys
             initialValue = fold.apply(ai, as.get(ai), param, initialValue);
             if (initialValue == terminalValue)
                 break;
+            ai++;
         }
 
         return initialValue;

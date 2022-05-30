@@ -71,6 +71,7 @@ public class Persist implements Callback<ApplyReply>
         switch (reply)
         {
             default: throw new IllegalStateException();
+            case Redundant:
             case Applied:
                 persistedOn.add(from);
                 if (tracker.success(from) && !isDone)
@@ -83,7 +84,7 @@ public class Persist implements Callback<ApplyReply>
                 break;
             case Insufficient:
                 Topologies topologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch);
-                node.send(from, new Commit(Kind.Maximal, from, topologies, txnId, txn, route, executeAt, deps, false));
+                node.send(from, new Commit(Kind.Maximal, from, topologies.forEpoch(txnId.epoch), topologies, txnId, txn, route, executeAt, deps, false));
         }
     }
 

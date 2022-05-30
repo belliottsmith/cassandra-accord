@@ -66,7 +66,15 @@ public class TopologyUpdate
                 return;
             }
 
-            // TODO: first check if already applied locally, and respond immediately
+            // first check if already applied locally, and respond immediately
+            Status minStatus = node.mapReduceLocal(route, epoch, instance -> instance.command(txnId).status(), (a, b) -> a.compareTo(b) <= 0 ? a : b);
+            if (minStatus == null || minStatus.logicalCompareTo(status) >= 0)
+            {
+                // TODO: minStatus == null means we're sending redundant messages
+                onDone.accept(true);
+                return;
+            }
+
             BiConsumer<FetchData.Outcome, Throwable> callback = (outcome, fail) -> {
                 if (fail != null) process(node, onDone);
                 else if (outcome == NotFullyReplicated) throw new IllegalStateException();
@@ -75,6 +83,7 @@ public class TopologyUpdate
             switch (status)
             {
                 case NotWitnessed:
+                    onDone.accept(true);
                     break;
                 case PreAccepted:
                 case Accepted:

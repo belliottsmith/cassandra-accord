@@ -149,6 +149,11 @@ public class ReadTracker<T extends ReadShardTracker> extends AbstractResponseTra
         return all(ReadShardTracker::hasCompletedRead);
     }
 
+    public boolean hasInFlight()
+    {
+        return !inflight.isEmpty();
+    }
+
     public boolean hasFailed()
     {
         return any(ReadShardTracker::hasFailed);

@@ -422,6 +422,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
         void recordBlocking(Command blocking, RoutingKeys someKeys)
         {
+            Preconditions.checkState(!someKeys.isEmpty());
             switch (blocking.status())
             {
                 default: throw new IllegalStateException();
@@ -430,13 +431,19 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     this.someKeys = someKeys;
                 case PreAccepted:
                 case Accepted:
-                    blockedOn = Status.Committed;
-                    progress = Expected;
+                    if (blockedOn.compareTo(Status.Committed) < 0)
+                    {
+                        blockedOn = Status.Committed;
+                        progress = Expected;
+                    }
                     break;
                 case Committed:
                 case ReadyToExecute:
-                    blockedOn = Executed;
-                    progress = Expected;
+                    if (blockedOn.compareTo(Executed) < 0)
+                    {
+                        blockedOn = Executed;
+                        progress = Expected;
+                    }
                     break;
                 case Executed:
                 case Applied:
@@ -447,6 +454,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
         void recordBlocking(Status blockedOn, RoutingKeys someKeys)
         {
+            Preconditions.checkState(!someKeys.isEmpty());
             this.someKeys = someKeys;
             if (blockedOn.compareTo(this.blockedOn) > 0)
             {
@@ -499,15 +507,15 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
                 if (command.homeKey() != null)
                 {
-                    FindRoute.findRoute(node, txnId, command.homeKey(), foundRoute);
+                    debugInvestigating = FindRoute.findRoute(node, txnId, command.homeKey(), foundRoute);
                 }
                 else
                 {
-                    FindHomeKey.findHomeKey(node, txnId, someKeys, (homeKey, fail) -> {
+                    debugInvestigating = FindHomeKey.findHomeKey(node, txnId, someKeys, (homeKey, fail) -> {
                         if (progress == Investigating && blockedOn == this.blockedOn)
                         {
                             if (fail != null) progress = Expected;
-                            else if (homeKey != null) FindRoute.findRoute(node, txnId, command.homeKey(), foundRoute);
+                            else if (homeKey != null) FindRoute.findRoute(node, txnId, homeKey, foundRoute);
                             else invalidate(node, command);
                         }
                     });

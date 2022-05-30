@@ -1,5 +1,7 @@
 package accord.coordinate;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 
 import com.google.common.base.Preconditions;
@@ -45,6 +47,11 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
             return true;
         }
 
+        public boolean hasFailed()
+        {
+            return super.hasFailed() && !hasReachedQuorum();
+        }
+
         public boolean hasReachedQuorum()
         {
             return responseCount >= shard.slowPathQuorumSize;
@@ -77,6 +84,7 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
     final Tracker tracker;
     private boolean isDone;
     private Throwable failure;
+    Map<Id, Reply> debug = new HashMap<>();
 
     QuorumReadCoordinator(Node node, Topologies topologies, TxnId txnId)
     {
@@ -98,6 +106,7 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
     @Override
     public void onSuccess(Id from, Reply reply)
     {
+        debug.put(from, reply);
         if (isDone)
             return;
 
@@ -119,6 +128,10 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
                     {
                         isDone = true;
                         onDone(Done.ReachedQuorum, null);
+                    }
+                    else
+                    {
+                        tryOneMore();
                     }
                     break;
 
@@ -150,6 +163,7 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
     @Override
     public void onFailure(Id from, Throwable failure)
     {
+        debug.put(from, null);
         if (isDone)
             return;
 
@@ -157,18 +171,25 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
         else this.failure.addSuppressed(failure);
 
         if (tracker.recordReadFailure(from))
+            tryOneMore();
+    }
+
+    private void tryOneMore()
+    {
+        Set<Id> readFrom = tracker.computeMinimalReadSetAndMarkInflight();
+        if (readFrom != null)
         {
-            Set<Id> readFrom = tracker.computeMinimalReadSetAndMarkInflight();
-            if (readFrom != null)
-            {
-                contact(readFrom);
-            }
-            else
-            {
-                isDone = true;
-                if (tracker.hasFailed()) onDone(null, failure);
-                else onDone(Done.Exhausted, null);
-            }
+            contact(readFrom);
+        }
+        else if (tracker.hasFailed())
+        {
+            isDone = true;
+            onDone(null, failure);
+        }
+        else if (!tracker.hasInFlight())
+        {
+            isDone = true;
+            onDone(Done.Exhausted, null);
         }
     }
 

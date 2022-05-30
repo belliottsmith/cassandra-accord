@@ -57,6 +57,9 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
         if (failure != null)
             return;
 
+        if (merged == null)
+            return;
+
         if (merged instanceof CheckStatusOkFull)
             merged = ((CheckStatusOkFull) merged).covering(someKeys);
 
@@ -78,6 +81,7 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
     @Override
     protected Action process(Id from, CheckStatusReply reply)
     {
+        debug.put(from, reply);
         if (reply.isOk())
         {
             CheckStatusOk ok = (CheckStatusOk) reply;

@@ -23,10 +23,11 @@ public class FindHomeKey extends CheckShards
         this.callback = callback;
     }
 
-    public static void findHomeKey(Node node, TxnId txnId, RoutingKeys someKeys, BiConsumer<RoutingKey, Throwable> callback)
+    public static FindHomeKey findHomeKey(Node node, TxnId txnId, RoutingKeys someKeys, BiConsumer<RoutingKey, Throwable> callback)
     {
         FindHomeKey findHomeKey = new FindHomeKey(node, txnId, someKeys, callback);
         findHomeKey.start();
+        return findHomeKey;
     }
 
     @Override

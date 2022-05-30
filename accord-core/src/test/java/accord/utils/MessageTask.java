@@ -70,7 +70,6 @@ public class MessageTask extends AsyncPromise<Void> implements Runnable
         public void process(Node on, Node.Id from, ReplyContext replyContext)
         {
             process.process(on, from, success -> on.reply(from, replyContext, success ? SUCCESS : FAILURE));
-
         }
 
         @Override

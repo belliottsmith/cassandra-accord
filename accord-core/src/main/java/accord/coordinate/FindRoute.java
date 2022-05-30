@@ -66,7 +66,7 @@ public class FindRoute extends CheckShards
         else
         {
             super.onDone(done, failure);
-            callback.accept(merged == null ? null : new Result(merged), null);
+            callback.accept(merged == null || merged.route == null ? null : new Result(merged), null);
         }
     }
 }

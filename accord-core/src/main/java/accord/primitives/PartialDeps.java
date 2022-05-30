@@ -52,8 +52,20 @@ public class PartialDeps extends Deps
     public Deps reconstitute(Route route)
     {
         if (!covers(route))
-            throw new IllegalStateException();
+            throw new IllegalArgumentException();
         return new Deps(keys, txnIds, keyToTxnId);
+    }
+
+    // PartialRoute might cover a wider set of ranges, some of which may have no involved keys
+    public PartialDeps reconstitutePartial(PartialRoute route)
+    {
+        if (!covers(route))
+            throw new IllegalArgumentException();
+
+        if (covers(route.covering))
+            return this;
+
+        return new PartialDeps(route.covering, keys, txnIds, keyToTxnId);
     }
 
     @Override

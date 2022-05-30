@@ -359,6 +359,7 @@ public class TopologyManager implements ConfigurationService.Listener
 
     public KeyRanges localRangesForEpochs(long start, long end)
     {
+        if (end < start) throw new IllegalArgumentException();
         KeyRanges ranges = localRangesForEpoch(start);
         for (long i = start + 1; i <= end ; ++i)
             ranges = ranges.union(localRangesForEpoch(i));

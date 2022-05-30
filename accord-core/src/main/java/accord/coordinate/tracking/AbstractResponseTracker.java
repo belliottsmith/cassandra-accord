@@ -35,9 +35,9 @@ public abstract class AbstractResponseTracker<T extends AbstractResponseTracker.
 
     public AbstractResponseTracker(Topologies topologies, IntFunction<T[]> arrayFactory, Function<Shard, T> trackerFactory)
     {
+        Preconditions.checkArgument(topologies.totalShards() > 0);
         this.topologies = topologies;
         this.trackers = arrayFactory.apply(topologies.totalShards());
-
         if (topologies.size() > 1)
         {
             this.offsets = new int[topologies.size() - 1];

@@ -1,5 +1,7 @@
 package accord.primitives;
 
+import javax.annotation.Nullable;
+
 import accord.api.Query;
 import accord.api.Read;
 import accord.api.Update;
@@ -58,5 +60,21 @@ public class PartialTxn extends Txn
             throw new IllegalStateException("Incomplete PartialTxn: " + this + ", route: " + route);
 
         return new Txn(keys, read, query, update);
+    }
+
+    public PartialTxn reconstitutePartial(PartialRoute route)
+    {
+        if (!covers(route))
+            throw new IllegalStateException("Incomplete PartialTxn: " + this + ", route: " + route);
+
+        if (covering.contains(route.covering))
+            return this;
+
+        return new PartialTxn(route.covering, kind, keys, read, query, update);
+    }
+
+    public static PartialTxn merge(@Nullable PartialTxn a, @Nullable PartialTxn b)
+    {
+        return a == null ? b : b == null ? a : a.with(b);
     }
 }

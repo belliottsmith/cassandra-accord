@@ -83,7 +83,7 @@ public class Command implements Listener, Consumer<Listener>
      *
      * At present, Deps contain every declare key in the range, however this should not be relied upon
      */
-    private PartialDeps partialDeps = PartialDeps.NONE;
+    private PartialDeps partialDeps = null;
     private Ballot promised = Ballot.ZERO, accepted = Ballot.ZERO;
     private Timestamp executeAt;
     private Writes writes;
@@ -249,7 +249,7 @@ public class Command implements Listener, Consumer<Listener>
 
         this.executeAt = executeAt;
         this.promised = this.accepted = ballot;
-        set(coordinateRanges, executeRanges, shard, route, partialTxn, Check, partialDeps, Set);
+        set(coordinateRanges, executeRanges, shard, route, partialTxn, Add, partialDeps, Set);
         this.status = Accepted;
 
         this.commandStore.progressLog().accept(txnId, shard);
@@ -419,7 +419,7 @@ public class Command implements Listener, Consumer<Listener>
 
         if (status == NotWitnessed)
         {
-            switch (preaccept(txn, route, progressKey))
+            switch (preacceptInternal(txn, route, progressKey))
             {
                 default:
                 case RejectedBallot:
@@ -776,10 +776,11 @@ public class Command implements Listener, Consumer<Listener>
                      @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
                      @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
     {
-        if (shard.isProgress())
-            this.route = AbstractRoute.merge(this.route, route);
-
         KeyRanges allRanges = existingRanges.union(additionalRanges);
+
+        if (shard.isProgress()) this.route = AbstractRoute.merge(this.route, route);
+        else this.route = AbstractRoute.merge(this.route, route.slice(allRanges));
+
         // TODO (now): apply hashIntersects
         switch (ensurePartialTxn)
         {
@@ -799,6 +800,7 @@ public class Command implements Listener, Consumer<Listener>
                 }
 
             case Set:
+            case TrySet:
                 this.partialTxn = partialTxn = partialTxn.slice(allRanges, shard.isHome());
                 partialTxn.keys().forEach(key -> {
                     if (commandStore.hashIntersects(key))
@@ -821,12 +823,13 @@ public class Command implements Listener, Consumer<Listener>
                 }
 
             case Set:
+            case TrySet:
                 this.partialDeps = partialDeps.slice(allRanges);
                 break;
         }
     }
 
-    private static boolean validate(EnsureAction action, KeyRanges coordinateRanges, KeyRanges executeRanges,
+    private static boolean validate(EnsureAction action, KeyRanges existingRanges, KeyRanges additionalRanges,
                                     KeyRanges existing, KeyRanges adding, String kind, Object obj)
     {
         switch (action)
@@ -838,10 +841,10 @@ public class Command implements Listener, Consumer<Listener>
             case TrySet:
                 if (adding != null)
                 {
-                    if (!adding.contains(coordinateRanges))
+                    if (!adding.contains(existingRanges))
                         return false;
 
-                    if (executeRanges != coordinateRanges && !adding.contains(executeRanges))
+                    if (additionalRanges != existingRanges && !adding.contains(additionalRanges))
                         return false;
 
                     break;
@@ -849,30 +852,41 @@ public class Command implements Listener, Consumer<Listener>
             case Set:
                 // failing any of these tests is always an illegal state
                 Preconditions.checkState(adding != null);
-                if (!adding.contains(coordinateRanges))
-                    throw new IllegalArgumentException("Incomplete " + kind + " (" + obj + ") provided; does not cover " + coordinateRanges);
+                if (!adding.contains(existingRanges))
+                    throw new IllegalArgumentException("Incomplete " + kind + " (" + obj + ") provided; does not cover " + existingRanges);
 
-                if (executeRanges != coordinateRanges && !adding.contains(executeRanges))
-                    throw new IllegalArgumentException("Incomplete " + kind + " (" + obj + ") provided; does not cover " + executeRanges);
+                if (additionalRanges != existingRanges && !adding.contains(additionalRanges))
+                    throw new IllegalArgumentException("Incomplete " + kind + " (" + obj + ") provided; does not cover " + additionalRanges);
                 break;
 
             case Check:
-            case Add:
                 if (existing == null)
                     return false;
 
-                if (adding != null)
+            case Add:
+                if (adding == null)
+                {
+                    if (existing == null)
+                        return false;
+
+                    Preconditions.checkState(existing.contains(existingRanges));
+                    if (existingRanges != additionalRanges && !existing.contains(additionalRanges))
+                        throw new IllegalArgumentException("Missing additional " + kind + "; existing does not cover " + additionalRanges.difference(existingRanges));
+                }
+                else if (existing != null)
                 {
                     KeyRanges covering = adding.union(existing);
-                    Preconditions.checkState(covering.contains(coordinateRanges));
-                    if (coordinateRanges != executeRanges && !covering.contains(executeRanges))
-                        throw new IllegalArgumentException("Incomplete additional " + kind + " (" + obj + ") provided; does not cover " + executeRanges.difference(coordinateRanges));
+                    Preconditions.checkState(covering.contains(existingRanges));
+                    if (existingRanges != additionalRanges && !covering.contains(additionalRanges))
+                        throw new IllegalArgumentException("Incomplete additional " + kind + " (" + obj + ") provided; does not cover " + additionalRanges.difference(existingRanges));
                 }
                 else
                 {
-                    Preconditions.checkState(existing.contains(coordinateRanges));
-                    if (coordinateRanges != executeRanges && !existing.contains(executeRanges))
-                        throw new IllegalArgumentException("Missing additional " + kind + "; existing does not cover " + executeRanges.difference(coordinateRanges));
+                    if (!adding.contains(existingRanges))
+                        return false;
+
+                    if (existingRanges != additionalRanges && !adding.contains(additionalRanges))
+                        throw new IllegalArgumentException("Incomplete additional " + kind + " (" + obj + ") provided; does not cover " + additionalRanges.difference(existingRanges));
                 }
                 break;
         }

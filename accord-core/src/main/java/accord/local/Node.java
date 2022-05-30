@@ -15,6 +15,7 @@ import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.*;
 import accord.coordinate.Coordinate;
+import accord.coordinate.FetchData;
 import accord.coordinate.MaybeRecover;
 
 import javax.annotation.Nullable;
@@ -415,13 +416,6 @@ public class Node implements ConfigurationService.Listener
         if (homeKey == null)
             homeKey = selectRandomHomeKey(txnId);
         return keys.toRoute(homeKey);
-    }
-
-    @VisibleForTesting
-    private @Nullable RoutingKey trySelectHomeKey(TxnId txnId, RoutingKey[] keys)
-    {
-        int i = topology().localForEpoch(txnId.epoch).ranges().findFirstKey(keys);
-        return i >= 0 ? keys[i] : null;
     }
 
     private @Nullable RoutingKey trySelectHomeKey(TxnId txnId, Keys keys)

@@ -9,8 +9,8 @@ public enum Status
     Committed(30),
     ReadyToExecute(30),
     Executed(50),
-    Applied(60),
-    Invalidated(70);
+    Applied(50),
+    Invalidated(60);
 
     final int logicalOrdinal;
 

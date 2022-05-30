@@ -21,6 +21,7 @@ import accord.topology.Topologies;
 import accord.primitives.Timestamp;
 import accord.primitives.Deps;
 import accord.primitives.TxnId;
+import accord.topology.Topology;
 
 import static accord.local.Status.PreAccepted;
 
@@ -37,26 +38,28 @@ public class Commit extends ReadData
 
     public enum Kind { Minimal, Maximal }
 
-    public Commit(Kind kind, Id to, Topologies topologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, boolean read)
+    // TODO: cleanup passing of topologies here - maybe fetch them adresh from Node? Or perhaps introduce well-named
+    //       classes to represent different topology combinations
+    public Commit(Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, boolean read)
     {
         super(to, topologies, txnId, route, executeAt);
 
         Route sendRoute = null;
         PartialTxn partialTxn = null;
-        KeyRanges commitRanges = topologies.forEpoch(txnId.epoch).rangesForNode(to);
         if (kind == Kind.Maximal)
         {
-            boolean isHome = commitRanges.contains(route.homeKey);
+            boolean isHome = coordinateTopology.rangesForNode(to).contains(route.homeKey);
             partialTxn = txn.slice(scope.covering, isHome);
             if (isHome)
                 sendRoute = route;
         }
         else if (executeAt.epoch != txnId.epoch)
         {
-            KeyRanges executeRanges = topologies.forEpoch(executeAt.epoch).rangesForNode(to);
-            KeyRanges extraRanges = executeRanges.difference(commitRanges);
+            KeyRanges coordinateRanges = coordinateTopology.rangesForNode(to);
+            KeyRanges executeRanges = topologies.computeRangesForNode(to);
+            KeyRanges extraRanges = executeRanges.difference(coordinateRanges);
             if (!extraRanges.isEmpty())
-                partialTxn = txn.slice(extraRanges, commitRanges.contains(route.homeKey));
+                partialTxn = txn.slice(extraRanges, coordinateRanges.contains(route.homeKey));
         }
 
         this.partialTxn = partialTxn;
@@ -69,10 +72,15 @@ public class Commit extends ReadData
     // TODO: do not commit if we're already ready to execute (requires extra info in Accept responses)
     public static void commitAndRead(Node node, Topologies executeTopologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Set<Id> readSet, Callback<ReadReply> callback)
     {
+        Topologies commitOnlyTopologies = executeTopologies;
+        if (txnId.epoch != executeAt.epoch)
+            commitOnlyTopologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch - 1);
+
+        Topology coordinateTopology = commitOnlyTopologies.forEpoch(txnId.epoch);
         for (Node.Id to : executeTopologies.nodes())
         {
             boolean read = readSet.contains(to);
-            Commit send = new Commit(Kind.Minimal, to, executeTopologies, txnId, txn, route, executeAt, deps, read);
+            Commit send = new Commit(Kind.Minimal, to, coordinateTopology, executeTopologies, txnId, txn, route, executeAt, deps, read);
             if (read) node.send(to, send, callback);
             else node.send(to, send);
         }
@@ -86,21 +94,23 @@ public class Commit extends ReadData
     public static void commit(Node node, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps)
     {
         Topologies commitTo = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch);
+        Topology coordinateTopology = commitTo.forEpoch(txnId.epoch);
         for (Node.Id to : commitTo.nodes())
         {
-            Commit send = new Commit(Kind.Minimal, to, commitTo, txnId, txn, route, executeAt, deps, false);
+            Commit send = new Commit(Kind.Minimal, to, coordinateTopology, commitTo, txnId, txn, route, executeAt, deps, false);
             node.send(to, send);
         }
     }
 
     public static void commit(Node node, Topologies commitTo, Set<Id> doNotCommitTo, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps)
     {
+        Topology coordinateTopology = commitTo.forEpoch(txnId.epoch);
         for (Node.Id to : commitTo.nodes())
         {
             if (doNotCommitTo.contains(to))
                 continue;
 
-            Commit send = new Commit(Kind.Minimal, to, commitTo, txnId, txn, route, executeAt, deps, false);
+            Commit send = new Commit(Kind.Minimal, to, coordinateTopology, commitTo, txnId, txn, route, executeAt, deps, false);
             node.send(to, send);
         }
     }

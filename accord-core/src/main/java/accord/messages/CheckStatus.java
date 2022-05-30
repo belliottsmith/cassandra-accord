@@ -259,12 +259,12 @@ public class CheckStatus implements Request
 
             CheckStatusOkFull fullMin = (CheckStatusOkFull) minSrc;
 
-            PartialTxn partialTxn = fullMax.partialTxn.with(fullMin.partialTxn);
+            PartialTxn partialTxn = PartialTxn.merge(fullMax.partialTxn, fullMin.partialTxn);
             PartialDeps committedDeps = null;
             if (fullMin.committedDeps != null) committedDeps = fullMax.committedDeps.with(fullMin.committedDeps);
             else if (fullMax.committedDeps != null) committedDeps = fullMax.committedDeps;
 
-            Status fullStatus = fullStatus(forKeys, max.status, partialTxn, committedDeps, writes, result);
+            Status fullStatus = forKeys == null ? max.status : fullStatus(forKeys, max.status, partialTxn, committedDeps, writes, result);
 
             return new CheckStatusOkFull(max.status, fullStatus, max.promised, max.accepted, fullMax.executeAt, max.isCoordinating, max.hasExecutedOnAllShards, max.route,
                                          max.homeKey, partialTxn, committedDeps, fullMax.writes, fullMax.result);
@@ -291,12 +291,13 @@ public class CheckStatus implements Request
                 case Applied:
                 case Executed:
                     if (writes != null && result != null
-                        && committedDeps != null && !committedDeps.covers(forKeys))
+                        && committedDeps != null && committedDeps.covers(forKeys)
+                        && partialTxn != null && partialTxn.covers(forKeys))
                         break;
                     return Committed;
                 case ReadyToExecute:
                 case Committed:
-                    if (committedDeps != null && !committedDeps.covers(forKeys)
+                    if (committedDeps != null && committedDeps.covers(forKeys)
                         && partialTxn != null && partialTxn.covers(forKeys))
                         break;
                     return PreAccepted;

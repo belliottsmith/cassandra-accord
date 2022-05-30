@@ -73,7 +73,7 @@ public class KeyRanges implements Iterable<KeyRange>
 
     public boolean containsAll(AbstractKeys<?, ?> keys)
     {
-        return keys.rangeFoldl(this, (from, to, v, p) -> v + (to - from), 0, 0, 0) == keys.size();
+        return keys.rangeFoldl(this, (from, to, p, v) -> v + (to - from), 0, 0, 0) == keys.size();
     }
 
     public int size()
@@ -254,7 +254,7 @@ public class KeyRanges implements Iterable<KeyRange>
     public boolean contains(KeyRanges that)
     {
         if (this.isEmpty()) return that.isEmpty();
-        if (that.isEmpty()) return false;
+        if (that.isEmpty()) return true;
 
         return ((int) supersetLinearMerge(this.ranges, that.ranges)) == that.size();
     }
