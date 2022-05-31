@@ -85,7 +85,7 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
             {
                 default: throw new AssertionError();
                 case NotWitnessed:
-                    Invalidate.invalidate(node, txnId, someKeys, homeKey)
+                    Invalidate.invalidateIfNotWitnessed(node, txnId, someKeys, homeKey)
                               .addCallback(this);
                     break;
                 case PreAccepted:

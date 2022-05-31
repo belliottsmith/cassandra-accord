@@ -18,6 +18,7 @@ import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
@@ -83,7 +84,8 @@ public class CheckOnCommitted extends CheckShards
         switch (full.fullStatus)
         {
             case Invalidated:
-                node.forEachLocal(someKeys, txnId.epoch, untilLocalEpoch, commandStore -> {
+                RoutingKeys keys = full.route != null ? full.route.union(someKeys) : someKeys;
+                node.forEachLocal(keys, txnId.epoch, untilLocalEpoch, commandStore -> {
                     Command command = commandStore.command(txnId);
                     command.commitInvalidate();
                 });
@@ -91,6 +93,7 @@ public class CheckOnCommitted extends CheckShards
             case PreAccepted:
             case Accepted:
             case AcceptedInvalidate:
+                callback.accept(full, null);
                 return;
         }
 

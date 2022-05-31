@@ -484,48 +484,50 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
             progress = Investigating;
 
-            // TODO: refactor to use FetchData
             // first make sure we have enough information to obtain the command locally
             long srcEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
             // TODO: compute fromEpoch, the epoch we already have this txn replicated until
-            long toEpoch = node.topology().epoch();
-            AbstractRoute route = AbstractRoute.merge(command.route(), someKeys instanceof AbstractRoute ? (AbstractRoute) someKeys : null);
-            KeyRanges ranges = node.topology().localRangesForEpochs(txnId.epoch, toEpoch);
-            if (route == null || !route.covers(ranges))
-            {
-                Status blockedOn = this.blockedOn;
-                BiConsumer<FindRoute.Result, Throwable> foundRoute = (findRoute, fail) -> {
-                    if (progress == Investigating && blockedOn == this.blockedOn)
-                    {
-                        progress = Expected;
-                        if (findRoute != null && !(someKeys instanceof Route))
-                            someKeys = findRoute.route;
-                        if (findRoute == null && fail == null)
-                            invalidate(node, command);
-                    }
-                };
+            long toEpoch = Math.max(srcEpoch, node.topology().epoch());
+            node.withEpoch(srcEpoch, () -> {
 
-                if (command.homeKey() != null)
+                // first check we have enough routing information for the ranges we own; if not, fetch it
+                AbstractRoute route = AbstractRoute.merge(command.route(), someKeys instanceof AbstractRoute ? (AbstractRoute) someKeys : null);
+                KeyRanges ranges = node.topology().localRangesForEpochs(txnId.epoch, toEpoch);
+                if (route == null || !route.covers(ranges))
                 {
-                    debugInvestigating = FindRoute.findRoute(node, txnId, command.homeKey(), foundRoute);
-                }
-                else
-                {
-                    debugInvestigating = FindHomeKey.findHomeKey(node, txnId, someKeys, (homeKey, fail) -> {
+                    Status blockedOn = this.blockedOn;
+                    BiConsumer<FindRoute.Result, Throwable> foundRoute = (findRoute, fail) -> {
                         if (progress == Investigating && blockedOn == this.blockedOn)
                         {
-                            if (fail != null) progress = Expected;
-                            else if (homeKey != null) FindRoute.findRoute(node, txnId, homeKey, foundRoute);
-                            else invalidate(node, command);
+                            progress = Expected;
+                            if (findRoute != null && !(someKeys instanceof Route))
+                                someKeys = findRoute.route;
+                            if (findRoute == null && fail == null)
+                                invalidate(node, command);
                         }
-                    });
+                    };
+
+                    if (command.homeKey() != null)
+                    {
+                        debugInvestigating = FindRoute.findRoute(node, txnId, command.homeKey(), foundRoute);
+                    }
+                    else
+                    {
+                        debugInvestigating = FindHomeKey.findHomeKey(node, txnId, someKeys, (homeKey, fail) -> {
+                            if (progress == Investigating && blockedOn == this.blockedOn)
+                            {
+                                if (fail != null) progress = Expected;
+                                else if (homeKey != null) FindRoute.findRoute(node, txnId, homeKey, foundRoute);
+                                else invalidate(node, command);
+                            }
+                        });
+                    }
+                    return;
                 }
-                return;
-            }
-            // check status with the only keys we know, if any, then:
-            // 1. if we cannot find any primary record of the transaction, then it cannot be a dependency so record this fact
-            // 2. otherwise record the homeKey for future reference and set the status based on whether progress has been made
-            node.withEpoch(srcEpoch, () -> {
+
+                // check status with the only keys we know, if any, then:
+                // 1. if we cannot find any primary record of the transaction, then it cannot be a dependency so record this fact
+                // 2. otherwise record the homeKey for future reference and set the status based on whether progress has been made
                 BiConsumer<CheckStatusOkFull, Throwable> callback = (success, fail) -> {
                     if (progress != Investigating)
                         return;
@@ -534,7 +536,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     if (fail != null)
                         return;
 
-                    switch (success.status)
+                    switch (success.fullStatus)
                     {
                         default:
                         case NotWitnessed:

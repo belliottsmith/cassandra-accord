@@ -17,6 +17,7 @@ import accord.messages.BeginInvalidation.InvalidateNack;
 import accord.messages.BeginInvalidation.InvalidateOk;
 import accord.messages.BeginInvalidation.InvalidateReply;
 import accord.messages.Callback;
+import accord.messages.PreAccept;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.topology.Shard;
@@ -25,6 +26,8 @@ import accord.primitives.TxnId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
+import static accord.local.Status.Committed;
+import static accord.local.Status.PreAccepted;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 
 // TODO (now): switch to callback like others
@@ -35,11 +38,12 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
     final TxnId txnId;
     final RoutingKeys someKeys;
     final RoutingKey someKey;
+    final Status recoverIfAtLeast;
 
     final List<InvalidateOk> invalidateOks = new ArrayList<>();
     final QuorumShardTracker preacceptTracker;
 
-    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey)
+    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, Status recoverIfAtLeast)
     {
         Preconditions.checkArgument(someKeys.contains(someKey));
         this.node = node;
@@ -47,14 +51,25 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
         this.txnId = txnId;
         this.someKeys = someKeys;
         this.someKey = someKey;
+        this.recoverIfAtLeast = recoverIfAtLeast;
         this.preacceptTracker = new QuorumShardTracker(shard);
+    }
+
+    public static Invalidate invalidateIfNotWitnessed(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey)
+    {
+        return invalidate(node, txnId, someKeys, someKey, PreAccepted);
     }
 
     public static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey)
     {
+        return invalidate(node, txnId, someKeys, someKey, Committed);
+    }
+
+    private static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, Status recoverIfAtLeast)
+    {
         Ballot ballot = new Ballot(node.uniqueNow());
         Shard shard = node.topology().forEpochIfKnown(someKey, txnId.epoch);
-        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKeys, someKey);
+        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKeys, someKey, recoverIfAtLeast);
         node.send(shard.nodes, to -> new BeginInvalidation(txnId, someKey, ballot), invalidate);
         return invalidate;
     }
@@ -96,6 +111,9 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
                 break;
             case PreAccepted:
             case Accepted:
+                if (recoverIfAtLeast.compareTo(maxStatus) > 0)
+                    break;
+
             case Committed:
             case ReadyToExecute:
             case Executed:

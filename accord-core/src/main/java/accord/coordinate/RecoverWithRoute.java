@@ -20,6 +20,7 @@ import accord.topology.Topologies;
 
 import static accord.coordinate.Recover.Outcome.Executed;
 import static accord.coordinate.Recover.Outcome.Invalidated;
+import static accord.local.Status.Committed;
 
 public class RecoverWithRoute extends CheckShards
 {

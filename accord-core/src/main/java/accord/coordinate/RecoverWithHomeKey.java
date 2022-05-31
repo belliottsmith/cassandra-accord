@@ -5,11 +5,14 @@ import java.util.function.BiConsumer;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
+
+import static accord.local.Status.Committed;
 
 /**
  * A result of null indicates the transaction is globally persistent
