@@ -28,7 +28,7 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
     final long untilRemoteEpoch;
     final IncludeInfo includeInfo;
 
-    CheckStatusOk merged;
+    protected CheckStatusOk merged;
 
     protected CheckShards(Node node, TxnId txnId, RoutingKeys someKeys, long untilRemoteEpoch, IncludeInfo includeInfo)
     {

@@ -43,6 +43,8 @@ public class ListRequest implements Request
         protected void onDone(Done done, Throwable failure)
         {
             super.onDone(done, failure);
+            if (failure != null) callback.accept(null, failure);
+            else callback.accept(merged, null);
         }
 
         @Override
