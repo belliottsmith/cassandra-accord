@@ -37,6 +37,13 @@ public class ReadTracker<T extends ReadShardTracker> extends AbstractResponseTra
             ++inflight;
         }
 
+        // TODO: this is clunky, restructure the tracker to handle this more cleanly
+        // record a node as contacted, even though it isn't
+        public void recordContacted(Id node)
+        {
+            ++contacted;
+        }
+
         public void recordSlowRead(Id node)
         {
             ++slow;
@@ -105,13 +112,18 @@ public class ReadTracker<T extends ReadShardTracker> extends AbstractResponseTra
         forEachTrackerForNode(node, ReadShardTracker::recordInflightRead);
     }
 
+    @VisibleForTesting
+    private void recordContacted(Id node)
+    {
+        forEachTrackerForNode(node, ReadShardTracker::recordContacted);
+    }
+
     public void recordSlowRead(Id node)
     {
         if (slow == null)
-        {
             slow = Sets.newHashSetWithExpectedSize(trackerCount());
-        }
-        else if (slow.add(node))
+
+        if (slow.add(node))
         {
             forEachTrackerForNode(node, ReadShardTracker::recordSlowRead);
         }
@@ -197,7 +209,11 @@ public class ReadTracker<T extends ReadShardTracker> extends AbstractResponseTra
         while (!toRead.isEmpty())
         {
             if (candidates.isEmpty())
+            {
+                if (!nodes.isEmpty())
+                    nodes.forEach(this::recordContacted);
                 return null;
+            }
 
             // TODO: Topology needs concept of locality/distance
             candidates.sort((a, b) -> compareIntersections(a, b, toRead));
@@ -205,10 +221,13 @@ public class ReadTracker<T extends ReadShardTracker> extends AbstractResponseTra
             int i = candidates.size() - 1;
             Id node = candidates.get(i);
             nodes.add(node);
-            recordInflightRead(node);
             candidates.remove(i);
             forEachTrackerForNode(node, (tracker, ignore) -> toRead.remove(tracker));
         }
+
+        // must recordInFlightRead after loop, as we might return null if the reads are insufficient to make progress
+        // but in this case we need the tracker to
+        nodes.forEach(this::recordInflightRead);
 
         return nodes;
     }

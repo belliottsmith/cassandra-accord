@@ -4,8 +4,8 @@ public enum Status
 {
     NotWitnessed(0),
     PreAccepted(10),
-    Accepted(20),
     AcceptedInvalidate(20),
+    Accepted(20),
     Committed(30),
     ReadyToExecute(30),
     Executed(50),

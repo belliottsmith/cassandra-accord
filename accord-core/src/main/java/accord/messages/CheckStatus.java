@@ -260,9 +260,10 @@ public class CheckStatus implements Request
             CheckStatusOkFull fullMin = (CheckStatusOkFull) minSrc;
 
             PartialTxn partialTxn = PartialTxn.merge(fullMax.partialTxn, fullMin.partialTxn);
-            PartialDeps committedDeps = null;
-            if (fullMin.committedDeps != null) committedDeps = fullMax.committedDeps.with(fullMin.committedDeps);
-            else if (fullMax.committedDeps != null) committedDeps = fullMax.committedDeps;
+            PartialDeps committedDeps;
+            if (fullMax.committedDeps == null) committedDeps = fullMin.committedDeps;
+            else if (fullMin.committedDeps == null) committedDeps = fullMax.committedDeps;
+            else committedDeps = fullMax.committedDeps.with(fullMin.committedDeps);
 
             Status fullStatus = forKeys == null ? max.status : fullStatus(forKeys, max.status, partialTxn, committedDeps, writes, result);
 
