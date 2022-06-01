@@ -9,6 +9,8 @@ import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.primitives.AbstractRoute;
+import accord.primitives.PartialRoute;
+import accord.primitives.PartialTxn;
 import accord.primitives.TxnId;
 
 import static accord.local.Status.Committed;
@@ -52,8 +54,12 @@ public class CheckOnUncommitted extends CheckOnCommitted
             case Accepted:
             case PreAccepted:
                 RoutingKey progressKey = node.trySelectProgressKey(txnId, full.route);
-                node.forEachLocal(someKeys, txnId, (full.executeAt == null ? txnId : full.executeAt), commandStore -> {
-                    commandStore.command(txnId).preaccept(full.partialTxn, full.route, progressKey);
+                long untilEpoch = (full.executeAt == null ? txnId : full.executeAt).epoch;
+                AbstractRoute fullRoute = AbstractRoute.merge(route(), full.route);
+                PartialRoute route = fullRoute.slice(node.topology().localRangesForEpochs(txnId.epoch, untilEpoch));
+                PartialTxn partialTxn = full.partialTxn.reconstitutePartial(route);
+                node.forEachLocal(someKeys, txnId.epoch, untilEpoch, commandStore -> {
+                    commandStore.command(txnId).preaccept(partialTxn, fullRoute, progressKey);
                 });
                 break;
             case Executed:

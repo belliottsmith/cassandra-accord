@@ -201,8 +201,16 @@ public class Command implements Listener, Consumer<Listener>
 
     private AcceptOutcome preacceptInternal(PartialTxn partialTxn, AbstractRoute route, @Nullable RoutingKey progressKey)
     {
-        if (hasBeen(PreAccepted))
+        if (executeAt != null)
             return AcceptOutcome.Redundant;
+
+        switch (status)
+        {
+            default: throw new IllegalStateException();
+            case NotWitnessed:
+            case AcceptedInvalidate:
+            case Invalidated:
+        }
 
         KeyRanges coordinateRanges = coordinateRanges();
         ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
@@ -215,8 +223,10 @@ public class Command implements Listener, Consumer<Listener>
         //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
         this.executeAt = txnId.compareTo(max) > 0 && txnId.epoch >= commandStore.latestEpoch()
                          ? txnId : commandStore.uniqueNow(max);
+
         set(KeyRanges.EMPTY, coordinateRanges, shard, route, partialTxn, Set, null, Ignore);
-        this.status = PreAccepted;
+        if (status == NotWitnessed)
+            this.status = PreAccepted;
 
         this.commandStore.progressLog().preaccept(txnId, shard);
         this.listeners.forEach(this);
@@ -417,7 +427,7 @@ public class Command implements Listener, Consumer<Listener>
         if (this.promised.compareTo(ballot) > 0)
             return AcceptOutcome.RejectedBallot;
 
-        if (status == NotWitnessed)
+        if (executeAt == null)
         {
             switch (preacceptInternal(txn, route, progressKey))
             {

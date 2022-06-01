@@ -65,7 +65,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 {
     enum Progress
     {
-        NoneExpected, Expected, NoProgress, Investigating, Done; // TODO: done is a redundant state (vs NoneExpected)
+        NoneExpected, Expected, NoProgress, Investigating, Done;
 
         static Progress advance(Progress current)
         {

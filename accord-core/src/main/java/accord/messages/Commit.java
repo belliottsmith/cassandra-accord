@@ -168,7 +168,15 @@ public class Commit extends ReadData
     {
         public static void commitInvalidate(Node node, TxnId txnId, RoutingKeys someKeys, Timestamp until)
         {
-            Topologies commitTo = node.topology().forEpochRange(someKeys, txnId.epoch, until.epoch);
+            commitInvalidate(node, txnId, someKeys, until.epoch);
+        }
+
+        public static void commitInvalidate(Node node, TxnId txnId, RoutingKeys someKeys, long untilEpoch)
+        {
+            // TODO: this kind of check needs to be inserted in all equivalent methods
+            Preconditions.checkState(untilEpoch >= txnId.epoch);
+            Preconditions.checkState(node.topology().hasEpoch(untilEpoch));
+            Topologies commitTo = node.topology().forEpochRange(someKeys, txnId.epoch, untilEpoch);
             commitInvalidate(node, commitTo, txnId, someKeys);
         }
 

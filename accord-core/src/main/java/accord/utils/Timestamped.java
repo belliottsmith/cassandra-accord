@@ -17,4 +17,10 @@ public class Timestamped<T>
     {
         return a.timestamp.compareTo(b.timestamp) >= 0 ? a : b;
     }
+
+    @Override
+    public String toString()
+    {
+        return data.toString();
+    }
 }

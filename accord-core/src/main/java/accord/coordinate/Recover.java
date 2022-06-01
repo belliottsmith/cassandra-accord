@@ -6,10 +6,14 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.Result;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.QuorumTracker;
+import accord.primitives.KeyRanges;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialTxn;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.topology.Shard;
@@ -239,13 +243,17 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     return;
                 case Committed:
                 case ReadyToExecute:
-                    Execute.execute(node, txnId, txn, route, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
+                {
+                    Execute.execute(node, txnId, txn, route, acceptOrCommit.executeAt, assembleDeps(), this);
                     return;
+                }
                 case Executed:
                 case Applied:
+                {
                     Persist.persistAndCommit(node, txnId, route, txn, acceptOrCommit.executeAt, assembleDeps(), acceptOrCommit.writes, acceptOrCommit.result);
                     accept(acceptOrCommit.result, null);
                     return;
+                }
                 case Invalidated:
                     Timestamp invalidateUntil = recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max);
                     node.withEpoch(invalidateUntil.epoch, () -> {
@@ -295,13 +303,16 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private Deps assembleDeps()
     {
-        PartialDeps partialDeps = null;
-        for (RecoverOk ok : recoverOks)
-        {
-            if (partialDeps == null) partialDeps = ok.deps;
-            else if (ok.deps != null) partialDeps = partialDeps.with(ok.deps);
-        }
-        return partialDeps.reconstitute(route);
+        Preconditions.checkState(recoverOks.stream().map(r -> r.deps.covering).reduce(KeyRanges::union).get().containsAll(route));
+        Deps deps = Deps.merge(txn.keys, recoverOks, r -> r.deps);
+        return deps;
+//        PartialDeps partialDeps = null;
+//        for (RecoverOk ok : recoverOks)
+//        {
+//            if (partialDeps == null) partialDeps = ok.deps;
+//            else if (ok.deps != null) partialDeps = partialDeps.with(ok.deps);
+//        }
+//        return partialDeps.reconstitute(route);
     }
 
     private void retry()

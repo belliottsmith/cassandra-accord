@@ -100,7 +100,7 @@ public class CheckStatus implements Request
         public final Status status;
         public final Ballot promised;
         public final Ballot accepted;
-        public final Timestamp executeAt;
+        public final @Nullable Timestamp executeAt; // not set if invalidating or invalidated
         public final boolean isCoordinating;
         public final boolean hasExecutedOnAllShards;
         public final @Nullable AbstractRoute route;
@@ -112,7 +112,7 @@ public class CheckStatus implements Request
                  node.isCoordinating(command.txnId(), command.promised()), command.isGloballyPersistent(), command.route(), command.homeKey());
         }
 
-        CheckStatusOk(Status status, Ballot promised, Ballot accepted, Timestamp executeAt,
+        CheckStatusOk(Status status, Ballot promised, Ballot accepted, @Nullable Timestamp executeAt,
                       boolean isCoordinating, boolean hasExecutedOnAllShards,
                       @Nullable AbstractRoute route, @Nullable RoutingKey homeKey)
         {

@@ -200,7 +200,6 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
     }
 
-    // TODO (now): filter out keys with no txnId
     public static <T> Deps merge(Keys keys, List<T> merge, Function<T, Deps> getter)
     {
         // collect non-empty inputs

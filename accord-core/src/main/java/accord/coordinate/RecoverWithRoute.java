@@ -3,6 +3,8 @@ package accord.coordinate;
 import java.util.Set;
 import java.util.function.BiConsumer;
 
+import com.google.common.base.Preconditions;
+
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
@@ -117,6 +119,7 @@ public class RecoverWithRoute extends CheckShards
             case Executed:
             case Applied:
             {
+                assert merged.executeAt != null;
                 // TODO: we might not be able to reconstitute Txn if we have GC'd on some shards
                 Txn txn = merged.partialTxn.reconstitute(route);
                 if (merged.committedDeps.covers(route))
@@ -131,7 +134,8 @@ public class RecoverWithRoute extends CheckShards
             }
             case Invalidated:
             {
-                Commit.Invalidate.commitInvalidate(node, txnId, route, merged.executeAt);
+                long untilEpoch = node.topology().epoch();
+                Commit.Invalidate.commitInvalidate(node, txnId, route, untilEpoch);
                 callback.accept(Invalidated, null);
             }
         }

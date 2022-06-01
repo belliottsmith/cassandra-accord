@@ -69,9 +69,9 @@ public class Txn
     public Writes execute(Timestamp executeAt, Data data)
     {
         if (update == null)
-            return new Writes(executeAt, keys, null);
+            return new Writes(executeAt, Keys.EMPTY, null);
 
-        return new Writes(executeAt, keys, update.apply(data));
+        return new Writes(executeAt, update.keys(), update.apply(data));
     }
 
     public Keys keys()
