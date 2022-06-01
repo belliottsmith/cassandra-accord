@@ -305,10 +305,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                         MergeStream stream = streams[streamIndex];
                         int index = ++stream.index;
                         if (index == stream.endIndex)
-                        {
-                            stream.endIndex = stream.input[++stream.keyIndex];
                             return Integer.MIN_VALUE;
-                        }
                         return remap(stream.input[index], stream.remap);
                     });
                 }
@@ -336,7 +333,8 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             result[keyIndex++] = resultIndex;
             keyHeapSize = InlineHeap.advance(keyHeap, keyHeapSize, streamIndex -> {
                 MergeStream stream = streams[streamIndex];
-                // keyIndex should already have been advanced by the txnId copying
+                while (stream.index == stream.endIndex && stream.keyIndex < stream.keyCount)
+                    stream.endIndex = stream.input[++stream.keyIndex];
                 return stream.keyIndex == stream.keyCount
                        ? Integer.MIN_VALUE
                        : remap(stream.keyIndex, stream.keys);
@@ -365,6 +363,8 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         this.txnIds = txnIds;
         this.keyToTxnId = keyToTxnId;
         Preconditions.checkState(keys.isEmpty() || keyToTxnId[keys.size() - 1] == keyToTxnId.length);
+        if (!checkValid())
+            throw new AssertionError();
     }
 
     // TODO: offer option of computing the maximal KeyRanges that covers the same set of keys as covered by the parameter
