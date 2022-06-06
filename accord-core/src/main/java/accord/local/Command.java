@@ -46,6 +46,7 @@ import static accord.local.Status.ReadyToExecute;
 public class Command implements Listener, Consumer<Listener>
 {
     public final CommandStore commandStore;
+
     private final TxnId txnId;
 
     /**
@@ -121,6 +122,8 @@ public class Command implements Listener, Consumer<Listener>
     public void saveRoute(Route route)
     {
         this.route = route;
+        updateHomeKey(route.homeKey);
+        // TODO (now): always set progress key
     }
 
     public Ballot promised()
@@ -445,80 +448,6 @@ public class Command implements Listener, Consumer<Listener>
         return AcceptOutcome.Success;
     }
 
-//    enum PropagateOutcome { Success, Insufficient, Require }
-//
-//    public boolean propagate(long epoch, CheckStatusOkFull full)
-//    {
-//        KeyRanges prev = commandStore.ranges().between(txnId.epoch, Math.max(txnId.epoch, epoch - 1));
-//        KeyRanges cur = commandStore.ranges().at(epoch);
-//        switch (full.status)
-//        {
-//            default:
-//                throw new IllegalStateException();
-//            case NotWitnessed:
-//                return true;
-//            case AcceptedInvalidate:
-//                if (full.homeKey == null)
-//                    return true;
-//            case PreAccepted:
-//            case Accepted:
-//                if (hasBeen(PreAccepted))
-//                    return true;
-//
-//                if (!prev.isEmpty())
-//                    return false;
-//
-//                validate(prev, cur, No, full.route, full.partialTxn, Add, null, Ignore);
-//                return true;
-//            case Committed:
-//            case ReadyToExecute:
-//            case Executed:
-//            case Applied:
-//                Status newStatus = full.status.compareTo(Executed) >= 0 ? Executed : Committed;
-//                if (this.status.compareTo(newStatus) >= 0)
-//                    return true;
-//                validate(prev, cur, No, full.route, full.partialTxn, Add, full.committedDeps, Add);
-//                this.executeAt = full.executeAt;
-//                this.writes = full.writes;
-//                this.result = full.result;
-//                set(prev, cur, No, full.route, full.partialTxn, Add, full.committedDeps, Add);
-//                if (!hasBeen(Committed))
-//                    populateWaitingOn();
-//                this.status = newStatus;
-//                maybeExecute(No, false);
-//                listeners.forEach(this);
-//                return true;
-//            case Invalidated:
-//                commitInvalidate();
-//                return true;
-//        }
-//    }
-//    public void propagate(long epoch, Status status, AbstractRoute route, PartialTxn partialTxn, PartialDeps partialDeps, RoutingKey progressKey, Timestamp executeAt, Writes writes, Result result)
-//    {
-//        switch (status)
-//        {
-//            case AcceptedInvalidate:
-//                if (partialTxn == null)
-//                    break;
-//            case PreAccepted:
-//            case Accepted:
-//                commandStore.command(txnId).preaccept(partialTxn, route, progressKey);
-//                break;
-//            case Committed:
-//            case ReadyToExecute:
-//                commandStore.command(txnId).commit(route, progressKey, partialTxn, executeAt, partialDeps);
-//                break;
-//            case Executed:
-//            case Applied:
-//                commandStore.command(txnId).apply(epoch, route, executeAt, partialDeps, writes, result);
-//                break;
-//            case Invalidated:
-//                commandStore.command(txnId).commitInvalidate();
-//            default:
-//                throw new IllegalStateException();
-//        }
-//    }
-
     public boolean addListener(Listener listener)
     {
         return listeners.add(listener);
@@ -587,7 +516,6 @@ public class Command implements Listener, Consumer<Listener>
             case Committed:
                 // TODO: maintain distinct ReadyToRead and ReadyToWrite states
                 status = ReadyToExecute;
-                boolean isProgressShard = progressKey != null && owns(txnId.epoch, progressKey);
                 commandStore.progressLog().readyToExecute(txnId, shard);
                 if (notifyListeners)
                     listeners.forEach(this);
@@ -687,8 +615,13 @@ public class Command implements Listener, Consumer<Listener>
 
     private ProgressShard progressShard(AbstractRoute route, @Nullable RoutingKey progressKey, KeyRanges coordinateRanges)
     {
-        if (progressKey == null)
+        if (progressKey == null || progressKey == NO_PROGRESS_KEY)
+        {
+            if (this.progressKey == null)
+                this.progressKey = NO_PROGRESS_KEY;
+
             return No;
+        }
 
         if (this.progressKey == null) this.progressKey = progressKey;
         else if (!this.progressKey.equals(progressKey)) throw new AssertionError();
@@ -705,7 +638,10 @@ public class Command implements Listener, Consumer<Listener>
 
     private ProgressShard progressShard(AbstractRoute route, KeyRanges coordinateRanges)
     {
-        if (partialTxn == null && !is(Accepted))
+//        if (partialTxn == null && !is(Accepted))
+//            return Unsure;
+//
+        if (progressKey == null)
             return Unsure;
 
         return progressShard(route, progressKey, coordinateRanges);
@@ -715,6 +651,9 @@ public class Command implements Listener, Consumer<Listener>
     {
         if (progressKey == null)
             return Unsure;
+
+        if (progressKey == NO_PROGRESS_KEY)
+            return No;
 
         KeyRanges coordinateRanges = commandStore.ranges().at(txnId.epoch);
         if (!coordinateRanges.contains(progressKey))
@@ -801,6 +740,7 @@ public class Command implements Listener, Consumer<Listener>
                      @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
                      @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
     {
+        Preconditions.checkState(progressKey != null);
         KeyRanges allRanges = existingRanges.union(additionalRanges);
 
         if (shard.isProgress()) this.route = AbstractRoute.merge(this.route, route);
@@ -949,18 +889,6 @@ public class Command implements Listener, Consumer<Listener>
         return null;
     }
 
-    /**
-     * A key nominated to be the primary shard within this node for managing progress of the command.
-     * It is nominated only as of txnId.epoch, and may be null (indicating that this node does not monitor
-     * the progress of this command).
-     *
-     * Preferentially, this is homeKey on nodes that replicate it, and otherwise any key that is replicated, as of txnId.epoch
-     */
-    public RoutingKey progressKey()
-    {
-        return progressKey;
-    }
-
     // does this specific Command instance execute (i.e. does it lose ownership post Commit)
     public boolean executes()
     {
@@ -1038,4 +966,19 @@ public class Command implements Listener, Consumer<Listener>
     {
         return txn != null && txn.query != null;
     }
+
+    private static final RoutingKey NO_PROGRESS_KEY = new RoutingKey()
+    {
+        @Override
+        public int routingHash()
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int compareTo(RoutingKey ignore)
+        {
+            throw new UnsupportedOperationException();
+        }
+    };
 }

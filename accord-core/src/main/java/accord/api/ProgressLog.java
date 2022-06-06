@@ -64,6 +64,7 @@ public interface ProgressLog
 
         /* Designated Home (Global Progress) Shard (if local node is a replica of home key on coordination epoch) */
         Home;
+
         public boolean isHome() { return this == Home; }
         public boolean isProgress() { return this.compareTo(Local) >= 0; }
     }
