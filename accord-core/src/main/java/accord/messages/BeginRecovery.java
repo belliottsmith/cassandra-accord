@@ -125,20 +125,23 @@ public class BeginRecovery extends TxnRequest
             RecoverOk ok2 = (RecoverOk) r2;
 
             // set ok1 to the most recent of the two
-            if (ok1.status.compareTo(ok2.status) < 0) { RecoverOk tmp = ok1; ok1 = ok2; ok2 = tmp; }
+            if (ok1.status.compareTo(ok2.status) < 0 || (ok1.status == ok2.status && ok1.accepted.compareTo(ok2.accepted) < 0))
+            {
+                RecoverOk tmp = ok1;
+                ok1 = ok2;
+                ok2 = tmp;
+            }
             if (!ok1.status.hasBeen(PreAccepted)) throw new IllegalStateException();
 
             PartialDeps deps = ok1.deps.with(ok2.deps);
             Deps earlierCommittedWitness = ok1.earlierCommittedWitness.with(ok2.earlierCommittedWitness);
             Deps earlierAcceptedNoWitness = ok1.earlierAcceptedNoWitness.with(ok2.earlierAcceptedNoWitness)
                                                                         .without(earlierCommittedWitness::contains);
+            Timestamp timestamp = ok1.status == PreAccepted ? Timestamp.max(ok1.executeAt, ok2.executeAt) : ok1.executeAt;
+
             return new RecoverOk(
-                    txnId, ok1.status,
-                    Ballot.max(ok1.accepted, ok2.accepted),
-                    Timestamp.max(ok1.executeAt, ok2.executeAt),
-                    deps,
-                    earlierCommittedWitness,
-                    earlierAcceptedNoWitness,
+                    txnId, ok1.status, Ballot.max(ok1.accepted, ok2.accepted), timestamp, deps,
+                    earlierCommittedWitness, earlierAcceptedNoWitness,
                     ok1.rejectsFastPath | ok2.rejectsFastPath,
                     ok1.writes, ok1.result);
         });
