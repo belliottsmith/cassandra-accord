@@ -546,7 +546,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                         if (nextLeft < nextRight)
                         {
-                            out = copy(right, o, left.length + right.length - r);
+                            out = copy(right, o, right.length + left.length - l);
                             break noOp;
                         }
                         else if (nextRight < nextLeft)
@@ -564,13 +564,13 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                     if (l < left[lk])
                     {
-                        out = copy(right, o, left.length + right.length - r);
+                        out = copy(right, o, right.length + left.length - l);
+                        break;
                     }
                     else if (r < right[rk])
                     {
                         o += right[rk] - r;
                         r = right[rk];
-                        break;
                     }
 
                     assert o == r && ok == rk && right[ok] == o;
