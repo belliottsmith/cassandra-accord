@@ -9,6 +9,7 @@ import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.primitives.AbstractRoute;
+import accord.primitives.KeyRanges;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.TxnId;
@@ -43,7 +44,7 @@ public class CheckOnUncommitted extends CheckOnCommitted
     }
 
     @Override
-    void onSuccessCriteriaOrExhaustion(CheckStatusOkFull full)
+    void persistLocally(CheckStatusOkFull full)
     {
         switch (full.fullStatus)
         {
@@ -53,12 +54,24 @@ public class CheckOnUncommitted extends CheckOnCommitted
             case AcceptedInvalidate:
             case Accepted:
             case PreAccepted:
-                RoutingKey progressKey = node.trySelectProgressKey(txnId, full.route);
-                long untilEpoch = (full.executeAt == null ? txnId : full.executeAt).epoch;
+                KeyRanges localRanges = node.topology().localRangesForEpochs(txnId.epoch, untilLocalEpoch);
+                if (!route().covers(localRanges))
+                {
+//                    if (full.homeKey != null)
+//                    {
+//                        node.forEachLocal(route(), txnId.epoch, untilLocalEpoch, commandStore -> {
+//                            commandStore.command(txnId).updateHomeKey(full.homeKey);
+//                        });
+//                    }
+                    break;
+                }
+
+                KeyRanges localCommitRanges = node.topology().localRangesForEpoch(txnId.epoch);
+                RoutingKey progressKey = node.trySelectProgressKey(txnId, route().slice(localCommitRanges));
                 AbstractRoute fullRoute = AbstractRoute.merge(route(), full.route);
-                PartialRoute route = fullRoute.slice(node.topology().localRangesForEpochs(txnId.epoch, untilEpoch));
+                PartialRoute route = fullRoute.sliceStrict(localRanges);
                 PartialTxn partialTxn = full.partialTxn.reconstitutePartial(route);
-                node.forEachLocal(someKeys, txnId.epoch, untilEpoch, commandStore -> {
+                node.forEachLocal(someKeys, txnId.epoch, untilLocalEpoch, commandStore -> {
                     commandStore.command(txnId).preaccept(partialTxn, fullRoute, progressKey);
                 });
                 break;
@@ -66,14 +79,8 @@ public class CheckOnUncommitted extends CheckOnCommitted
             case Applied:
             case Committed:
             case ReadyToExecute:
-                super.onSuccessCriteriaOrExhaustion(full);
-                break;
             case Invalidated:
-                node.forEachLocalSince(someKeys, txnId.epoch, commandStore -> {
-                    Command command = commandStore.ifPresent(txnId);
-                    if (command != null)
-                        command.commitInvalidate();
-                });
+                super.persistLocally(full);
         }
     }
 }

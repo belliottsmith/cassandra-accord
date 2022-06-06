@@ -82,6 +82,8 @@ public class RecoverWithRoute extends CheckShards
     @Override
     protected void onDone(Done done, Throwable failure)
     {
+        super.onDone(done, failure);
+
         if (failure != null)
         {
             callback.accept(null, failure);
@@ -89,7 +91,7 @@ public class RecoverWithRoute extends CheckShards
         }
 
         CheckStatusOkFull merged = (CheckStatusOkFull) this.merged;
-        switch (merged.status)
+        switch (merged.fullStatus)
         {
             case NotWitnessed:
             {
@@ -100,15 +102,6 @@ public class RecoverWithRoute extends CheckShards
             case PreAccepted:
             case Accepted:
             case AcceptedInvalidate:
-            {
-                if (!merged.partialTxn.covers(route))
-                {
-                    // could not assemble the full transaction, so invalidate
-                    Invalidate.invalidate(node, txnId, route, route.homeKey)
-                              .addCallback(callback);
-                    break;
-                }
-            }
             case Committed:
             case ReadyToExecute:
             {

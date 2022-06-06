@@ -37,32 +37,34 @@ public class CheckStatus implements Request
 
     final TxnId txnId;
     final RoutingKeys someKeys;
-    final long epoch;
+    final long startEpoch;
+    final long endEpoch;
     final IncludeInfo includeInfo;
 
-    public CheckStatus(TxnId txnId, RoutingKeys someKeys, long epoch, IncludeInfo includeInfo)
+    public CheckStatus(TxnId txnId, RoutingKeys someKeys, long startEpoch, long endEpoch, IncludeInfo includeInfo)
     {
         this.txnId = txnId;
         this.someKeys = someKeys;
-        this.epoch = epoch;
+        this.startEpoch = startEpoch;
+        this.endEpoch = endEpoch;
         this.includeInfo = includeInfo;
     }
 
     public CheckStatus(Id to, Topologies topologies, TxnId txnId, RoutingKeys someKeys, IncludeInfo includeInfo)
     {
-        Preconditions.checkState(topologies.currentEpoch() == topologies.oldestEpoch());
         this.txnId = txnId;
         if (someKeys instanceof AbstractRoute)
             this.someKeys = computeScope(to, topologies, (AbstractRoute) someKeys, 0, AbstractRoute::sliceStrict, PartialRoute::union);
         else
             this.someKeys = computeScope(to, topologies, someKeys, 0, RoutingKeys::slice, RoutingKeys::union);
-        this.epoch = topologies.currentEpoch();
+        this.startEpoch = topologies.oldestEpoch();
+        this.endEpoch = topologies.currentEpoch();
         this.includeInfo = includeInfo;
     }
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        CheckStatusOk ok = node.mapReduceLocal(someKeys, epoch, instance -> {
+        CheckStatusOk ok = node.mapReduceLocal(someKeys, startEpoch, endEpoch, instance -> {
             Command command = instance.command(txnId);
             switch (includeInfo)
             {
@@ -243,8 +245,6 @@ public class CheckStatus implements Request
         public CheckStatusOk merge(CheckStatusOk that, @Nullable AbstractKeys<?, ?> forKeys)
         {
             CheckStatusOk max = super.merge(that);
-            if (this == max || that == max) return max;
-
             CheckStatusOk maxSrc = this.status.compareTo(that.status) >= 0 ? this : that;
             if (!(maxSrc instanceof CheckStatusOkFull))
                 return max;
@@ -284,6 +284,7 @@ public class CheckStatus implements Request
 
         private static Status fullStatus(AbstractKeys<?, ?> forKeys, Status maxStatus, PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, Result result)
         {
+            Status status = maxStatus;
             switch (maxStatus)
             {
                 default: throw new IllegalStateException();
@@ -295,23 +296,23 @@ public class CheckStatus implements Request
                         && committedDeps != null && committedDeps.covers(forKeys)
                         && partialTxn != null && partialTxn.covers(forKeys))
                         break;
-                    return Committed;
+                    status = Committed;
                 case ReadyToExecute:
                 case Committed:
                     if (committedDeps != null && committedDeps.covers(forKeys)
                         && partialTxn != null && partialTxn.covers(forKeys))
                         break;
-                    return PreAccepted;
+                    status = PreAccepted;
                 case Accepted:
                 case AcceptedInvalidate:
                 case PreAccepted:
                     if (partialTxn != null && partialTxn.covers(forKeys))
                         break;
                     // TODO (now): we should test Route presence here
-                    return NotWitnessed;
+                    status = NotWitnessed;
                 case NotWitnessed:
             }
-            return maxStatus;
+            return status;
         }
 
         private CheckStatusOkFull withFullStatus(Status newFullStatus)

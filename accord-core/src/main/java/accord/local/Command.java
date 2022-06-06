@@ -696,7 +696,10 @@ public class Command implements Listener, Consumer<Listener>
         if (!coordinateRanges.contains(progressKey))
             return No;
 
-        return coordinateRanges.contains(route.homeKey) ? Home : Local;
+        if (!commandStore.hashIntersects(progressKey))
+            return No;
+
+        return progressKey.equals(homeKey) ? Home : Local;
     }
 
     private ProgressShard progressShard(AbstractRoute route, KeyRanges coordinateRanges)
@@ -716,7 +719,10 @@ public class Command implements Listener, Consumer<Listener>
         if (!coordinateRanges.contains(progressKey))
             return No;
 
-        return homeKey != null && coordinateRanges.contains(homeKey) ? Home : Local;
+        if (!commandStore.hashIntersects(progressKey))
+            return No;
+
+        return progressKey.equals(homeKey) ? Home : Local;
     }
 
     private KeyRanges coordinateRanges()
@@ -1003,7 +1009,7 @@ public class Command implements Listener, Consumer<Listener>
         return "Command{" +
                "txnId=" + txnId +
                ", status=" + status +
-               ", partOfTxn=" + partialTxn +
+               ", partialTxn=" + partialTxn +
                ", executeAt=" + executeAt +
                ", partialDeps=" + partialDeps +
                '}';

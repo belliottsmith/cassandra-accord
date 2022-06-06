@@ -25,8 +25,8 @@ public class PartialRoute extends AbstractRoute
         if (!covering.contains(newRange))
             throw new IllegalArgumentException("Not covered");
 
-        RoutingKey[] keys = slice(covering, RoutingKey[]::new);
-        return new PartialRoute(covering, homeKey, keys);
+        RoutingKey[] keys = slice(newRange, RoutingKey[]::new);
+        return new PartialRoute(newRange, homeKey, keys);
     }
 
     @Override

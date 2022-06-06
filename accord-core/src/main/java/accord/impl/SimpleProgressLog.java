@@ -108,6 +108,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
         void ensureAtLeast(LocalStatus newStatus, Progress newProgress, Command command)
         {
+            Preconditions.checkState(command.owns(command.txnId().epoch, command.homeKey()));
             if (newStatus == Committed && command.isGloballyPersistent() && !command.executes())
             {
                 status = LocalStatus.Done;
@@ -491,7 +492,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             node.withEpoch(srcEpoch, () -> {
 
                 // first check we have enough routing information for the ranges we own; if not, fetch it
-                AbstractRoute route = AbstractRoute.merge(command.route(), someKeys instanceof AbstractRoute ? (AbstractRoute) someKeys : null);
+                AbstractRoute route = route(command);
                 KeyRanges ranges = node.topology().localRangesForEpochs(txnId.epoch, toEpoch);
                 if (route == null || !route.covers(ranges))
                 {
@@ -513,6 +514,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     }
                     else
                     {
+                        RoutingKeys someKeys = this.someKeys;
+                        if (someKeys == null) someKeys = route;
                         debugInvestigating = FindHomeKey.findHomeKey(node, txnId, someKeys, (homeKey, fail) -> {
                             if (progress == Investigating && blockedOn == this.blockedOn)
                             {
@@ -539,8 +542,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     switch (success.fullStatus)
                     {
                         default:
-                        case NotWitnessed:
                             throw new IllegalStateException();
+                        case NotWitnessed:
                         case PreAccepted:
                         case Accepted:
                         case AcceptedInvalidate:
@@ -548,7 +551,6 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                             break;
                         case Committed:
                         case ReadyToExecute:
-                            // TODO (now): verify that it was applied locally
                             Preconditions.checkState(command.hasBeen(Status.Committed) || !command.commandStore.ranges().intersects(txnId.epoch, someKeys));
                             if (blockedOn == Status.Committed)
                                 progress = NoneExpected;
@@ -565,11 +567,21 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             });
         }
 
+        private AbstractRoute route(Command command)
+        {
+            return AbstractRoute.merge(command.route(), someKeys instanceof AbstractRoute ? (AbstractRoute) someKeys : null);
+        }
+
         private void invalidate(Node node, Command command)
         {
             progress = Investigating;
             RoutingKey someKey = command.homeKey();
             if (someKey == null) someKey = someKeys.get(0);
+
+            RoutingKeys someKeys = route(command);
+            if (someKeys == null) someKeys = this.someKeys;
+            if (someKeys == null || !someKeys.contains(someKey))
+                someKeys = RoutingKeys.of(someKey);
             debugInvestigating = Invalidate.invalidate(node, command.txnId(), someKeys, someKey)
                                            .addCallback((success, fail) -> {
                                                if (progress != Investigating) return;

@@ -110,46 +110,38 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
         if (isDone)
             return;
 
-        try
+        switch (process(from, reply))
         {
-            switch (process(from, reply))
-            {
-                default: throw new IllegalStateException();
-                case Abort:
+            default: throw new IllegalStateException();
+            case Abort:
+                isDone = true;
+                break;
+
+            case Continue:
+                break;
+
+            case AcceptQuorum:
+                tracker.recordReadResponse(from);
+                if (tracker.hasReachedQuorum())
+                {
                     isDone = true;
+                    onDone(Done.ReachedQuorum, null);
+                }
+                else
+                {
+                    tryOneMore();
+                }
+                break;
+
+            case Accept:
+                tracker.recordReadSuccess(from);
+                if (!tracker.hasCompletedRead())
                     break;
 
-                case Continue:
-                    break;
-
-                case AcceptQuorum:
-                    tracker.recordReadResponse(from);
-                    if (tracker.hasReachedQuorum())
-                    {
-                        isDone = true;
-                        onDone(Done.ReachedQuorum, null);
-                    }
-                    else
-                    {
-                        tryOneMore();
-                    }
-                    break;
-
-                case Accept:
-                    tracker.recordReadSuccess(from);
-                    if (!tracker.hasCompletedRead())
-                        break;
-
-                case Success:
-                    isDone = true;
-                    onDone(Done.Success, null);
-            }
-        }
-        catch (Throwable t)
-        {
-            onFailure(from, t);
-        }
-    }
+            case Success:
+                isDone = true;
+                onDone(Done.Success, null);
+        }    }
 
     @Override
     public void onSlowResponse(Id from)

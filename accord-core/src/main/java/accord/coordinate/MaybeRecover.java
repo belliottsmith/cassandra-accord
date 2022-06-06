@@ -5,6 +5,7 @@ import java.util.function.BiConsumer;
 import com.google.common.base.Preconditions;
 
 import accord.api.RoutingKey;
+import accord.coordinate.Recover.Outcome;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
@@ -21,7 +22,7 @@ import static accord.local.Status.Accepted;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public class MaybeRecover extends CheckShards implements BiConsumer<Object, Throwable>
+public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Throwable>
 {
     final RoutingKey homeKey;
     final Status knownStatus;
@@ -48,9 +49,19 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
     }
 
     @Override
-    public void accept(Object unused, Throwable fail)
+    public void accept(Outcome outcome, Throwable fail)
     {
-        callback.accept(null, fail);
+        if (fail != null) callback.accept(null, fail);
+        else switch (outcome)
+        {
+            default: throw new IllegalStateException();
+            case Executed:
+            case Invalidated:
+                callback.accept(null, null);
+                break;
+            case Preempted:
+                callback.accept(null, new Preempted(txnId, homeKey));
+        }
     }
 
     @Override
@@ -85,12 +96,15 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Object, Thro
             {
                 default: throw new AssertionError();
                 case NotWitnessed:
-                    Invalidate.invalidateIfNotWitnessed(node, txnId, someKeys, homeKey)
-                              .addCallback(this);
-                    break;
+                case AcceptedInvalidate:
+                    if (!(merged.route instanceof Route))
+                    {
+                        Invalidate.invalidateIfNotWitnessed(node, txnId, someKeys, homeKey)
+                                  .addCallback(this);
+                        break;
+                    }
                 case PreAccepted:
                 case Accepted:
-                case AcceptedInvalidate:
                 case Committed:
                 case ReadyToExecute:
                 case Executed:

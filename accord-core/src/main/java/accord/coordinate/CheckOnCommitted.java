@@ -8,7 +8,6 @@ import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
@@ -17,7 +16,6 @@ import accord.primitives.KeyRanges;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
-import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -81,11 +79,17 @@ public class CheckOnCommitted extends CheckShards
 
     void onSuccessCriteriaOrExhaustion(CheckStatusOkFull full)
     {
+        persistLocally(full);
+        callback.accept(full, null);
+    }
+
+    void persistLocally(CheckStatusOkFull full)
+    {
         switch (full.fullStatus)
         {
             case Invalidated:
-                RoutingKeys keys = full.route != null ? full.route.union(someKeys) : someKeys;
-                node.forEachLocal(keys, txnId.epoch, untilLocalEpoch, commandStore -> {
+                AbstractRoute route = AbstractRoute.merge(route(), full.route);
+                node.forEachLocal(route, txnId.epoch, untilLocalEpoch, commandStore -> {
                     Command command = commandStore.command(txnId);
                     command.commitInvalidate();
                 });
@@ -93,12 +97,14 @@ public class CheckOnCommitted extends CheckShards
             case PreAccepted:
             case Accepted:
             case AcceptedInvalidate:
-                callback.accept(full, null);
                 return;
         }
 
-        Timestamp executeAt = full.executeAt;
         KeyRanges minCommitRanges = node.topology().localRangesForEpoch(txnId.epoch);
+        if (!route().covers(minCommitRanges))
+            return; // only try to persist locally if we requested enough data
+
+        Timestamp executeAt = full.executeAt;
         KeyRanges minExecuteRanges = node.topology().localRangesForEpochs(executeAt.epoch, Math.max(executeAt.epoch, untilLocalEpoch));
         KeyRanges allRanges = node.topology().localRangesForEpochs(txnId.epoch, untilLocalEpoch);
 
@@ -144,7 +150,5 @@ public class CheckOnCommitted extends CheckShards
                     command.commit(route(), progressKey, partialTxn, executeAt, partialDeps);
                 });
         }
-
-        callback.accept(full, null);
     }
 }

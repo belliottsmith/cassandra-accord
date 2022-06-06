@@ -146,7 +146,7 @@ public class Topology extends AbstractCollection<Shard>
     public KeyRanges rangesForNode(Id node)
     {
         NodeInfo info = nodeLookup.get(node);
-        return info != null ? info.ranges : null;
+        return info != null ? info.ranges : KeyRanges.EMPTY;
     }
 
     // TODO: optimised HomeKey concept containing the Key, Shard and Topology to avoid lookups when topology hasn't changed

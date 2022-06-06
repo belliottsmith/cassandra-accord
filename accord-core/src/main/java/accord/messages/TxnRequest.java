@@ -43,11 +43,11 @@ public abstract class TxnRequest implements EpochRequest
             KeyRanges ranges = topologies.forEpoch(txnId.epoch).rangesForNode(to);
             if (doNotComputeProgressKey)
             {
-                Preconditions.checkState(ranges == null || !ranges.intersects(route)); // confirm dest is not a replica on txnId.epoch
+                Preconditions.checkState(!ranges.intersects(route)); // confirm dest is not a replica on txnId.epoch
             }
             else
             {
-                boolean intersects = ranges != null && ranges.intersects(route);
+                boolean intersects = ranges.intersects(route);
                 long progressEpoch = Math.min(waitForEpoch(), txnId.epoch);
                 KeyRanges computesRangesOn = topologies.forEpoch(progressEpoch).rangesForNode(to);
                 boolean check = computesRangesOn != null && computesRangesOn.intersects(route);
@@ -109,14 +109,14 @@ public abstract class TxnRequest implements EpochRequest
     {
         KeyRanges latest = topologies.current().rangesForNode(node);
 
-        if (latest != null && latest.intersects(keys))
+        if (latest.intersects(keys))
             return 0;
 
         int i = 0;
         int mi = topologies.size();
 
         // find first non-null for node
-        while (latest == null)
+        while (latest.isEmpty())
         {
             if (++i == mi)
                 return mi;
@@ -161,7 +161,7 @@ public abstract class TxnRequest implements EpochRequest
         {
             Topology topology = topologies.get(i);
             KeyRanges ranges = topology.rangesForNode(node);
-            if (ranges == null || !ranges.equals(latest))
+            if (!ranges.equals(latest))
                 break;
         }
         return topologies.get(i - 1).epoch();
@@ -186,7 +186,7 @@ public abstract class TxnRequest implements EpochRequest
         {
             Topology topology = topologies.get(i);
             KeyRanges ranges = topology.rangesForNode(node);
-            if (ranges != last && ranges != null && !ranges.equals(last))
+            if (ranges != last && !ranges.equals(last))
             {
                 O add = slice.apply(keys, ranges);
                 scope = scope == null ? add : merge.apply(scope, add);

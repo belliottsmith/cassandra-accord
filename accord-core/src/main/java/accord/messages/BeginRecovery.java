@@ -2,6 +2,7 @@ package accord.messages;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
+import accord.messages.Commit.Invalidate;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
@@ -12,6 +13,8 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import javax.annotation.Nullable;
+
+import com.google.common.base.Preconditions;
 
 import accord.local.CommandStore;
 import accord.local.CommandsForKey;
@@ -27,8 +30,9 @@ import accord.local.Status;
 import accord.primitives.TxnId;
 
 import static accord.local.Status.Accepted;
+import static accord.local.Status.AcceptedInvalidate;
 import static accord.local.Status.Committed;
-import static accord.local.Status.NotWitnessed;
+import static accord.local.Status.Invalidated;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.PreAccept.calculateDeps;
 
@@ -70,11 +74,13 @@ public class BeginRecovery extends TxnRequest
             }
 
             PartialDeps deps = command.savedPartialDeps();
-            if (command.status() == PreAccepted)
+            if (!command.status().hasBeen(Accepted)) // includes AcceptedInvalidated
             {
                 deps = calculateDeps(instance, txnId, txn.keys, txn.kind, txnId,
                                      PartialDeps.builder(instance.ranges().at(txnId.epoch), txn.keys));
             }
+            if (deps == null && command.status().hasBeen(Invalidated))
+                deps = PartialDeps.NONE;
 
             boolean rejectsFastPath;
             Deps earlierCommittedWitness, earlierAcceptedNoWitness;
@@ -119,34 +125,9 @@ public class BeginRecovery extends TxnRequest
             RecoverOk ok2 = (RecoverOk) r2;
 
             // set ok1 to the most recent of the two
-            if (ok1.status.compareTo(ok2.status) < 0)
-            { RecoverOk tmp = ok1; ok1 = ok2; ok2 = tmp; }
+            if (ok1.status.compareTo(ok2.status) < 0) { RecoverOk tmp = ok1; ok1 = ok2; ok2 = tmp; }
+            if (!ok1.status.hasBeen(PreAccepted)) throw new IllegalStateException();
 
-            switch (ok1.status)
-            {
-                default: throw new IllegalStateException();
-                case PreAccepted:
-                    if (ok2.status == NotWitnessed)
-                        throw new IllegalStateException();
-                    break;
-
-                case Accepted:
-                case AcceptedInvalidate:
-                    // we currently replicate all deps to every shard, so all Accepted should have the same information
-                    // but we must pick the one with the newest ballot
-                    if (ok2.status.logicalCompareTo(ok1.status) == 0)
-                        return ok1.accepted.compareTo(ok2.accepted) >= 0 ? ok1 : ok2;
-
-                case Committed:
-                case ReadyToExecute:
-                case Executed:
-                case Applied:
-                case Invalidated:
-                    // we currently replicate all deps to every shard, so all Committed should have the same information
-                    return ok1;
-            }
-
-            // ok1 and ok2 both PreAccepted
             PartialDeps deps = ok1.deps.with(ok2.deps);
             Deps earlierCommittedWitness = ok1.earlierCommittedWitness.with(ok2.earlierCommittedWitness);
             Deps earlierAcceptedNoWitness = ok1.earlierAcceptedNoWitness.with(ok2.earlierAcceptedNoWitness)
@@ -207,6 +188,7 @@ public class BeginRecovery extends TxnRequest
 
         public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, PartialDeps deps, Deps earlierCommittedWitness, Deps earlierAcceptedNoWitness, boolean rejectsFastPath, Writes writes, Result result)
         {
+            Preconditions.checkNotNull(deps);
             this.txnId = txnId;
             this.accepted = accepted;
             this.executeAt = executeAt;

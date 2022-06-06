@@ -24,6 +24,7 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
 
     /**
      * The epoch until which we want to fetch data from remotely
+     * TODO: configure the epoch we want to start with
      */
     final long untilRemoteEpoch;
     final IncludeInfo includeInfo;
@@ -46,7 +47,7 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
     @Override
     protected void contact(Set<Id> nodes)
     {
-        node.send(nodes, new CheckStatus(txnId, someKeys, untilRemoteEpoch, includeInfo), this);
+        node.send(nodes, new CheckStatus(txnId, someKeys, txnId.epoch, untilRemoteEpoch, includeInfo), this);
     }
 
     protected abstract boolean isSufficient(Id from, CheckStatusOk ok);
@@ -63,13 +64,11 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
         if (merged instanceof CheckStatusOkFull)
             merged = ((CheckStatusOkFull) merged).covering(someKeys);
 
-        if (merged.hasExecutedOnAllShards)
+        if (!merged.hasExecutedOnAllShards)
             return;
 
         RoutingKey homeKey = merged.homeKey;
         if (homeKey == null)
-            return;
-        if (!node.topology().localRangesForEpoch(txnId.epoch).contains(homeKey))
             return;
 
         node.ifLocal(merged.homeKey, txnId, store -> {

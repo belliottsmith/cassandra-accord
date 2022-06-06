@@ -72,22 +72,26 @@ public class Commit extends ReadData
     // TODO: do not commit if we're already ready to execute (requires extra info in Accept responses)
     public static void commitAndRead(Node node, Topologies executeTopologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Set<Id> readSet, Callback<ReadReply> callback)
     {
-        Topologies commitOnlyTopologies = executeTopologies;
+        Topologies allTopologies = executeTopologies;
         if (txnId.epoch != executeAt.epoch)
-            commitOnlyTopologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch - 1);
+            allTopologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch);
 
-        Topology coordinateTopology = commitOnlyTopologies.forEpoch(txnId.epoch);
-        for (Node.Id to : executeTopologies.nodes())
+        Topology executeTopology = executeTopologies.forEpoch(executeAt.epoch);
+        Topology coordinateTopology = allTopologies.forEpoch(txnId.epoch);
+        for (Node.Id to : executeTopology.nodes())
         {
             boolean read = readSet.contains(to);
-            Commit send = new Commit(Kind.Minimal, to, coordinateTopology, executeTopologies, txnId, txn, route, executeAt, deps, read);
+            Commit send = new Commit(Kind.Minimal, to, coordinateTopology, allTopologies, txnId, txn, route, executeAt, deps, read);
             if (read) node.send(to, send, callback);
             else node.send(to, send);
         }
-        if (txnId.epoch != executeAt.epoch)
+        if (coordinateTopology != executeTopology)
         {
-            Topologies earlierTopologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch - 1);
-            Commit.commit(node, earlierTopologies, executeTopologies, txnId, txn, route, executeAt, deps);
+            for (Node.Id to : allTopologies.nodes())
+            {
+                if (!executeTopology.nodes().contains(to))
+                    node.send(to, new Commit(Kind.Minimal, to, coordinateTopology, allTopologies, txnId, txn, route, executeAt, deps, false));
+            }
         }
     }
 
