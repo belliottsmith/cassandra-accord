@@ -153,6 +153,9 @@ public class KeyRanges implements Iterable<KeyRange>
      */
     public KeyRanges difference(KeyRanges that)
     {
+        if (that == this)
+            return KeyRanges.EMPTY;
+
         List<KeyRange> result = new ArrayList<>(this.size() + that.size());
         int thatIdx = 0;
 

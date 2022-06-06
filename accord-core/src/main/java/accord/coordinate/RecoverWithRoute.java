@@ -15,6 +15,8 @@ import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.Commit;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
+import accord.primitives.KeyRanges;
+import accord.primitives.PartialRoute;
 import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -23,6 +25,7 @@ import accord.topology.Topologies;
 import static accord.coordinate.Recover.Outcome.Executed;
 import static accord.coordinate.Recover.Outcome.Invalidated;
 import static accord.local.Status.Committed;
+import static accord.local.Status.PreAccepted;
 
 public class RecoverWithRoute extends CheckShards
 {
@@ -72,11 +75,13 @@ public class RecoverWithRoute extends CheckShards
     protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
         CheckStatusOkFull full = (CheckStatusOkFull)ok;
-        if (full.partialTxn == null)
+        if (!full.fullStatus.hasBeen(PreAccepted))
             return false;
-        if (full.status.compareTo(Status.Executed) < 0)
-            return true;
-        return full.partialTxn.covers(tracker.topologies().forEpoch(txnId.epoch).rangesForNode(from));
+
+        KeyRanges rangesForNode = tracker.topologies().forEpoch(txnId.epoch).rangesForNode(from);
+        PartialRoute route = this.route.slice(rangesForNode);
+        Preconditions.checkState(full.partialTxn.covers(route));
+        return true;
     }
 
     @Override

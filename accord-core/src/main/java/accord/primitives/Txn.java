@@ -2,6 +2,8 @@ package accord.primitives;
 
 import java.util.Objects;
 
+import com.google.common.base.Preconditions;
+
 import accord.api.*;
 import accord.local.*;
 
@@ -25,6 +27,7 @@ public class Txn
 
     public Txn(Keys keys, Read read, Query query)
     {
+        Preconditions.checkArgument(getClass() != Txn.class || query != null);
         this.kind = Kind.READ;
         this.keys = keys;
         this.read = read;
@@ -34,6 +37,7 @@ public class Txn
 
     public Txn(Keys keys, Read read, Query query, Update update)
     {
+        Preconditions.checkArgument(getClass() != Txn.class || query != null);
         this.kind = Kind.WRITE;
         this.keys = keys;
         this.read = read;

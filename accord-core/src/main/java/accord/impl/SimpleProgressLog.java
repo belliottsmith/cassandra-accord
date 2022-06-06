@@ -40,6 +40,7 @@ import accord.topology.Topologies;
 import accord.topology.Topology;
 import org.apache.cassandra.utils.concurrent.Future;
 
+import static accord.api.ProgressLog.ProgressShard.Unsure;
 import static accord.coordinate.CheckOnCommitted.checkOnCommitted;
 import static accord.coordinate.CheckOnUncommitted.checkOnUncommitted;
 import static accord.coordinate.InformHomeOfTxn.inform;
@@ -757,6 +758,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         @Override
         public void preaccept(TxnId txnId, ProgressShard shard)
         {
+            Preconditions.checkState(shard != Unsure);
+
             if (shard.isProgress())
             {
                 State state = ensure(txnId);
@@ -783,6 +786,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
         private void ensureSafeOrAtLeast(TxnId txnId, ProgressShard shard, LocalStatus newStatus, Progress newProgress)
         {
+            Preconditions.checkState(shard != Unsure);
+
             State state = null;
             assert newStatus.isAtMost(ReadyToExecute);
             if (newStatus.isAtLeast(LocalStatus.Committed))
@@ -818,6 +823,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         @Override
         public void execute(TxnId txnId, ProgressShard shard)
         {
+            Preconditions.checkState(shard != Unsure);
             State state = recordExecute(txnId);
 
             if (shard.isProgress())

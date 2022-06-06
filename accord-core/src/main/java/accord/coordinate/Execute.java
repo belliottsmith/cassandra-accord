@@ -18,6 +18,8 @@ import accord.local.Node.Id;
 import accord.messages.Commit;
 import accord.messages.ReadData;
 import accord.messages.ReadData.ReadOk;
+import accord.topology.Topologies.Single;
+import accord.topology.Topology;
 
 import static accord.coordinate.AnyReadCoordinator.Action.Accept;
 import static accord.messages.Commit.Kind.Maximal;
@@ -79,7 +81,8 @@ class Execute extends AnyReadCoordinator<ReadReply>
                 callback.accept(null, new Preempted(txnId, route.homeKey));
                 return Action.Abort;
             case NotCommitted:
-                node.send(from, new Commit(Maximal, from, node.topology().globalForEpoch(txnId.epoch), topologies, txnId, txn, route, executeAt, deps, false));
+                Topology topology = node.topology().globalForEpoch(txnId.epoch);
+                node.send(from, new Commit(Maximal, from, topology, new Single(topology, false), txnId, txn, route, executeAt, deps, false));
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 return Action.TryAlternative;
             case Invalid:

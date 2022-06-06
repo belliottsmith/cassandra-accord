@@ -25,7 +25,17 @@ public class PartialTxn extends Txn
 
     public boolean covers(AbstractKeys<?, ?> keys)
     {
+        if (keys instanceof AbstractRoute)
+            return covers((AbstractRoute)keys);
+
         return covering.containsAll(keys);
+    }
+
+    public boolean covers(AbstractRoute route)
+    {
+        if (query == null && route.contains(route.homeKey))
+            return false;
+        return covering.containsAll(route);
     }
 
     // TODO: merge efficient merge when more than one input
@@ -56,7 +66,7 @@ public class PartialTxn extends Txn
 
     public Txn reconstitute(Route route)
     {
-        if (!covers(route))
+        if (!covers(route) || query == null)
             throw new IllegalStateException("Incomplete PartialTxn: " + this + ", route: " + route);
 
         return new Txn(keys, read, query, update);

@@ -680,6 +680,9 @@ public class Command implements Listener, Consumer<Listener>
     {
         if (this.homeKey == null) this.homeKey = homeKey;
         else if (!this.homeKey.equals(homeKey)) throw new AssertionError();
+
+        if (progressKey == null && owns(txnId.epoch, homeKey))
+            progressKey = homeKey;
     }
 
     private ProgressShard progressShard(AbstractRoute route, @Nullable RoutingKey progressKey, KeyRanges coordinateRanges)
@@ -689,9 +692,7 @@ public class Command implements Listener, Consumer<Listener>
 
         if (this.progressKey == null) this.progressKey = progressKey;
         else if (!this.progressKey.equals(progressKey)) throw new AssertionError();
-
-        if (this.homeKey == null) this.homeKey = route.homeKey;
-        else if (!this.homeKey.equals(route.homeKey)) throw new IllegalStateException();
+        updateHomeKey(route.homeKey);
 
         if (!coordinateRanges.contains(progressKey))
             return No;
@@ -784,8 +785,16 @@ public class Command implements Listener, Consumer<Listener>
             Preconditions.checkState(status != Accepted && status != AcceptedInvalidate);
 
         // validate new partial txn
-        return validate(ensurePartialTxn, existingRanges, additionalRanges, covers(this.partialTxn), covers(partialTxn), "txn", partialTxn)
-               && validate(ensurePartialDeps, existingRanges, additionalRanges, covers(this.partialDeps), covers(partialDeps), "deps", partialDeps);
+        if (!validate(ensurePartialTxn, existingRanges, additionalRanges, covers(this.partialTxn), covers(partialTxn), "txn", partialTxn))
+            return false;
+
+        if (shard.isHome() && ensurePartialTxn != Ignore)
+        {
+            if (!hasQuery(this.partialTxn) && !hasQuery(partialTxn))
+                throw new IllegalStateException();
+        }
+
+        return validate(ensurePartialDeps, existingRanges, additionalRanges, covers(this.partialDeps), covers(partialDeps), "deps", partialDeps);
     }
 
     private void set(KeyRanges existingRanges, KeyRanges additionalRanges, ProgressShard shard, AbstractRoute route,
@@ -1023,5 +1032,10 @@ public class Command implements Listener, Consumer<Listener>
     private static KeyRanges covers(@Nullable PartialDeps deps)
     {
         return deps == null ? null : deps.covering;
+    }
+
+    private static boolean hasQuery(PartialTxn txn)
+    {
+        return txn != null && txn.query != null;
     }
 }
