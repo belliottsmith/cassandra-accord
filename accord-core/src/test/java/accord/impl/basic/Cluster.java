@@ -198,10 +198,12 @@ public class Cluster implements Scheduler
                 sinks.add(next);
 
             while (sinks.processPending());
-            sinks.onDone.forEach(Runnable::run);
-            sinks.onDone.clear();
-            while (sinks.processPending());
-            System.out.println();
+            while (!sinks.onDone.isEmpty())
+            {
+                sinks.onDone.forEach(Runnable::run);
+                sinks.onDone.clear();
+                while (sinks.processPending());
+            }
         }
         finally
         {
