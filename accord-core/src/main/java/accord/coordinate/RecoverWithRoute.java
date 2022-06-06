@@ -78,6 +78,9 @@ public class RecoverWithRoute extends CheckShards
         if (!full.fullStatus.hasBeen(PreAccepted))
             return false;
 
+        if (full.fullStatus.hasBeen(Status.Invalidated))
+            return true;
+
         KeyRanges rangesForNode = tracker.topologies().forEpoch(txnId.epoch).rangesForNode(from);
         PartialRoute route = this.route.slice(rangesForNode);
         Preconditions.checkState(full.partialTxn.covers(route));
