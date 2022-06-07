@@ -30,6 +30,13 @@ public class PartialRoute extends AbstractRoute
     }
 
     @Override
+    public AbstractRoute union(AbstractRoute that)
+    {
+        if (that instanceof Route) return that;
+        return union((PartialRoute) that);
+    }
+
+    @Override
     public boolean covers(KeyRanges ranges)
     {
         return covering.contains(ranges);

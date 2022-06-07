@@ -208,7 +208,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         RoutingKey homeKey = command.homeKey();
                         node.withEpoch(txnId.epoch, () -> {
 
-                            Future<CheckStatusOk> recover = node.maybeRecover(txnId, homeKey, maxStatus, maxPromised, maxPromiseHasBeenAccepted);
+                            Future<CheckStatusOk> recover = node.maybeRecover(txnId, command.homeKey(), command.route(), maxStatus, maxPromised, maxPromiseHasBeenAccepted);
                             recover.addCallback((success, fail) -> {
                                 if (status.isAtMost(ReadyToExecute) && progress == Investigating)
                                 {

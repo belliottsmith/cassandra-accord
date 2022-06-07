@@ -10,15 +10,15 @@ public class Route extends AbstractRoute
     }
 
     @Override
-    public RoutingKeys union(RoutingKeys that)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
     public boolean covers(KeyRanges ranges)
     {
         return true;
+    }
+
+    @Override
+    public AbstractRoute union(AbstractRoute that)
+    {
+        return this;
     }
 
     @Override

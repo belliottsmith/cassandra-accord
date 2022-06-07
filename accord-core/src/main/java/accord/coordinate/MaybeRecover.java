@@ -2,6 +2,8 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
 import com.google.common.base.Preconditions;
 
 import accord.api.RoutingKey;
@@ -11,12 +13,15 @@ import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
+import accord.primitives.AbstractRoute;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Ballot;
 import accord.primitives.TxnId;
+import accord.utils.Functions;
 
 import static accord.local.Status.Accepted;
+import static accord.utils.Functions.reduceNonNull;
 
 /**
  * A result of null indicates the transaction is globally persistent
@@ -24,27 +29,30 @@ import static accord.local.Status.Accepted;
  */
 public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Throwable>
 {
+    @Nullable final AbstractRoute route;
     final RoutingKey homeKey;
     final Status knownStatus;
     final Ballot knownPromised;
     final boolean knownPromisedHasBeenAccepted;
     final BiConsumer<CheckStatusOk, Throwable> callback;
 
-    MaybeRecover(Node node, TxnId txnId, RoutingKey homeKey, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted, BiConsumer<CheckStatusOk, Throwable> callback)
+    MaybeRecover(Node node, TxnId txnId, RoutingKey homeKey, @Nullable AbstractRoute route, Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted, BiConsumer<CheckStatusOk, Throwable> callback)
     {
+        // we only want to enquire with the home shard, but we prefer maximal route information for running Invalidation against, if necessary
         super(node, txnId, RoutingKeys.of(homeKey), txnId.epoch, IncludeInfo.Route);
         this.homeKey = homeKey;
+        this.route = route;
         this.knownStatus = knownStatus;
         this.knownPromised = knownPromised;
         this.knownPromisedHasBeenAccepted = knownPromiseHasBeenAccepted;
         this.callback = callback;
     }
 
-    public static void maybeRecover(Node node, TxnId txnId, RoutingKey homeKey,
-                                                     Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted,
-                                                     BiConsumer<CheckStatusOk, Throwable> callback)
+    public static void maybeRecover(Node node, TxnId txnId, RoutingKey homeKey, @Nullable AbstractRoute route,
+                                    Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted,
+                                    BiConsumer<CheckStatusOk, Throwable> callback)
     {
-        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, homeKey, knownStatus, knownPromised, knownPromiseHasBeenAccepted, callback);
+        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, homeKey, route, knownStatus, knownPromised, knownPromiseHasBeenAccepted, callback);
         maybeRecover.start();
     }
 
@@ -99,6 +107,8 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Thr
                 case AcceptedInvalidate:
                     if (!(merged.route instanceof Route))
                     {
+                        // order important, as route could be a Route which does not implement RoutingKeys.union
+                        RoutingKeys someKeys = reduceNonNull(RoutingKeys::union, this.someKeys, merged.route, route);
                         Invalidate.invalidateIfNotWitnessed(node, txnId, someKeys, homeKey)
                                   .addCallback(this);
                         break;
@@ -115,7 +125,8 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Thr
                     break;
 
                 case Invalidated:
-                    callback.accept(merged, null);
+                    Invalidate.invalidate(node, txnId, AbstractRoute.merge(route, merged.route), homeKey)
+                              .addCallback(this);
             }
         }
     }

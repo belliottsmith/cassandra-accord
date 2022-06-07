@@ -537,7 +537,7 @@ public class Node implements ConfigurationService.Listener
     }
 
     // TODO: coalesce other maybeRecover calls also? perhaps have mutable knownStatuses so we can inject newer ones?
-    public Future<CheckStatusOk> maybeRecover(TxnId txnId, RoutingKey homeKey,
+    public Future<CheckStatusOk> maybeRecover(TxnId txnId, RoutingKey homeKey, @Nullable AbstractRoute route,
                                               Status knownStatus, Ballot knownPromised, boolean knownPromiseHasBeenAccepted)
     {
         Future<?> result = coordinating.get(txnId);
@@ -545,7 +545,7 @@ public class Node implements ConfigurationService.Listener
             return result.map(r -> null);
 
         RecoverFuture<CheckStatusOk> future = new RecoverFuture<>();
-        MaybeRecover.maybeRecover(this, txnId, homeKey, knownStatus, knownPromised, knownPromiseHasBeenAccepted, future);
+        MaybeRecover.maybeRecover(this, txnId, homeKey, route, knownStatus, knownPromised, knownPromiseHasBeenAccepted, future);
         return future;
     }
 

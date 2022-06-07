@@ -17,6 +17,17 @@ public abstract class AbstractRoute extends RoutingKeys
         this.homeKey = homeKey;
     }
 
+    @Override
+    public RoutingKeys union(RoutingKeys that)
+    {
+        if (that instanceof AbstractRoute)
+            return union((AbstractRoute) that);
+
+        throw new UnsupportedOperationException();
+    }
+
+    public abstract AbstractRoute union(AbstractRoute that);
+
     public abstract boolean covers(KeyRanges ranges);
 
     public abstract PartialRoute slice(KeyRanges ranges);
@@ -28,13 +39,8 @@ public abstract class AbstractRoute extends RoutingKeys
 
     public static AbstractRoute merge(@Nullable AbstractRoute prefer, @Nullable AbstractRoute defer)
     {
-        if (prefer == null)
-            return defer;
-        else if (prefer instanceof PartialRoute && defer instanceof Route)
-            return defer;
-        else if (prefer instanceof PartialRoute && defer instanceof PartialRoute)
-            return ((PartialRoute)prefer).union((PartialRoute) defer);
-        else
-            return prefer;
+        if (defer == null) return prefer;
+        if (prefer == null) return defer;
+        return prefer.union(defer);
     }
 }
