@@ -28,8 +28,8 @@ import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
-// TODO (now): test Keys with no contents
-// TODO (now): test #without
+// TODO: test Keys with no contents
+// TODO: test #without
 public class DepsTest
 {
     private static final Logger logger = LoggerFactory.getLogger(DepsTest.class);

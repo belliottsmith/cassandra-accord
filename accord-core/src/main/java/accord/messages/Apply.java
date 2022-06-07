@@ -58,7 +58,7 @@ public class Apply extends TxnRequest
 
         if (reply == ApplyReply.Applied)
         {
-            node.ifLocal(scope.homeKey, txnId, instance -> { instance.progressLog().execute(txnId, Home); return null; });
+            node.ifLocal(scope.homeKey, txnId, instance -> { instance.progressLog().durableLocal(txnId); return null; });
         }
 
         node.reply(replyToNode, replyContext, reply);

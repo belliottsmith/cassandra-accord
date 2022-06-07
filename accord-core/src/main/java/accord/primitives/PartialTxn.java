@@ -25,6 +25,7 @@ public class PartialTxn extends Txn
 
     public boolean covers(AbstractKeys<?, ?> keys)
     {
+        // TODO: this distinction seems brittle
         if (keys instanceof AbstractRoute)
             return covers((AbstractRoute)keys);
 

@@ -181,8 +181,9 @@ public class Cluster implements Scheduler
         run.run();
     }
 
-    // TODO (now): there remains some inconsistency of execution, at least causing different partitions if prior runs have happened;
-    //             unclear what source is, but might be deterministic based on prior runs (some evidence of this), or non-deterministic
+    // TODO: there may remain some inconsistency of execution, at least causing different partitions if prior runs have happened;
+    //       unclear what source is, but less frequence now we split cluster partitioning recurring task to its own random
+    //       might be deterministic based on prior runs (some evidence of this), or non-deterministic
     public static void run(Id[] nodes, Supplier<PendingQueue> queueSupplier, Consumer<Packet> responseSink, Consumer<Throwable> onFailure, Supplier<Random> randomSupplier, Supplier<LongSupplier> nowSupplier, TopologyFactory topologyFactory, Supplier<Packet> in)
     {
         Topology topology = topologyFactory.toTopology(nodes);

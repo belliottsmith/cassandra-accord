@@ -26,11 +26,9 @@ import accord.primitives.TxnId;
 
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
 import static accord.local.Status.Accepted;
-import static accord.local.Status.Committed;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 
-// TODO (now): switch to callback like others
 public class Invalidate implements Callback<InvalidateReply>
 {
     final Node node;

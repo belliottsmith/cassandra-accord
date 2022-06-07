@@ -64,7 +64,6 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         {
             int txnIdx = ensureTxnIdx(txnId);
             int keyIdx = keys.indexOf(key);
-            // TODO (now): try to do cheap dedup, so can avoid it on build
             if (keysToTxnIdCounts[keyIdx] == keysToTxnId[keyIdx].length)
                 keysToTxnId[keyIdx] = Arrays.copyOf(keysToTxnId[keyIdx], Math.max(4, keysToTxnIdCounts[keyIdx] * 2));
             keysToTxnId[keyIdx][keysToTxnIdCounts[keyIdx]++] = txnIdx;
@@ -716,7 +715,6 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         keyToTxnId = Arrays.copyOf(keyToTxnId, o);
 
-        // TODO (now): trim unused keys
         return new Deps(keys, txnIds, keyToTxnId);
     }
 

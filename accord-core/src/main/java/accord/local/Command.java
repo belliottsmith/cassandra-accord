@@ -123,7 +123,6 @@ public class Command implements Listener, Consumer<Listener>
     {
         this.route = route;
         updateHomeKey(route.homeKey);
-        // TODO (now): always set progress key
     }
 
     public Ballot promised()
@@ -757,7 +756,7 @@ public class Command implements Listener, Consumer<Listener>
         if (shard.isProgress()) this.route = AbstractRoute.merge(this.route, route);
         else this.route = AbstractRoute.merge(this.route, route.slice(allRanges));
 
-        // TODO (now): apply hashIntersects
+        // TODO (now): apply hashIntersects, or stop round-robin hashing and partition only on ranges
         switch (ensurePartialTxn)
         {
             case Add:
@@ -785,7 +784,7 @@ public class Command implements Listener, Consumer<Listener>
                 break;
         }
 
-        // TODO (now): apply hashIntersects
+        // TODO (now): apply hashIntersects, or stop round-robin hashing and partition only on ranges
         switch (ensurePartialDeps)
         {
             case Add:
@@ -978,6 +977,8 @@ public class Command implements Listener, Consumer<Listener>
         return txn != null && txn.query != null;
     }
 
+    // TODO: this is an ugly hack, need to encode progress/homeKey/Route state combinations much more clearly
+    //  (perhaps introduce encapsulating class representing each possible arrangement)
     private static final RoutingKey NO_PROGRESS_KEY = new RoutingKey()
     {
         @Override

@@ -168,7 +168,6 @@ public class EpochSync implements Runnable
             for (SyncCommitted send : syncMessages.values())
                 CommandSync.sync(node, send.route, send, nextTopology);
 
-            // TODO (now): this needs to be made reliable; we need an Ack and retry
             SyncComplete syncComplete = new SyncComplete(syncEpoch);
             node.send(nextTopology.nodes(), syncComplete);
         }

@@ -94,7 +94,9 @@ public class TopologyUpdate
                 case Executed:
                 case Applied:
                 case Invalidated:
-                    FetchData.fetchCommitted(node, txnId, route, executeAt, epoch, callback);
+                    node.withEpoch(executeAt.epoch, () -> {
+                        FetchData.fetchCommitted(node, txnId, route, executeAt, epoch, callback);
+                    });
             }
         }
     }

@@ -345,16 +345,18 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                             pendingDurable.persistedOn.addAll(persistedOn);
                     }
                     break;
+
                 case NotExecuted:
                     status = RemotelyDurableOnly;
                     progress = NoneExpected;
                     if (persistedOn != null)
                         pendingDurable = new PendingDurable(persistedOn);
                     break;
+
                 case LocallyDurableOnly:
                     status = Durable;
                     progress = Expected;
-                    break;
+
                 case Durable:
                     refresh(node, command, null, persistedOn, null);
             }
@@ -875,13 +877,13 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         @Override
         public void durable(TxnId txnId, AbstractRoute route, ProgressShard shard)
         {
-            ensure(txnId).recordBlocking(txnId, Executed, null);
+            ensure(txnId).recordBlocking(txnId, Executed, route);
         }
 
         @Override
         public void waiting(TxnId blockedBy, RoutingKeys someKeys)
         {
-            // TODO (now): propagate to progress shard, if known
+            // TODO (now): forward to progress shard, if known
             Command blockedByCommand = commandStore.command(blockedBy);
             if (!blockedByCommand.hasBeen(Executed))
                 ensure(blockedBy).recordBlocking(blockedByCommand, someKeys);
