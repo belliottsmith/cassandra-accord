@@ -18,6 +18,7 @@ import accord.messages.BeginInvalidation.InvalidateOk;
 import accord.messages.BeginInvalidation.InvalidateReply;
 import accord.messages.Callback;
 import accord.messages.PreAccept;
+import accord.primitives.AbstractRoute;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.topology.Shard;
@@ -103,52 +104,53 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
     private void invalidate()
     {
         // first look to see if it has already been
-        Status maxStatus = invalidateOks.stream().map(ok -> ok.status).max(Comparable::compareTo).orElseThrow();
-        switch (maxStatus)
         {
-            default: throw new IllegalStateException();
-            case NotWitnessed:
-                break;
-            case PreAccepted:
-            case Accepted:
-                if (recoverIfAtLeast.compareTo(maxStatus) > 0)
-                    break;
+            Status maxStatus = invalidateOks.stream().map(ok -> ok.status).max(Comparable::compareTo).orElseThrow();
+            Route route = InvalidateOk.findRoute(invalidateOks);
+            RoutingKey homeKey = route != null ? route.homeKey : InvalidateOk.findHomeKey(invalidateOks);
 
-            case Committed:
-            case ReadyToExecute:
-            case Executed:
-            case Applied:
-                Route route = InvalidateOk.findRoute(invalidateOks);
-                RoutingKey homeKey = route == null ? InvalidateOk.findHomeKey(invalidateOks) : null;
-
-                if (route != null)
-                {
-                    RecoverWithRoute.recover(node, ballot, txnId, route, this);
-                }
-                else if (homeKey != null && homeKey.equals(someKey))
-                {
-                    throw new IllegalStateException("Received a reply from a node that must have known the route, but that did not include it");
-                }
-                else if (homeKey != null)
-                {
-                    RecoverWithHomeKey.recover(node, txnId, homeKey, this);
-                }
-                else
-                {
-                    throw new IllegalStateException("Received a reply from a node that must have known the homeKey, but that did not include it");
-                }
-                return;
-
-            case AcceptedInvalidate:
+            switch (maxStatus)
             {
-                break; // latest accept also invalidating, so we're on the same page and should finish our invalidation
+                default: throw new IllegalStateException();
+                case NotWitnessed:
+                    break;
+                case PreAccepted:
+                case Accepted:
+                    if (recoverIfAtLeast.compareTo(maxStatus) > 0)
+                        break;
+
+                case Committed:
+                case ReadyToExecute:
+                case Executed:
+                case Applied:
+                    if (route != null)
+                    {
+                        RecoverWithRoute.recover(node, ballot, txnId, route, this);
+                    }
+                    else if (homeKey != null && homeKey.equals(someKey))
+                    {
+                        throw new IllegalStateException("Received a reply from a node that must have known the route, but that did not include it");
+                    }
+                    else if (homeKey != null)
+                    {
+                        RecoverWithHomeKey.recover(node, txnId, homeKey, this);
+                    }
+                    else
+                    {
+                        throw new IllegalStateException("Received a reply from a node that must have known the homeKey, but that did not include it");
+                    }
+                    return;
+
+                case AcceptedInvalidate:
+                    break; // latest accept also invalidating, so we're on the same page and should finish our invalidation
+
+                case Invalidated:
+                    node.forEachLocalSince(someKeys, txnId, instance -> {
+                        instance.command(txnId).commitInvalidate();
+                    });
+                    trySuccess(Outcome.Invalidated);
+                    return;
             }
-            case Invalidated:
-                node.forEachLocalSince(someKeys, txnId, instance -> {
-                    instance.command(txnId).commitInvalidate();
-                });
-                trySuccess(Outcome.Invalidated);
-                return;
         }
 
         // if we have witnessed the transaction, but are able to invalidate, do we want to proceed?
@@ -162,7 +164,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
 
             try
             {
-                Route route = InvalidateOk.findRoute(invalidateOks);
+                AbstractRoute route = InvalidateOk.mergeRoutes(invalidateOks);
                 // TODO: commitInvalidate (and others) should skip the network for local applications,
                 //  so we do not need to explicitly do so here before notifying the waiter
                 commitInvalidate(node, txnId, route != null ? route : someKeys, txnId);

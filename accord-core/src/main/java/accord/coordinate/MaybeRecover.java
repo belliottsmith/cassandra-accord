@@ -125,7 +125,8 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Thr
                     break;
 
                 case Invalidated:
-                    Invalidate.invalidate(node, txnId, AbstractRoute.merge(route, merged.route), homeKey)
+                    RoutingKeys someKeys = reduceNonNull(RoutingKeys::union, this.someKeys, merged.route, route);
+                    Invalidate.invalidate(node, txnId, someKeys, homeKey)
                               .addCallback(this);
             }
         }

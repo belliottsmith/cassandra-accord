@@ -24,8 +24,8 @@ import accord.topology.Topologies;
 
 import static accord.coordinate.Recover.Outcome.Executed;
 import static accord.coordinate.Recover.Outcome.Invalidated;
-import static accord.local.Status.Committed;
 import static accord.local.Status.PreAccepted;
+import static accord.messages.Commit.Invalidate.commitInvalidate;
 
 public class RecoverWithRoute extends CheckShards
 {
@@ -136,7 +136,7 @@ public class RecoverWithRoute extends CheckShards
             case Invalidated:
             {
                 long untilEpoch = node.topology().epoch();
-                Commit.Invalidate.commitInvalidate(node, txnId, route, untilEpoch);
+                commitInvalidate(node, txnId, route, untilEpoch);
                 callback.accept(Invalidated, null);
             }
         }

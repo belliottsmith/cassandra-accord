@@ -40,6 +40,7 @@ import accord.topology.Topologies;
 import accord.topology.Topology;
 import org.apache.cassandra.utils.concurrent.Future;
 
+import static accord.api.ProgressLog.ProgressShard.Home;
 import static accord.api.ProgressLog.ProgressShard.Unsure;
 import static accord.coordinate.CheckOnCommitted.checkOnCommitted;
 import static accord.coordinate.CheckOnUncommitted.checkOnUncommitted;
@@ -846,6 +847,9 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         {
             State state = recordExecute(txnId);
 
+            Preconditions.checkState(shard == Home || state == null || state.homeState == null);
+
+            // note: we permit Unsure here, so we check if we have any local home state
             if (shard.isProgress())
             {
                 state = ensure(txnId, state);

@@ -38,7 +38,7 @@ public class Commit extends ReadData
 
     public enum Kind { Minimal, Maximal }
 
-    // TODO: cleanup passing of topologies here - maybe fetch them adresh from Node? Or perhaps introduce well-named
+    // TODO: cleanup passing of topologies here - maybe fetch them afresh from Node? Or perhaps introduce well-named
     //       classes to represent different topology combinations
     public Commit(Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, boolean read)
     {

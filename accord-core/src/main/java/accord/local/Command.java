@@ -232,6 +232,7 @@ public class Command implements Listener, Consumer<Listener>
             this.status = PreAccepted;
 
         this.commandStore.progressLog().preaccept(txnId, shard);
+
         this.listeners.forEach(this);
         return AcceptOutcome.Success;
     }
@@ -373,10 +374,10 @@ public class Command implements Listener, Consumer<Listener>
             return;
         }
 
-        status = Invalidated;
-
         ProgressShard shard = progressShard();
         commandStore.progressLog().invalidate(txnId, shard);
+        executeAt = txnId;
+        status = Invalidated;
 
         listeners.forEach(this);
     }
@@ -432,6 +433,7 @@ public class Command implements Listener, Consumer<Listener>
 
         if (executeAt == null)
         {
+            Preconditions.checkState(status == NotWitnessed || status == AcceptedInvalidate);
             switch (preacceptInternal(txn, route, progressKey))
             {
                 default:
@@ -606,11 +608,16 @@ public class Command implements Listener, Consumer<Listener>
 
     public void updateHomeKey(RoutingKey homeKey)
     {
-        if (this.homeKey == null) this.homeKey = homeKey;
-        else if (!this.homeKey.equals(homeKey)) throw new AssertionError();
-
-        if (progressKey == null && owns(txnId.epoch, homeKey))
-            progressKey = homeKey;
+        if (this.homeKey == null)
+        {
+            this.homeKey = homeKey;
+            if (progressKey == null && owns(txnId.epoch, homeKey))
+                progressKey = homeKey;
+        }
+        else if (!this.homeKey.equals(homeKey))
+        {
+            throw new IllegalStateException();
+        }
     }
 
     private ProgressShard progressShard(AbstractRoute route, @Nullable RoutingKey progressKey, KeyRanges coordinateRanges)
@@ -638,9 +645,6 @@ public class Command implements Listener, Consumer<Listener>
 
     private ProgressShard progressShard(AbstractRoute route, KeyRanges coordinateRanges)
     {
-//        if (partialTxn == null && !is(Accepted))
-//            return Unsure;
-//
         if (progressKey == null)
             return Unsure;
 

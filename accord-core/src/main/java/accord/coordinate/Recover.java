@@ -232,7 +232,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                         if (fail != null) accept(null, fail);
                         else
                         {
-                            commitInvalidate(node, txnId, route, recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max));
+                            Timestamp invalidateUntil = recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max);
+                            commitInvalidate(node, txnId, route, invalidateUntil);
                             isDone = true;
                             callback.accept(Outcome.Invalidated, null);
                         }

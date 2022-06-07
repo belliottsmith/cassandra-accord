@@ -9,10 +9,13 @@ import accord.local.Command;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
+import accord.primitives.AbstractRoute;
 import accord.primitives.Ballot;
 import accord.primitives.Route;
-import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
+
+import static accord.utils.Functions.mapReduceNonNull;
+import static accord.utils.Functions.reduceNonNull;
 
 public class BeginInvalidation implements EpochRequest
 {
@@ -70,13 +73,13 @@ public class BeginInvalidation implements EpochRequest
     public static class InvalidateOk implements InvalidateReply
     {
         public final Status status;
-        public final @Nullable RoutingKeys routingKeys;
-        public final RoutingKey homeKey;
+        public final @Nullable AbstractRoute route;
+        public final @Nullable RoutingKey homeKey;
 
-        public InvalidateOk(Status status, @Nullable RoutingKeys routingKeys, RoutingKey homeKey)
+        public InvalidateOk(Status status, @Nullable AbstractRoute route, @Nullable RoutingKey homeKey)
         {
             this.status = status;
-            this.routingKeys = routingKeys;
+            this.route = route;
             this.homeKey = homeKey;
         }
 
@@ -89,7 +92,7 @@ public class BeginInvalidation implements EpochRequest
         @Override
         public String toString()
         {
-            return "InvalidateOk{" + status + ',' + routingKeys + ',' + homeKey + '}';
+            return "InvalidateOk{" + status + ',' + (route != null ? route: homeKey) + '}';
         }
 
         @Override
@@ -102,10 +105,15 @@ public class BeginInvalidation implements EpochRequest
         {
             for (InvalidateOk ok : invalidateOks)
             {
-                if (ok.routingKeys != null)
-                    return ok.routingKeys.toRoute(ok.homeKey);
+                if (ok.route instanceof Route)
+                    return (Route)ok.route;
             }
             return null;
+        }
+
+        public static AbstractRoute mergeRoutes(List<InvalidateOk> invalidateOks)
+        {
+            return mapReduceNonNull(ok -> ok.route, AbstractRoute::union, invalidateOks);
         }
 
         public static RoutingKey findHomeKey(List<InvalidateOk> invalidateOks)

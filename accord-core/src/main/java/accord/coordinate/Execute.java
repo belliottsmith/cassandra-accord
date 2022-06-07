@@ -81,8 +81,10 @@ class Execute extends AnyReadCoordinator<ReadReply>
                 callback.accept(null, new Preempted(txnId, route.homeKey));
                 return Action.Abort;
             case NotCommitted:
-                Topology topology = node.topology().globalForEpoch(txnId.epoch);
-                node.send(from, new Commit(Maximal, from, topology, new Single(topology, false), txnId, txn, route, executeAt, deps, false));
+                // we might be missing the original commit, or the additional commit, so send everything
+                Topologies topology = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch);
+                Topology coordinateTopology = topology.forEpoch(txnId.epoch);
+                node.send(from, new Commit(Maximal, from, coordinateTopology, topology, txnId, txn, route, executeAt, deps, false));
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 return Action.TryAlternative;
             case Invalid:
