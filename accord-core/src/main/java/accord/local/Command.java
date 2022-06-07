@@ -161,6 +161,11 @@ public class Command implements Listener, Consumer<Listener>
         return status;
     }
 
+    public boolean hasBeenWitnessed()
+    {
+        return partialTxn != null;
+    }
+
     public boolean hasBeen(Status status)
     {
         return this.status.compareTo(status) >= 0;

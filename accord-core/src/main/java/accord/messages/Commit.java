@@ -138,7 +138,7 @@ public class Commit extends ReadData
                     return null;
 
                 case Insufficient:
-                    Preconditions.checkState(!command.hasBeen(PreAccepted));
+                    Preconditions.checkState(!command.hasBeenWitnessed());
                     if (defer == null)
                         defer = new Defer(PreAccepted, this, node, from, replyContext);
                     defer.add(command, instance);
