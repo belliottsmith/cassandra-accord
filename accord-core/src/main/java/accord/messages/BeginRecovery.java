@@ -29,6 +29,7 @@ import accord.local.Status;
 import accord.primitives.TxnId;
 
 import static accord.local.Status.Accepted;
+import static accord.local.Status.AcceptedInvalidate;
 import static accord.local.Status.Committed;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.PreAccept.calculateDeps;
@@ -232,11 +233,11 @@ public class BeginRecovery extends TxnRequest
             T max = null;
             for (T ok : recoverOks)
             {
-                if (!ok.status.hasBeen(Accepted))
+                if (!ok.status.hasBeen(AcceptedInvalidate))
                     continue;
 
                 boolean update =     max == null
-                                  || max.status.compareTo(ok.status) < 0
+                                  || max.status.logicalCompareTo(ok.status) < 0
                                   || (ok.status == Accepted && max.accepted.compareTo(ok.accepted) < 0);
                 if (update)
                     max = ok;
