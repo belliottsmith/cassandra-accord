@@ -56,15 +56,7 @@ public class CheckOnUncommitted extends CheckOnCommitted
             case PreAccepted:
                 KeyRanges localRanges = node.topology().localRangesForEpochs(txnId.epoch, untilLocalEpoch);
                 if (!route().covers(localRanges))
-                {
-//                    if (full.homeKey != null)
-//                    {
-//                        node.forEachLocal(route(), txnId.epoch, untilLocalEpoch, commandStore -> {
-//                            commandStore.command(txnId).updateHomeKey(full.homeKey);
-//                        });
-//                    }
                     break;
-                }
 
                 KeyRanges localCommitRanges = node.topology().localRangesForEpoch(txnId.epoch);
                 RoutingKey progressKey = node.trySelectProgressKey(txnId, route().slice(localCommitRanges));

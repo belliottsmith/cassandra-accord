@@ -216,6 +216,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         RecoverOk acceptOrCommit = maxAcceptedOrLater(recoverOks);
         if (acceptOrCommit != null)
         {
+            Timestamp executeAt = acceptOrCommit.executeAt;
             switch (acceptOrCommit.status)
             {
                 default: throw new IllegalStateException();
@@ -233,26 +234,30 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 case Applied:
                 case Executed:
                     // TODO: in some cases we can use the deps we already have (e.g. if we have a quorum of Committed responses)
-                    CollectDeps.withDeps(node, txnId, route, txn, acceptOrCommit.executeAt, (deps, fail) -> {
-                        if (fail != null)
-                        {
-                            accept(null, fail);
-                        }
-                        else
-                        {
-                            // TODO: when writes/result are partially replicated, need to confirm we have quorum of these
-                            Persist.persistAndCommit(node, txnId, route, txn, acceptOrCommit.executeAt, deps, acceptOrCommit.writes, acceptOrCommit.result);
-                            accept(acceptOrCommit.result, null);
-                        }
+                    node.withEpoch(executeAt.epoch, () -> {
+                        CollectDeps.withDeps(node, txnId, route, txn, acceptOrCommit.executeAt, (deps, fail) -> {
+                            if (fail != null)
+                            {
+                                accept(null, fail);
+                            }
+                            else
+                            {
+                                // TODO: when writes/result are partially replicated, need to confirm we have quorum of these
+                                Persist.persistAndCommit(node, txnId, route, txn, executeAt, deps, acceptOrCommit.writes, acceptOrCommit.result);
+                                accept(acceptOrCommit.result, null);
+                            }
+                        });
                     });
                     return;
 
                 case ReadyToExecute:
                 case Committed:
                     // TODO: in some cases we can use the deps we already have (e.g. if we have a quorum of Committed responses)
-                    CollectDeps.withDeps(node, txnId, route, txn, acceptOrCommit.executeAt, (deps, fail) -> {
-                        if (fail != null) accept(null, fail);
-                        else Execute.execute(node, txnId, txn, route, acceptOrCommit.executeAt, deps, this);
+                    node.withEpoch(executeAt.epoch, () -> {
+                        CollectDeps.withDeps(node, txnId, route, txn, executeAt, (deps, fail) -> {
+                            if (fail != null) accept(null, fail);
+                            else Execute.execute(node, txnId, txn, route, acceptOrCommit.executeAt, deps, this);
+                        });
                     });
                     return;
 

@@ -78,8 +78,11 @@ public class CheckOnCommitted extends CheckShards
 
     void onSuccessCriteriaOrExhaustion(CheckStatusOkFull full)
     {
-        persistLocally(full);
-        callback.accept(full, null);
+        long epoch = full.executeAt == null ? untilLocalEpoch : Math.max(full.executeAt.epoch, untilLocalEpoch);
+        node.withEpoch(epoch, () -> {
+            persistLocally(full);
+            callback.accept(full, null);
+        });
     }
 
     void persistLocally(CheckStatusOkFull full)
