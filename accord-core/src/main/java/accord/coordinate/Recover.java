@@ -223,7 +223,6 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 case PreAccepted:
                     throw new IllegalStateException("Should only be possible to have Accepted or later commands");
                 case Accepted:
-                    // TODO (now): do we need to do a preaccept round for the later epoch?
                     node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
                         Propose.propose(node, ballot, txnId, txn, route, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
                     });

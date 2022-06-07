@@ -160,7 +160,6 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
                 return;
             }
 
-            // TODO (now): error handling in other callbacks
             try
             {
                 Route route = InvalidateOk.findRoute(invalidateOks);

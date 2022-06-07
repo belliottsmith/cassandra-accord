@@ -44,7 +44,7 @@ public class CheckOnCommitted extends CheckShards
         this.untilLocalEpoch = untilLocalEpoch;
     }
 
-    // TODO (now): many callers only need to consult precisely executeAt.epoch remotely
+    // TODO: many callers only need to consult precisely executeAt.epoch remotely
     public static CheckOnCommitted checkOnCommitted(Node node, TxnId txnId, AbstractRoute route, long untilRemoteEpoch, long untilLocalEpoch, BiConsumer<? super CheckStatusOkFull, Throwable> callback)
     {
         CheckOnCommitted checkOnCommitted = new CheckOnCommitted(node, txnId, route, untilRemoteEpoch, untilLocalEpoch, callback);

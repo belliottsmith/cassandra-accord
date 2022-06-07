@@ -47,7 +47,6 @@ public class TopologyUpdate
 
         public CommandSync(TxnId txnId, CheckStatusOk status, long epoch)
         {
-            // TODO (now): AcceptInvalidate and CommitInvalidate can leave these fields null
             Preconditions.checkArgument(status.status.hasBeen(Status.PreAccepted));
             Preconditions.checkState(status.route != null);
             this.txnId = txnId;
