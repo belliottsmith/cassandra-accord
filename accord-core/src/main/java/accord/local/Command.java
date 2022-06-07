@@ -884,12 +884,12 @@ public class Command implements Listener, Consumer<Listener>
     public RoutingKeys someRoutingKeys()
     {
         if (route != null)
-            return route;
+            return route instanceof Route ? route : route.with(route.homeKey);
 
-        if (partialTxn != null)
+        if (partialTxn != null && !partialTxn.keys.isEmpty())
             return partialTxn.keys.toRoutingKeys();
 
-        if (partialDeps != null)
+        if (partialDeps != null && !partialDeps.keys().isEmpty())
             return partialDeps.keys().toRoutingKeys();
 
         return null;
