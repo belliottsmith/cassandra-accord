@@ -25,6 +25,7 @@ import accord.primitives.Ballot;
 import accord.primitives.TxnId;
 
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
+import static accord.local.Status.Accepted;
 import static accord.local.Status.Committed;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
@@ -64,7 +65,7 @@ public class Invalidate implements Callback<InvalidateReply>
 
     public static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, BiConsumer<Outcome, Throwable> callback)
     {
-        return invalidate(node, txnId, someKeys, someKey, Committed, callback);
+        return invalidate(node, txnId, someKeys, someKey, Accepted, callback);
     }
 
     private static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, Status recoverIfAtLeast, BiConsumer<Outcome, Throwable> callback)
