@@ -18,7 +18,6 @@ import accord.local.Node.Id;
 import accord.messages.Commit;
 import accord.messages.ReadData;
 import accord.messages.ReadData.ReadOk;
-import accord.topology.Topologies.Single;
 import accord.topology.Topology;
 
 import static accord.coordinate.AnyReadCoordinator.Action.Accept;

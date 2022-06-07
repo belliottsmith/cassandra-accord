@@ -377,6 +377,8 @@ public class Command implements Listener, Consumer<Listener>
         ProgressShard shard = progressShard();
         commandStore.progressLog().invalidate(txnId, shard);
         executeAt = txnId;
+        if (partialDeps == null)
+            partialDeps = PartialDeps.NONE;
         status = Invalidated;
 
         listeners.forEach(this);

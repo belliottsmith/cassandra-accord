@@ -158,7 +158,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         isDone = true;
         if (failure == null) callback.accept(Outcome.Executed, null);
         else callback.accept(null, failure);
-        node.agent().onRecover(node, result, null);
+        node.agent().onRecover(node, result, failure);
     }
 
     public static Recover recover(Node node, TxnId txnId, Txn txn, Route route, BiConsumer<Outcome, Throwable> callback)
@@ -219,14 +219,49 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             switch (acceptOrCommit.status)
             {
                 default: throw new IllegalStateException();
-                case NotWitnessed:
-                case PreAccepted:
-                    throw new IllegalStateException("Should only be possible to have Accepted or later commands");
-                case Accepted:
-                    node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
-                        Propose.propose(node, ballot, txnId, txn, route, acceptOrCommit.executeAt, acceptOrCommit.deps, this);
+                case Invalidated:
+                {
+                    Timestamp invalidateUntil = recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max);
+                    node.withEpoch(invalidateUntil.epoch, () -> {
+                        commitInvalidate(node, txnId, route, invalidateUntil);
+                    });
+                    isDone = true;
+                    callback.accept(Outcome.Invalidated, null);
+                    return;
+                }
+
+                case Applied:
+                case Executed:
+                    // TODO: in some cases we can use the deps we already have (e.g. if we have a quorum of Committed responses)
+                    CollectDeps.withDeps(node, txnId, route, txn, acceptOrCommit.executeAt, (deps, fail) -> {
+                        if (fail != null)
+                        {
+                            accept(null, fail);
+                        }
+                        else
+                        {
+                            // TODO: when writes/result are partially replicated, need to confirm we have quorum of these
+                            Persist.persistAndCommit(node, txnId, route, txn, acceptOrCommit.executeAt, deps, acceptOrCommit.writes, acceptOrCommit.result);
+                            accept(acceptOrCommit.result, null);
+                        }
                     });
                     return;
+
+                case ReadyToExecute:
+                case Committed:
+                    // TODO: in some cases we can use the deps we already have (e.g. if we have a quorum of Committed responses)
+                    CollectDeps.withDeps(node, txnId, route, txn, acceptOrCommit.executeAt, (deps, fail) -> {
+                        if (fail != null) accept(null, fail);
+                        else Execute.execute(node, txnId, txn, route, acceptOrCommit.executeAt, deps, this);
+                    });
+                    return;
+
+                case Accepted:
+                    node.withEpoch(acceptOrCommit.executeAt.epoch, () -> {
+                        Propose.propose(node, ballot, txnId, txn, route, acceptOrCommit.executeAt, mergeDeps(), this);
+                    });
+                    return;
+
                 case AcceptedInvalidate:
                     proposeInvalidate(node, ballot, txnId, route.homeKey).addCallback((success, fail) -> {
                         if (fail != null) accept(null, fail);
@@ -239,32 +274,15 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                         }
                     });
                     return;
-                case Committed:
-                case ReadyToExecute:
-                {
-                    Execute.execute(node, txnId, txn, route, acceptOrCommit.executeAt, assembleDeps(), this);
-                    return;
-                }
-                case Executed:
-                case Applied:
-                {
-                    Persist.persistAndCommit(node, txnId, route, txn, acceptOrCommit.executeAt, assembleDeps(), acceptOrCommit.writes, acceptOrCommit.result);
-                    accept(acceptOrCommit.result, null);
-                    return;
-                }
-                case Invalidated:
-                    Timestamp invalidateUntil = recoverOks.stream().map(ok -> ok.executeAt).reduce(txnId, Timestamp::max);
-                    node.withEpoch(invalidateUntil.epoch, () -> {
-                        commitInvalidate(node, txnId, route, invalidateUntil);
-                    });
-                    isDone = true;
-                    callback.accept(Outcome.Invalidated, null);
-                    return;
+
+                case NotWitnessed:
+                case PreAccepted:
+                    throw new IllegalStateException("Should only be possible to have Accepted or later commands");
             }
         }
 
         // should all be PreAccept
-        Deps deps = Deps.merge(txn.keys, recoverOks, ok -> ok.deps);
+        Deps deps = mergeDeps();
         Deps earlierAcceptedNoWitness = Deps.merge(txn.keys, recoverOks, ok -> ok.earlierAcceptedNoWitness);
         Deps earlierCommittedWitness = Deps.merge(txn.keys, recoverOks, ok -> ok.earlierCommittedWitness);
         Timestamp maxExecuteAt = txnId;
@@ -299,7 +317,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         });
     }
 
-    private Deps assembleDeps()
+    private Deps mergeDeps()
     {
         KeyRanges ranges = recoverOks.stream().map(r -> r.deps.covering).reduce(KeyRanges::union).orElseThrow();
         Preconditions.checkState(ranges.containsAll(txn.keys));

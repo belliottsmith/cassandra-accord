@@ -5,7 +5,6 @@ import java.util.Set;
 import accord.local.*;
 import accord.local.Node.Id;
 import accord.api.Data;
-import accord.primitives.AbstractRoute;
 import accord.primitives.PartialRoute;
 import accord.primitives.Route;
 import accord.topology.Topologies;

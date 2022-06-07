@@ -11,6 +11,8 @@ public enum MessageType
     ACCEPT_REQ,
     ACCEPT_INVALIDATE_REQ,
     ACCEPT_RSP,
+    GET_DEPS_REQ,
+    GET_DEPS_RSP,
     COMMIT_REQ,
     COMMIT_INVALIDATE,
     APPLY_REQ,

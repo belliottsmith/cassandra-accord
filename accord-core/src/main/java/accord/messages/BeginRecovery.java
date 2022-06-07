@@ -2,7 +2,6 @@ package accord.messages;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
-import accord.messages.Commit.Invalidate;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
@@ -30,9 +29,7 @@ import accord.local.Status;
 import accord.primitives.TxnId;
 
 import static accord.local.Status.Accepted;
-import static accord.local.Status.AcceptedInvalidate;
 import static accord.local.Status.Committed;
-import static accord.local.Status.Invalidated;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.PreAccept.calculateDeps;
 
@@ -74,13 +71,11 @@ public class BeginRecovery extends TxnRequest
             }
 
             PartialDeps deps = command.savedPartialDeps();
-            if (!command.status().hasBeen(Accepted)) // includes AcceptedInvalidated
+            if (!command.hasBeen(Accepted))
             {
                 deps = calculateDeps(instance, txnId, txn.keys, txn.kind, txnId,
                                      PartialDeps.builder(instance.ranges().at(txnId.epoch), txn.keys));
             }
-            if (deps == null && command.status().hasBeen(Invalidated))
-                deps = PartialDeps.NONE;
 
             boolean rejectsFastPath;
             Deps earlierCommittedWitness, earlierAcceptedNoWitness;
