@@ -16,9 +16,8 @@ import accord.topology.Topologies;
 
 import static accord.messages.PreAccept.calculateDeps;
 
-public class GetDeps extends TxnRequest
+public class GetDeps extends TxnRequest.WithUnsync
 {
-    final TxnId txnId;
     final Keys keys;
     final Timestamp executeAt;
     final Txn.Kind kind;
@@ -26,8 +25,7 @@ public class GetDeps extends TxnRequest
     public GetDeps(Id to, Topologies topologies, Route route, TxnId txnId, Txn txn, Timestamp executeAt)
     {
         // TODO: we don't need to send to homeKey here, can use keys directly
-        super(to, topologies, route);
-        this.txnId = txnId;
+        super(to, topologies, txnId, route);
         this.keys = txn.keys.slice(scope.covering);
         this.executeAt = executeAt;
         this.kind = txn.kind;
@@ -35,8 +33,9 @@ public class GetDeps extends TxnRequest
 
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
-        PartialDeps deps = node.mapReduceLocal(scope, txnId.epoch, executeAt.epoch, instance -> {
-            KeyRanges ranges = instance.ranges().between(txnId.epoch, executeAt.epoch);
+        PartialDeps deps = node.mapReduceLocal(scope, minEpoch, executeAt.epoch, instance -> {
+            // TODO: shrink ranges to those that intersect key
+            KeyRanges ranges = instance.ranges().between(minEpoch, executeAt.epoch);
             return calculateDeps(instance, txnId, keys, kind, executeAt, PartialDeps.builder(ranges, keys));
         }, PartialDeps::with);
 

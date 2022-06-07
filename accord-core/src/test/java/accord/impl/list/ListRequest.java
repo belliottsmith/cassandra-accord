@@ -12,6 +12,7 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
+import accord.messages.CheckStatus.CheckStatusReply;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.MessageType;
 import accord.messages.ReplyContext;
@@ -40,6 +41,12 @@ public class ListRequest implements Request
         }
 
         @Override
+        protected Action check(Id from, CheckStatusOk ok)
+        {
+            return ok.status.compareTo(Executed) >= 0 ? Action.Accept : Action.Reject;
+        }
+
+        @Override
         protected void onDone(Done done, Throwable failure)
         {
             super.onDone(done, failure);
@@ -50,7 +57,7 @@ public class ListRequest implements Request
         @Override
         protected boolean isSufficient(Id from, CheckStatusOk ok)
         {
-            return ok.status.compareTo(Executed) >= 0;
+            throw new UnsupportedOperationException();
         }
     }
 

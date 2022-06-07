@@ -19,7 +19,7 @@ import accord.topology.Topologies;
 //       we should also escalate the number of nodes we contact on each failure to succeed
 abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
 {
-    protected enum Action { Abort, Continue, AcceptQuorum, Accept, Success }
+    protected enum Action { Abort, Continue, Reject, AcceptQuorum, Accept, Success }
 
     protected enum Done { Exhausted, ReachedQuorum, Success }
 
@@ -120,6 +120,10 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
                 break;
 
             case Continue:
+                break;
+
+            case Reject:
+                tryOneMore();
                 break;
 
             case AcceptQuorum:

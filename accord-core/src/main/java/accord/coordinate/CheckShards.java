@@ -52,6 +52,14 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
 
     protected abstract boolean isSufficient(Id from, CheckStatusOk ok);
 
+    protected Action check(Id from, CheckStatusOk ok)
+    {
+        if (isSufficient(from, ok))
+            return Action.Accept;
+
+        return Action.AcceptQuorum;
+    }
+
     @Override
     protected void onDone(Done done, Throwable failure)
     {
@@ -87,10 +95,7 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
             if (merged == null) merged = ok;
             else merged = merged.merge(ok);
 
-            if (isSufficient(from, ok))
-                return Action.Accept;
-
-            return Action.AcceptQuorum;
+            return check(from, ok);
         }
         else
         {
