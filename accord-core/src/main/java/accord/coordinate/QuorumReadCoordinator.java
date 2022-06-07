@@ -83,7 +83,7 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
 
     final Node node;
     final TxnId txnId;
-    final Tracker tracker;
+    protected final Tracker tracker;
     private boolean isDone;
     private Throwable failure;
     Map<Id, Reply> debug = new HashMap<>();
@@ -123,6 +123,7 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
                 break;
 
             case Reject:
+                tracker.recordReadFailure(from);
                 tryOneMore();
                 break;
 
@@ -144,7 +145,8 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
             case Success:
                 isDone = true;
                 onDone(Done.Success, null);
-        }    }
+        }
+    }
 
     @Override
     public void onSlowResponse(Id from)
@@ -208,4 +210,10 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
             failure.addSuppressed(this.failure);
         onDone(null, failure);
     }
+
+    protected Set<Id> nodes()
+    {
+        return tracker.nodes();
+    }
+
 }

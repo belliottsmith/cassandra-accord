@@ -150,6 +150,7 @@ public class BurnTest
 
         AtomicInteger acks = new AtomicInteger();
         AtomicInteger nacks = new AtomicInteger();
+        AtomicInteger lost = new AtomicInteger();
         AtomicInteger clock = new AtomicInteger();
         AtomicInteger requestIndex = new AtomicInteger();
         for (int max = Math.min(concurrency, requests.length) ; requestIndex.get() < max ; )
@@ -183,7 +184,8 @@ public class BurnTest
                 replies[(int)packet.replyId] = packet;
                 if (reply.readKeys == null)
                 {
-                    nacks.incrementAndGet();
+                    if (reply.read == null) nacks.incrementAndGet();
+                    else lost.incrementAndGet();
                     return;
                 }
 
@@ -218,7 +220,7 @@ public class BurnTest
                     () -> new AtomicLong()::incrementAndGet,
                     topologyFactory, () -> null);
 
-        logger.info("Received {} acks and {} nacks ({} total) to {} operations\n", acks.get(), nacks.get(), acks.get() + nacks.get(), operations);
+        logger.info("Received {} acks, {} nacks and {} lost ({} total) to {} operations\n", acks.get(), nacks.get(), lost.get(), acks.get() + nacks.get() + lost.get(), operations);
         if (clock.get() != operations * 2)
         {
             for (int i = 0 ; i < requests.length ; ++i)
@@ -233,7 +235,7 @@ public class BurnTest
     public static void main(String[] args) throws Exception
     {
         Long overrideSeed = null;
-//        Long overrideSeed = -763352888693325055L;
+//        Long overrideSeed = 2039233368321947764L;
         do
         {
             long seed = overrideSeed != null ? overrideSeed : ThreadLocalRandom.current().nextLong();

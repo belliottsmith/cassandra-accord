@@ -6,13 +6,13 @@ import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.coordinate.CheckShards;
 import accord.coordinate.CoordinateFailed;
+import accord.coordinate.Invalidate;
 import accord.impl.basic.Cluster;
 import accord.impl.basic.Packet;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.Status;
 import accord.messages.CheckStatus.CheckStatusOk;
-import accord.messages.CheckStatus.CheckStatusReply;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.MessageType;
 import accord.messages.ReplyContext;
@@ -25,16 +25,19 @@ import static accord.local.Status.Executed;
 
 public class ListRequest implements Request
 {
+    enum Outcome { Invalidated, Lost, Neither }
+
     static class CheckOnResult extends CheckShards
     {
-        final BiConsumer<CheckStatusOk, Throwable> callback;
-        protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<CheckStatusOk, Throwable> callback)
+        final BiConsumer<Outcome, Throwable> callback;
+        int count = 0;
+        protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback)
         {
             super(node, txnId, RoutingKeys.of(homeKey), txnId.epoch, IncludeInfo.All);
             this.callback = callback;
         }
 
-        static void checkOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<CheckStatusOk, Throwable> callback)
+        static void checkOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback)
         {
             CheckOnResult result = new CheckOnResult(node, txnId, homeKey, callback);
             result.start();
@@ -43,6 +46,7 @@ public class ListRequest implements Request
         @Override
         protected Action check(Id from, CheckStatusOk ok)
         {
+            ++count;
             return ok.status.compareTo(Executed) >= 0 ? Action.Accept : Action.Reject;
         }
 
@@ -51,7 +55,9 @@ public class ListRequest implements Request
         {
             super.onDone(done, failure);
             if (failure != null) callback.accept(null, failure);
-            else callback.accept(merged, null);
+            else if (merged.status.hasBeen(Status.Invalidated)) callback.accept(Outcome.Invalidated, null);
+            else if (count == nodes().size()) callback.accept(Outcome.Lost, null);
+            else callback.accept(Outcome.Neither, null);
         }
 
         @Override
@@ -90,8 +96,17 @@ public class ListRequest implements Request
                     RoutingKey homeKey = ((CoordinateFailed) fail).homeKey;
                     TxnId txnId = ((CoordinateFailed) fail).txnId;
                     CheckOnResult.checkOnResult(node, txnId, homeKey, (s, f) -> {
-                        if (s.status == Status.Invalidated)
-                            node.reply(client, replyContext, new ListResult(client, ((Packet)replyContext).requestId, null, null, null));
+                        switch (s)
+                        {
+                            case Invalidated:
+                                node.reply(client, replyContext, new ListResult(client, ((Packet)replyContext).requestId, null, null, null));
+                                break;
+                            case Lost:
+                                node.reply(client, replyContext, new ListResult(client, ((Packet)replyContext).requestId, null, new int[0][], null));
+                                break;
+                            case Neither:
+                                // currently caught elsewhere in response tracking, but might help to throw an exception here
+                        }
                     });
                 });
             }
