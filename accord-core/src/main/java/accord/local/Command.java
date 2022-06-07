@@ -712,7 +712,7 @@ public class Command implements Listener, Consumer<Listener>
             {
                 // failing any of these tests is always an illegal state
                 if (!route.covers(existingRanges))
-                    throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + existingRanges);
+                    return false;
 
                 if (existingRanges != additionalRanges && !route.covers(additionalRanges))
                     throw new IllegalArgumentException("Incomplete route (" + route + ") provided; does not cover " + additionalRanges);
