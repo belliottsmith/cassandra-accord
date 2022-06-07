@@ -80,6 +80,7 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
             return;
 
         node.ifLocal(merged.homeKey, txnId, store -> {
+            store.command(txnId).setGloballyPersistent(merged.homeKey, merged.executeAt);
             store.progressLog().durable(txnId, null);
             return null;
         });

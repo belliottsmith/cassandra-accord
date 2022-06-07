@@ -191,6 +191,9 @@ public class Command implements Listener, Consumer<Listener>
                 commandStore.agent().onInconsistentTimestamp(this, this.executeAt, executeAt);
         }
         isGloballyPersistent = true;
+
+        if (owns(txnId.epoch, homeKey))
+            commandStore.progressLog().durable(txnId, null);
     }
 
     public enum AcceptOutcome

@@ -50,6 +50,7 @@ import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.LocallyDura
 import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.NotExecuted;
 import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.RemotelyDurableOnly;
 import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.Committed;
+import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.NotWitnessed;
 import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.ReadyToExecute;
 import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.Uncommitted;
 import static accord.impl.SimpleProgressLog.NonHomeState.Safe;
@@ -100,7 +101,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
         }
 
-        LocalStatus status = LocalStatus.NotWitnessed;
+        LocalStatus status = NotWitnessed;
         Progress progress = NoneExpected;
         Status maxStatus;
         Ballot maxPromised;
@@ -219,7 +220,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
                                     // TODO: avoid returning null (need to change semantics here in this case, though, as Recover doesn't return CheckStatusOk)
                                     if (success == null || success.hasExecutedOnAllShards)
-                                        command.setGloballyPersistent(homeKey, null);
+                                        command.setGloballyPersistent(homeKey, null); // TODO (now): notify progressLog.durable()?
 
                                     if (success != null)
                                         updateMax(success);
@@ -871,6 +872,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         public void durable(TxnId txnId, Set<Id> persistedOn)
         {
             State state = ensure(txnId);
+            state.ensureAtLeast(Uncommitted, Expected);
             state.global().durable(node, state.command, persistedOn);
         }
 
