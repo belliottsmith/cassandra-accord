@@ -184,6 +184,12 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 {
                     if (status.isAtLeast(Committed) && command.isGloballyPersistent())
                     {
+                        if (!command.executes())
+                        {
+                            status = LocalStatus.Done;
+                            progress = Done;
+                            break;
+                        }
                         // must also be committed, as at the time of writing we do not guarantee dissemination of Commit
                         // records to the home shard, so we only know the executeAt shards will have witnessed this
                         // if the home shard is at an earlier phase, it must run recovery
