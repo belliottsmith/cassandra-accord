@@ -12,7 +12,6 @@ import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.IncludeInfo;
-import accord.messages.Commit;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.KeyRanges;
@@ -103,8 +102,7 @@ public class RecoverWithRoute extends CheckShards
         {
             case NotWitnessed:
             {
-                Invalidate.invalidate(node, txnId, route, route.homeKey)
-                          .addCallback(callback);
+                Invalidate.invalidate(node, txnId, route, route.homeKey, callback);
                 break;
             }
             case PreAccepted:

@@ -590,21 +590,20 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             if (someKeys == null) someKeys = this.someKeys;
             if (someKeys == null || !someKeys.contains(someKey))
                 someKeys = RoutingKeys.of(someKey);
-            debugInvestigating = Invalidate.invalidate(node, command.txnId(), someKeys, someKey)
-                                           .addCallback((success, fail) -> {
-                                               if (progress != Investigating) return;
-                                               if (fail != null) progress = Expected;
-                                               else switch (success)
-                                               {
-                                                   default: throw new IllegalStateException();
-                                                   case Preempted:
-                                                       progress = Expected;
-                                                       break;
-                                                   case Executed:
-                                                   case Invalidated:
-                                                       progress = Done;
-                                               }
-                                           });
+            debugInvestigating = Invalidate.invalidate(node, command.txnId(), someKeys, someKey, (success, fail) -> {
+                if (progress != Investigating) return;
+                if (fail != null) progress = Expected;
+                else switch (success)
+                {
+                    default: throw new IllegalStateException();
+                    case Preempted:
+                        progress = Expected;
+                        break;
+                    case Executed:
+                    case Invalidated:
+                        progress = Done;
+                }
+            });
         }
 
         public String toString()

@@ -18,7 +18,6 @@ import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Ballot;
 import accord.primitives.TxnId;
-import accord.utils.Functions;
 
 import static accord.local.Status.Accepted;
 import static accord.utils.Functions.reduceNonNull;
@@ -109,8 +108,7 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Thr
                     {
                         // order important, as route could be a Route which does not implement RoutingKeys.union
                         RoutingKeys someKeys = reduceNonNull(RoutingKeys::union, this.someKeys, merged.route, route);
-                        Invalidate.invalidateIfNotWitnessed(node, txnId, someKeys, homeKey)
-                                  .addCallback(this);
+                        Invalidate.invalidateIfNotWitnessed(node, txnId, someKeys, homeKey, this);
                         break;
                     }
                 case PreAccepted:
@@ -126,8 +124,7 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Thr
 
                 case Invalidated:
                     RoutingKeys someKeys = reduceNonNull(RoutingKeys::union, this.someKeys, merged.route, route);
-                    Invalidate.invalidate(node, txnId, someKeys, homeKey)
-                              .addCallback(this);
+                    Invalidate.invalidate(node, txnId, someKeys, homeKey, this);
             }
         }
     }

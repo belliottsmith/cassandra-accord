@@ -17,14 +17,12 @@ import accord.messages.BeginInvalidation.InvalidateNack;
 import accord.messages.BeginInvalidation.InvalidateOk;
 import accord.messages.BeginInvalidation.InvalidateReply;
 import accord.messages.Callback;
-import accord.messages.PreAccept;
 import accord.primitives.AbstractRoute;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.topology.Shard;
 import accord.primitives.Ballot;
 import accord.primitives.TxnId;
-import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
 import static accord.local.Status.Committed;
@@ -32,7 +30,7 @@ import static accord.local.Status.PreAccepted;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 
 // TODO (now): switch to callback like others
-public class Invalidate extends AsyncFuture<Outcome> implements Callback<InvalidateReply>, BiConsumer<Outcome, Throwable>
+public class Invalidate implements Callback<InvalidateReply>
 {
     final Node node;
     final Ballot ballot;
@@ -40,12 +38,15 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
     final RoutingKeys someKeys;
     final RoutingKey someKey;
     final Status recoverIfAtLeast;
+    final BiConsumer<Outcome, Throwable> callback;
 
+    boolean isDone;
     final List<InvalidateOk> invalidateOks = new ArrayList<>();
     final QuorumShardTracker preacceptTracker;
 
-    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, Status recoverIfAtLeast)
+    private Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, Status recoverIfAtLeast, BiConsumer<Outcome, Throwable> callback)
     {
+        this.callback = callback;
         Preconditions.checkArgument(someKeys.contains(someKey));
         this.node = node;
         this.ballot = ballot;
@@ -56,21 +57,21 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
         this.preacceptTracker = new QuorumShardTracker(shard);
     }
 
-    public static Invalidate invalidateIfNotWitnessed(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey)
+    public static Invalidate invalidateIfNotWitnessed(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, BiConsumer<Outcome, Throwable> callback)
     {
-        return invalidate(node, txnId, someKeys, someKey, PreAccepted);
+        return invalidate(node, txnId, someKeys, someKey, PreAccepted, callback);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey)
+    public static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, BiConsumer<Outcome, Throwable> callback)
     {
-        return invalidate(node, txnId, someKeys, someKey, Committed);
+        return invalidate(node, txnId, someKeys, someKey, Committed, callback);
     }
 
-    private static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, Status recoverIfAtLeast)
+    private static Invalidate invalidate(Node node, TxnId txnId, RoutingKeys someKeys, RoutingKey someKey, Status recoverIfAtLeast, BiConsumer<Outcome, Throwable> callback)
     {
         Ballot ballot = new Ballot(node.uniqueNow());
         Shard shard = node.topology().forEpochIfKnown(someKey, txnId.epoch);
-        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKeys, someKey, recoverIfAtLeast);
+        Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, someKeys, someKey, recoverIfAtLeast, callback);
         node.send(shard.nodes, to -> new BeginInvalidation(txnId, someKey, ballot), invalidate);
         return invalidate;
     }
@@ -78,7 +79,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
     @Override
     public synchronized void onSuccess(Id from, InvalidateReply reply)
     {
-        if (isDone() || preacceptTracker.hasReachedQuorum())
+        if (isDone || preacceptTracker.hasReachedQuorum())
             return;
 
         if (!reply.isOk())
@@ -91,7 +92,9 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
                     return null;
                 });
             }
-            trySuccess(Outcome.Preempted);
+
+            isDone = true;
+            callback.accept(Outcome.Preempted, null);
             return;
         }
 
@@ -125,7 +128,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
                 case Applied:
                     if (route != null)
                     {
-                        RecoverWithRoute.recover(node, ballot, txnId, route, this);
+                        RecoverWithRoute.recover(node, ballot, txnId, route, callback);
                     }
                     else if (homeKey != null && homeKey.equals(someKey))
                     {
@@ -133,7 +136,7 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
                     }
                     else if (homeKey != null)
                     {
-                        RecoverWithHomeKey.recover(node, txnId, homeKey, this);
+                        RecoverWithHomeKey.recover(node, txnId, homeKey, callback);
                     }
                     else
                     {
@@ -148,7 +151,8 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
                     node.forEachLocalSince(someKeys, txnId, instance -> {
                         instance.command(txnId).commitInvalidate();
                     });
-                    trySuccess(Outcome.Invalidated);
+                    isDone = true;
+                    callback.accept(Outcome.Invalidated, null);
                     return;
             }
         }
@@ -158,7 +162,8 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
         proposeInvalidate(node, ballot, txnId, someKey).addCallback((success, fail) -> {
             if (fail != null)
             {
-                tryFailure(fail);
+                isDone = true;
+                callback.accept(null, fail);
                 return;
             }
 
@@ -175,7 +180,8 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
             }
             finally
             {
-                trySuccess(Outcome.Invalidated);
+                isDone = true;
+                callback.accept(Outcome.Invalidated, null);
             }
         });
     }
@@ -183,23 +189,23 @@ public class Invalidate extends AsyncFuture<Outcome> implements Callback<Invalid
     @Override
     public void onFailure(Id from, Throwable failure)
     {
-        if (isDone())
+        if (isDone)
             return;
 
         if (preacceptTracker.failure(from))
-            tryFailure(new Timeout(txnId, null));
+        {
+            isDone = true;
+            callback.accept(null, new Timeout(txnId, null));
+        }
     }
 
     @Override
     public void onCallbackFailure(Throwable failure)
     {
-        tryFailure(failure);
-    }
+        if (isDone)
+            return;
 
-    @Override
-    public void accept(Outcome success, Throwable fail)
-    {
-        if (success != null) trySuccess(success);
-        else tryFailure(fail);
+        isDone = true;
+        callback.accept(null, failure);
     }
 }
