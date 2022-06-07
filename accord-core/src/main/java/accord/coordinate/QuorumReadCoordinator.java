@@ -15,6 +15,8 @@ import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 
+// TODO: this class needs cleaning up
+//       we should also escalate the number of nodes we contact on each failure to succeed
 abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
 {
     protected enum Action { Abort, Continue, AcceptQuorum, Accept, Success }
@@ -122,21 +124,18 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
 
             case AcceptQuorum:
                 tracker.recordReadResponse(from);
-                if (tracker.hasReachedQuorum())
-                {
-                    isDone = true;
-                    onDone(Done.ReachedQuorum, null);
-                }
-                else
-                {
+                if (!finishIfQuorum())
                     tryOneMore();
-                }
                 break;
 
             case Accept:
                 tracker.recordReadSuccess(from);
                 if (!tracker.hasCompletedRead())
+                {
+                    if (!finishIfQuorum())
+                        finishIfFailure();
                     break;
+                }
 
             case Success:
                 isDone = true;
@@ -169,11 +168,23 @@ abstract class QuorumReadCoordinator<Reply> implements Callback<Reply>
     private void tryOneMore()
     {
         Set<Id> readFrom = tracker.computeMinimalReadSetAndMarkInflight();
-        if (readFrom != null)
-        {
-            contact(readFrom);
-        }
-        else if (tracker.hasFailed())
+        if (readFrom != null) contact(readFrom);
+        else finishIfFailure();
+    }
+
+    private boolean finishIfQuorum()
+    {
+        if (!tracker.hasReachedQuorum())
+            return false;
+
+        isDone = true;
+        onDone(Done.ReachedQuorum, null);
+        return true;
+    }
+
+    private void finishIfFailure()
+    {
+        if (tracker.hasFailed())
         {
             isDone = true;
             onDone(null, failure);
