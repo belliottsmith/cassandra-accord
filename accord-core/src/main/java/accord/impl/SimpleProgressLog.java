@@ -63,6 +63,7 @@ import static accord.impl.SimpleProgressLog.Progress.NoProgress;
 import static accord.impl.SimpleProgressLog.Progress.NoneExpected;
 import static accord.impl.SimpleProgressLog.Progress.advance;
 import static accord.local.Status.Executed;
+import static accord.local.Status.Invalidated;
 
 public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 {
@@ -872,7 +873,10 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         public void durable(TxnId txnId, Set<Id> persistedOn)
         {
             State state = ensure(txnId);
-            state.ensureAtLeast(Uncommitted, Expected);
+            // we could have been invalidated prior to knowing that we were the home shard
+            // TODO: this is a clunky way of addressing this
+            if (state.homeState == null && state.command.hasBeen(Invalidated))
+                invalidate(txnId, Home);
             state.global().durable(node, state.command, persistedOn);
         }
 
