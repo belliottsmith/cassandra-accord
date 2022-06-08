@@ -16,6 +16,7 @@ import accord.primitives.KeyRanges;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
@@ -34,11 +35,18 @@ public class CheckOnCommitted extends CheckShards
      * The epoch until which we want to persist any response for locally
      */
     final long untilLocalEpoch;
+    final AbstractRoute route;
 
     CheckOnCommitted(Node node, TxnId txnId, AbstractRoute route, long untilRemoteEpoch, long untilLocalEpoch, BiConsumer<? super CheckStatusOkFull, Throwable> callback)
     {
+        this(node, txnId, route, route, untilRemoteEpoch, untilLocalEpoch, callback);
+    }
+
+    CheckOnCommitted(Node node, TxnId txnId, AbstractRoute route, RoutingKeys someKeys, long untilRemoteEpoch, long untilLocalEpoch, BiConsumer<? super CheckStatusOkFull, Throwable> callback)
+    {
         // TODO (now): restore behaviour of only collecting info if e.g. Committed or Executed
-        super(node, txnId, route, untilRemoteEpoch, IncludeInfo.All);
+        super(node, txnId, someKeys, untilRemoteEpoch, IncludeInfo.All);
+        this.route = route;
         this.callback = callback;
         this.untilLocalEpoch = untilLocalEpoch;
     }
@@ -53,7 +61,7 @@ public class CheckOnCommitted extends CheckShards
 
     protected AbstractRoute route()
     {
-        return (AbstractRoute) someKeys;
+        return route;
     }
 
     @Override

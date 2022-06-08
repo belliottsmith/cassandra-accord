@@ -232,6 +232,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         switch (streamCount)
         {
             case 0: return NONE;
+            // TODO (now): might return a PartialDeps - should strip down to Deps
             case 1: return streams[0].source;
             case 2: return streams[0].source.with(streams[1].source);
         }

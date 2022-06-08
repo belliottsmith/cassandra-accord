@@ -124,7 +124,9 @@ public class RecoverWithRoute extends CheckShards
                 if (merged.committedDeps.covers(route))
                 {
                     Deps deps = merged.committedDeps.reconstitute(route);
-                    Persist.persistAndCommit(node, txnId, route, txn, merged.executeAt, deps, merged.writes, merged.result);
+                    node.withEpoch(merged.executeAt.epoch, () -> {
+                        Persist.persistAndCommit(node, txnId, route, txn, merged.executeAt, deps, merged.writes, merged.result);
+                    });
                     callback.accept(Executed, null);
                     break;
                 }

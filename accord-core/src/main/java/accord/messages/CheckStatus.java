@@ -2,8 +2,6 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
-import com.google.common.base.Preconditions;
-
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.local.Command;
@@ -27,7 +25,7 @@ import static accord.local.Status.NotWitnessed;
 import static accord.local.Status.PreAccepted;
 import static accord.messages.TxnRequest.computeScope;
 
-public class CheckStatus implements Request
+public class CheckStatus implements EpochRequest
 {
     // order is important
     public enum IncludeInfo
@@ -382,5 +380,11 @@ public class CheckStatus implements Request
     public MessageType type()
     {
         return MessageType.CHECK_STATUS_REQ;
+    }
+
+    @Override
+    public long waitForEpoch()
+    {
+        return endEpoch;
     }
 }

@@ -183,13 +183,8 @@ public class Command implements Listener, Consumer<Listener>
     public void setGloballyPersistent(RoutingKey homeKey, @Nullable Timestamp executeAt)
     {
         updateHomeKey(homeKey);
-        if (executeAt != null)
-        {
-            if (!hasBeen(Committed))
-                this.executeAt = executeAt;
-            else if (!this.executeAt.equals(executeAt))
-                commandStore.agent().onInconsistentTimestamp(this, this.executeAt, executeAt);
-        }
+        if (executeAt != null && hasBeen(Committed) && !this.executeAt.equals(executeAt))
+            commandStore.agent().onInconsistentTimestamp(this, this.executeAt, executeAt);
         isGloballyPersistent = true;
     }
 
@@ -628,6 +623,8 @@ public class Command implements Listener, Consumer<Listener>
 
     private ProgressShard progressShard(AbstractRoute route, @Nullable RoutingKey progressKey, KeyRanges coordinateRanges)
     {
+        updateHomeKey(route.homeKey);
+
         if (progressKey == null || progressKey == NO_PROGRESS_KEY)
         {
             if (this.progressKey == null)
@@ -638,7 +635,6 @@ public class Command implements Listener, Consumer<Listener>
 
         if (this.progressKey == null) this.progressKey = progressKey;
         else if (!this.progressKey.equals(progressKey)) throw new AssertionError();
-        updateHomeKey(route.homeKey);
 
         if (!coordinateRanges.contains(progressKey))
             return No;

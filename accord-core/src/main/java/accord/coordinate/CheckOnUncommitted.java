@@ -26,7 +26,9 @@ public class CheckOnUncommitted extends CheckOnCommitted
 {
     CheckOnUncommitted(Node node, TxnId txnId, AbstractRoute route, long srcEpoch, long trgEpoch, BiConsumer<CheckStatusOkFull, Throwable> callback)
     {
-        super(node, txnId, route, srcEpoch, trgEpoch, callback);
+        // invalidated transactions are not guaranteed to be disseminated, so we include the homeKey when
+        // checking on uncommitted transactions to ensure we detect an invalidation
+        super(node, txnId, route, route.with(route.homeKey), srcEpoch, trgEpoch, callback);
     }
 
     public static CheckOnUncommitted checkOnUncommitted(Node node, TxnId txnId, AbstractRoute route, long srcEpoch, long trgEpoch,

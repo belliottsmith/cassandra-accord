@@ -5,14 +5,18 @@ import java.util.Set;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.Status;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.CheckStatusReply;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.primitives.RoutingKeys;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+
+import static accord.local.Status.Committed;
 
 /**
  * A result of null indicates the transaction is globally persistent
@@ -80,7 +84,8 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
             return;
 
         node.ifLocal(merged.homeKey, txnId, store -> {
-            store.command(txnId).setGloballyPersistent(merged.homeKey, merged.executeAt);
+            Timestamp executeAt = merged.status.hasBeen(Committed) ? merged.executeAt : null;
+            store.command(txnId).setGloballyPersistent(merged.homeKey, executeAt);
             store.progressLog().durable(txnId, null);
             return null;
         });

@@ -513,21 +513,22 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         if (progress == Investigating && blockedOn == this.blockedOn)
                         {
                             progress = Expected;
-                            if (findRoute != null && !(someKeys instanceof Route))
+                            if (findRoute != null && findRoute.route != null && !(someKeys instanceof Route))
                                 someKeys = findRoute.route;
                             if (findRoute == null && fail == null)
                                 invalidate(node, command);
                         }
                     };
 
-                    if (command.homeKey() != null)
+                    if (command.homeKey() != null || route != null)
                     {
-                        debugInvestigating = FindRoute.findRoute(node, txnId, command.homeKey(), foundRoute);
+                        RoutingKey homeKey = route != null ? route.homeKey : command.homeKey();
+                        debugInvestigating = FindRoute.findRoute(node, txnId, homeKey, foundRoute);
                     }
                     else
                     {
                         RoutingKeys someKeys = this.someKeys;
-                        if (someKeys == null) someKeys = route;
+                        if (someKeys == null || someKeys.isEmpty()) someKeys = route;
                         debugInvestigating = FindHomeKey.findHomeKey(node, txnId, someKeys, (homeKey, fail) -> {
                             if (progress == Investigating && blockedOn == this.blockedOn)
                             {
