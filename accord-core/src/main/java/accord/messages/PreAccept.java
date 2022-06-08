@@ -64,7 +64,7 @@ public class PreAccept extends TxnRequest.WithUnsync
 
                 case Success:
                 case Redundant:
-                    return new PreAcceptOk(txnId, command.executeAt(), calculateDeps(instance, txnId, txn.keys, txn.kind, txnId,
+                     return new PreAcceptOk(txnId, command.executeAt(), calculateDeps(instance, txnId, txn.keys, txn.kind, txnId,
                                                                                      PartialDeps.builder(instance.ranges().at(txnId.epoch), txn.keys)));
 
                 case RejectedBallot:

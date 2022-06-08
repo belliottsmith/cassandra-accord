@@ -43,9 +43,10 @@ public class TopologyUpdate
         final Status status;
         final AbstractRoute route;
         final Timestamp executeAt;
-        final long epoch;
+        final long fromEpoch;
+        final long toEpoch;
 
-        public CommandSync(TxnId txnId, CheckStatusOk status, long epoch)
+        public CommandSync(TxnId txnId, CheckStatusOk status, long fromEpoch)
         {
             Preconditions.checkArgument(status.status.hasBeen(Status.PreAccepted));
             Preconditions.checkState(status.route != null);
@@ -53,7 +54,8 @@ public class TopologyUpdate
             this.status = status.status;
             this.route = status.route;
             this.executeAt = status.executeAt;
-            this.epoch = epoch;
+            this.fromEpoch = fromEpoch;
+            this.toEpoch = fromEpoch + 1;
         }
 
         public void process(Node node, Consumer<Boolean> onDone)
@@ -66,7 +68,7 @@ public class TopologyUpdate
             }
 
             // first check if already applied locally, and respond immediately
-            Status minStatus = node.mapReduceLocal(route, epoch, instance -> instance.command(txnId).status(), (a, b) -> a.compareTo(b) <= 0 ? a : b);
+            Status minStatus = node.mapReduceLocal(route, toEpoch, instance -> instance.command(txnId).status(), (a, b) -> a.compareTo(b) <= 0 ? a : b);
             if (minStatus == null || minStatus.logicalCompareTo(status) >= 0)
             {
                 // TODO: minStatus == null means we're sending redundant messages
@@ -87,7 +89,7 @@ public class TopologyUpdate
                 case PreAccepted:
                 case Accepted:
                 case AcceptedInvalidate:
-                    FetchData.fetchUncommitted(node, txnId, route, epoch, callback);
+                    FetchData.fetchUncommitted(node, txnId, route, toEpoch, callback);
                     break;
                 case Committed:
                 case ReadyToExecute:
@@ -95,7 +97,7 @@ public class TopologyUpdate
                 case Applied:
                 case Invalidated:
                     node.withEpoch(executeAt.epoch, () -> {
-                        FetchData.fetchCommitted(node, txnId, route, executeAt, epoch, callback);
+                        FetchData.fetchCommitted(node, txnId, route, executeAt, toEpoch, callback);
                     });
             }
         }
