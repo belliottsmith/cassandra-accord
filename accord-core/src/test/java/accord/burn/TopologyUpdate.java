@@ -2,6 +2,7 @@ package accord.burn;
 
 import accord.api.TestableConfigurationService;
 import accord.coordinate.FetchData;
+import accord.coordinate.Invalidate;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.Status;
@@ -30,6 +31,7 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static accord.coordinate.FetchData.Outcome.NotFullyReplicated;
+import static accord.coordinate.Invalidate.invalidate;
 
 public class TopologyUpdate
 {
@@ -78,7 +80,7 @@ public class TopologyUpdate
 
             BiConsumer<FetchData.Outcome, Throwable> callback = (outcome, fail) -> {
                 if (fail != null) process(node, onDone);
-                else if (outcome == NotFullyReplicated) throw new IllegalStateException();
+                else if (outcome == NotFullyReplicated) invalidate(node, txnId, route, route.homeKey, (i1, i2) -> process(node, onDone));
                 else onDone.accept(true);
             };
             switch (status)
