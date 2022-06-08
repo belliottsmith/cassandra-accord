@@ -79,9 +79,12 @@ public class TopologyUpdate
             }
 
             BiConsumer<FetchData.Outcome, Throwable> callback = (outcome, fail) -> {
-                if (fail != null) process(node, onDone);
-                else if (outcome == NotFullyReplicated) invalidate(node, txnId, route, route.homeKey, (i1, i2) -> process(node, onDone));
-                else onDone.accept(true);
+                if (fail != null)
+                    process(node, onDone);
+                else if (outcome == NotFullyReplicated)
+                    invalidate(node, txnId, route.with(route.homeKey), route.homeKey, (i1, i2) -> process(node, onDone));
+                else
+                    onDone.accept(true);
             };
             switch (status)
             {
@@ -98,7 +101,7 @@ public class TopologyUpdate
                 case Executed:
                 case Applied:
                 case Invalidated:
-                    node.withEpoch(executeAt.epoch, () -> {
+                    node.withEpoch(Math.max(executeAt.epoch, toEpoch), () -> {
                         FetchData.fetchCommitted(node, txnId, route, executeAt, toEpoch, callback);
                     });
             }

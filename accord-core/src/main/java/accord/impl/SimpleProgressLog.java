@@ -875,8 +875,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             State state = ensure(txnId);
             // we could have been invalidated prior to knowing that we were the home shard
             // TODO: this is a clunky way of addressing this
-            if (state.homeState == null && state.command.hasBeen(Invalidated))
-                invalidate(txnId, Home);
+            if (state.homeState == null && state.command.hasBeen(Invalidated)) invalidate(txnId, Home);
+            else state.ensureAtLeast(Uncommitted, Expected);
             state.global().durable(node, state.command, persistedOn);
         }
 
