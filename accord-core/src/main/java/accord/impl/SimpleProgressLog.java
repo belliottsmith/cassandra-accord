@@ -18,7 +18,7 @@ import accord.api.RoutingKey;
 import accord.coordinate.FindHomeKey;
 import accord.coordinate.FindRoute;
 import accord.coordinate.Invalidate;
-import accord.impl.SimpleProgressLog.HomeState.LocalStatus;
+import accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Node;
@@ -45,14 +45,14 @@ import static accord.api.ProgressLog.ProgressShard.Unsure;
 import static accord.coordinate.CheckOnCommitted.checkOnCommitted;
 import static accord.coordinate.CheckOnUncommitted.checkOnUncommitted;
 import static accord.coordinate.InformHomeOfTxn.inform;
-import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.Durable;
-import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.LocallyDurableOnly;
-import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.NotExecuted;
-import static accord.impl.SimpleProgressLog.GlobalState.GlobalStatus.RemotelyDurableOnly;
-import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.Committed;
-import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.NotWitnessed;
-import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.ReadyToExecute;
-import static accord.impl.SimpleProgressLog.HomeState.LocalStatus.Uncommitted;
+import static accord.impl.SimpleProgressLog.DisseminateState.DisseminateStatus.Durable;
+import static accord.impl.SimpleProgressLog.DisseminateState.DisseminateStatus.LocallyDurableOnly;
+import static accord.impl.SimpleProgressLog.DisseminateState.DisseminateStatus.NotExecuted;
+import static accord.impl.SimpleProgressLog.DisseminateState.DisseminateStatus.RemotelyDurableOnly;
+import static accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus.Committed;
+import static accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus.NotWitnessed;
+import static accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus.ReadyToExecute;
+import static accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus.Uncommitted;
 import static accord.impl.SimpleProgressLog.NonHomeState.Safe;
 import static accord.impl.SimpleProgressLog.NonHomeState.StillUnsafe;
 import static accord.impl.SimpleProgressLog.NonHomeState.Unsafe;
@@ -63,7 +63,6 @@ import static accord.impl.SimpleProgressLog.Progress.NoProgress;
 import static accord.impl.SimpleProgressLog.Progress.NoneExpected;
 import static accord.impl.SimpleProgressLog.Progress.advance;
 import static accord.local.Status.Executed;
-import static accord.local.Status.Invalidated;
 
 // TODO (now): consider propagating invalidations in the same way as we do applied
 public class SimpleProgressLog implements Runnable, ProgressLog.Factory
@@ -88,22 +87,23 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         }
     }
 
-    static class HomeState
+    // exists only on home shard
+    static class CoordinateState
     {
-        enum LocalStatus
+        enum CoordinateStatus
         {
-            NotWitnessed, Uncommitted, Committed, ReadyToExecute, Done;
-            boolean isAtMost(LocalStatus equalOrLessThan)
+            NotWitnessed, Uncommitted, Committed, ReadyToExecute, LocallyDurable, Done;
+            boolean isAtMost(CoordinateStatus equalOrLessThan)
             {
                 return compareTo(equalOrLessThan) <= 0;
             }
-            boolean isAtLeast(LocalStatus equalOrGreaterThan)
+            boolean isAtLeast(CoordinateStatus equalOrGreaterThan)
             {
                 return compareTo(equalOrGreaterThan) >= 0;
             }
         }
 
-        LocalStatus status = NotWitnessed;
+        CoordinateStatus status = NotWitnessed;
         Progress progress = NoneExpected;
         Status maxStatus;
         Ballot maxPromised;
@@ -111,12 +111,12 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
         Object debugInvestigating;
 
-        void ensureAtLeast(LocalStatus newStatus, Progress newProgress, Command command)
+        void ensureAtLeast(CoordinateStatus newStatus, Progress newProgress, Command command)
         {
             Preconditions.checkState(command.owns(command.txnId().epoch, command.homeKey()));
             if (newStatus == Committed && command.isGloballyPersistent() && !command.executes())
             {
-                status = LocalStatus.Done;
+                status = CoordinateStatus.Done;
                 progress = Done;
             }
             else if (newStatus.compareTo(status) > 0)
@@ -151,7 +151,22 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
         }
 
-        void executed()
+//        void durableLocal()
+//        {
+//            switch (status)
+//            {
+//                default: throw new IllegalStateException();
+//                case NotWitnessed:
+//                case Uncommitted:
+//                case Committed:
+//                case ReadyToExecute:
+//                    status = CoordinateStatus.LocallyDurable;
+//                    progress = Expected;
+//                case Done:
+//            }
+//        }
+//
+        void durableGlobal()
         {
             switch (status)
             {
@@ -160,7 +175,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 case Uncommitted:
                 case Committed:
                 case ReadyToExecute:
-                    status = LocalStatus.Done;
+                    status = CoordinateStatus.Done;
                     progress = NoneExpected;
                 case Done:
             }
@@ -190,7 +205,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     {
                         if (!command.executes())
                         {
-                            status = LocalStatus.Done;
+                            status = CoordinateStatus.Done;
                             progress = Done;
                             break;
                         }
@@ -222,7 +237,10 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
                                     // TODO: avoid returning null (need to change semantics here in this case, though, as Recover doesn't return CheckStatusOk)
                                     if (success == null || success.hasExecutedOnAllShards)
-                                        command.setGloballyPersistent(homeKey, null); // TODO (now): notify progressLog.durable()?
+                                    {
+                                        command.setGloballyPersistent(homeKey, null);
+                                        command.commandStore.progressLog().durable(txnId, null);
+                                    }
 
                                     if (success != null)
                                         updateMax(success);
@@ -243,9 +261,10 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         }
     }
 
-    static class GlobalState
+    // exists only on home shard
+    static class DisseminateState
     {
-        enum GlobalStatus { NotExecuted, RemotelyDurableOnly, LocallyDurableOnly, Durable, Done }
+        enum DisseminateStatus { NotExecuted, RemotelyDurableOnly, LocallyDurableOnly, Durable, Done }
 
         static class PendingDurable
         {
@@ -277,7 +296,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
         }
 
-        GlobalStatus status = NotExecuted;
+        DisseminateStatus status = NotExecuted;
         Progress progress = NoneExpected;
         Set<Id> notAwareOfDurability;
         Set<Id> notPersisted;
@@ -333,7 +352,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             return true;
         }
 
-        void durable(Node node, Command command, Set<Id> persistedOn)
+        void durableGlobal(Node node, Command command, @Nullable Set<Id> persistedOn)
         {
             switch (status)
             {
@@ -404,19 +423,30 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
 
             progress = Investigating;
-            if (notAwareOfDurability.isEmpty())
+            switch (status)
             {
-                // TODO: also track actual durability
-                status = GlobalStatus.Done;
-                progress = Done;
-                return;
-            }
+                default: throw new IllegalStateException();
 
-            Route route = (Route) command.route();
-            Timestamp executeAt = command.executeAt();
-            investigating = new CoordinateAwareness();
-            Topologies topologies = node.topology().forEpoch(route, executeAt.epoch);
-            node.send(notAwareOfDurability, to -> new InformDurable(to, topologies, route, txnId, executeAt), investigating);
+                case LocallyDurableOnly:
+
+                    break;
+
+                case Durable:
+                    if (notAwareOfDurability.isEmpty())
+                    {
+                        // TODO: also track actual durability
+                        status = DisseminateStatus.Done;
+                        progress = Done;
+                        return;
+                    }
+
+                    Route route = (Route) command.route();
+                    Timestamp executeAt = command.executeAt();
+                    investigating = new CoordinateAwareness();
+                    Topologies topologies = node.topology().forEpoch(route, executeAt.epoch);
+                    node.send(notAwareOfDurability, to -> new InformDurable(to, topologies, route, txnId, executeAt), investigating);
+                    break;
+            }
         }
 
         @Override
@@ -628,8 +658,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         final TxnId txnId;
         final Command command;
 
-        HomeState homeState;
-        GlobalState globalState;
+        CoordinateState coordinateState;
+        DisseminateState disseminateState;
         NonHomeState nonHomeState;
         BlockingState blockingState;
 
@@ -661,23 +691,23 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 nonHomeState = ensureAtLeast;
         }
 
-        HomeState home()
+        CoordinateState local()
         {
-            if (homeState == null)
-                homeState = new HomeState();
-            return homeState;
+            if (coordinateState == null)
+                coordinateState = new CoordinateState();
+            return coordinateState;
         }
 
-        GlobalState global()
+        DisseminateState global()
         {
-            if (globalState == null)
-                globalState = new GlobalState();
-            return globalState;
+            if (disseminateState == null)
+                disseminateState = new DisseminateState();
+            return disseminateState;
         }
 
-        void ensureAtLeast(LocalStatus newStatus, Progress newProgress)
+        void ensureAtLeast(CoordinateStatus newStatus, Progress newProgress)
         {
-            home().ensureAtLeast(newStatus, newProgress, command);
+            local().ensureAtLeast(newStatus, newProgress, command);
         }
 
         void updateNonHome(Node node)
@@ -710,11 +740,11 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             if (blockingState != null)
                 blockingState.update(node, txnId, command);
 
-            if (homeState != null)
-                homeState.update(node, txnId, command);
+            if (coordinateState != null)
+                coordinateState.update(node, txnId, command);
 
-            if (globalState != null)
-                globalState.update(node, txnId, command);
+            if (disseminateState != null)
+                disseminateState.update(node, txnId, command);
 
             if (nonHomeState != null)
                 updateNonHome(node);
@@ -723,8 +753,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         @Override
         public String toString()
         {
-            return homeState != null ? homeState.toString()
-                                     : nonHomeState != null
+            return coordinateState != null ? coordinateState.toString()
+                                           : nonHomeState != null
                                        ? nonHomeState.toString()
                                        : blockingState.toString();
         }
@@ -796,13 +826,13 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             return state;
         }
 
-        private void ensureSafeOrAtLeast(TxnId txnId, ProgressShard shard, LocalStatus newStatus, Progress newProgress)
+        private void ensureSafeOrAtLeast(TxnId txnId, ProgressShard shard, CoordinateStatus newStatus, Progress newProgress)
         {
             Preconditions.checkState(shard != Unsure);
 
             State state = null;
             assert newStatus.isAtMost(ReadyToExecute);
-            if (newStatus.isAtLeast(LocalStatus.Committed))
+            if (newStatus.isAtLeast(CoordinateStatus.Committed))
                 state = recordCommit(txnId);
 
             if (shard.isProgress())
@@ -823,28 +853,20 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         @Override
         public void commit(TxnId txnId, ProgressShard shard)
         {
-            ensureSafeOrAtLeast(txnId, shard, LocalStatus.Committed, NoneExpected);
+            ensureSafeOrAtLeast(txnId, shard, CoordinateStatus.Committed, NoneExpected);
         }
 
         @Override
         public void readyToExecute(TxnId txnId, ProgressShard shard)
         {
-            ensureSafeOrAtLeast(txnId, shard, LocalStatus.ReadyToExecute, Expected);
+            ensureSafeOrAtLeast(txnId, shard, CoordinateStatus.ReadyToExecute, Expected);
         }
 
         @Override
         public void execute(TxnId txnId, ProgressShard shard)
         {
-            Preconditions.checkState(shard != Unsure);
-            State state = recordExecute(txnId);
-
-            if (shard.isProgress())
-            {
-                state = ensure(txnId, state);
-
-                if (shard.isHome()) state.home().executed();
-                else ensure(txnId).ensureAtLeast(Safe);
-            }
+            // this is the home shard's state ONLY, so we don't know it is fully durable locally
+            ensureSafeOrAtLeast(txnId, shard, CoordinateStatus.ReadyToExecute, Expected);
         }
 
         @Override
@@ -852,14 +874,14 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         {
             State state = recordExecute(txnId);
 
-            Preconditions.checkState(shard == Home || state == null || state.homeState == null);
+            Preconditions.checkState(shard == Home || state == null || state.coordinateState == null);
 
             // note: we permit Unsure here, so we check if we have any local home state
             if (shard.isProgress())
             {
                 state = ensure(txnId, state);
 
-                if (shard.isHome()) state.ensureAtLeast(LocalStatus.Done, Done);
+                if (shard.isHome()) state.ensureAtLeast(CoordinateStatus.Done, Done);
                 else ensure(txnId).ensureAtLeast(Safe);
             }
         }
@@ -868,18 +890,16 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         public void durableLocal(TxnId txnId)
         {
             State state = ensure(txnId);
-            ensure(txnId).global().durableLocal(node, state.command);
+//            state.local().durableLocal();
+            state.global().durableLocal(node, state.command);
         }
 
         @Override
-        public void durable(TxnId txnId, Set<Id> persistedOn)
+        public void durable(TxnId txnId, @Nullable Set<Id> persistedOn)
         {
             State state = ensure(txnId);
-            // we could have been invalidated prior to knowing that we were the home shard
-            // TODO: this is a clunky way of addressing this
-            if (state.homeState == null && state.command.hasBeen(Invalidated)) invalidate(txnId, Home);
-            else state.ensureAtLeast(Uncommitted, Expected);
-            state.global().durable(node, state.command, persistedOn);
+            state.local().durableGlobal();
+            state.global().durableGlobal(node, state.command, persistedOn);
         }
 
         @Override
