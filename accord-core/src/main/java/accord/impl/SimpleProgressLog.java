@@ -65,6 +65,7 @@ import static accord.impl.SimpleProgressLog.Progress.advance;
 import static accord.local.Status.Executed;
 import static accord.local.Status.Invalidated;
 
+// TODO (now): consider propagating invalidations in the same way as we do applied
 public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 {
     enum Progress

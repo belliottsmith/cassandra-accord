@@ -41,6 +41,8 @@ public interface Topologies
 
     KeyRanges computeRangesForNode(Id node);
 
+    boolean hasRangesForNode(Id node, KeyRanges ranges);
+
     default void forEach(IndexedConsumer<Topology> consumer)
     {
         for (int i=0, mi=size(); i<mi; i++)
@@ -190,6 +192,12 @@ public interface Topologies
         }
 
         @Override
+        public boolean hasRangesForNode(Id node, KeyRanges ranges)
+        {
+            return topology.rangesForNode(node).contains(ranges);
+        }
+
+        @Override
         public boolean equals(Object obj)
         {
             return Topologies.equals(this, obj);
@@ -312,6 +320,13 @@ public interface Topologies
             for (int i = 0, mi = size() ; i < mi ; i++)
                 ranges = ranges.union(get(i).rangesForNode(node));
             return ranges;
+        }
+
+        @Override
+        public boolean hasRangesForNode(Id node, KeyRanges ranges)
+        {
+            // TODO: optimise
+            return computeRangesForNode(node).contains(ranges);
         }
 
         public void add(Topology topology)

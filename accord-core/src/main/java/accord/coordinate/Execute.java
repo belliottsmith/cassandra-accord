@@ -53,7 +53,7 @@ class Execute extends AnyReadCoordinator<ReadReply>
     @Override
     void start(Set<Id> readSet)
     {
-        Commit.commitAndRead(node, topologies, txnId, txn, route, executeAt, deps, readSet, this);
+        Commit.commitMinimalAndRead(node, topologies, txnId, txn, route, executeAt, deps, readSet, this);
     }
 
     @Override

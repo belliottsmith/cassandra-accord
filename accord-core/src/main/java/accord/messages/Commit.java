@@ -70,7 +70,7 @@ public class Commit extends ReadData
 
     // TODO (now): accept Topology not Topologies
     // TODO: do not commit if we're already ready to execute (requires extra info in Accept responses)
-    public static void commitAndRead(Node node, Topologies executeTopologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Set<Id> readSet, Callback<ReadReply> callback)
+    public static void commitMinimalAndRead(Node node, Topologies executeTopologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Set<Id> readSet, Callback<ReadReply> callback)
     {
         Topologies allTopologies = executeTopologies;
         if (txnId.epoch != executeAt.epoch)
@@ -95,34 +95,17 @@ public class Commit extends ReadData
         }
     }
 
-    public static void commit(Node node, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps)
-    {
-        Topologies commitTo = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch);
-        Topology coordinateTopology = commitTo.forEpoch(txnId.epoch);
-        for (Node.Id to : commitTo.nodes())
-        {
-            Commit send = new Commit(Kind.Minimal, to, coordinateTopology, commitTo, txnId, txn, route, executeAt, deps, false);
-            node.send(to, send);
-        }
-    }
-
-    public static void commit(Node node, Topologies commitTo, Set<Id> doNotCommitTo, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps)
+    public static void commitMinimal(Node node, Topologies commitTo, Topologies appliedTo, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Callback<? super ReadReply> callback)
     {
         Topology coordinateTopology = commitTo.forEpoch(txnId.epoch);
         for (Node.Id to : commitTo.nodes())
         {
-            if (doNotCommitTo.contains(to))
+            if (appliedTo.hasRangesForNode(to, coordinateTopology.rangesForNode(to)))
                 continue;
 
             Commit send = new Commit(Kind.Minimal, to, coordinateTopology, commitTo, txnId, txn, route, executeAt, deps, false);
-            node.send(to, send);
+            node.send(to, send, callback);
         }
-    }
-
-    public static void commit(Node node, Topologies commitTo, Topologies appliedTo, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps)
-    {
-        // TODO (now): avoid sending commits to nodes that Apply the same
-        commit(node, commitTo, Collections.emptySet(), txnId, txn, route, executeAt, deps);
     }
 
     public void process(Node node, Id from, ReplyContext replyContext)

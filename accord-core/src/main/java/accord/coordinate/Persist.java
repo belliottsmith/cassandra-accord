@@ -7,12 +7,15 @@ import accord.api.Result;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.messages.Accept.AcceptReply;
 import accord.messages.Apply;
 import accord.messages.Apply.ApplyReply;
 import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.messages.Commit.Kind;
 import accord.messages.InformHomeDurable;
+import accord.messages.ReadData.ReadNack;
+import accord.messages.ReadData.ReadReply;
 import accord.primitives.Deps;
 import accord.primitives.Route;
 import accord.primitives.Txn;
@@ -23,7 +26,7 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 
 // TODO: do not extend AsyncFuture, just use a simple BiConsumer callback
-public class Persist implements Callback<ApplyReply>
+public class Persist implements Callback<Object>
 {
     final Node node;
     final TxnId txnId;
@@ -49,7 +52,7 @@ public class Persist implements Callback<ApplyReply>
         if (txnId.epoch != executeAt.epoch)
         {
             Topologies earlierTopologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch - 1);
-            Commit.commit(node, earlierTopologies, persistTo, txnId, txn, route, executeAt, deps);
+            Commit.commitMinimal(node, earlierTopologies, persistTo, txnId, txn, route, executeAt, deps, persist);
         }
     }
 
@@ -66,9 +69,34 @@ public class Persist implements Callback<ApplyReply>
     }
 
     @Override
-    public void onSuccess(Id from, ApplyReply reply)
+    public void onSuccess(Id from, Object reply)
     {
-        switch (reply)
+        ApplyReply applyReply;
+        if (reply instanceof ApplyReply)
+        {
+            applyReply = (ApplyReply) reply;
+        }
+        else
+        {
+            if (!(reply instanceof ReadNack))
+                throw new IllegalStateException();
+
+            ReadNack readNack = (ReadNack) reply;
+            switch (readNack)
+            {
+                default: throw new IllegalStateException();
+                case Invalid:
+                    throw new IllegalStateException("Invalid topology used to send request");
+                case Redundant:
+                    applyReply = ApplyReply.Redundant;
+                    break;
+                case NotCommitted:
+                    applyReply = ApplyReply.Insufficient;
+                    break;
+            }
+        }
+
+        switch (applyReply)
         {
             default: throw new IllegalStateException();
             case Redundant:
