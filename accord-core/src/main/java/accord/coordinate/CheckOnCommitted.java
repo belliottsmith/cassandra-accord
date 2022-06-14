@@ -113,27 +113,28 @@ public class CheckOnCommitted extends CheckShards
                 return;
         }
 
-        KeyRanges minCommitRanges = node.topology().localRangesForEpoch(txnId.epoch);
-        if (!route().covers(minCommitRanges))
+        KeyRanges commitRanges = node.topology().localRangesForEpochs(txnId.epoch, untilLocalEpoch);
+        if (!route().covers(commitRanges))
             return; // only try to persist locally if we requested enough data
 
         Timestamp executeAt = full.executeAt;
-        KeyRanges minExecuteRanges = node.topology().localRangesForEpochs(executeAt.epoch, Math.max(executeAt.epoch, untilLocalEpoch));
+        KeyRanges executeRanges = node.topology().localRangesForEpochs(executeAt.epoch, Math.max(executeAt.epoch, untilLocalEpoch));
         KeyRanges allRanges = node.topology().localRangesForEpochs(txnId.epoch, untilLocalEpoch);
 
-        PartialRoute route = route().slice(allRanges);
-        RoutingKey progressKey = node.trySelectProgressKey(txnId, route);
+        PartialRoute requestedRoute = route().slice(allRanges);
+        AbstractRoute maxRoute = route().union(full.route);
+        RoutingKey progressKey = node.trySelectProgressKey(txnId, maxRoute);
 
-        boolean canCommit = route.covers(minCommitRanges);
-        boolean canExecute = route.covers(minExecuteRanges);
+        boolean canCommit = requestedRoute.covers(commitRanges);
+        boolean canExecute = requestedRoute.covers(executeRanges);
 
         Preconditions.checkState(canCommit);
         Preconditions.checkState(untilRemoteEpoch < full.executeAt.epoch || canExecute);
-        Preconditions.checkState(full.partialTxn.covers(route));
-        Preconditions.checkState(full.committedDeps.covers(route));
+        Preconditions.checkState(full.partialTxn.covers(requestedRoute));
+        Preconditions.checkState(full.committedDeps.covers(requestedRoute));
 
-        PartialTxn partialTxn = full.partialTxn.reconstitutePartial(route).slice(allRanges, true);
-        PartialDeps partialDeps = full.committedDeps.reconstitutePartial(route).slice(allRanges);
+        PartialTxn partialTxn = full.partialTxn.reconstitutePartial(requestedRoute).slice(allRanges, true);
+        PartialDeps partialDeps = full.committedDeps.reconstitutePartial(requestedRoute).slice(allRanges);
 
         switch (full.fullStatus)
         {
@@ -146,24 +147,26 @@ public class CheckOnCommitted extends CheckShards
                     //  (i.e. those covered by Route)
                     if (txnId.epoch != executeAt.epoch)
                     {
-                        node.forEachLocal(route, txnId.epoch, executeAt.epoch - 1, commandStore -> {
+                        node.forEachLocal(maxRoute, txnId.epoch, executeAt.epoch - 1, commandStore -> {
                             Command command = commandStore.command(txnId);
-                            command.commit(full.route, progressKey, partialTxn, executeAt, partialDeps);
+                            command.commit(maxRoute, progressKey, partialTxn, executeAt, partialDeps);
                         });
                     }
 
-                    node.forEachLocal(route, executeAt.epoch, untilLocalEpoch, commandStore -> {
+                    node.forEachLocal(maxRoute, executeAt.epoch, untilLocalEpoch, commandStore -> {
                         Command command = commandStore.command(txnId);
-                        confirm(command.commit(full.route, progressKey, partialTxn, executeAt, partialDeps));
-                        confirm(command.apply(untilLocalEpoch, route, executeAt, partialDeps, full.writes, full.result));
+                        confirm(command.commit(maxRoute, progressKey, partialTxn, executeAt, partialDeps));
+                        confirm(command.apply(untilLocalEpoch, maxRoute, executeAt, partialDeps, full.writes, full.result));
                     });
                     break;
                 }
             case Committed:
             case ReadyToExecute:
-                node.forEachLocal(route, txnId.epoch, untilLocalEpoch, commandStore -> {
+                node.forEachLocal(maxRoute, txnId.epoch, untilLocalEpoch, commandStore -> {
                     Command command = commandStore.command(txnId);
-                    confirm(command.commit(full.route, progressKey, partialTxn, executeAt, partialDeps));
+                    if (Insufficient == command.commit(maxRoute, progressKey, partialTxn, executeAt, partialDeps))
+                        command.commit(maxRoute, progressKey, partialTxn, executeAt, partialDeps);
+//                    confirm(command.commit(route, progressKey, partialTxn, executeAt, partialDeps));
                 });
         }
     }
