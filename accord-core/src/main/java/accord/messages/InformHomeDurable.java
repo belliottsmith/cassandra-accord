@@ -27,7 +27,7 @@ public class InformHomeDurable implements Request
     {
         node.ifLocal(homeKey, txnId, instance -> {
             instance.command(txnId).setGloballyPersistent(homeKey, executeAt);
-            instance.progressLog().durable(txnId, persistedOn);
+            instance.progressLog().durable(txnId, homeKey, persistedOn);
             return null;
         });
     }

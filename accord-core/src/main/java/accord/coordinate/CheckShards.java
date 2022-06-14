@@ -5,7 +5,6 @@ import java.util.Set;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.Status;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
@@ -86,7 +85,7 @@ public abstract class CheckShards extends QuorumReadCoordinator<CheckStatusReply
         node.ifLocal(merged.homeKey, txnId, store -> {
             Timestamp executeAt = merged.status.hasBeen(Committed) ? merged.executeAt : null;
             store.command(txnId).setGloballyPersistent(merged.homeKey, executeAt);
-            store.progressLog().durable(txnId, null);
+            store.progressLog().durable(txnId, merged.homeKey, null);
             return null;
         });
     }

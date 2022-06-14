@@ -143,7 +143,7 @@ public interface ProgressLog
      * Otherwise, this transaction no longer needs to be monitored, but implementations may wish to ensure that
      * the result is propagated to every live replica.
      */
-    void durable(TxnId txnId, @Nullable Set<Id> persistedOn);
+    void durable(TxnId txnId, RoutingKey homeKey, @Nullable Set<Id> persistedOn);
 
     /**
      * The transaction's outcome has been durably recorded (but not necessarily applied) at a quorum of all shards.
