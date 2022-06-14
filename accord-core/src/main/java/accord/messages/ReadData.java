@@ -12,6 +12,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.DeterministicIdentitySet;
 
+import static accord.local.Status.Executed;
 import static accord.messages.MessageType.READ_RSP;
 import static accord.messages.ReadData.ReadNack.NotCommitted;
 import static accord.messages.ReadData.ReadNack.Redundant;
@@ -100,7 +101,7 @@ public class ReadData extends TxnRequest
                         return NotCommitted;
 
                     case Committed:
-                        instance.progressLog().waiting(txnId, scope);
+                        instance.progressLog().waiting(txnId, Executed, scope);
                         command.addListener(this);
                         return null;
 

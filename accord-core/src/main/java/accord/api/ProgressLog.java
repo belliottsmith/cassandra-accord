@@ -8,6 +8,7 @@ import accord.coordinate.CheckOnUncommitted;
 import accord.coordinate.InformHomeOfTxn;
 import accord.local.CommandStore;
 import accord.local.Node.Id;
+import accord.local.Status;
 import accord.primitives.AbstractRoute;
 import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
@@ -169,5 +170,5 @@ public interface ProgressLog
      *
      * In all other scenarios, the implementation is free to choose its course of action.
      */
-    void waiting(TxnId blockedBy, RoutingKeys someKeys);
+    void waiting(TxnId blockedBy, Status blockedUntil, RoutingKeys someKeys);
 }

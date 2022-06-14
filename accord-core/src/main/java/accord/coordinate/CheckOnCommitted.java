@@ -190,8 +190,8 @@ public class CheckOnCommitted extends CheckShards
             default: throw new IllegalStateException();
             case Redundant:
             case Success:
+            case OutOfRange:
                 return;
-            case OutOfRange: throw new IllegalStateException("Should not be out of range");
             case Insufficient: throw new IllegalStateException("Should have enough information");
         }
 

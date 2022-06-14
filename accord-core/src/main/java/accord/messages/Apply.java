@@ -6,6 +6,7 @@ import accord.local.Node.Id;
 import accord.api.Result;
 import accord.primitives.AbstractRoute;
 import accord.primitives.Deps;
+import accord.primitives.KeyRanges;
 import accord.primitives.PartialDeps;
 import accord.topology.Topologies;
 import accord.primitives.Timestamp;
@@ -25,13 +26,14 @@ public class Apply extends TxnRequest
     public final Writes writes;
     public final Result result;
 
-    public Apply(Id to, Topologies topologies, long untilEpoch, TxnId txnId, AbstractRoute route, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public Apply(Id to, Topologies sendTo, Topologies applyTo, long untilEpoch, TxnId txnId, AbstractRoute route, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        super(to, topologies, route);
+        super(to, sendTo, route);
         this.untilEpoch = untilEpoch;
         this.txnId = txnId;
         // TODO: we shouldn't send deps unless we need to (but need to implement fetching them if they're not present)
-        this.deps = deps.slice(scope.covering);
+        KeyRanges slice = applyTo == sendTo ? scope.covering : applyTo.computeRangesForNode(to);
+        this.deps = deps.slice(slice);
         this.executeAt = executeAt;
         this.writes = writes;
         this.result = result;
@@ -40,7 +42,7 @@ public class Apply extends TxnRequest
     public void process(Node node, Id replyToNode, ReplyContext replyContext)
     {
         // note, we do not also commit here if txnId.epoch != executeAt.epoch, as the scope() for a commit would be different
-        ApplyReply reply = node.mapReduceLocal(scope(), executeAt.epoch, untilEpoch, instance -> {
+        ApplyReply reply = node.mapReduceLocal(scope(), txnId.epoch, untilEpoch, instance -> {
             Command command = instance.command(txnId);
             switch (command.apply(untilEpoch, scope, executeAt, deps, writes, result))
             {

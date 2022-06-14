@@ -46,7 +46,6 @@ import static accord.coordinate.CheckOnUncommitted.checkOnUncommitted;
 import static accord.coordinate.InformHomeOfTxn.inform;
 import static accord.impl.SimpleProgressLog.DisseminateState.DisseminateStatus.Durable;
 import static accord.impl.SimpleProgressLog.DisseminateState.DisseminateStatus.NotExecuted;
-import static accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus.Committed;
 import static accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus.NotWitnessed;
 import static accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus.ReadyToExecute;
 import static accord.impl.SimpleProgressLog.CoordinateState.CoordinateStatus.Uncommitted;
@@ -60,7 +59,6 @@ import static accord.impl.SimpleProgressLog.Progress.NoProgress;
 import static accord.impl.SimpleProgressLog.Progress.NoneExpected;
 import static accord.impl.SimpleProgressLog.Progress.advance;
 import static accord.local.Status.Executed;
-import static accord.local.Status.Invalidated;
 
 // TODO (now): consider propagating invalidations in the same way as we do applied
 public class SimpleProgressLog implements Runnable, ProgressLog.Factory
@@ -112,7 +110,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         void ensureAtLeast(CoordinateStatus newStatus, Progress newProgress, Command command)
         {
             Preconditions.checkState(command.owns(command.txnId().epoch, command.homeKey()));
-            if (newStatus == Committed && command.isGloballyPersistent() && !command.executes())
+            if (newStatus == CoordinateStatus.Committed && command.isGloballyPersistent() && !command.executes())
             {
                 status = CoordinateStatus.Done;
                 progress = Done;
@@ -199,7 +197,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 case Uncommitted:
                 case ReadyToExecute:
                 {
-                    if (status.isAtLeast(Committed) && command.isGloballyPersistent())
+                    if (status.isAtLeast(CoordinateStatus.Committed) && command.isGloballyPersistent())
                     {
                         if (!command.executes())
                         {
@@ -418,63 +416,33 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
     static class BlockingState
     {
-        Status blockedOn = Status.NotWitnessed;
+        Status blockedUntil = Status.NotWitnessed;
         Progress progress = NoneExpected;
         RoutingKeys someKeys;
 
         Object debugInvestigating;
 
-        void recordBlocking(Command blocking, RoutingKeys someKeys)
+        void recordBlocking(Command command, Status blockedUntil, RoutingKeys someKeys)
         {
             Preconditions.checkState(!someKeys.isEmpty());
-            switch (blocking.status())
-            {
-                default: throw new IllegalStateException();
-                case NotWitnessed:
-                case AcceptedInvalidate:
-                    this.someKeys = someKeys;
-                case PreAccepted:
-                case Accepted:
-                    if (blockedOn.compareTo(Status.Committed) < 0)
-                    {
-                        blockedOn = Status.Committed;
-                        progress = Expected;
-                    }
-                    break;
-                case Committed:
-                case ReadyToExecute:
-                    if (blockedOn.compareTo(Executed) < 0)
-                    {
-                        blockedOn = Executed;
-                        progress = Expected;
-                    }
-                    break;
-                case Executed:
-                case Applied:
-                case Invalidated:
-                    throw new IllegalStateException("Should not be recorded as blocked if result already recorded locally");
-            }
-        }
-
-        void recordBlocking(Status blockedOn, RoutingKeys someKeys)
-        {
-            Preconditions.checkState(!someKeys.isEmpty());
+            Preconditions.checkState(!command.hasBeen(blockedUntil));
             this.someKeys = someKeys;
-            if (blockedOn.compareTo(this.blockedOn) > 0)
+            if (blockedUntil.compareTo(this.blockedUntil) > 0)
             {
-                this.blockedOn = blockedOn;
+                this.blockedUntil = blockedUntil;
                 progress = Expected;
             }
         }
 
         void recordCommit()
         {
-            if (blockedOn == Status.Committed)
+            if (blockedUntil == Status.Committed)
                 progress = NoneExpected;
         }
 
         void recordExecute()
         {
+            blockedUntil = Executed;
             progress = Done;
         }
 
@@ -487,8 +455,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
 
             progress = Investigating;
-
             // first make sure we have enough information to obtain the command locally
+            boolean canExecute = command.hasBeen(Status.Committed) && command.executes();
             long srcEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
             // TODO: compute fromEpoch, the epoch we already have this txn replicated until
             long toEpoch = Math.max(srcEpoch, node.topology().epoch());
@@ -499,9 +467,9 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 KeyRanges ranges = node.topology().localRangesForEpochs(txnId.epoch, toEpoch);
                 if (route == null || !route.covers(ranges))
                 {
-                    Status blockedOn = this.blockedOn;
+                    Status blockedOn = this.blockedUntil;
                     BiConsumer<FindRoute.Result, Throwable> foundRoute = (findRoute, fail) -> {
-                        if (progress == Investigating && blockedOn == this.blockedOn)
+                        if (progress == Investigating && blockedOn == this.blockedUntil)
                         {
                             progress = Expected;
                             if (findRoute != null && findRoute.route != null && !(someKeys instanceof Route))
@@ -521,7 +489,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         RoutingKeys someKeys = this.someKeys;
                         if (someKeys == null || someKeys.isEmpty()) someKeys = route;
                         debugInvestigating = FindHomeKey.findHomeKey(node, txnId, someKeys, (homeKey, fail) -> {
-                            if (progress == Investigating && blockedOn == this.blockedOn)
+                            if (progress == Investigating && blockedOn == this.blockedUntil)
                             {
                                 if (fail != null) progress = Expected;
                                 else if (homeKey != null) FindRoute.findRoute(node, txnId, homeKey, foundRoute);
@@ -547,28 +515,33 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                     {
                         default:
                             throw new IllegalStateException();
-                        case NotWitnessed:
-                        case PreAccepted:
-                        case Accepted:
-                        case AcceptedInvalidate:
-                            // the home shard is managing progress, give it time
-                            break;
-                        case Committed:
+                        case Invalidated:
+                        case Applied:
+                        case Executed:
+                            if (canExecute)
+                            {
+                                Preconditions.checkState(command.hasBeen(Executed));
+                                blockedUntil = Executed;
+                                progress = Done;
+                                break;
+                            }
                         case ReadyToExecute:
+                        case Committed:
                             Preconditions.checkState(command.hasBeen(Status.Committed));
-                            if (blockedOn == Status.Committed)
+                            if (blockedUntil == Status.Committed)
                                 progress = NoneExpected;
                             break;
-                        case Executed:
-                        case Applied:
-                        case Invalidated:
-                            Preconditions.checkState(command.hasBeen(Executed));
-                            progress = Done;
+                        case Accepted:
+                        case AcceptedInvalidate:
+                        case PreAccepted:
+                        case NotWitnessed:
+                            // the home shard is managing progress, give it time
+                            break;
                     }
                 };
 
-                debugInvestigating = blockedOn == Executed ? checkOnCommitted(node, txnId, route, srcEpoch, toEpoch, callback)
-                                                           : checkOnUncommitted(node, txnId, route, srcEpoch, toEpoch, callback);
+                debugInvestigating = blockedUntil == Executed ? checkOnCommitted(node, txnId, route, srcEpoch, toEpoch, callback)
+                                                              : checkOnUncommitted(node, txnId, route, srcEpoch, toEpoch, callback);
             });
         }
 
@@ -630,20 +603,12 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             this.command = command;
         }
 
-        void recordBlocking(TxnId txnId, Status waitingFor, RoutingKeys someKeys)
+        void recordBlocking(Command command, Status waitingFor, RoutingKeys someKeys)
         {
-            Preconditions.checkArgument(txnId.equals(this.txnId));
+            Preconditions.checkArgument(command.txnId().equals(this.txnId));
             if (blockingState == null)
                 blockingState = new BlockingState();
-            blockingState.recordBlocking(waitingFor, someKeys);
-        }
-
-        void recordBlocking(Command waitingFor, RoutingKeys someKeys)
-        {
-            Preconditions.checkArgument(waitingFor.txnId().equals(this.txnId));
-            if (blockingState == null)
-                blockingState = new BlockingState();
-            blockingState.recordBlocking(waitingFor, someKeys);
+            blockingState.recordBlocking(command, waitingFor, someKeys);
         }
 
         void ensureAtLeast(NonHomeState ensureAtLeast)
@@ -826,6 +791,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         @Override
         public void execute(TxnId txnId, ProgressShard shard)
         {
+            recordExecute(txnId);
             // this is the home shard's state ONLY, so we don't know it is fully durable locally
             ensureSafeOrAtLeast(txnId, shard, CoordinateStatus.ReadyToExecute, Expected);
         }
@@ -851,7 +817,6 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         public void durableLocal(TxnId txnId)
         {
             State state = ensure(txnId);
-//            state.local().durableLocal();
             state.global().durableLocal(node, state.command);
         }
 
@@ -860,7 +825,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         {
             State state = ensure(txnId);
             if (!state.command.hasBeen(Executed))
-                state.recordBlocking(txnId, Executed, RoutingKeys.of(homeKey));
+                state.recordBlocking(state.command, Executed, RoutingKeys.of(homeKey));
             state.local().durableGlobal();
             state.global().durableGlobal(node, state.command, persistedOn);
         }
@@ -868,16 +833,20 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         @Override
         public void durable(TxnId txnId, AbstractRoute route, ProgressShard shard)
         {
-            ensure(txnId).recordBlocking(txnId, Executed, route);
+            State state = ensure(txnId);
+            // TODO: we can probably simplify things by requiring (empty) Apply messages to be sent also to the coordinating topology
+            Status blockedUntil = state.command.executes() ? Executed : Status.Committed;
+            if (!state.command.hasBeen(blockedUntil))
+                state.recordBlocking(state.command, blockedUntil, route);
         }
 
         @Override
-        public void waiting(TxnId blockedBy, RoutingKeys someKeys)
+        public void waiting(TxnId blockedBy, Status blockedUntil, RoutingKeys someKeys)
         {
             // TODO (now): forward to progress shard, if known
             Command blockedByCommand = commandStore.command(blockedBy);
-            if (!blockedByCommand.hasBeen(Executed))
-                ensure(blockedBy).recordBlocking(blockedByCommand, someKeys);
+            if (!blockedByCommand.hasBeen(blockedUntil))
+                ensure(blockedBy).recordBlocking(blockedByCommand, blockedUntil, someKeys);
         }
     }
 

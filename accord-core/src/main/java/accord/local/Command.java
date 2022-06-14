@@ -508,7 +508,7 @@ public class Command implements Listener, Consumer<Listener>
             BlockedBy blockedBy = blockedBy();
             if (blockedBy != null)
             {
-                commandStore.progressLog().waiting(blockedBy.txnId, blockedBy.someKeys);
+                commandStore.progressLog().waiting(blockedBy.txnId, blockedBy.until, blockedBy.someKeys);
                 return;
             }
             assert waitingOnApply == null;
@@ -562,11 +562,13 @@ public class Command implements Listener, Consumer<Listener>
     static class BlockedBy
     {
         final TxnId txnId;
+        final Status until;
         final RoutingKeys someKeys; // some keys we know to be associated with this txnId, unlikely to be exhaustive
 
-        BlockedBy(TxnId txnId, RoutingKeys someKeys)
+        BlockedBy(TxnId txnId, Status until, RoutingKeys someKeys)
         {
             this.txnId = txnId;
+            this.until = until;
             this.someKeys = someKeys;
         }
     }
@@ -588,7 +590,7 @@ public class Command implements Listener, Consumer<Listener>
         RoutingKeys someKeys = cur.someRoutingKeys();
         if (someKeys == null)
             someKeys = prev.partialDeps.someRoutingKeys(cur.txnId);
-        return new BlockedBy(cur.txnId, someKeys);
+        return new BlockedBy(cur.txnId, cur.hasBeen(Committed) ? Executed : Committed, someKeys);
     }
 
     /**
@@ -896,11 +898,13 @@ public class Command implements Listener, Consumer<Listener>
     }
 
     // does this specific Command instance execute (i.e. does it lose ownership post Commit)
+    // TODO (now): remove this and all callers
+    @Deprecated
     public boolean executes()
     {
         KeyRanges ranges = commandStore.ranges().at(executeAt.epoch);
         // TODO: take care when merging commandStores, as partialTxn may be incomplete
-        return partialTxn.keys.any(ranges, commandStore::hashIntersects);
+        return route.any(ranges, commandStore::hashIntersects);
     }
 
     /**

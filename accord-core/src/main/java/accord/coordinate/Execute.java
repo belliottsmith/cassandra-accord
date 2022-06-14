@@ -29,7 +29,7 @@ class Execute extends AnyReadCoordinator<ReadReply>
     final Route route;
     final Timestamp executeAt;
     final Deps deps;
-    final Topologies topologies;
+    final Topologies applyTo;
     final BiConsumer<Result, Throwable> callback;
     private Data data;
 
@@ -40,7 +40,7 @@ class Execute extends AnyReadCoordinator<ReadReply>
         this.route = route;
         this.executeAt = executeAt;
         this.deps = deps;
-        this.topologies = node.topology().forEpoch(route, executeAt.epoch);
+        this.applyTo = node.topology().forEpoch(route, executeAt.epoch);
         this.callback = callback;
     }
 
@@ -53,7 +53,7 @@ class Execute extends AnyReadCoordinator<ReadReply>
     @Override
     void start(Set<Id> readSet)
     {
-        Commit.commitMinimalAndRead(node, topologies, txnId, txn, route, executeAt, deps, readSet, this);
+        Commit.commitMinimalAndRead(node, applyTo, txnId, txn, route, executeAt, deps, readSet, this);
     }
 
     @Override
@@ -97,7 +97,8 @@ class Execute extends AnyReadCoordinator<ReadReply>
     {
         Result result = txn.result(data);
         callback.accept(result, null);
-        Persist.persist(node, topologies, txnId, route, txn, executeAt, deps, txn.execute(executeAt, data), result);
+        Topologies sendTo = txnId.epoch == executeAt.epoch ? applyTo : node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch);
+        Persist.persist(node, sendTo, applyTo, txnId, route, txn, executeAt, deps, txn.execute(executeAt, data), result);
     }
 
     @Override

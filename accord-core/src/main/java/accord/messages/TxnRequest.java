@@ -180,6 +180,14 @@ public abstract class TxnRequest implements EpochRequest
     // TODO: move to Topologies
     public static <I extends AbstractKeys<?, ?>, O extends AbstractKeys<?, ?>> O computeScope(Node.Id node, Topologies topologies, I keys, int startIndex, BiFunction<I, KeyRanges, O> slice, BiFunction<O, O, O> merge)
     {
+        O scope = computeScopeInternal(node, topologies, keys, startIndex, slice, merge);
+        if (scope == null)
+            throw new IllegalArgumentException("No intersection");
+        return scope;
+    }
+
+    private static <I, O> O computeScopeInternal(Node.Id node, Topologies topologies, I keys, int startIndex, BiFunction<I, KeyRanges, O> slice, BiFunction<O, O, O> merge)
+    {
         KeyRanges last = null;
         O scope = null;
         for (int i = startIndex, mi = topologies.size() ; i < mi ; ++i)

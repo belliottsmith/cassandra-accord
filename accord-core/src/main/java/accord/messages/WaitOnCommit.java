@@ -10,6 +10,8 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
 
+import static accord.local.Status.Committed;
+
 public class WaitOnCommit implements EpochRequest
 {
     static class LocalWait implements Listener
@@ -68,7 +70,7 @@ public class WaitOnCommit implements EpochRequest
                 case Accepted:
                 case AcceptedInvalidate:
                     command.addListener(this);
-                    instance.progressLog().waiting(txnId, scope);
+                    instance.progressLog().waiting(txnId, Committed, scope);
                     break;
 
                 case Committed:

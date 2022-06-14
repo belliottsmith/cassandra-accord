@@ -7,7 +7,6 @@ import accord.api.Result;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.messages.Accept.AcceptReply;
 import accord.messages.Apply;
 import accord.messages.Apply.ApplyReply;
 import accord.messages.Callback;
@@ -15,7 +14,6 @@ import accord.messages.Commit;
 import accord.messages.Commit.Kind;
 import accord.messages.InformHomeDurable;
 import accord.messages.ReadData.ReadNack;
-import accord.messages.ReadData.ReadReply;
 import accord.primitives.Deps;
 import accord.primitives.Route;
 import accord.primitives.Txn;
@@ -38,22 +36,18 @@ public class Persist implements Callback<Object>
     final Set<Id> persistedOn;
     boolean isDone;
 
-    public static void persist(Node node, Topologies topologies, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public static void persist(Node node, Topologies sendTo, Topologies applyTo, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        Persist persist = new Persist(node, topologies, txnId, route, txn, executeAt, deps);
-        node.send(topologies.nodes(), to -> new Apply(to, topologies, executeAt.epoch, txnId, route, executeAt, deps, writes, result), persist);
+        Persist persist = new Persist(node, applyTo, txnId, route, txn, executeAt, deps);
+        node.send(sendTo.nodes(), to -> new Apply(to, sendTo, applyTo, executeAt.epoch, txnId, route, executeAt, deps, writes, result), persist);
     }
 
     public static void persistAndCommit(Node node, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        Topologies persistTo = node.topology().forEpoch(route, executeAt.epoch);
-        Persist persist = new Persist(node, persistTo, txnId, route, txn, executeAt, deps);
-        node.send(persistTo.nodes(), to -> new Apply(to, persistTo, executeAt.epoch, txnId, route, executeAt, deps, writes, result), persist);
-        if (txnId.epoch != executeAt.epoch)
-        {
-            Topologies earlierTopologies = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch - 1);
-            Commit.commitMinimal(node, earlierTopologies, persistTo, txnId, txn, route, executeAt, deps, persist);
-        }
+        Topologies sendTo = node.topology().forEpochRange(route, txnId.epoch, executeAt.epoch);
+        Topologies applyTo = node.topology().forEpoch(route, executeAt.epoch);
+        Persist persist = new Persist(node, sendTo, txnId, route, txn, executeAt, deps);
+        node.send(sendTo.nodes(), to -> new Apply(to, sendTo, applyTo, executeAt.epoch, txnId, route, executeAt, deps, writes, result), persist);
     }
 
     private Persist(Node node, Topologies topologies, TxnId txnId, Route route, Txn txn, Timestamp executeAt, Deps deps)

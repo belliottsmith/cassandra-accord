@@ -33,6 +33,8 @@ public interface Topologies
 
     int totalShards();
 
+    boolean contains(Id to);
+
     Set<Node.Id> nodes();
 
     Set<Node.Id> copyOfNodes();
@@ -168,6 +170,12 @@ public interface Topologies
         }
 
         @Override
+        public boolean contains(Id to)
+        {
+            return topology.nodes().contains(to);
+        }
+
+        @Override
         public Set<Node.Id> nodes()
         {
             return topology.nodes();
@@ -287,6 +295,17 @@ public interface Topologies
             for (int i=0, mi= topologies.size(); i<mi; i++)
                 count += topologies.get(i).size();
             return count;
+        }
+
+        @Override
+        public boolean contains(Id to)
+        {
+            for (Topology topology : topologies)
+            {
+                if (topology.nodes().contains(to))
+                    return true;
+            }
+            return false;
         }
 
         @Override
