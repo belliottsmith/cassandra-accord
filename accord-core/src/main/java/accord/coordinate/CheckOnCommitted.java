@@ -6,6 +6,8 @@ import com.google.common.base.Preconditions;
 
 import accord.api.RoutingKey;
 import accord.local.Command;
+import accord.local.Command.ApplyOutcome;
+import accord.local.Command.CommitOutcome;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.CheckStatus.CheckStatusOk;
@@ -20,6 +22,7 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
+import static accord.local.Command.CommitOutcome.Insufficient;
 import static accord.local.Status.Executed;
 
 /**
@@ -141,15 +144,18 @@ public class CheckOnCommitted extends CheckShards
                 {
                     // TODO: assert that the outcome is Success or Redundant, but only for those we expect to succeed
                     //  (i.e. those covered by Route)
-                    node.forEachLocal(route, txnId.epoch, executeAt.epoch - 1, commandStore -> {
-                        Command command = commandStore.command(txnId);
-                        command.commit(route(), progressKey, partialTxn, executeAt, partialDeps);
-                    });
+                    if (txnId.epoch != executeAt.epoch)
+                    {
+                        node.forEachLocal(route, txnId.epoch, executeAt.epoch - 1, commandStore -> {
+                            Command command = commandStore.command(txnId);
+                            command.commit(full.route, progressKey, partialTxn, executeAt, partialDeps);
+                        });
+                    }
 
                     node.forEachLocal(route, executeAt.epoch, untilLocalEpoch, commandStore -> {
                         Command command = commandStore.command(txnId);
-                        command.commit(route(), progressKey, partialTxn, executeAt, partialDeps);
-                        command.apply(untilLocalEpoch, route, executeAt, partialDeps, full.writes, full.result);
+                        confirm(command.commit(full.route, progressKey, partialTxn, executeAt, partialDeps));
+                        confirm(command.apply(untilLocalEpoch, route, executeAt, partialDeps, full.writes, full.result));
                     });
                     break;
                 }
@@ -157,8 +163,34 @@ public class CheckOnCommitted extends CheckShards
             case ReadyToExecute:
                 node.forEachLocal(route, txnId.epoch, untilLocalEpoch, commandStore -> {
                     Command command = commandStore.command(txnId);
-                    command.commit(route(), progressKey, partialTxn, executeAt, partialDeps);
+                    confirm(command.commit(full.route, progressKey, partialTxn, executeAt, partialDeps));
                 });
         }
+    }
+
+    private static void confirm(CommitOutcome outcome)
+    {
+        switch (outcome)
+        {
+            default: throw new IllegalStateException();
+            case Redundant:
+            case Success:
+                return;
+            case Insufficient: throw new IllegalStateException("Should have enough information");
+        }
+    }
+
+    private static void confirm(ApplyOutcome outcome)
+    {
+        switch (outcome)
+        {
+            default: throw new IllegalStateException();
+            case Redundant:
+            case Success:
+                return;
+            case OutOfRange: throw new IllegalStateException("Should not be out of range");
+            case Insufficient: throw new IllegalStateException("Should have enough information");
+        }
+
     }
 }

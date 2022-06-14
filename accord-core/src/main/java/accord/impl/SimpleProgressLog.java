@@ -60,6 +60,7 @@ import static accord.impl.SimpleProgressLog.Progress.NoProgress;
 import static accord.impl.SimpleProgressLog.Progress.NoneExpected;
 import static accord.impl.SimpleProgressLog.Progress.advance;
 import static accord.local.Status.Executed;
+import static accord.local.Status.Invalidated;
 
 // TODO (now): consider propagating invalidations in the same way as we do applied
 public class SimpleProgressLog implements Runnable, ProgressLog.Factory
@@ -554,13 +555,14 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                             break;
                         case Committed:
                         case ReadyToExecute:
-                            Preconditions.checkState(command.hasBeen(Status.Committed) || !command.commandStore.ranges().intersects(txnId.epoch, someKeys));
+                            Preconditions.checkState(command.hasBeen(Status.Committed));
                             if (blockedOn == Status.Committed)
                                 progress = NoneExpected;
                             break;
                         case Executed:
                         case Applied:
                         case Invalidated:
+                            Preconditions.checkState(command.hasBeen(Executed));
                             progress = Done;
                     }
                 };
