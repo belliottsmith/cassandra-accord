@@ -46,44 +46,6 @@ public abstract class CommandStores
         long select(ShardedRanges ranges, Scope scope, long minEpoch, long maxEpoch);
     }
 
-    static class KeysAndEpoch
-    {
-        final Keys keys;
-        final long epoch;
-
-        KeysAndEpoch(Keys keys, long epoch)
-        {
-            this.keys = keys;
-            this.epoch = epoch;
-        }
-    }
-
-    static class KeysAndEpochRange
-    {
-        final Keys keys;
-        final long minEpoch;
-        final long maxEpoch;
-
-        KeysAndEpochRange(Keys keys, long minEpoch, long maxEpoch)
-        {
-            this.keys = keys;
-            this.minEpoch = minEpoch;
-            this.maxEpoch = maxEpoch;
-        }
-    }
-
-    static class KeyAndEpoch
-    {
-        final Key key;
-        final long epoch;
-
-        KeyAndEpoch(Key key, long epoch)
-        {
-            this.key = key;
-            this.epoch = epoch;
-        }
-    }
-
     private static class Supplier
     {
         private final Node node;
@@ -163,11 +125,11 @@ public abstract class CommandStores
                 return rangesForEpoch(fromInclusive);
 
             int i = Arrays.binarySearch(epochs, fromInclusive);
-            if (i < 0) i = -2 -i;
-            if (i < 0) return KeyRanges.EMPTY;
+            if (i < 0) i = -1 - i;
 
             int j = Arrays.binarySearch(epochs, toInclusive);
-            if (j < 0) j = -2 -j;
+            if (j < 0) j = -2 - j;
+            if (i > j) return KeyRanges.EMPTY;
 
             KeyRanges result = ranges[i++];
             while (i <= j)
