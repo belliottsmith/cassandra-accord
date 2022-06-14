@@ -145,15 +145,7 @@ public class CheckOnCommitted extends CheckShards
                 {
                     // TODO: assert that the outcome is Success or Redundant, but only for those we expect to succeed
                     //  (i.e. those covered by Route)
-                    if (txnId.epoch != executeAt.epoch)
-                    {
-                        node.forEachLocal(maxRoute, txnId.epoch, executeAt.epoch - 1, commandStore -> {
-                            Command command = commandStore.command(txnId);
-                            command.commit(maxRoute, progressKey, partialTxn, executeAt, partialDeps);
-                        });
-                    }
-
-                    node.forEachLocal(maxRoute, executeAt.epoch, untilLocalEpoch, commandStore -> {
+                    node.forEachLocal(maxRoute, txnId.epoch, untilLocalEpoch, commandStore -> {
                         Command command = commandStore.command(txnId);
                         confirm(command.commit(maxRoute, progressKey, partialTxn, executeAt, partialDeps));
                         confirm(command.apply(untilLocalEpoch, maxRoute, executeAt, partialDeps, full.writes, full.result));

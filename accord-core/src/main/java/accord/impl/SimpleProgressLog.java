@@ -110,12 +110,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         void ensureAtLeast(CoordinateStatus newStatus, Progress newProgress, Command command)
         {
             Preconditions.checkState(command.owns(command.txnId().epoch, command.homeKey()));
-            if (newStatus == CoordinateStatus.Committed && command.isGloballyPersistent() && !command.executes())
-            {
-                status = CoordinateStatus.Done;
-                progress = Done;
-            }
-            else if (newStatus.compareTo(status) > 0)
+            if (newStatus.compareTo(status) > 0)
             {
                 status = newStatus;
                 progress = newProgress;
@@ -199,12 +194,6 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 {
                     if (status.isAtLeast(CoordinateStatus.Committed) && command.isGloballyPersistent())
                     {
-                        if (!command.executes())
-                        {
-                            status = CoordinateStatus.Done;
-                            progress = Done;
-                            break;
-                        }
                         // must also be committed, as at the time of writing we do not guarantee dissemination of Commit
                         // records to the home shard, so we only know the executeAt shards will have witnessed this
                         // if the home shard is at an earlier phase, it must run recovery
@@ -456,7 +445,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
             progress = Investigating;
             // first make sure we have enough information to obtain the command locally
-            boolean canExecute = command.hasBeen(Status.Committed) && command.executes();
+            boolean canExecute = command.hasBeen(Status.Committed);
             long srcEpoch = (command.hasBeen(Status.Committed) ? command.executeAt() : txnId).epoch;
             // TODO: compute fromEpoch, the epoch we already have this txn replicated until
             long toEpoch = Math.max(srcEpoch, node.topology().epoch());
@@ -835,9 +824,8 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         {
             State state = ensure(txnId);
             // TODO: we can probably simplify things by requiring (empty) Apply messages to be sent also to the coordinating topology
-            Status blockedUntil = state.command.executes() ? Executed : Status.Committed;
-            if (!state.command.hasBeen(blockedUntil))
-                state.recordBlocking(state.command, blockedUntil, route);
+            if (!state.command.hasBeen(Executed))
+                state.recordBlocking(state.command, Executed, route);
         }
 
         @Override
