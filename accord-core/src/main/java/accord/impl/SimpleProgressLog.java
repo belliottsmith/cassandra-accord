@@ -130,7 +130,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
         void updateMax(CheckStatusOk ok)
         {
             // TODO: perhaps set localProgress back to Waiting if Investigating and we update anything?
-            if (ok.status.compareTo(maxStatus) > 0) maxStatus = ok.status;
+            if (ok.status.logicalCompareTo(maxStatus) > 0) maxStatus = ok.status;
             if (ok.promised.compareTo(maxPromised) > 0)
             {
                 maxPromised = ok.promised;
@@ -142,21 +142,6 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
             }
         }
 
-//        void durableLocal()
-//        {
-//            switch (status)
-//            {
-//                default: throw new IllegalStateException();
-//                case NotWitnessed:
-//                case Uncommitted:
-//                case Committed:
-//                case ReadyToExecute:
-//                    status = CoordinateStatus.LocallyDurable;
-//                    progress = Expected;
-//                case Done:
-//            }
-//        }
-//
         void durableGlobal()
         {
             switch (status)

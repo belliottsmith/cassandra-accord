@@ -80,9 +80,9 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Thr
     public boolean hasMadeProgress(CheckStatusOk ok)
     {
         return ok != null && (ok.isCoordinating
-                              || ok.status.compareTo(knownStatus) > 0
+                              || ok.status.logicalCompareTo(knownStatus) > 0
                               || ok.promised.compareTo(knownPromised) > 0
-                              || (!knownPromisedHasBeenAccepted && knownStatus == Accepted && ok.accepted.equals(knownPromised)));
+                              || (!knownPromisedHasBeenAccepted && knownStatus.logicalCompareTo(Accepted) == 0 && ok.accepted.equals(knownPromised)));
     }
 
     @Override

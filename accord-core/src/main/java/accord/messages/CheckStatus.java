@@ -157,9 +157,14 @@ public class CheckStatus implements EpochRequest
             CheckStatusOk defer = prefer == this ? that : this;
 
             // then select the max along each criteria, preferring the coordinator
-            CheckStatusOk maxStatus = prefer.status.compareTo(defer.status) >= 0 ? prefer : defer;
-            CheckStatusOk maxPromised = prefer.promised.compareTo(defer.promised) >= 0 ? prefer : defer;
             CheckStatusOk maxAccepted = prefer.accepted.compareTo(defer.accepted) >= 0 ? prefer : defer;
+            CheckStatusOk maxStatus; {
+                int c = prefer.status.compareTo(defer.status);
+                if (c > 0) maxStatus = prefer;
+                else if (c < 0) maxStatus = defer;
+                else maxStatus = maxAccepted;
+            }
+            CheckStatusOk maxPromised = prefer.promised.compareTo(defer.promised) >= 0 ? prefer : defer;
             CheckStatusOk maxHasExecuted = !defer.hasExecutedOnAllShards || prefer.hasExecutedOnAllShards ? prefer : defer;
             CheckStatusOk maxHomeKey = prefer.homeKey != null || defer.homeKey == null ? prefer : defer;
             AbstractRoute mergedRoute = AbstractRoute.merge(prefer.route, defer.route);
