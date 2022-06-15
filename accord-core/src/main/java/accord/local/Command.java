@@ -478,23 +478,54 @@ public class Command implements Listener, Consumer<Listener>
             case Executed:
             case Applied:
             case Invalidated:
-                if (waitingOnApply != null)
-                {
-                    updatePredecessor(command);
-                    if (waitingOnCommit != null)
-                    {
-                        if (waitingOnCommit.remove(command.txnId) != null && waitingOnCommit.isEmpty())
-                            waitingOnCommit = null;
-                    }
-                    if (waitingOnCommit == null && waitingOnApply.isEmpty())
-                        waitingOnApply = null;
-                }
-                else
-                {
-                    command.removeListener(this);
-                }
+                updatePredecessorAndRefresh(command);
                 maybeExecute(progressShard(), true);
                 break;
+        }
+    }
+
+    /**
+     * @param dependency is either committed, applied or invalidated
+     */
+    private void updatePredecessor(Command dependency)
+    {
+        Preconditions.checkState(dependency.hasBeen(Committed));
+        if (dependency.hasBeen(Invalidated))
+        {
+            dependency.removeListener(this);
+        }
+        else if (dependency.executeAt.compareTo(executeAt) > 0)
+        {
+            // cannot be a predecessor if we execute later
+            dependency.removeListener(this);
+        }
+        else if (dependency.hasBeen(Applied))
+        {
+            waitingOnApply.remove(dependency.executeAt);
+            dependency.removeListener(this);
+        }
+        else
+        {
+            waitingOnApply.putIfAbsent(dependency.executeAt, dependency);
+        }
+    }
+
+    private void updatePredecessorAndRefresh(Command command)
+    {
+        if (waitingOnApply != null)
+        {
+            updatePredecessor(command);
+            if (waitingOnCommit != null)
+            {
+                if (waitingOnCommit.remove(command.txnId) != null && waitingOnCommit.isEmpty())
+                    waitingOnCommit = null;
+            }
+            if (waitingOnCommit == null && waitingOnApply.isEmpty())
+                waitingOnApply = null;
+        }
+        else
+        {
+            command.removeListener(this);
         }
     }
 
@@ -528,34 +559,6 @@ public class Command implements Listener, Consumer<Listener>
                 status = Applied;
                 if (notifyListeners)
                     listeners.forEach(this);
-        }
-    }
-
-    /**
-     * @param dependency is either committed or invalidated
-     */
-    private void updatePredecessor(Command dependency)
-    {
-        Preconditions.checkState(dependency.hasBeen(Committed));
-        if (dependency.hasBeen(Invalidated))
-        {
-            dependency.removeListener(this);
-            if (waitingOnCommit.remove(dependency.txnId) != null && waitingOnCommit.isEmpty())
-                waitingOnCommit = null;
-        }
-        else if (dependency.executeAt.compareTo(executeAt) > 0)
-        {
-            // cannot be a predecessor if we execute later
-            dependency.removeListener(this);
-        }
-        else if (dependency.hasBeen(Applied))
-        {
-            waitingOnApply.remove(dependency.executeAt);
-            dependency.removeListener(this);
-        }
-        else
-        {
-            waitingOnApply.putIfAbsent(dependency.executeAt, dependency);
         }
     }
 
@@ -927,7 +930,9 @@ public class Command implements Listener, Consumer<Listener>
             // cannot guarantee that listener updating this set is invoked before this method by another listener
             // so we must check the entry is still valid, and potentially remove it if not
             Command waitingOn = waitingOnCommit.firstEntry().getValue();
-            if (!waitingOn.hasBeen(Committed)) return waitingOn;
+            if (!waitingOn.hasBeen(Committed))
+                return waitingOn;
+            // TODO (now): we can get into infinite loops here of invoking maybeExecute
             onChange(waitingOn);
         }
 
@@ -937,7 +942,8 @@ public class Command implements Listener, Consumer<Listener>
             // cannot guarantee that listener updating this set is invoked before this method by another listener
             // so we must check the entry is still valid, and potentially remove it if not
             Command waitingOn = waitingOnApply.firstEntry().getValue();
-            if (!waitingOn.hasBeen(Applied)) return waitingOn;
+            if (!waitingOn.hasBeen(Applied))
+                return waitingOn;
             onChange(waitingOn);
         }
 

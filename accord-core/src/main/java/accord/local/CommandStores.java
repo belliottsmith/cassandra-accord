@@ -121,11 +121,15 @@ public abstract class CommandStores
 
         KeyRanges rangesBetweenEpochs(long fromInclusive, long toInclusive)
         {
+            if (fromInclusive > toInclusive)
+                throw new IndexOutOfBoundsException();
+
             if (fromInclusive == toInclusive)
                 return rangesForEpoch(fromInclusive);
 
             int i = Arrays.binarySearch(epochs, fromInclusive);
-            if (i < 0) i = -1 - i;
+            if (i < 0) i = -2 - i;
+            if (i < 0) i = 0;
 
             int j = Arrays.binarySearch(epochs, toInclusive);
             if (j < 0) j = -2 - j;

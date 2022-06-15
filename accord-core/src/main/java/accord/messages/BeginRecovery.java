@@ -238,7 +238,7 @@ public class BeginRecovery extends TxnRequest
 
                 boolean update =     max == null
                                   || max.status.logicalCompareTo(ok.status) < 0
-                                  || (ok.status == Accepted && max.accepted.compareTo(ok.accepted) < 0);
+                                  || (ok.status.logicalCompareTo(Accepted) == 0 && max.accepted.compareTo(ok.accepted) < 0);
                 if (update)
                     max = ok;
             }
