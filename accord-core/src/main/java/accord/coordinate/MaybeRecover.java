@@ -66,8 +66,6 @@ public class MaybeRecover extends CheckShards implements BiConsumer<Outcome, Thr
             case Invalidated:
                 callback.accept(null, null);
                 break;
-            case Preempted:
-                callback.accept(null, new Preempted(txnId, homeKey));
         }
     }
 

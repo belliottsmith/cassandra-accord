@@ -93,7 +93,7 @@ public class Invalidate implements Callback<InvalidateReply>
             }
 
             isDone = true;
-            callback.accept(Outcome.Preempted, null);
+            callback.accept(null, new Preempted(txnId, null));
             return;
         }
 

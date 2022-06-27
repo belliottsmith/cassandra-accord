@@ -42,7 +42,7 @@ import static accord.messages.Commit.Invalidate.commitInvalidate;
 // TODO: rename to Recover (verb); rename Recover message to not clash
 public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
-    public enum Outcome { Preempted, Executed, Invalidated }
+    public enum Outcome { Executed, Invalidated }
 
     class AwaitCommit extends AsyncFuture<Timestamp> implements Callback<WaitOnCommitOk>
     {

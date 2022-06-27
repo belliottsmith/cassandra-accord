@@ -3,6 +3,7 @@ package accord.coordinate.tracking;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
@@ -195,7 +196,7 @@ public class ReadTracker<T extends ReadShardTracker> extends AbstractResponseTra
                 return accumulate;
 
             if (accumulate == null)
-                accumulate = new HashSet<>();
+                accumulate = new LinkedHashSet<>();
 
             accumulate.add(tracker);
             return accumulate;

@@ -540,9 +540,6 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                 else switch (success)
                 {
                     default: throw new IllegalStateException();
-                    case Preempted:
-                        progress = Expected;
-                        break;
                     case Executed:
                     case Invalidated:
                         progress = Done;

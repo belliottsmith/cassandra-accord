@@ -109,7 +109,6 @@ public abstract class KeyRange implements Comparable<RoutingKey>
     public abstract boolean endInclusive();
 
     public abstract KeyRange subRange(RoutingKey start, RoutingKey end);
-//    public abstract KeyRange
 
     @Override
     public boolean equals(Object o)
@@ -123,7 +122,7 @@ public abstract class KeyRange implements Comparable<RoutingKey>
     @Override
     public int hashCode()
     {
-        return Objects.hash(start, end);
+        return start.hashCode() * 31 + end.hashCode();
     }
 
     @Override
