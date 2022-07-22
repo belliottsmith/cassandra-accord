@@ -4,6 +4,7 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.function.Consumer;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import com.google.common.base.Preconditions;
@@ -760,7 +761,7 @@ public class Command implements Listener, Consumer<Listener>
         if (shard.isProgress()) this.route = AbstractRoute.merge(this.route, route);
         else this.route = AbstractRoute.merge(this.route, route.slice(allRanges));
 
-        // TODO (now): apply hashIntersects, or stop round-robin hashing and partition only on ranges
+        // TODO (soon): stop round-robin hashing; partition only on ranges
         switch (ensurePartialTxn)
         {
             case Add:
@@ -769,12 +770,13 @@ public class Command implements Listener, Consumer<Listener>
 
                 if (this.partialTxn != null)
                 {
+                    partialTxn = partialTxn.slice(allRanges, shard.isHome());
                     partialTxn.keys.foldlDifference(this.partialTxn.keys, (i, key, p, v) -> {
                         if (commandStore.hashIntersects(key))
                             commandStore.commandsForKey(key).register(this);
                         return v;
                     }, 0, 0, 1);
-                    this.partialTxn = this.partialTxn.with(partialTxn.slice(allRanges, shard.isHome()));
+                    this.partialTxn = this.partialTxn.with(partialTxn);
                     break;
                 }
 
@@ -788,7 +790,6 @@ public class Command implements Listener, Consumer<Listener>
                 break;
         }
 
-        // TODO (now): apply hashIntersects, or stop round-robin hashing and partition only on ranges
         switch (ensurePartialDeps)
         {
             case Add:
@@ -903,16 +904,6 @@ public class Command implements Listener, Consumer<Listener>
         return null;
     }
 
-    // does this specific Command instance execute (i.e. does it lose ownership post Commit)
-    // TODO (now): remove this and all callers
-    @Deprecated
-    public boolean executes()
-    {
-        KeyRanges ranges = commandStore.ranges().at(executeAt.epoch);
-        // TODO: take care when merging commandStores, as partialTxn may be incomplete
-        return route.any(ranges, commandStore::hashIntersects);
-    }
-
     /**
      * true iff this commandStore owns the given key on the given epoch
      */
@@ -997,7 +988,7 @@ public class Command implements Listener, Consumer<Listener>
         }
 
         @Override
-        public int compareTo(RoutingKey ignore)
+        public int compareTo(@Nonnull RoutingKey ignore)
         {
             throw new UnsupportedOperationException();
         }

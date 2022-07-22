@@ -7,6 +7,9 @@ import com.google.common.base.Preconditions;
 import accord.api.*;
 import accord.local.*;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 public class Txn
 {
     public enum Kind
@@ -27,18 +30,18 @@ public class Txn
 
     public Txn(Keys keys, Read read, Query query)
     {
-        Preconditions.checkArgument(getClass() != Txn.class || query != null);
-        this.kind = Kind.READ;
-        this.keys = keys;
-        this.read = read;
-        this.query = query;
-        this.update = null;
+        this(Kind.READ, keys, read, query, null);
     }
 
-    public Txn(Keys keys, Read read, Query query, Update update)
+    public Txn(Keys keys, Read read, Query query, @Nonnull Update update)
+    {
+        this(Kind.WRITE, keys, read, query, update);
+    }
+
+    protected Txn(Kind kind, Keys keys, Read read, Query query, @Nullable Update update)
     {
         Preconditions.checkArgument(getClass() != Txn.class || query != null);
-        this.kind = Kind.WRITE;
+        this.kind = kind;
         this.keys = keys;
         this.read = read;
         this.update = update;

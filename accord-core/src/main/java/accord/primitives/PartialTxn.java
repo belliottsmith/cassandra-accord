@@ -9,13 +9,11 @@ import accord.api.Update;
 public class PartialTxn extends Txn
 {
     public final KeyRanges covering;
-    public final Kind kind; // TODO: we do not need to take a write-edge dependency on every key
 
     public PartialTxn(KeyRanges covering, Kind kind, Keys keys, Read read, Query query, Update update)
     {
-        super(keys, read, query, update);
+        super(kind, keys, read, query, update);
         this.covering = covering;
-        this.kind = kind;
     }
 
     public boolean covers(KeyRanges ranges)
@@ -70,7 +68,7 @@ public class PartialTxn extends Txn
         if (!covers(route) || query == null)
             throw new IllegalStateException("Incomplete PartialTxn: " + this + ", route: " + route);
 
-        return new Txn(keys, read, query, update);
+        return new Txn(kind, keys, read, query, update);
     }
 
     public PartialTxn reconstitutePartial(PartialRoute route)

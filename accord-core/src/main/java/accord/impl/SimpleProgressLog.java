@@ -60,7 +60,7 @@ import static accord.impl.SimpleProgressLog.Progress.NoneExpected;
 import static accord.impl.SimpleProgressLog.Progress.advance;
 import static accord.local.Status.Executed;
 
-// TODO (now): consider propagating invalidations in the same way as we do applied
+// TODO: consider propagating invalidations in the same way as we do applied
 public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 {
     enum Progress
@@ -184,7 +184,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
                         // if the home shard is at an earlier phase, it must run recovery
                         long epoch = command.executeAt().epoch;
                         node.withEpoch(epoch, () -> {
-                            // TODO (now): slice the route to only those owned locally
+                            // TODO: slice the route to only those owned locally
                             debugInvestigating = checkOnCommitted(node, txnId, command.route(), epoch, epoch, (success, fail) -> {
                                 // should have found enough information to apply the result, but in case we did not reset progress
                                 if (progress == Investigating)
@@ -812,7 +812,7 @@ public class SimpleProgressLog implements Runnable, ProgressLog.Factory
 
         public void waiting(TxnId blockedBy, Status blockedUntil, RoutingKeys someKeys)
         {
-            // TODO (now): forward to progress shard, if known
+            // TODO (soon): forward to progress shard for processing (if known)
             Command blockedByCommand = commandStore.command(blockedBy);
             if (!blockedByCommand.hasBeen(blockedUntil))
                 ensure(blockedBy).recordBlocking(blockedByCommand, blockedUntil, someKeys);

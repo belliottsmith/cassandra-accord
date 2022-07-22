@@ -11,9 +11,11 @@ import accord.primitives.Keys;
 import accord.primitives.PartialRoute;
 import accord.primitives.RoutingKeys;
 
+import javax.annotation.Nonnull;
+
 public class IntKey implements Key
 {
-    private static class Range extends KeyRange.EndInclusive
+    public static class Range extends KeyRange.EndInclusive
     {
         public Range(IntKey start, IntKey end)
         {
@@ -35,8 +37,10 @@ public class IntKey implements Key
     }
 
     @Override
-    public int compareTo(RoutingKey that)
+    public int compareTo(@Nonnull RoutingKey that)
     {
+        if (that instanceof InfiniteRoutingKey)
+            return -that.compareTo(this);
         return Integer.compare(this.key, ((IntKey)that).key);
     }
 

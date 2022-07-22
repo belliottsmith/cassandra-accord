@@ -67,7 +67,7 @@ public class Commit extends ReadData
         this.read = read;
     }
 
-    // TODO (now): accept Topology not Topologies
+    // TODO (soon): accept Topology not Topologies
     // TODO: do not commit if we're already ready to execute (requires extra info in Accept responses)
     public static void commitMinimalAndRead(Node node, Topologies executeTopologies, TxnId txnId, Txn txn, Route route, Timestamp executeAt, Deps deps, Set<Id> readSet, Callback<ReadReply> callback)
     {
@@ -88,7 +88,7 @@ public class Commit extends ReadData
         {
             for (Node.Id to : allTopologies.nodes())
             {
-                if (!executeTopology.nodes().contains(to))
+                if (!executeTopology.contains(to))
                     node.send(to, new Commit(Kind.Minimal, to, coordinateTopology, allTopologies, txnId, txn, route, executeAt, deps, false));
             }
         }

@@ -43,7 +43,9 @@ public class Packet implements ReplyContext
         CheckStatus(CheckStatus.class),
         CheckStatusOk(CheckStatus.CheckStatusOk.class),
         CheckStatusOkFull(CheckStatus.CheckStatusOkFull.class),
-        InformOfTxnId(InformOfTxnId.class, Json.DEFAULT_ADAPTER);
+        InformOfTxnId(InformOfTxnId.class, Json.DEFAULT_ADAPTER),
+        SimpleReply(accord.messages.SimpleReply.class, Json.DEFAULT_ADAPTER),
+        ;
 
         private static final Map<Class<?>, Type> LOOKUP_MAP = Arrays.stream(Type.values())
                 .filter(t -> t.type != null)

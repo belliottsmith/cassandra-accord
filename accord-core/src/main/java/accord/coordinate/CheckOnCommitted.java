@@ -47,7 +47,7 @@ public class CheckOnCommitted extends CheckShards
 
     CheckOnCommitted(Node node, TxnId txnId, AbstractRoute route, RoutingKeys someKeys, long untilRemoteEpoch, long untilLocalEpoch, BiConsumer<? super CheckStatusOkFull, Throwable> callback)
     {
-        // TODO (now): restore behaviour of only collecting info if e.g. Committed or Executed
+        // TODO (soon): restore behaviour of only collecting info if e.g. Committed or Executed
         super(node, txnId, someKeys, untilRemoteEpoch, IncludeInfo.All);
         this.route = route;
         this.callback = callback;
@@ -126,7 +126,7 @@ public class CheckOnCommitted extends CheckShards
         RoutingKey progressKey = node.trySelectProgressKey(txnId, maxRoute);
 
         boolean canCommit = requestedRoute.covers(commitRanges);
-        boolean canExecute = requestedRoute.covers(executeRanges);
+        boolean canExecute = requestedRoute.covers(executeRanges) && untilLocalEpoch >= executeAt.epoch;
 
         Preconditions.checkState(canCommit);
         Preconditions.checkState(untilRemoteEpoch < full.executeAt.epoch || canExecute);

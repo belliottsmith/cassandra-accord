@@ -1,8 +1,8 @@
 package accord.messages;
 
 import accord.api.RoutingKey;
+import accord.impl.*;
 import accord.impl.mock.*;
-import accord.impl.SimpleProgressLog;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.api.MessageSink;
@@ -20,9 +20,6 @@ import accord.utils.EpochFunction;
 import accord.utils.ThreadPoolScheduler;
 import accord.local.*;
 import accord.primitives.Keys;
-import accord.impl.IntKey;
-import accord.impl.TestAgent;
-import accord.impl.TopologyFactory;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;

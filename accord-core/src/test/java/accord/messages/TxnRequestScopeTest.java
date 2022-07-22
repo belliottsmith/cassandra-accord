@@ -23,14 +23,19 @@ public class TxnRequestScopeTest
         Route route = keys.toRoute(keys.get(0).toRoutingKey());
         KeyRange range = range(100, 200);
         Topology topology1 = topology(1, shard(range, idList(1, 2, 3), idSet(1, 2)));
-        Topology topology2 = topology(2, shard(range, idList(4, 5, 6), idSet(4, 5)));
+        Topology topology2 = topology(2, shard(range, idList(3, 4, 5), idSet(4, 5)));
 
         Topologies.Multi topologies = new Topologies.Multi();
         topologies.add(topology2);
         topologies.add(topology1);
 
+        // 3 remains a member across both topologies, so can process requests without waiting for latest topology data
+        Assertions.assertEquals(scope(150), TxnRequest.computeScope(id(3), topologies, route).toRoutingKeys());
+        Assertions.assertEquals(1, TxnRequest.computeWaitForEpoch(id(3), topologies, keys));
+
+        // 1 leaves the shard, and 4 joins, so both need the latest information
         Assertions.assertEquals(scope(150), TxnRequest.computeScope(id(1), topologies, route).toRoutingKeys());
-        Assertions.assertEquals(1, TxnRequest.computeWaitForEpoch(id(1), topologies, keys));
+        Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(1), topologies, keys));
         Assertions.assertEquals(scope(150), TxnRequest.computeScope(id(4), topologies, route).toRoutingKeys());
         Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(4), topologies, keys));
     }
