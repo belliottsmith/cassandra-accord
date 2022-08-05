@@ -373,8 +373,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         this.txnIds = txnIds;
         this.keyToTxnId = keyToTxnId;
         Preconditions.checkState(keys.isEmpty() || keyToTxnId[keys.size() - 1] == keyToTxnId.length);
-        if (!checkValid())
-            throw new AssertionError();
+        checkValid();
     }
 
     public Deps slice(KeyRanges ranges)
@@ -985,7 +984,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
     }
 
-    public boolean checkValid()
+    private void checkValid()
     {
         int k = 0;
         for (int i = keys.size() ; i < keyToTxnId.length ; ++i)
@@ -995,12 +994,15 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             {
                 if (first) first = false;
                 else if (keyToTxnId[i - 1] == keyToTxnId[i])
-                    return false;
+                {
+                    Key key = keys.get(i);
+                    TxnId txnId = txnIds[keyToTxnId[i]];
+                    throw new AssertionError(String.format("Duplicate TxnId (%s) found for key {}", txnId, key));
+                }
                 i++;
             }
             ++k;
         }
-        return true;
     }
 
 }
