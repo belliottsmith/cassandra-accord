@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -946,6 +947,15 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                && Arrays.equals(this.keyToTxnId, that.keyToTxnId)
                && Arrays.equals(this.txnIds, that.txnIds)
                && this.keys.equals(that.keys);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = Objects.hash(keys);
+        result = 31 * result + Arrays.hashCode(txnIds);
+        result = 31 * result + Arrays.hashCode(keyToTxnId);
+        result = 31 * result + Arrays.hashCode(txnIdToKey);
+        return result;
     }
 
     public static class Entry implements Map.Entry<Key, TxnId>

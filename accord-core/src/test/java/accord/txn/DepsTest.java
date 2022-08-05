@@ -9,9 +9,12 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
+import accord.primitives.*;
+import accord.primitives.Deps.Builder;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -22,11 +25,6 @@ import accord.api.Key;
 import accord.impl.IntHashKey;
 import accord.local.Node.Id;
 import accord.primitives.Deps.Entry;
-import accord.primitives.KeyRange;
-import accord.primitives.KeyRanges;
-import accord.primitives.Keys;
-import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
 
 // TODO (now): test Keys with no contents
 // TODO (now): test without
@@ -83,6 +81,27 @@ public class DepsTest
         }
     }
 
+    @Test
+    public void testIterator()
+    {
+        property(deps -> {
+            Builder builder = new Builder(deps.test.keys());
+            for (Map.Entry<Key, TxnId> e : deps.test)
+                builder.add(e.getKey(), e.getValue());
+            Assertions.assertEquals(deps.test, builder.build());
+        });
+    }
+
+    private static void property(Consumer<Deps> test)
+    {
+        Random random = random(seed());
+        for (int i = 0; i < 100; i++) {
+            Deps deps = Deps.generate(random);
+            deps.testSimpleEquality();
+            test.accept(deps);
+        }
+    }
+
     static class Deps
     {
         final Map<Key, Set<TxnId>> canonical;
@@ -92,6 +111,32 @@ public class DepsTest
         {
             this.canonical = canonical;
             this.test = test;
+        }
+
+        static Deps generate(Random random)
+        {
+            int epochRange = 3;
+            int realRange = 50;
+            int logicalRange = 10;
+            double uniqueTxnIdsPercentage = 0.66D;
+            int uniqueTxnIds = nextPositive(random, (int) ((realRange * logicalRange * epochRange) * uniqueTxnIdsPercentage));
+
+            int nodeRange = nextPositive(random, 4);
+            int uniqueKeys = nextPositive(random , 100);
+            int emptyKeys = random.nextInt(10);
+            int keyRange = next(random, uniqueKeys + emptyKeys, 200);
+            int totalCount = nextPositive(random, 1000);
+            return generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount);
+        }
+
+        private static int nextPositive(Random random, int upperExclusive)
+        {
+            return random.nextInt(upperExclusive - 1) + 1;
+        }
+
+        private static int next(Random random, int lower, int upperExclusive)
+        {
+            return random.nextInt(upperExclusive - lower + 1) + lower;
         }
 
         static Deps generate(Random random, int uniqueTxnIds, int epochRange, int realRange, int logicalRange, int nodeRange,
@@ -115,7 +160,7 @@ public class DepsTest
                 txnIds = new ArrayList<>(tmp);
             }
 
-            accord.primitives.Deps.Builder builder = accord.primitives.Deps.builder(keys);
+            Builder builder = accord.primitives.Deps.builder(keys);
             Map<Key, Set<TxnId>> canonical = new TreeMap<>();
             for (int i = 0 ; i < totalCount ; ++i)
             {
