@@ -1,6 +1,7 @@
 package accord.txn;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -15,6 +16,7 @@ import java.util.stream.IntStream;
 
 import accord.primitives.*;
 import accord.primitives.Deps.Builder;
+import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -92,6 +94,88 @@ public class DepsTest
         });
     }
 
+    @Test
+    public void testForEachOnUniqueBetween()
+    {
+        property(deps -> {
+            Keys keys = deps.test.keys();
+            Key start = keys.get(0);
+            Key end = keys.get(keys.size() - 1);
+
+            TreeSet<TxnId> seen = new TreeSet<>();
+            deps.test.forEachOn(new KeyRanges(KeyRange.range(start, end, true, true)), ignore -> true, txnId -> {
+                if (!seen.add(txnId))
+                    throw new AssertionError("Seen " + txnId + " multiple times");
+            });
+            Assertions.assertEquals(deps.invertCanonical().keySet(), new TreeSet<>(seen));
+        });
+    }
+
+    @Test
+    public void testForEachOnUniqueEndInclusive()
+    {
+        property(deps -> {
+            Keys keys = deps.test.keys();
+            Key start = keys.get(0);
+            Key end = keys.get(keys.size() - 1);
+
+            TreeSet<TxnId> seen = new TreeSet<>();
+            deps.test.forEachOn(new KeyRanges(KeyRange.range(start, end, false, true)), ignore -> true, txnId -> {
+                if (!seen.add(txnId))
+                    throw new AssertionError("Seen " + txnId + " multiple times");
+            });
+            Set<TxnId> notExpected = deps.canonical.get(start);
+            for (int i = 1; i < keys.size(); i++)
+            {
+                Set<TxnId> ids = deps.canonical.get(keys.get(i));
+                notExpected = Sets.difference(notExpected, ids);
+            }
+            TreeSet<TxnId> expected = new TreeSet<>(Sets.difference(deps.invertCanonical().keySet(), notExpected));
+            Assertions.assertEquals(expected, seen);
+        });
+    }
+
+    @Test
+    public void testForEachOnUniqueStartInclusive()
+    {
+        property(deps -> {
+            Keys keys = deps.test.keys();
+            Key start = keys.get(0);
+            Key end = keys.get(keys.size() - 1);
+
+            TreeSet<TxnId> seen = new TreeSet<>();
+            deps.test.forEachOn(new KeyRanges(KeyRange.range(start, end, true, false)), ignore -> true, txnId -> {
+                if (!seen.add(txnId))
+                    throw new AssertionError("Seen " + txnId + " multiple times");
+            });
+            Set<TxnId> notExpected = deps.canonical.get(end);
+            for (int i = 0; i < keys.size() - 1; i++)
+            {
+                Set<TxnId> ids = deps.canonical.get(keys.get(i));
+                notExpected = Sets.difference(notExpected, ids);
+            }
+            TreeSet<TxnId> expected = new TreeSet<>(Sets.difference(deps.invertCanonical().keySet(), notExpected));
+            Assertions.assertEquals(expected, seen);
+        });
+    }
+
+    @Test
+    public void testForEachOnUniqueNoMatch()
+    {
+        property(deps -> {
+            Keys keys = deps.test.keys();
+            Key start = IntHashKey.forHash(Integer.MIN_VALUE);
+            Key end = keys.get(0);
+
+            TreeSet<TxnId> seen = new TreeSet<>();
+            deps.test.forEachOn(new KeyRanges(KeyRange.range(start, end, true, false)), ignore -> true, txnId -> {
+                if (!seen.add(txnId))
+                    throw new AssertionError("Seen " + txnId + " multiple times");
+            });
+            Assertions.assertEquals(Collections.emptySet(), seen);
+        });
+    }
+
     private static void property(Consumer<Deps> test)
     {
         Random random = random(seed());
@@ -122,9 +206,9 @@ public class DepsTest
             int uniqueTxnIds = nextPositive(random, (int) ((realRange * logicalRange * epochRange) * uniqueTxnIdsPercentage));
 
             int nodeRange = nextPositive(random, 4);
-            int uniqueKeys = nextPositive(random , 100);
+            int uniqueKeys = nextPositive(random , 200);
             int emptyKeys = random.nextInt(10);
-            int keyRange = next(random, uniqueKeys + emptyKeys, 200);
+            int keyRange = next(random, uniqueKeys + emptyKeys, 400);
             int totalCount = nextPositive(random, 1000);
             return generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount);
         }
