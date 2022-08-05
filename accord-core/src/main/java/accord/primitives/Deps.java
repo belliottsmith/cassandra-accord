@@ -33,7 +33,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         final Keys keys;
         final Map<TxnId, Integer> txnIdLookup = new HashMap<>(); // TODO: primitive map
         TxnId[] txnIds = new TxnId[4];
+        // Key -> [TxnId]
         final int[][] keysToTxnId;
+        // Key -> Counter
         final int[] keysToTxnIdCounts;
 
         public Builder(Keys keys)
@@ -91,11 +93,17 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         {
             TxnId[] txnIds = txnIdLookup.keySet().toArray(TxnId[]::new);
             Arrays.sort(txnIds, TxnId::compareTo);
+            // all data is indexed based off insertion order, but now that build is happening its desirable to have ids
+            // in tx order, in order to map from sorted -> insert order, need "txnIdMap" as the bridge
             int[] txnIdMap = new int[txnIds.length];
             for (int i = 0 ; i < txnIdMap.length ; i++)
                 txnIdMap[txnIdLookup.get(txnIds[i])] = i;
 
             int keyCount = 0;
+            // Key -> distinct([*TxnID]])
+            // at the key position is the OFFSET into the array where the txnIds are for the key
+            // Example
+            // OFFSET(2), OFFSET(4), *tx1, *tx1, *tx2
             int[] result; {
                 int count = 0;
                 for (int i = 0 ; i < keys.size() ; ++i)
@@ -114,13 +122,16 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 {
                     int count = keysToTxnIdCounts[i];
                     int[] src = keysToTxnId[i];
+                    // store all txnIds to results at offset
                     for (int j = 0 ; j < count ; ++j)
                         result[j + offset] = txnIdMap[src[j]];
                     Arrays.sort(result, offset, count + offset);
+                    // the same txnId may be present multiple times, attempt to detect this and push all dups to the end
                     int dups = 0;
                     for (int j = offset + 1 ; j < offset + count ; ++j)
                     {
                         if (result[j] == result[j - 1]) ++dups;
+                        // positions i == i - 1 but dups were found; replace the "first" dup with the current value, removing it
                         else if (dups > 0) result[j - dups] = result[j];
                     }
                     result[keyIndex] = offset += count - dups;
@@ -335,8 +346,25 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
     final Keys keys; // unique Keys
     final TxnId[] txnIds; // unique TxnId TODO: this should perhaps be a BTree?
 
-    // first N entries are offsets for each src item, remainder are pointers into value set (either keys or txnIds)
+    /**
+     * This represents a map of {@code Key -> [TxnId] } where each TxnId is actually a pointer into the txnIds array.
+     * The beginning of the array (the first keys.size() entries) are offsets into this array.
+     * <p/>
+     * Example:
+     * <p/>
+     * {@code
+     *   int keyIdx = keys.indexOf(key);
+     *   int startOfTxnOffset = keyIdx == 0 ? keys.size() : keyToTxnId[keyIdx - 1];
+     *   int endOfTxnOffset = keyToTxnId[keyIdx];
+     *   for (int i = startOfTxnOffset; i < endOfTxnOffset; i++)
+     *   {
+     *       TxnId id = txnIds[keyToTxnId[i]]
+     *       ...
+     *   }
+     * }
+     */
     final int[] keyToTxnId; // Key -> [TxnId]
+    // Lazy loaded in ensureTxnIdToKey()
     int[] txnIdToKey; // TxnId -> [Key]
 
     Deps(Keys keys, TxnId[] txnIds, int[] keyToTxnId)
