@@ -84,6 +84,57 @@ public abstract class KeyRange<K extends Key<K>> implements Comparable<K>
         }
     }
 
+    public static <K extends Key<K>> KeyRange<K> range(K start, K end, boolean startInclusive, boolean endInclusive)
+    {
+        return new KeyRange<>(start, end) {
+
+            @Override
+            public boolean startInclusive() {
+                return startInclusive;
+            }
+
+            @Override
+            public boolean endInclusive() {
+                return endInclusive;
+            }
+
+            @Override
+            public KeyRange<K> tryMerge(KeyRange<K> that) {
+                return KeyRange.tryMergeExclusiveInclusive(this, that);
+            }
+
+            @Override
+            public KeyRange<K> subRange(K start, K end) {
+                throw new UnsupportedOperationException("subRange");
+            }
+
+            @Override
+            public int compareTo(K key) {
+                if (startInclusive)
+                {
+                    if (key.compareTo(start()) < 0)
+                        return 1;
+                }
+                else
+                {
+                    if (key.compareTo(start()) <= 0)
+                        return 1;
+                }
+                if (endInclusive)
+                {
+                    if (key.compareTo(end()) > 0)
+                        return -1;
+                }
+                else
+                {
+                    if (key.compareTo(end()) >= 0)
+                        return -1;
+                }
+                return 0;
+            }
+        };
+    }
+
     private static <K extends Key<K>> KeyRange<K> tryMergeExclusiveInclusive(KeyRange<K> left, KeyRange<K> right)
     {
         if (left.getClass() != right.getClass())
@@ -111,7 +162,7 @@ public abstract class KeyRange<K extends Key<K>> implements Comparable<K>
 
     private KeyRange(K start, K end)
     {
-        Preconditions.checkArgument(start.compareTo(end) < 0);
+        Preconditions.checkArgument(start.compareTo(end) <= 0);
         this.start = start;
         this.end = end;
     }
