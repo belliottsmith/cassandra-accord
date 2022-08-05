@@ -16,7 +16,7 @@ public class KeyRanges implements Iterable<KeyRange>
     // TODO: fix raw parameterized use
     final KeyRange[] ranges;
 
-    public KeyRanges(KeyRange[] ranges)
+    public KeyRanges(KeyRange... ranges)
     {
         Preconditions.checkNotNull(ranges);
         this.ranges = ranges;
