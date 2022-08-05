@@ -828,8 +828,19 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         forEachOn(ranges, commandStore::hashIntersects, forEach);
     }
 
+    /**
+     * For each {@link TxnId} that references a key within the {@link KeyRanges}; the {@link TxnId} will be seen exactly once.
+     * @param ranges to match on
+     * @param include function to say if a key should be used or not
+     * @param forEach function to call on each unique {@link TxnId}
+     */
     public void forEachOn(KeyRanges ranges, Predicate<Key> include, Consumer<TxnId> forEach)
     {
+        // Find all keys within the ranges, but record existence within an int64 bitset.  Since the bitset is limited
+        // to 64, this search must be called multiple times searching for different TxnIds in txnIds; this also has
+        // the property that forEach is called in TxnId order.
+        //TODO Should TxnId order be part of the public docs or just a hidden implementation detail?  The only caller
+        // does not rely on this ordering.
         for (int offset = 0 ; offset < txnIds.length ; offset += 64)
         {
             long bitset = keys.foldl(ranges, (keyIndex, key, off, value) -> {
