@@ -416,9 +416,18 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         return new Deps(select, txnIds, trg);
     }
 
+    /**
+     * Returns the set of {@link TxnId}s that are referenced by {@code keysToTxnId}, and <strong>updates</strong>
+     * {@code keysToTxnId} to point to the new offsets in the returned set.
+     * @param keys object referenced by {@code keysToTxnId} index
+     * @param txnIds to trim to the seen {@link TxnId}s
+     * @param keysToTxnId to use as reference for trimming, this index will be updated to reflect the trimmed offsets.
+     * @return smallest set of {@link TxnId} seen in {@code keysToTxnId}
+     */
     private static TxnId[] trimUnusedTxnId(Keys keys, TxnId[] txnIds, int[] keysToTxnId)
     {
         int[] remapTxnId = new int[txnIds.length];
+        // on init all values got set to 0, so use 1 to define that the id exists in the index
         for (int i = keys.size() ; i < keysToTxnId.length ; ++i)
             remapTxnId[keysToTxnId[i]] = 1;
 
@@ -438,6 +447,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 if (remapTxnId[i]>= 0)
                     result[remapTxnId[i]] = txnIds[i];
             }
+            // Update keysToTxnId to point to the new remapped TxnId offsets
             for (int i = keys.size() ; i < keysToTxnId.length ; ++i)
                 keysToTxnId[i] = remapTxnId[keysToTxnId[i]];
         }
@@ -765,7 +775,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             return;
 
         int[] src = keyToTxnId;
-        int[] trg = txnIdToKey = new int[txnIds.length - keys.size() + keyToTxnId.length];
+        int[] trg = txnIdToKey = new int[txnIds.length + keyToTxnId.length - keys.size()];
 
         // first pass, count number of txnId per key
         for (int i = keys.size() ; i < src.length ; ++i)
@@ -780,12 +790,15 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         System.arraycopy(trg, 0, trg, 1, txnIds.length - 1);
         trg[0] = txnIds.length;
 
+        // convert the offsets to end, and set the key at the target positions
         int k = 0;
         for (int i = keys.size() ; i < src.length ; ++i)
         {
-            while (i == keyToTxnId[k])
+            // if at the end offset, switch to the next key
+            while (i == src[k])
                 ++k;
 
+            // find the next key offset for the TxnId and set the offset to this key
             trg[trg[src[i]]++] = k;
         }
     }
