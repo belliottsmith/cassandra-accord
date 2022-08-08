@@ -104,7 +104,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             // Key -> distinct([*TxnID]])
             // at the key position is the OFFSET into the array where the txnIds are for the key
             // Example
-            // OFFSET(2), OFFSET(4), *tx1, *tx1, *tx2
+            // OFFSET(3), OFFSET(5), *tx1, *tx1, *tx2
             int[] result; {
                 int count = 0;
                 for (int i = 0 ; i < keys.size() ; ++i)
