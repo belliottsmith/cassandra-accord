@@ -225,14 +225,15 @@ public class DepsTest
         accord.primitives.Deps merged = null;
 //        Keys keys = list.get(0).test.keys();
         Keys keys = list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
-        KeyRanges ranges = new KeyRanges(KeyRange.range(keys.get(0), keys.get(keys.size() - 1), true, true));
+//        KeyRanges ranges = new KeyRanges(KeyRange.range(keys.get(0), keys.get(keys.size() - 1), true, true));
         for (int loop = 0; loop < 1000; loop++)
         {
             Builder builder = new Builder(keys);
             for (int i = 0; i < list.size(); i++)
             {
                 Deps next = list.get(i);
-                next.test.forEachOn(ranges, keys::contains, (key, txnid) -> builder.add(key, txnid));
+                next.test.forEach(e -> builder.add(e.getKey(), e.getValue()));
+//                next.test.forEachOn(ranges, keys::contains, (key, txnid) -> builder.add(key, txnid));
             }
             merged = builder.build();
         }
