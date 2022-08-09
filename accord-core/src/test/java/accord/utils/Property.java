@@ -51,7 +51,7 @@ public class Property
 
         public <A, B> DoubleBuilder<A, B> forAll(Gen<A> a, Gen<B> b)
         {
-            return new DoubleBuilder<>(a, b);
+            return new DoubleBuilder<>(a, b, this);
         }
     }
 
@@ -86,7 +86,8 @@ public class Property
         private final Gen<A> a;
         private final Gen<B> b;
 
-        public DoubleBuilder(Gen<A> a, Gen<B> b) {
+        private DoubleBuilder(Gen<A> a, Gen<B> b, Common<?> other) {
+            super(other);
             this.a = Objects.requireNonNull(a);
             this.b = Objects.requireNonNull(b);
         }

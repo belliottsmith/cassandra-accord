@@ -197,7 +197,7 @@ public class DepsTest
     @Test
     public void testMergePartial()
     {
-        qt().forAll(lists(Deps::generate).ofSizeBetween(0, 20), Gens.random()).check((list, random) -> {
+        qt().withSeed(2166268934702838083L).forAll(lists(Deps::generate).ofSizeBetween(0, 20), Gens.random()).check((list, random) -> {
             Keys keys = keys(list);
             // filter out specific keys
             keys = new Keys(keys.stream().filter(ignore -> random.nextBoolean()).collect(Collectors.toSet()));
