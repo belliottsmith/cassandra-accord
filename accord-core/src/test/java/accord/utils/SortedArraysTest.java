@@ -41,6 +41,20 @@ class SortedArraysTest
                     Assertions.assertEquals(i, SortedArrays.exponentialSearch(jint, 0, array.length, find, Integer::compare, search));
                     Assertions.assertEquals(i, SortedArrays.binarySearch(jint, 0, array.length, find, Integer::compare, search));
                 }
+
+                // uses Search.FAST
+                long lr = SortedArrays.findNextIntersection(jint, i, jint, i);
+                int left = (int) (lr >>> 32);
+                int right = (int) lr;
+                Assertions.assertEquals(left, right);
+                Assertions.assertEquals(left, i);
+
+                // uses Search.CEIL
+                lr = SortedArrays.findNextIntersectionWithOverlaps(jint, i, jint, i, Integer::compare, Integer::compare);
+                left = (int) (lr >>> 32);
+                right = (int) lr;
+                Assertions.assertEquals(left, right);
+                Assertions.assertEquals(left, i);
             }
         });
     }
