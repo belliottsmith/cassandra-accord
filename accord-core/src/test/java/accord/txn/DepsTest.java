@@ -1,7 +1,6 @@
 package accord.txn;
 
 import java.lang.management.ManagementFactory;
-import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
@@ -16,14 +15,16 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 
 import accord.primitives.*;
 import accord.primitives.Deps.Builder;
-import accord.utils.Gen;
+import accord.utils.Gens;
 import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 import org.slf4j.Logger;
@@ -34,6 +35,7 @@ import accord.impl.IntHashKey;
 import accord.local.Node.Id;
 import accord.primitives.Deps.Entry;
 
+import static accord.utils.Gens.lists;
 import static accord.utils.Property.qt;
 
 // TODO (now): test Keys with no contents
@@ -184,12 +186,53 @@ public class DepsTest
         });
     }
 
+    @Test
+    public void testMergeFull()
+    {
+        qt().forAll(lists(Deps::generate).ofSizeBetween(0, 20)).check(list -> {
+            testMergedProperty(keys(list), list);
+        });
+    }
+
+    @Test
+    public void testMergePartial()
+    {
+        qt().forAll(lists(Deps::generate).ofSizeBetween(0, 20), Gens.random()).check((list, random) -> {
+            Keys keys = keys(list);
+            // filter out specific keys
+            keys = new Keys(keys.stream().filter(ignore -> random.nextBoolean()).collect(Collectors.toSet()));
+            testMergedProperty(keys, list);
+        });
+    }
+
+    private static Keys keys(List<Deps> list) {
+        return list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
+    }
+
+    private static void testMergedProperty(Keys keys, List<Deps> list)
+    {
+        KeyRanges ranges = keys.isEmpty() ? KeyRanges.EMPTY : new KeyRanges(KeyRange.range(keys.get(0), keys.get(keys.size() - 1), true, true));
+        Deps expected = Deps.merge(keys, list);
+        expected.testSimpleEquality();
+        accord.primitives.Deps merged = accord.primitives.Deps.merge(keys, list, a -> a.test);
+        Builder builder = new Builder(keys);
+        // can't do forEach due to Builder will fail if you add a key not provided in keys
+        list.forEach(d -> d.test.forEachOn(ranges, i -> true, (key, txnId) -> builder.add(key, txnId)));
+        accord.primitives.Deps built = builder.build();
+
+        Assertions.assertEquals(expected.test, merged);
+        Assertions.assertEquals(expected.test, built);
+    }
+
     //TODO remove, this was mostly for review to better grasp "why"
     @Test
     public void hackyBenchmark()
     {
-        qt().withExamples(10).forAll(listOf(Deps::generate)).check(list -> {
-            Keys keys = list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
+        // comment out to run.. for some reason @Ignore isn't present in junit 5
+        Assumptions.assumeTrue(false);
+
+        qt().withExamples(10).forAll(lists(Deps::generate).ofSizeBetween(1, 20)).check(list -> {
+            Keys keys = keys(list);
 
             // warmup
             benchmarkMerge(list);
@@ -224,7 +267,7 @@ public class DepsTest
     private static accord.primitives.Deps benchmarkBuilderForEach(List<Deps> list) {
         accord.primitives.Deps merged = null;
 //        Keys keys = list.get(0).test.keys();
-        Keys keys = list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
+        Keys keys = keys(list);
 //        KeyRanges ranges = new KeyRanges(KeyRange.range(keys.get(0), keys.get(keys.size() - 1), true, true));
         for (int loop = 0; loop < 1000; loop++)
         {
@@ -244,22 +287,11 @@ public class DepsTest
     private static accord.primitives.Deps benchmarkMerge(List<Deps> list) {
         accord.primitives.Deps merged = null;
 //        Keys keys = list.get(0).test.keys();
-        Keys keys = list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
+        Keys keys = keys(list);
         for (int i = 0; i < 1000; i++)
             merged = accord.primitives.Deps.merge(keys, list, d -> d.test);
 
         return merged;
-    }
-
-    private static <T> Gen<List<T>> listOf(Gen<T> gen)
-    {
-        return r -> {
-            int size = r.nextInt(1, 21);
-            List<T> list = new ArrayList<>(size);
-            for (int i = 0; i < size; i++)
-                list.add(gen.next(r));
-            return list;
-        };
     }
 
     private static void property(Consumer<Deps> test)
