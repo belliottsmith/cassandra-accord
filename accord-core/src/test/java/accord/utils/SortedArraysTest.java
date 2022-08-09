@@ -59,6 +59,8 @@ class SortedArraysTest
         });
     }
 
+    //TODO: linearUnion
+
     private static void assertRemapperProperty(int i, Long[] src, Long[] trg, int[] result)
     {
         if (!(result[i] == -1 || Objects.equals(src[i], trg[result[i]])))

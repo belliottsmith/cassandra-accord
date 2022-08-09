@@ -1,5 +1,9 @@
 package accord.txn;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
+import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -13,9 +17,11 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 
 import accord.primitives.*;
 import accord.primitives.Deps.Builder;
+import accord.utils.Gen;
 import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -176,6 +182,83 @@ public class DepsTest
             });
             Assertions.assertEquals(Collections.emptySet(), seen);
         });
+    }
+
+    //TODO remove, this was mostly for review to better grasp "why"
+    @Test
+    public void hackyBenchmark()
+    {
+        qt().withExamples(10).forAll(listOf(Deps::generate)).check(list -> {
+            Keys keys = list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
+
+            // warmup
+            benchmarkMerge(list);
+            benchmarkBuilderForEach(list);
+            String postfix = "(size=" + list.size() + ", keys=" + keys.size() + ")";
+
+            // test
+            benchmark("merge" + postfix, () -> benchmarkMerge(list));
+            benchmark("builder forEach" + postfix, () -> benchmarkBuilderForEach(list));
+        });
+    }
+
+    private static void benchmark(String name, Runnable task) {
+        com.sun.management.ThreadMXBean jvmThreading = (com.sun.management.ThreadMXBean) ManagementFactory.getPlatformMXBean(ThreadMXBean.class);
+
+        long[] attempts = new long[42];
+
+        long startAlloc = jvmThreading.getThreadAllocatedBytes(Thread.currentThread().getId());
+        for (int i = 0; i < attempts.length; i++)
+        {
+            System.gc();
+            System.runFinalization();
+            long start = System.nanoTime();
+            task.run();
+            attempts[i] = System.nanoTime() - start;
+        }
+        long endAlloc = jvmThreading.getThreadAllocatedBytes(Thread.currentThread().getId());
+        double avgPerCallNanos = LongStream.of(attempts).average().getAsDouble() / 1000; // div by 1k to show per call time
+        logger.info("Benchmark[name={}] avg {}ms, allocated {} MiB", name, new DecimalFormat("#,###.##").format(avgPerCallNanos / 1000), (endAlloc - startAlloc) / 1024 / 1024 );
+    }
+
+    private static accord.primitives.Deps benchmarkBuilderForEach(List<Deps> list) {
+        accord.primitives.Deps merged = null;
+//        Keys keys = list.get(0).test.keys();
+        Keys keys = list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
+        KeyRanges ranges = new KeyRanges(KeyRange.range(keys.get(0), keys.get(keys.size() - 1), true, true));
+        for (int loop = 0; loop < 1000; loop++)
+        {
+            Builder builder = new Builder(keys);
+            for (int i = 0; i < list.size(); i++)
+            {
+                Deps next = list.get(i);
+                next.test.forEachOn(ranges, keys::contains, (key, txnid) -> builder.add(key, txnid));
+            }
+            merged = builder.build();
+        }
+
+        return merged;
+    }
+
+    private static accord.primitives.Deps benchmarkMerge(List<Deps> list) {
+        accord.primitives.Deps merged = null;
+//        Keys keys = list.get(0).test.keys();
+        Keys keys = list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
+        for (int i = 0; i < 1000; i++)
+            merged = accord.primitives.Deps.merge(keys, list, d -> d.test);
+
+        return merged;
+    }
+
+    private static <T> Gen<List<T>> listOf(Gen<T> gen)
+    {
+        return r -> {
+            int size = r.nextInt(1, 21);
+            List<T> list = new ArrayList<>(size);
+            for (int i = 0; i < size; i++)
+                list.add(gen.next(r));
+            return list;
+        };
     }
 
     private static void property(Consumer<Deps> test)

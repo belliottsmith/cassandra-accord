@@ -215,6 +215,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 return c;
             });
 
+            // remove duplicates
             int diff = 0;
             for (int i = 1 ; i < streamCount ; i++)
             {
