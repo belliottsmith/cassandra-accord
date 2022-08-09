@@ -1,9 +1,13 @@
 package accord.utils;
 
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.IntStream;
 
 import static accord.utils.Property.qt;
 
@@ -19,6 +23,25 @@ class SortedArraysTest
             int[] result = SortedArrays.remapper(src, trg, false);
             for (int i = 0; i < result.length; i++)
                 assertRemapperProperty(i, src, trg, result);
+        });
+    }
+
+    @Test
+    public void testSearch()
+    {
+        qt().forAll(uniqueInts()).check(array -> {
+            Arrays.sort(array);
+            Integer[] jint = IntStream.of(array).mapToObj(Integer::valueOf).toArray(Integer[]::new);
+            for (int i = 0; i < array.length; i++)
+            {
+                int find = array[i];
+                Assertions.assertEquals(i, SortedArrays.exponentialSearch(array, 0, array.length, find));
+                for (SortedArrays.Search search : SortedArrays.Search.values())
+                {
+                    Assertions.assertEquals(i, SortedArrays.exponentialSearch(jint, 0, array.length, find, Integer::compare, search));
+                    Assertions.assertEquals(i, SortedArrays.binarySearch(jint, 0, array.length, find, Integer::compare, search));
+                }
+            }
         });
     }
 
@@ -77,6 +100,22 @@ class SortedArraysTest
             Long[] array = new Long[size];
             for (int i = 0; i < size; i++)
                 array[i] = random.nextLong();
+            return array;
+        };
+    }
+
+    private static Gen<int[]> uniqueInts()
+    {
+        return random -> {
+            int size = random.nextInt(99) + 1;
+            int[] array = new int[size];
+            Set<Integer> dedup = new HashSet<>();
+            for (int i = 0; i < size; i++)
+            {
+                int value;
+                while (!dedup.add(value = random.nextInt())) {}
+                array[i] = value;
+            }
             return array;
         };
     }

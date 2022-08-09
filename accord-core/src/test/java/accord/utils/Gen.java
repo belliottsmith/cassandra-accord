@@ -1,7 +1,14 @@
 package accord.utils;
 
-public interface Gen<T> {
-    T next(Random random);
+import java.util.function.Function;
+
+public interface Gen<A> {
+    A next(Random random);
+
+    default <B> Gen<B> map(Function<A, B> fn)
+    {
+        return r -> fn.apply(this.next(r));
+    }
 
     class Random extends java.util.Random
     {
