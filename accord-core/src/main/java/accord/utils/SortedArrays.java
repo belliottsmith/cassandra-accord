@@ -5,6 +5,8 @@ import java.util.function.IntFunction;
 
 import org.apache.cassandra.utils.concurrent.Inline;
 
+import javax.annotation.Nullable;
+
 import static java.util.Arrays.*;
 
 public class SortedArrays
@@ -503,6 +505,7 @@ public class SortedArrays
         return ((long)ai << 32) | bi;
     }
 
+    @Nullable
     public static <T extends Comparable<? super T>> int[] remapper(T[] src, T[] trg, boolean trgIsKnownSuperset)
     {
         return remapper(src, src.length, trg, trg.length, trgIsKnownSuperset);
@@ -512,12 +515,14 @@ public class SortedArrays
      * Given two sorted arrays, where one is a subset of the other, return an int[] of the same size as
      * the {@code src} parameter, with the index within {@code trg} of the corresponding element within {@code src},
      * or -1 otherwise.
-     * That is, {@code src[i] == -1 || src[i].equals(trg[result[i]])}
+     * That is, {@code result[i] == -1 || src[i].equals(trg[result[i]])}
      */
+    @Nullable
     public static <T extends Comparable<? super T>> int[] remapper(T[] src, int srcLength, T[] trg, int trgLength, boolean trgIsSuperset)
     {
         if (src == trg || (trgIsSuperset && trgLength == srcLength)) return null;
         int[] result = new int[srcLength];
+        Arrays.fill(result, -1);
         for (int i = 0, j = 0 ; i < srcLength && j < trgLength ;)
         {
             int c = src[i].compareTo(trg[j]);

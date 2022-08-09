@@ -28,6 +28,8 @@ import accord.impl.IntHashKey;
 import accord.local.Node.Id;
 import accord.primitives.Deps.Entry;
 
+import static accord.utils.Property.qt;
+
 // TODO (now): test Keys with no contents
 // TODO (now): test without
 public class DepsTest
@@ -178,12 +180,10 @@ public class DepsTest
 
     private static void property(Consumer<Deps> test)
     {
-        Random random = random(seed());
-        for (int i = 0; i < 100; i++) {
-            Deps deps = Deps.generate(random);
+        qt().forAll(Deps::generate).check(deps -> {
             deps.testSimpleEquality();
             test.accept(deps);
-        }
+        });
     }
 
     static class Deps
