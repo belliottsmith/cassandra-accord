@@ -216,45 +216,54 @@ public class DepsTest
     public void hackyBenchmark()
     {
         // comment out to run.. for some reason @Ignore isn't present in junit 5
-        Assumptions.assumeTrue(false);
+//        Assumptions.assumeTrue(false);
 
         qt().withExamples(10).forAll(lists(Deps::generate).ofSizeBetween(1, 20)).check(list -> {
             Keys keys = keys(list);
+            int size = 0;
+            for (Deps deps : list)
+                size += deps.test.totalCount();
 
             // warmup
-            benchmarkMerge(list);
-            benchmarkBuilderForEach(list);
-            String postfix = "(size=" + list.size() + ", keys=" + keys.size() + ")";
+            benchmarkMerge(keys, list);
+            benchmarkBuilderForEach(keys, list);
+            String postfix = "(No.=" + list.size() + ", keys=" + keys.size() + ", size=" + size + ")";
 
             // test
-            benchmark("merge" + postfix, () -> benchmarkMerge(list));
-            benchmark("builder forEach" + postfix, () -> benchmarkBuilderForEach(list));
+            benchmark("merge" + postfix, () -> benchmarkMerge(keys, list));
+            benchmark("builder forEach" + postfix, () -> benchmarkBuilderForEach(keys, list));
         });
     }
 
     private static void benchmark(String name, Runnable task) {
         com.sun.management.ThreadMXBean jvmThreading = (com.sun.management.ThreadMXBean) ManagementFactory.getPlatformMXBean(ThreadMXBean.class);
 
+        System.gc();
+        System.runFinalization();
         long[] attempts = new long[42];
 
         long startAlloc = jvmThreading.getThreadAllocatedBytes(Thread.currentThread().getId());
         for (int i = 0; i < attempts.length; i++)
         {
-            System.gc();
-            System.runFinalization();
             long start = System.nanoTime();
             task.run();
             attempts[i] = System.nanoTime() - start;
         }
+
+        long startGc = System.nanoTime();
+        System.gc();
+        System.runFinalization();
+        long endGc = System.nanoTime();
+
         long endAlloc = jvmThreading.getThreadAllocatedBytes(Thread.currentThread().getId());
         double avgPerCallNanos = LongStream.of(attempts).average().getAsDouble() / 1000; // div by 1k to show per call time
-        logger.info("Benchmark[name={}] avg {}ms, allocated {} MiB", name, new DecimalFormat("#,###.##").format(avgPerCallNanos / 1000), (endAlloc - startAlloc) / 1024 / 1024 );
+        double avgGcPerCallNanos = (endGc - startGc) / (attempts.length * 1000d); // div by 1k to show per call time
+        logger.info("Benchmark[name={}] avg {}ms, {}ms GC, allocated {} MiB", name, new DecimalFormat("#,###.##").format(avgPerCallNanos / 1000), new DecimalFormat("#,###.##").format(avgGcPerCallNanos / 1000), (endAlloc - startAlloc) / 1024 / 1024 );
     }
 
-    private static accord.primitives.Deps benchmarkBuilderForEach(List<Deps> list) {
+    private static accord.primitives.Deps benchmarkBuilderForEach(Keys keys, List<Deps> list) {
         accord.primitives.Deps merged = null;
 //        Keys keys = list.get(0).test.keys();
-        Keys keys = keys(list);
 //        KeyRanges ranges = new KeyRanges(KeyRange.range(keys.get(0), keys.get(keys.size() - 1), true, true));
         for (int loop = 0; loop < 1000; loop++)
         {
@@ -271,10 +280,9 @@ public class DepsTest
         return merged;
     }
 
-    private static accord.primitives.Deps benchmarkMerge(List<Deps> list) {
+    private static accord.primitives.Deps benchmarkMerge(Keys keys, List<Deps> list) {
         accord.primitives.Deps merged = null;
 //        Keys keys = list.get(0).test.keys();
-        Keys keys = keys(list);
         for (int i = 0; i < 1000; i++)
             merged = accord.primitives.Deps.merge(keys, list, d -> d.test);
 
@@ -309,7 +317,7 @@ public class DepsTest
             int uniqueTxnIds = nextPositive(random, (int) ((realRange * logicalRange * epochRange) * uniqueTxnIdsPercentage));
 
             int nodeRange = nextPositive(random, 4);
-            int uniqueKeys = nextPositive(random , 200);
+            int uniqueKeys = nextPositive(random , 20);
             int emptyKeys = random.nextInt(10);
             int keyRange = next(random, uniqueKeys + emptyKeys, 400);
             int totalCount = nextPositive(random, 1000);

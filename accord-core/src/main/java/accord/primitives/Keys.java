@@ -1,7 +1,6 @@
 package accord.primitives;
 
 import java.util.*;
-import java.util.function.IntFunction;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -426,9 +425,9 @@ public class Keys implements Iterable<Key>
         return wrap == keys ? this : new Keys(wrap);
     }
 
-    public int[] remapper(Keys target, boolean isTargetKnownSuperset)
+    public int[] remapToSuperset(Keys target)
     {
-        return SortedArrays.remapper(keys, target.keys, isTargetKnownSuperset);
+        return SortedArrays.remapToSuperset(keys, target.keys);
     }
 
     public static Keys union(Keys as, Keys bs)

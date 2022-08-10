@@ -1,17 +1,12 @@
 package accord.primitives;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
-import com.google.common.base.Preconditions;
+import accord.utils.MergeIterator;
 
 import accord.api.Key;
 import accord.local.Command;
@@ -20,7 +15,7 @@ import accord.utils.InlineHeap;
 import accord.utils.SortedArrays;
 
 import static accord.utils.SortedArrays.remap;
-import static accord.utils.SortedArrays.remapper;
+import static accord.utils.SortedArrays.remapToSuperset;
 
 // TODO (now): switch to RoutingKey
 public class Deps implements Iterable<Map.Entry<Key, TxnId>>
@@ -164,7 +159,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         return new Builder(keys);
     }
 
-    static class MergeStream
+    static class MergeStream implements Iterator<TxnId>
     {
         final Deps source;
         // TODO: could share backing array for all of these if we want, with an additional offset
@@ -176,6 +171,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         int index;
         int endIndex;
 
+        // to implement Iterator<TxnId>
+        int txnIdIdx;
+
         MergeStream(Deps source)
         {
             this.source = source;
@@ -185,12 +183,24 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         private void init(Keys keys, TxnId[] txnIds)
         {
-            this.remap = remapper(source.txnIds, txnIds, true);
-            this.keys = source.keys.remapper(keys, true);
+            this.remap = remapToSuperset(source.txnIds, txnIds);
+            this.keys = source.keys.remapToSuperset(keys);
             while (input[keyIndex] == keyCount)
                 ++keyIndex;
             this.index = keyCount;
             this.endIndex = input[keyIndex];
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return txnIdIdx < source.txnIdCount();
+        }
+
+        @Override
+        public TxnId next()
+        {
+            return source.txnId(txnIdIdx++);
         }
     }
 
@@ -233,12 +243,28 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
 
         // TODO: use Cassandra MergeIterator to perform more efficient merge of TxnId
-        TxnId[] txnIds = NONE.txnIds;
-        for (T t : merge)
+        TxnId[] txnIds;
         {
-            Deps deps = getter.apply(t);
-            if (deps != null && !deps.isEmpty())
-                txnIds = SortedArrays.linearUnion(txnIds, deps.txnIds, TxnId[]::new);
+            MergeIterator<TxnId, TxnId> iter = MergeIterator.get(Arrays.asList(streams).subList(0, streamCount), TxnId::compareTo, new MergeIterator.Reducer<>()
+            {
+                TxnId txnId;
+
+                @Override
+                public void reduce(int idx, TxnId current)
+                {
+                    txnId = current;
+                }
+
+                @Override
+                protected TxnId getReduced()
+                {
+                    return txnId;
+                }
+            });
+            List<TxnId> tmp = new ArrayList<>(streams[0].source.txnIdCount());
+            while (iter.hasNext())
+                tmp.add(iter.next());
+            txnIds = tmp.toArray(TxnId[]::new);
         }
 
         int[] result; {
@@ -464,8 +490,8 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         Keys keys = this.keys.union(that.keys);
         TxnId[] txnIds = SortedArrays.linearUnion(this.txnIds, that.txnIds, TxnId[]::new);
-        int[] remapLeft = remapper(this.txnIds, txnIds, true);
-        int[] remapRight = remapper(that.txnIds, txnIds, true);
+        int[] remapLeft = remapToSuperset(this.txnIds, txnIds);
+        int[] remapRight = remapToSuperset(that.txnIds, txnIds);
         Keys leftKeys = this.keys, rightKeys = that.keys;
         int[] left = keyToTxnId, right = that.keyToTxnId;
 
@@ -900,6 +926,11 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
     public int txnIdCount()
     {
         return txnIds.length;
+    }
+
+    public int totalCount()
+    {
+        return keyToTxnId.length - keys.size();
     }
 
     public TxnId txnId(int i)

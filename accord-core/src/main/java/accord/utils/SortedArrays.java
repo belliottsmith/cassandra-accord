@@ -31,7 +31,10 @@ public class SortedArrays
         {
             while (leftIdx < left.length && rightIdx < right.length)
             {
-                int cmp = left[leftIdx].compareTo(right[rightIdx]);
+                T leftKey = left[leftIdx];
+                T rightKey = right[rightIdx];
+                int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
                 if (cmp <= 0)
                 {
                     leftIdx += 1;
@@ -60,7 +63,10 @@ public class SortedArrays
         {
             while (leftIdx < left.length && rightIdx < right.length)
             {
-                int cmp = left[leftIdx].compareTo(right[rightIdx]);
+                T leftKey = left[leftIdx];
+                T rightKey = right[rightIdx];
+                int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
                 if (cmp >= 0)
                 {
                     rightIdx += 1;
@@ -90,7 +96,8 @@ public class SortedArrays
         {
             T leftKey = left[leftIdx];
             T rightKey = right[rightIdx];
-            int cmp = leftKey.compareTo(rightKey);
+            int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
             T minKey;
             if (cmp == 0)
             {
@@ -143,7 +150,10 @@ public class SortedArrays
         {
             while (leftIdx < left.length && rightIdx < right.length)
             {
-                int cmp = left[leftIdx].compareTo(right[rightIdx]);
+                T leftKey = left[leftIdx];
+                T rightKey = right[rightIdx];
+                int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
                 if (cmp >= 0)
                 {
                     rightIdx += 1;
@@ -165,7 +175,10 @@ public class SortedArrays
         {
             while (leftIdx < left.length && rightIdx < right.length)
             {
-                int cmp = left[leftIdx].compareTo(right[rightIdx]);
+                T leftKey = left[leftIdx];
+                T rightKey = right[rightIdx];
+                int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
                 if (cmp <= 0)
                 {
                     leftIdx += 1;
@@ -187,7 +200,9 @@ public class SortedArrays
         while (leftIdx < left.length && rightIdx < right.length)
         {
             T leftKey = left[leftIdx];
-            int cmp = leftKey.compareTo(right[rightIdx]);
+            T rightKey = right[rightIdx];
+            int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
             if (cmp == 0)
             {
                 leftIdx++;
@@ -222,7 +237,10 @@ public class SortedArrays
 
         while (leftIdx < left.length && rightIdx < right.length)
         {
-            int cmp = left[leftIdx].compareTo(right[rightIdx]);
+            T leftKey = left[leftIdx];
+            T rightKey = right[rightIdx];
+            int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
             if (cmp == 0)
             {
                 resultSize = leftIdx++;
@@ -246,7 +264,10 @@ public class SortedArrays
 
         while (leftIdx < left.length && rightIdx < right.length)
         {
-            int cmp = left[leftIdx].compareTo(right[rightIdx]);
+            T leftKey = left[leftIdx];
+            T rightKey = right[rightIdx];
+            int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
             if (cmp > 0)
             {
                 result[resultSize++] = left[leftIdx++];
@@ -506,42 +527,39 @@ public class SortedArrays
     }
 
     @Nullable
-    public static <T extends Comparable<? super T>> int[] remapper(T[] src, T[] trg, boolean trgIsKnownSuperset)
+    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, T[] trg)
     {
-        return remapper(src, src.length, trg, trg.length, trgIsKnownSuperset);
+        return remapToSuperset(src, src.length, trg, trg.length);
     }
 
     /**
-     * Given two sorted arrays, where one is a subset of the other, return an int[] of the same size as
+     * Given two sorted arrays with unique elements, where one is a subset of the other, return an int[] of the same size as
      * the {@code src} parameter, with the index within {@code trg} of the corresponding element within {@code src},
      * or -1 otherwise.
      * That is, {@code result[i] == -1 || src[i].equals(trg[result[i]])}
      */
     @Nullable
-    public static <T extends Comparable<? super T>> int[] remapper(T[] src, int srcLength, T[] trg, int trgLength, boolean trgIsSuperset)
+    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, int srcLength, T[] trg, int trgLength)
     {
-        // when trgIsSuperset=true then the src elements should be present in trg else an error will be thrown.
-        if (src == trg || (trgIsSuperset && trgLength == srcLength)) return null;
+        if (src == trg || trgLength == srcLength) return null;
+
         int[] result = new int[srcLength];
-        Arrays.fill(result, -1);
-        int idxLastEq = -1;
-        for (int i = 0, j = 0 ; i < srcLength && j < trgLength ;)
+        int i = 0, j = 0;
+        while (i < srcLength && j < trgLength)
         {
-            int c = src[i].compareTo(trg[j]);
-            if (c < 0)
+            if (src[i] != trg[j] && !src[i].equals(trg[j]))
             {
-                // src has a smaller element, this is either a duplicate or element not present in target
-                if (trgIsSuperset && (idxLastEq == -1 || src[idxLastEq].compareTo(trg[j]) != 0))
-                    throw new AssertionError("Unexpected value in target superset array: " + trg[j] + " at index " + j + " does not exist in source array");
-                result[i++] = -1;
+                j = SortedArrays.exponentialSearch(trg, j, trgLength, src[i]);
+                if (j < 0)
+                {
+                    if (i > 0 && src[i] == src[i-1])
+                        throw new AssertionError("Unexpected value in source: " + src[i] + " at index " + i + " duplicates index " + (i - 1));
+                    throw new AssertionError("Unexpected value in source: " + src[i] + " at index " + i + " does not exist in target array");
+                }
             }
-            else if (c > 0) ++j;
-            else
-            {
-                result[i++] = j++;
-                idxLastEq = i;
-            }
+            result[i++] = j++;
         }
+        Arrays.fill(result, i, result.length, -1);
         return result;
     }
 
