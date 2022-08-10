@@ -205,11 +205,8 @@ public class SortedArrays
                 rightIdx++;
                 result[resultSize++] = leftKey;
             }
-            else
-            {
-                if (cmp < 0) leftIdx++;
-                else rightIdx++;
-            }
+            else if (cmp < 0) leftIdx++;
+            else rightIdx++;
         }
 
         if (resultSize < result.length)
