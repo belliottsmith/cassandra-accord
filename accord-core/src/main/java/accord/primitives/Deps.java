@@ -169,8 +169,8 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         // TODO: could share backing array for all of these if we want, with an additional offset
         final int[] input;
         final int keyCount;
-        int[] remap; // TODO: use cached backing array
-        int[] keys; // TODO: use cached backing array
+        int[] remapTxnIds; // TODO: use cached backing array
+        int[] remapKeys; // TODO: use cached backing array
         int keyIndex;
         int index;
         int endIndex;
@@ -187,8 +187,16 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         private void init(Keys keys, TxnId[] txnIds)
         {
-            this.remap = remapToSuperset(source.txnIds, txnIds, takeFromCache(source.txnIds.length));
-            this.keys = source.keys.remapToSuperset(keys, takeFromCache(source.keys.size()));
+            int[] remapTxnIds = takeFromCache(source.txnIds.length);
+            this.remapTxnIds = remapToSuperset(source.txnIds, txnIds, remapTxnIds);
+            if (this.remapTxnIds == null)
+                returnToCache(remapTxnIds);
+
+            int[] remapKeys = takeFromCache(source.keys.size());
+            this.remapKeys = source.keys.remapToSuperset(keys, remapKeys);
+            if (this.remapKeys == null)
+                returnToCache(remapKeys);
+
             while (input[keyIndex] == keyCount)
                 ++keyIndex;
             this.index = keyCount;
@@ -209,10 +217,10 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         private void dealloc()
         {
-            if (remap != null)
-                returnToCache(remap);
-            if (keys != null)
-                returnToCache(keys);
+            if (remapTxnIds != null)
+                returnToCache(remapTxnIds);
+            if (remapKeys != null)
+                returnToCache(remapKeys);
         }
     }
 
@@ -298,7 +306,6 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             case 2: return streams[0].source.with(streams[1].source);
         }
 
-        // TODO: use Cassandra MergeIterator to perform more efficient merge of TxnId
         TxnId[] txnIds;
         {
             MergeIterator<TxnId, TxnId> iter = MergeIterator.get(Arrays.asList(streams).subList(0, streamCount), TxnId::compareTo, new MergeIterator.Reducer<>()
@@ -347,7 +354,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             int keyHeapSize = 0;
             for (int stream = 0 ; stream < streamCount ; ++stream)
             {
-                InlineHeap.set(keyHeap, keyHeapSize++, remap(0, streams[stream].keys), stream);
+                InlineHeap.set(keyHeap, keyHeapSize++, remap(0, streams[stream].remapKeys), stream);
             }
 
             int keyIndex = 0;
@@ -367,7 +374,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                 int txnIdHeapSize = InlineHeap.consume(keyHeap, keyHeapSize, (key, streamIndex, size) -> {
                     MergeStream stream = streams[streamIndex];
-                    InlineHeap.set(txnIdHeap, size, remap(stream.input[stream.index], stream.remap), streamIndex);
+                    InlineHeap.set(txnIdHeap, size, remap(stream.input[stream.index], stream.remapTxnIds), streamIndex);
                     return size + 1;
                 }, 0);
 
@@ -387,7 +394,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                             int index = ++stream.index;
                             if (index == stream.endIndex)
                                 return Integer.MIN_VALUE;
-                            return remap(stream.input[index], stream.remap);
+                            return remap(stream.input[index], stream.remapTxnIds);
                         });
                     }
                     while (txnIdHeapSize > 1);
@@ -405,7 +412,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                         result = Arrays.copyOf(result, Math.max(result.length + (result.length / 2), resultIndex + count));
 
                     while (index < endIndex)
-                        result[resultIndex++] = remap(stream.input[index++], stream.remap);
+                        result[resultIndex++] = remap(stream.input[index++], stream.remapTxnIds);
 
                     stream.index = index;
                     stream.endIndex = stream.input[++stream.keyIndex];
@@ -418,7 +425,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                         stream.endIndex = stream.input[++stream.keyIndex];
                     return stream.keyIndex == stream.keyCount
                            ? Integer.MIN_VALUE
-                           : remap(stream.keyIndex, stream.keys);
+                           : remap(stream.keyIndex, stream.remapKeys);
                 });
             }
 
@@ -555,100 +562,191 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         if (isEmpty() || that.isEmpty())
             return isEmpty() ? that : this;
 
-        Keys keys = this.keys.union(that.keys);
-        TxnId[] txnIds = SortedArrays.linearUnion(this.txnIds, that.txnIds, TxnId[]::new);
-        int[] remapLeft = remapToSuperset(this.txnIds, txnIds);
-        int[] remapRight = remapToSuperset(that.txnIds, txnIds);
-        Keys leftKeys = this.keys, rightKeys = that.keys;
-        int[] left = keyToTxnId, right = that.keyToTxnId;
-
-        if (remapLeft == null && remapRight == null && Arrays.equals(left, right)
-            && keys.size() == leftKeys.size() && keys.size() == rightKeys.size())
+        int[] remapLeft, remapRight, out = null;
+        synchronized (Deps.class)
         {
-            return this;
+            remapLeft = takeFromCache(this.txnIds.length);
+            remapRight = takeFromCache(that.txnIds.length);
         }
 
-        int[] out = null;
-        int lk = 0, rk = 0, ok = 0, l = this.keys.size(), r = that.keys.size(), o = keys.size();
-
-        if (remapLeft == null && keys == leftKeys)
+        try
         {
-            noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
+
+            Keys keys = this.keys.union(that.keys);
+            TxnId[] txnIds = SortedArrays.linearUnion(this.txnIds, that.txnIds, TxnId[]::new);
+
+            int[] tmpRemapLeft = remapToSuperset(this.txnIds, txnIds, remapLeft);
+            int[] tmpRemapRight = remapToSuperset(that.txnIds, txnIds, remapRight);
+            if (tmpRemapLeft == null || tmpRemapRight == null)
             {
-                int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
-                if (ck < 0)
+                synchronized (Deps.class)
                 {
-                    o += left[lk] - l;
-                    l = left[lk];
-                    assert o == l && ok == lk && left[ok] == o;
-                    ok++;
-                    lk++;
+                    if (tmpRemapLeft == null)
+                        returnToCache(remapLeft);
+                    if (tmpRemapRight == null)
+                        returnToCache(remapRight);
                 }
-                else if (ck > 0)
-                {
-                    throw new IllegalStateException();
-                }
-                else
-                {
-                    while (l < left[lk] && r < right[rk])
-                    {
-                        int nextLeft = left[l];
-                        int nextRight = remap(right[r], remapRight);
+            }
+            remapLeft = tmpRemapLeft;
+            remapRight = tmpRemapRight;
 
-                        if (nextLeft < nextRight)
-                        {
-                            o++;
-                            l++;
-                        }
-                        else if (nextRight < nextLeft)
-                        {
-                            out = copy(left, o, left.length + right.length - r);
-                            break noOp;
-                        }
-                        else
-                        {
-                            o++;
-                            l++;
-                            r++;
-                        }
-                    }
+            Keys leftKeys = this.keys, rightKeys = that.keys;
+            int[] left = keyToTxnId, right = that.keyToTxnId;
 
-                    if (l < left[lk])
+            if (remapLeft == null && remapRight == null && Arrays.equals(left, right)
+                && keys.size() == leftKeys.size() && keys.size() == rightKeys.size())
+            {
+                return this;
+            }
+
+            int lk = 0, rk = 0, ok = 0, l = this.keys.size(), r = that.keys.size(), o = keys.size();
+
+            if (remapLeft == null && keys == leftKeys)
+            {
+                noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
+                {
+                    int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
+                    if (ck < 0)
                     {
                         o += left[lk] - l;
                         l = left[lk];
+                        assert o == l && ok == lk && left[ok] == o;
+                        ok++;
+                        lk++;
                     }
-                    else if (r < right[rk])
+                    else if (ck > 0)
                     {
-                        out = copy(left, o, left.length + right.length - r);
-                        break;
+                        throw new IllegalStateException();
                     }
+                    else
+                    {
+                        while (l < left[lk] && r < right[rk])
+                        {
+                            int nextLeft = left[l];
+                            int nextRight = remap(right[r], remapRight);
 
-                    assert o == l && ok == lk && left[ok] == o;
-                    ok++;
-                    rk++;
-                    lk++;
+                            if (nextLeft < nextRight)
+                            {
+                                o++;
+                                l++;
+                            }
+                            else if (nextRight < nextLeft)
+                            {
+                                out = copy(left, o, left.length + right.length - r);
+                                break noOp;
+                            }
+                            else
+                            {
+                                o++;
+                                l++;
+                                r++;
+                            }
+                        }
+
+                        if (l < left[lk])
+                        {
+                            o += left[lk] - l;
+                            l = left[lk];
+                        }
+                        else if (r < right[rk])
+                        {
+                            out = copy(left, o, left.length + right.length - r);
+                            break;
+                        }
+
+                        assert o == l && ok == lk && left[ok] == o;
+                        ok++;
+                        rk++;
+                        lk++;
+                    }
                 }
+
+                if (out == null)
+                    return this;
+            }
+            else if (remapRight == null && keys == rightKeys)
+            {
+                noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
+                {
+                    int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
+                    if (ck < 0)
+                    {
+                        throw new IllegalStateException();
+                    }
+                    else if (ck > 0)
+                    {
+                        o += right[rk] - r;
+                        r = right[rk];
+                        assert o == r && ok == rk && right[ok] == o;
+                        ok++;
+                        rk++;
+                    }
+                    else
+                    {
+                        while (l < left[lk] && r < right[rk])
+                        {
+                            int nextLeft = remap(left[l], remapLeft);
+                            int nextRight = right[r];
+
+                            if (nextLeft < nextRight)
+                            {
+                                out = copy(right, o, right.length + left.length - l);
+                                break noOp;
+                            }
+                            else if (nextRight < nextLeft)
+                            {
+                                o++;
+                                r++;
+                            }
+                            else
+                            {
+                                o++;
+                                l++;
+                                r++;
+                            }
+                        }
+
+                        if (l < left[lk])
+                        {
+                            out = copy(right, o, right.length + left.length - l);
+                            break;
+                        }
+                        else if (r < right[rk])
+                        {
+                            o += right[rk] - r;
+                            r = right[rk];
+                        }
+
+                        assert o == r && ok == rk && right[ok] == o;
+                        ok++;
+                        rk++;
+                        lk++;
+                    }
+                }
+
+                if (out == null)
+                    return that;
+            }
+            else
+            {
+                out = takeFromCache(left.length + right.length);
             }
 
-            if (out == null)
-                return this;
-        }
-        else if (remapRight == null && keys == rightKeys)
-        {
-            noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
+            while (lk < leftKeys.size() && rk < rightKeys.size())
             {
                 int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
                 if (ck < 0)
                 {
-                    throw new IllegalStateException();
+                    while (l < left[lk])
+                        out[o++] = remap(left[l++], remapLeft);
+                    out[ok++] = o;
+                    lk++;
                 }
                 else if (ck > 0)
                 {
-                    o += right[rk] - r;
-                    r = right[rk];
-                    assert o == r && ok == rk && right[ok] == o;
-                    ok++;
+                    while (r < right[rk])
+                        out[o++] = remap(right[r++], remapRight);
+                    out[ok++] = o;
                     rk++;
                 }
                 else
@@ -656,121 +754,64 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                     while (l < left[lk] && r < right[rk])
                     {
                         int nextLeft = remap(left[l], remapLeft);
-                        int nextRight = right[r];
+                        int nextRight = remap(right[r], remapRight);
 
-                        if (nextLeft < nextRight)
+                        if (nextLeft <= nextRight)
                         {
-                            out = copy(right, o, right.length + left.length - l);
-                            break noOp;
-                        }
-                        else if (nextRight < nextLeft)
-                        {
-                            o++;
-                            r++;
+                            out[o++] = nextLeft;
+                            l += 1;
+                            r += nextLeft == nextRight ? 1 : 0;
                         }
                         else
                         {
-                            o++;
-                            l++;
-                            r++;
+                            out[o++] = nextRight;
+                            ++r;
                         }
                     }
 
-                    if (l < left[lk])
-                    {
-                        out = copy(right, o, right.length + left.length - l);
-                        break;
-                    }
-                    else if (r < right[rk])
-                    {
-                        o += right[rk] - r;
-                        r = right[rk];
-                    }
+                    while (l < left[lk])
+                        out[o++] = remap(left[l++], remapLeft);
 
-                    assert o == r && ok == rk && right[ok] == o;
-                    ok++;
+                    while (r < right[rk])
+                        out[o++] = remap(right[r++], remapRight);
+
+                    out[ok++] = o;
                     rk++;
                     lk++;
                 }
             }
 
-            if (out == null)
-                return that;
-        }
-        else
-        {
-            out = new int[left.length + right.length];
-        }
-
-        while (lk < leftKeys.size() && rk < rightKeys.size())
-        {
-            int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
-            if (ck < 0)
+            while (lk < leftKeys.size())
             {
                 while (l < left[lk])
                     out[o++] = remap(left[l++], remapLeft);
                 out[ok++] = o;
                 lk++;
             }
-            else if (ck > 0)
+
+            while (rk < rightKeys.size())
             {
                 while (r < right[rk])
                     out[o++] = remap(right[r++], remapRight);
                 out[ok++] = o;
                 rk++;
             }
-            else
-            {
-                while (l < left[lk] && r < right[rk])
-                {
-                    int nextLeft = remap(left[l], remapLeft);
-                    int nextRight = remap(right[r], remapRight);
 
-                    if (nextLeft <= nextRight)
-                    {
-                        out[o++] = nextLeft;
-                        l += 1;
-                        r += nextLeft == nextRight ? 1 : 0;
-                    }
-                    else
-                    {
-                        out[o++] = nextRight;
-                        ++r;
-                    }
-                }
-
-                while (l < left[lk])
-                    out[o++] = remap(left[l++], remapLeft);
-
-                while (r < right[rk])
-                    out[o++] = remap(right[r++], remapRight);
-
-                out[ok++] = o;
-                rk++;
-                lk++;
-            }
-        }
-
-        while (lk < leftKeys.size())
-        {
-            while (l < left[lk])
-                out[o++] = remap(left[l++], remapLeft);
-            out[ok++] = o;
-            lk++;
-        }
-
-        while (rk < rightKeys.size())
-        {
-            while (r < right[rk])
-                out[o++] = remap(right[r++], remapRight);
-            out[ok++] = o;
-            rk++;
-        }
-
-        if (o < out.length)
             out = Arrays.copyOf(out, o);
-
-        return new Deps(keys, txnIds, out);
+            return new Deps(keys, txnIds, out);
+        }
+        finally
+        {
+            synchronized (Deps.class)
+            {
+                if (remapLeft != null)
+                    returnToCache(remapLeft);
+                if (remapRight != null)
+                    returnToCache(remapRight);
+                if (out != null)
+                    returnToCache(out);
+            }
+        }
     }
 
     private static int[] copy(int[] src, int to, int length)

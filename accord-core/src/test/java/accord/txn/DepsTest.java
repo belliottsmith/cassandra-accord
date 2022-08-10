@@ -230,8 +230,9 @@ public class DepsTest
             String postfix = "(No.=" + list.size() + ", keys=" + keys.size() + ", size=" + size + ")";
 
             // test
-            benchmark("merge" + postfix, () -> benchmarkMerge(keys, list));
             benchmark("builder forEach" + postfix, () -> benchmarkBuilderForEach(keys, list));
+            benchmark("merge" + postfix, () -> benchmarkMerge(keys, list));
+            benchmark("with" + postfix, () -> benchmarkWith(keys, list));
         });
     }
 
@@ -289,6 +290,17 @@ public class DepsTest
         return merged;
     }
 
+    private static accord.primitives.Deps benchmarkWith(Keys keys, List<Deps> list) {
+        accord.primitives.Deps merged = null;
+//        Keys keys = list.get(0).test.keys();
+        for (int i = 0; i < 1000; i++)
+        {
+            merged = list.stream().map(v -> v.test).reduce(accord.primitives.Deps.NONE, accord.primitives.Deps::with);
+        }
+
+        return merged;
+    }
+
     private static void property(Consumer<Deps> test)
     {
         qt().forAll(Deps::generate).check(deps -> {
@@ -319,7 +331,7 @@ public class DepsTest
             int nodeRange = nextPositive(random, 4);
             int uniqueKeys = nextPositive(random , 20);
             int emptyKeys = random.nextInt(10);
-            int totalCount = nextPositive(random, 1000);
+            int totalCount = nextPositive(random, uniqueKeys * next(random, 2, 200));
             return generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, uniqueKeys + emptyKeys, totalCount);
         }
 
