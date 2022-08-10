@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -214,6 +215,41 @@ class SortedArraysTest
                 Arrays.sort(expected);
                 assertArrayEquals(expected, SortedArrays.linearDifference(b, a, Integer[]::new));
             }
+        });
+    }
+
+    @Test
+    public void testInsert()
+    {
+        Gen<Integer[]> gen = Gens.arrays(Integer.class, Gens.ints().all()).ofSizeBetween(0, 42).map(a -> {
+            Arrays.sort(a);
+            return a;
+        });
+        qt().forAll(gen, Gens.random()).check((array, random) -> {
+            // insert w/e already exists
+            Set<Integer> uniq = new HashSet<>();
+            for (int i = 0; i < array.length; i++)
+            {
+                Integer value = array[i];
+                Assertions.assertEquals(array, SortedArrays.insert(array, value, Integer[]::new));
+                uniq.add(value);
+            }
+
+            // insert something not present
+            int numToAdd = random.nextInt(1, 10);
+            List<Integer> expected = new ArrayList<>(array.length + numToAdd);
+            expected.addAll(Arrays.asList(array));
+            for (int i = 0; i < numToAdd; i++)
+            {
+                int value;
+                while (!uniq.add((value = random.nextInt()))) {}
+                Integer[] updated = SortedArrays.insert(array, value, Integer[]::new);
+                Assertions.assertNotEquals(array, updated);
+                expected.add(value);
+                array = updated;
+            }
+            Collections.sort(expected);
+            assertArrayEquals(expected.toArray(new Integer[0]), array);
         });
     }
 
