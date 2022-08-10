@@ -319,9 +319,8 @@ public class DepsTest
             int nodeRange = nextPositive(random, 4);
             int uniqueKeys = nextPositive(random , 20);
             int emptyKeys = random.nextInt(10);
-            int keyRange = next(random, uniqueKeys + emptyKeys, 400);
             int totalCount = nextPositive(random, 1000);
-            return generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount);
+            return generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, uniqueKeys + emptyKeys, totalCount);
         }
 
         private static int nextPositive(Random random, int upperExclusive)

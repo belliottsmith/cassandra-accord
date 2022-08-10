@@ -20,6 +20,10 @@ import static accord.utils.SortedArrays.remapToSuperset;
 // TODO (now): switch to RoutingKey
 public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 {
+    private static final int MAX_CACHED_ARRAY_COUNT = 64; // means 2MiB total
+    private static final int[] ARRAY_CACHE_SIZE = new int[14];
+    private static final int[][][] ARRAY_CACHE = new int[14][MAX_CACHED_ARRAY_COUNT][];
+
     private static final TxnId[] NO_TXNIDS = new TxnId[0];
     private static final int[] NO_INTS = new int[0];
     public static final Deps NONE = new Deps(Keys.EMPTY, NO_TXNIDS, NO_INTS);
@@ -183,8 +187,8 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         private void init(Keys keys, TxnId[] txnIds)
         {
-            this.remap = remapToSuperset(source.txnIds, txnIds);
-            this.keys = source.keys.remapToSuperset(keys);
+            this.remap = remapToSuperset(source.txnIds, txnIds, takeFromCache(source.txnIds.length));
+            this.keys = source.keys.remapToSuperset(keys, takeFromCache(source.keys.size()));
             while (input[keyIndex] == keyCount)
                 ++keyIndex;
             this.index = keyCount;
@@ -201,6 +205,58 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         public TxnId next()
         {
             return source.txnId(txnIdIdx++);
+        }
+
+        private void dealloc()
+        {
+            if (remap != null)
+                returnToCache(remap);
+            if (keys != null)
+                returnToCache(keys);
+        }
+    }
+
+    private static int[] takeFromCache(int size)
+    {
+        if (size == 0)
+            return NO_INTS;
+
+        int log2 = 32 - Integer.numberOfLeadingZeros(size - 1);
+        if (log2 > ARRAY_CACHE_SIZE.length)
+            return new int[size];
+
+        if (ARRAY_CACHE_SIZE[log2] < MAX_CACHED_ARRAY_COUNT)
+        {
+            ARRAY_CACHE_SIZE[log2]++;
+            return new int[1 << log2];
+        }
+
+        for (int i = 0 ; i < ARRAY_CACHE[log2].length ; ++i)
+        {
+            if (ARRAY_CACHE[log2][i] != null)
+            {
+                int[] result = ARRAY_CACHE[log2][i];
+                ARRAY_CACHE[log2][i] = null;
+                return result;
+            }
+        }
+
+        return new int[size];
+    }
+
+    private static void returnToCache(int[] array)
+    {
+        if (Integer.bitCount(array.length) != 1)
+            return;
+
+        int log2 = 31 - Integer.numberOfLeadingZeros(array.length);
+        for (int i = 0 ; i < ARRAY_CACHE[log2].length ; ++i)
+        {
+            if (ARRAY_CACHE[log2][i] == null)
+            {
+                ARRAY_CACHE[log2][i] = array;
+                break;
+            }
         }
     }
 
@@ -267,7 +323,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             txnIds = tmp.toArray(TxnId[]::new);
         }
 
-        int[] result; {
+        int[] result;
+        synchronized (Deps.class)
+        {
             int maxStreamSize = 0, totalStreamSize = 0;
             for (int streamIndex = 0 ; streamIndex < streamCount ; ++streamIndex)
             {
@@ -276,99 +334,108 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 maxStreamSize = Math.max(maxStreamSize, stream.input.length - stream.keyCount);
                 totalStreamSize += stream.input.length - stream.keyCount;
             }
-            result = new int[keys.size() + Math.min(maxStreamSize * 2, totalStreamSize)]; // TODO: use cached temporary array
+            result = takeFromCache(keys.size() + Math.min(maxStreamSize * 2, totalStreamSize)); // TODO: use cached temporary array
         }
 
-        int resultIndex = keys.size();
-        int[] keyHeap = InlineHeap.create(streamCount); // TODO: use cached temporary array
-        int[] txnIdHeap = InlineHeap.create(streamCount); // TODO: use cached temporary array
-
-        // build a heap of keys and streams, so we can merge those streams with overlapping keys
-        int keyHeapSize = 0;
-        for (int stream = 0 ; stream < streamCount ; ++stream)
+        try
         {
-            InlineHeap.set(keyHeap, keyHeapSize++, remap(0, streams[stream].keys), stream);
-        }
+            int resultIndex = keys.size();
+            int[] keyHeap = InlineHeap.create(streamCount); // TODO: use cached temporary array
+            int[] txnIdHeap = InlineHeap.create(streamCount); // TODO: use cached temporary array
 
-        int keyIndex = 0;
-        keyHeapSize = InlineHeap.heapify(keyHeap, keyHeapSize);
-        while (keyHeapSize > 0)
-        {
-            // while the heap is non-empty, pop the streams matching the top key and insert them into their own heap
-
-            // if we have keys with no contents, fill in zeroes
-            while (keyIndex < InlineHeap.key(keyHeap, 0))
+            // build a heap of keys and streams, so we can merge those streams with overlapping keys
+            int keyHeapSize = 0;
+            for (int stream = 0 ; stream < streamCount ; ++stream)
             {
-                if (keyIndex == result.length)
-                    result = Arrays.copyOf(result, result.length * 2);
+                InlineHeap.set(keyHeap, keyHeapSize++, remap(0, streams[stream].keys), stream);
+            }
+
+            int keyIndex = 0;
+            keyHeapSize = InlineHeap.heapify(keyHeap, keyHeapSize);
+            while (keyHeapSize > 0)
+            {
+                // while the heap is non-empty, pop the streams matching the top key and insert them into their own heap
+
+                // if we have keys with no contents, fill in zeroes
+                while (keyIndex < InlineHeap.key(keyHeap, 0))
+                {
+                    if (keyIndex == result.length)
+                        result = Arrays.copyOf(result, result.length * 2);
+
+                    result[keyIndex++] = resultIndex;
+                }
+
+                int txnIdHeapSize = InlineHeap.consume(keyHeap, keyHeapSize, (key, streamIndex, size) -> {
+                    MergeStream stream = streams[streamIndex];
+                    InlineHeap.set(txnIdHeap, size, remap(stream.input[stream.index], stream.remap), streamIndex);
+                    return size + 1;
+                }, 0);
+
+                if (txnIdHeapSize > 1)
+                {
+                    txnIdHeapSize = InlineHeap.heapify(txnIdHeap, txnIdHeapSize);
+                    do
+                    {
+                        if (resultIndex + txnIdHeapSize >= result.length)
+                            result = Arrays.copyOf(result, Math.max((resultIndex + txnIdHeapSize) * 2, resultIndex + (resultIndex/2)));
+
+                        result[resultIndex++] = InlineHeap.key(txnIdHeap, 0);
+                        InlineHeap.consume(txnIdHeap, txnIdHeapSize, (key, stream, v) -> 0, 0);
+
+                        txnIdHeapSize = InlineHeap.advance(txnIdHeap, txnIdHeapSize, streamIndex -> {
+                            MergeStream stream = streams[streamIndex];
+                            int index = ++stream.index;
+                            if (index == stream.endIndex)
+                                return Integer.MIN_VALUE;
+                            return remap(stream.input[index], stream.remap);
+                        });
+                    }
+                    while (txnIdHeapSize > 1);
+                }
+
+                // fast path when one remaining source for this key
+                if (txnIdHeapSize > 0)
+                {
+                    int streamIndex = InlineHeap.stream(txnIdHeap, 0);
+                    MergeStream stream = streams[streamIndex];
+                    int index = stream.index;
+                    int endIndex = stream.endIndex;
+                    int count = endIndex - index;
+                    if (result.length < resultIndex + count)
+                        result = Arrays.copyOf(result, Math.max(result.length + (result.length / 2), resultIndex + count));
+
+                    while (index < endIndex)
+                        result[resultIndex++] = remap(stream.input[index++], stream.remap);
+
+                    stream.index = index;
+                    stream.endIndex = stream.input[++stream.keyIndex];
+                }
 
                 result[keyIndex++] = resultIndex;
+                keyHeapSize = InlineHeap.advance(keyHeap, keyHeapSize, streamIndex -> {
+                    MergeStream stream = streams[streamIndex];
+                    while (stream.index == stream.endIndex && stream.keyIndex < stream.keyCount)
+                        stream.endIndex = stream.input[++stream.keyIndex];
+                    return stream.keyIndex == stream.keyCount
+                           ? Integer.MIN_VALUE
+                           : remap(stream.keyIndex, stream.keys);
+                });
             }
 
-            int txnIdHeapSize = InlineHeap.consume(keyHeap, keyHeapSize, (key, streamIndex, size) -> {
-                MergeStream stream = streams[streamIndex];
-                InlineHeap.set(txnIdHeap, size, remap(stream.input[stream.index], stream.remap), streamIndex);
-                return size + 1;
-            }, 0);
+            while (keyIndex < keys.size())
+                result[keyIndex++] = resultIndex;
 
-            if (txnIdHeapSize > 1)
-            {
-                txnIdHeapSize = InlineHeap.heapify(txnIdHeap, txnIdHeapSize);
-                do
-                {
-                    if (resultIndex + txnIdHeapSize >= result.length)
-                        result = Arrays.copyOf(result, Math.max((resultIndex + txnIdHeapSize) * 2, resultIndex + (resultIndex/2)));
-
-                    result[resultIndex++] = InlineHeap.key(txnIdHeap, 0);
-                    InlineHeap.consume(txnIdHeap, txnIdHeapSize, (key, stream, v) -> 0, 0);
-
-                    txnIdHeapSize = InlineHeap.advance(txnIdHeap, txnIdHeapSize, streamIndex -> {
-                        MergeStream stream = streams[streamIndex];
-                        int index = ++stream.index;
-                        if (index == stream.endIndex)
-                            return Integer.MIN_VALUE;
-                        return remap(stream.input[index], stream.remap);
-                    });
-                }
-                while (txnIdHeapSize > 1);
-            }
-
-            // fast path when one remaining source for this key
-            if (txnIdHeapSize > 0)
-            {
-                int streamIndex = InlineHeap.stream(txnIdHeap, 0);
-                MergeStream stream = streams[streamIndex];
-                int index = stream.index;
-                int endIndex = stream.endIndex;
-                int count = endIndex - index;
-                if (result.length < resultIndex + count)
-                    result = Arrays.copyOf(result, Math.max(result.length + (result.length / 2), resultIndex + count));
-
-                while (index < endIndex)
-                    result[resultIndex++] = remap(stream.input[index++], stream.remap);
-
-                stream.index = index;
-                stream.endIndex = stream.input[++stream.keyIndex];
-            }
-
-            result[keyIndex++] = resultIndex;
-            keyHeapSize = InlineHeap.advance(keyHeap, keyHeapSize, streamIndex -> {
-                MergeStream stream = streams[streamIndex];
-                while (stream.index == stream.endIndex && stream.keyIndex < stream.keyCount)
-                    stream.endIndex = stream.input[++stream.keyIndex];
-                return stream.keyIndex == stream.keyCount
-                       ? Integer.MIN_VALUE
-                       : remap(stream.keyIndex, stream.keys);
-            });
+            return new Deps(keys, txnIds, Arrays.copyOf(result, resultIndex));
         }
-
-        while (keyIndex < keys.size())
-            result[keyIndex++] = resultIndex;
-
-        if (resultIndex < result.length)
-            result = Arrays.copyOf(result, resultIndex);
-
-        return new Deps(keys, txnIds, result);
+        finally
+        {
+            returnToCache(result);
+            for (int i = 0 ; i < streamCount ; ++i)
+            {
+                if (streams[i] != null)
+                    streams[i].dealloc();
+            }
+        }
     }
 
     final Keys keys; // unique Keys

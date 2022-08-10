@@ -529,7 +529,12 @@ public class SortedArrays
     @Nullable
     public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, T[] trg)
     {
-        return remapToSuperset(src, src.length, trg, trg.length);
+        return remapToSuperset(src, trg, null);
+    }
+
+    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, T[] trg, @Nullable int[] result)
+    {
+        return remapToSuperset(src, src.length, trg, trg.length, result);
     }
 
     /**
@@ -539,11 +544,13 @@ public class SortedArrays
      * That is, {@code result[i] == -1 || src[i].equals(trg[result[i]])}
      */
     @Nullable
-    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, int srcLength, T[] trg, int trgLength)
+    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, int srcLength, T[] trg, int trgLength, int[] result)
     {
         if (src == trg || trgLength == srcLength) return null;
 
-        int[] result = new int[srcLength];
+        if (result == null)
+            result = new int[srcLength];
+
         int i = 0, j = 0;
         while (i < srcLength && j < trgLength)
         {
@@ -559,7 +566,7 @@ public class SortedArrays
             }
             result[i++] = j++;
         }
-        Arrays.fill(result, i, result.length, -1);
+        Arrays.fill(result, i, srcLength, -1);
         return result;
     }
 

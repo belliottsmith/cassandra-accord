@@ -14,6 +14,8 @@ import accord.utils.IndexedRangeFoldToLong;
 import accord.utils.SortedArrays;
 import org.apache.cassandra.utils.concurrent.Inline;
 
+import javax.annotation.Nullable;
+
 @SuppressWarnings("rawtypes")
 // TODO: this should probably be a BTree
 // TODO: check that foldl call-sites are inlined and optimised by HotSpot
@@ -427,7 +429,12 @@ public class Keys implements Iterable<Key>
 
     public int[] remapToSuperset(Keys target)
     {
-        return SortedArrays.remapToSuperset(keys, target.keys);
+        return remapToSuperset(target, null);
+    }
+
+    public int[] remapToSuperset(Keys target, @Nullable int[] result)
+    {
+        return SortedArrays.remapToSuperset(keys, target.keys, result);
     }
 
     public static Keys union(Keys as, Keys bs)
