@@ -13,7 +13,7 @@ public class Property
     public static abstract class Common<T extends Common<T>>
     {
         protected long seed = ThreadLocalRandom.current().nextLong();
-        protected int examples = 100;
+        protected int examples = 1000;
 
         protected boolean pure = true;
 
