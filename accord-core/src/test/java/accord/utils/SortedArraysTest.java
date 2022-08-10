@@ -147,7 +147,7 @@ class SortedArraysTest
     public void testLinearDifference()
     {
         Gen<Integer[]> gen = sortedUniqueIntegerArray();
-        qt().withExamples(Integer.MAX_VALUE).forAll(gen, gen).check((a, b) -> {
+        qt().forAll(gen, gen).check((a, b) -> {
             Set<Integer> left = new HashSet<>(Arrays.asList(a));
             Set<Integer> right = new HashSet<>(Arrays.asList(b));
 
