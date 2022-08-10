@@ -49,17 +49,24 @@ class SortedArraysTest
     @Test
     public void testSearch()
     {
-        qt().forAll(uniqueInts()).check(array -> {
+        qt().forAll(Gens.arrays(Gens.ints().all()).unique().ofSizeBetween(1, 100)).check(array -> {
             Arrays.sort(array);
             Integer[] jint = IntStream.of(array).mapToObj(Integer::valueOf).toArray(Integer[]::new);
             for (int i = 0; i < array.length; i++)
             {
                 int find = array[i];
+                int expectedOnToExclusion = -(i + 1);
+
                 Assertions.assertEquals(i, SortedArrays.exponentialSearch(array, 0, array.length, find));
+                Assertions.assertEquals(expectedOnToExclusion, SortedArrays.exponentialSearch(array, 0, i, find));
+
                 for (SortedArrays.Search search : SortedArrays.Search.values())
                 {
                     Assertions.assertEquals(i, SortedArrays.exponentialSearch(jint, 0, array.length, find, Integer::compare, search));
+                    Assertions.assertEquals(expectedOnToExclusion, SortedArrays.exponentialSearch(jint, 0, i, find, Integer::compare, search));
+
                     Assertions.assertEquals(i, SortedArrays.binarySearch(jint, 0, array.length, find, Integer::compare, search));
+                    Assertions.assertEquals(expectedOnToExclusion, SortedArrays.binarySearch(jint, 0, i, find, Integer::compare, search));
                 }
 
                 // uses Search.FAST
@@ -200,11 +207,6 @@ class SortedArraysTest
     {
         // need Long rather than long
         return Gens.arrays(Long.class, Gens.longs().all()).ofSizeBetween(1, 100);
-    }
-
-    private static Gen<int[]> uniqueInts()
-    {
-        return Gens.arrays(Gens.ints().all()).unique().ofSizeBetween(1, 100);
     }
 
     private static Gen<Integer[]> sortedUniqueIntegerArray() {

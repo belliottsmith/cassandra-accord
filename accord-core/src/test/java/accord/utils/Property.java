@@ -64,8 +64,27 @@ public class Property
     {
         if (value == null)
             return null;
-        if (value.getClass().isArray() && !value.getClass().getComponentType().isPrimitive())
-            return Arrays.asList((Object[]) value);
+        // one day java arrays will have a useful toString... one day...
+        if (value.getClass().isArray())
+        {
+            Class<?> subType = value.getClass().getComponentType();
+            if (!subType.isPrimitive())
+                return Arrays.asList((Object[]) value);
+            if (Byte.TYPE == subType)
+                return Arrays.toString((byte[]) value);
+            if (Character.TYPE == subType)
+                return Arrays.toString((char[]) value);
+            if (Short.TYPE == subType)
+                return Arrays.toString((short[]) value);
+            if (Integer.TYPE == subType)
+                return Arrays.toString((int[]) value);
+            if (Long.TYPE == subType)
+                return Arrays.toString((long[]) value);
+            if (Float.TYPE == subType)
+                return Arrays.toString((float[]) value);
+            if (Double.TYPE == subType)
+                return Arrays.toString((double[]) value);
+        }
         return value;
     }
 
