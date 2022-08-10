@@ -4,8 +4,10 @@ import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.IntStream;
@@ -83,6 +85,48 @@ class SortedArraysTest
                 Assertions.assertEquals(left, right);
                 Assertions.assertEquals(left, i);
             }
+        });
+    }
+
+    @Test
+    public void testNextIntersection()
+    {
+        Gen<Integer[]> gen = Gens.arrays(Integer.class, Gens.ints().between(0, 100))
+                .unique()
+                .ofSizeBetween(0, 10)
+                .map(a -> {
+                    Arrays.sort(a);
+                    return a;
+                });
+        qt().forAll(gen, gen).check((a, b) -> {
+            // find all intersections
+            List<Long> expected = new ArrayList<>();
+            for (int i = 0; i < a.length; i++)
+            {
+                for (int j = 0; j < b.length; j++)
+                {
+                    if (a[i].equals(b[j]))
+                    {
+                        long ab = ((long)i << 32) | j;
+                        expected.add(ab);
+                    }
+                }
+            }
+            List<Long> seen = new ArrayList<>(expected.size());
+            int ai = 0, bi = 0;
+            while (ai < a.length && bi < b.length)
+            {
+                long ab = SortedArrays.findNextIntersection(a, ai, b, bi, Integer::compare);
+                if (ab == -1)
+                    return; // no more matches...
+                seen.add(ab);
+                ai = (int) (ab >>> 32);
+                bi = (int) ab;
+                // since data is unique just "consume" both pointers so can find the next one
+                ai++;
+                bi++;
+            }
+            assertArrayEquals(expected.toArray(), seen.toArray());
         });
     }
 
