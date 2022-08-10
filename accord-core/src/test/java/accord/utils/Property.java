@@ -77,7 +77,14 @@ public class Property
         sb.append("Examples = ").append(input.examples).append('\n');
         sb.append("Pure = ").append(input.pure).append('\n');
         if (cause != null)
-            sb.append("Error: ").append(cause.getMessage()).append('\n');
+        {
+            String msg = cause.getMessage();
+            sb.append("Error: ");
+            // to improve readability, if a newline is detected move the error msg to the next line
+            if (msg != null && msg.contains("\n"))
+                msg = "\n\t" + msg.replace("\n", "\n\t");
+            sb.append(msg).append('\n');
+        }
         if (values != null)
         {
             sb.append("Values:\n");

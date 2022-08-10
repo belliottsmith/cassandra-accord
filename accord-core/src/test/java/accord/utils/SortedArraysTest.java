@@ -87,10 +87,11 @@ class SortedArraysTest
             Set<Integer> seen = new HashSet<>();
             Stream.of(a).forEach(seen::add);
             Stream.of(b).forEach(seen::add);
-            Integer[] actual = SortedArrays.linearUnion(a, b, Integer[]::new);
             Integer[] expected = seen.toArray(Integer[]::new);
             Arrays.sort(expected);
-            Assertions.assertArrayEquals(expected, actual);
+
+            assertArrayEquals(expected, SortedArrays.linearUnion(a, b, Integer[]::new));
+            assertArrayEquals(expected, SortedArrays.linearUnion(b, a, Integer[]::new));
         });
     }
 
@@ -98,15 +99,38 @@ class SortedArraysTest
     public void testLinearIntersection()
     {
         Gen<Integer[]> gen = sortedUniqueIntegerArray();
-        qt().withSeed(3576953691942488024L).forAll(gen, gen).check((a, b) -> {
+        qt().withSeed(-6416679495733509868L).forAll(gen, gen).check((a, b) -> {
             Set<Integer> left = new HashSet<>(Arrays.asList(a));
             Set<Integer> right = new HashSet<>(Arrays.asList(b));
             Set<Integer> intersection = Sets.intersection(left, right);
             Integer[] expected = intersection.toArray(Integer[]::new);
             Arrays.sort(expected);
 
-            Integer[] actual = SortedArrays.linearIntersection(a, b, Integer[]::new);
-            Assertions.assertArrayEquals(expected, actual);
+            assertArrayEquals(expected, SortedArrays.linearIntersection(a, b, Integer[]::new));
+            assertArrayEquals(expected, SortedArrays.linearIntersection(b, a, Integer[]::new));
+        });
+    }
+
+    private static void assertArrayEquals(Object[] expected, Object[] actual)
+    {
+        Assertions.assertArrayEquals(expected, actual, () -> {
+            // default error msg is not as useful as it could be, and since this class always works with sorted data
+            // attempt to find first miss-match and return a useful log
+            StringBuilder sb = new StringBuilder();
+            sb.append("Expected: ").append(Arrays.toString(expected)).append('\n');
+            sb.append("Actual:   ").append(Arrays.toString(actual)).append('\n');
+            int length = Math.min(expected.length, actual.length);
+            if (length != 0)
+            {
+                for (int i = 0; i < length; i++)
+                {
+                    Object l = expected[i];
+                    Object r = actual[i];
+                    if (!Objects.equals(l, r))
+                        sb.append("Difference detected at index ").append(i).append("; left=").append(l).append(", right=").append(r).append('\n');
+                }
+            }
+            return sb.toString();
         });
     }
 
