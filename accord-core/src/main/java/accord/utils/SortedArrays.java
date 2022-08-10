@@ -141,6 +141,7 @@ public class SortedArrays
         // first pick a subset candidate, and merge both until we encounter an element not present in the other array
         if (left.length <= right.length)
         {
+            boolean hasMatch = false;
             while (leftIdx < left.length && rightIdx < right.length)
             {
                 int cmp = left[leftIdx].compareTo(right[rightIdx]);
@@ -148,6 +149,8 @@ public class SortedArrays
                 {
                     rightIdx += 1;
                     leftIdx += cmp == 0 ? 1 : 0;
+                    if (cmp == 0)
+                        hasMatch = true;
                 }
                 else
                 {
@@ -158,11 +161,15 @@ public class SortedArrays
                 }
             }
 
+            if (!hasMatch)
+                return allocate.apply(0);
+
             if (result == null)
                 return left;
         }
         else
         {
+            boolean hasMatch = false;
             while (leftIdx < left.length && rightIdx < right.length)
             {
                 int cmp = left[leftIdx].compareTo(right[rightIdx]);
@@ -170,6 +177,8 @@ public class SortedArrays
                 {
                     leftIdx += 1;
                     rightIdx += cmp == 0 ? 1 : 0;
+                    if (cmp == 0)
+                        hasMatch = true;
                 }
                 else
                 {
@@ -179,6 +188,8 @@ public class SortedArrays
                     break;
                 }
             }
+            if (!hasMatch)
+                return allocate.apply(0);
 
             if (result == null)
                 return right;
