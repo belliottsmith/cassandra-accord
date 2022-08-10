@@ -520,15 +520,27 @@ public class SortedArrays
     @Nullable
     public static <T extends Comparable<? super T>> int[] remapper(T[] src, int srcLength, T[] trg, int trgLength, boolean trgIsSuperset)
     {
+        // when trgIsSuperset=true then the src elements should be present in trg else an error will be thrown.
         if (src == trg || (trgIsSuperset && trgLength == srcLength)) return null;
         int[] result = new int[srcLength];
         Arrays.fill(result, -1);
+        int idxLastEq = -1;
         for (int i = 0, j = 0 ; i < srcLength && j < trgLength ;)
         {
             int c = src[i].compareTo(trg[j]);
-            if (c < 0) result[i++] = -1;
+            if (c < 0)
+            {
+                // src has a smaller element, this is either a duplicate or element not present in target
+                if (trgIsSuperset && (idxLastEq == -1 || src[idxLastEq].compareTo(trg[j]) != 0))
+                    throw new AssertionError("Unexpected value in target superset array: " + trg[j] + " at index " + j + " does not exist in source array");
+                result[i++] = -1;
+            }
             else if (c > 0) ++j;
-            else result[i++] = j++;
+            else
+            {
+                result[i++] = j++;
+                idxLastEq = i;
+            }
         }
         return result;
     }

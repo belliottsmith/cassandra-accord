@@ -374,7 +374,8 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         this.keys = keys;
         this.txnIds = txnIds;
         this.keyToTxnId = keyToTxnId;
-        Preconditions.checkState(keys.isEmpty() || keyToTxnId[keys.size() - 1] == keyToTxnId.length);
+        if (!(keys.isEmpty() || keyToTxnId[keys.size() - 1] == keyToTxnId.length))
+            throw new IllegalArgumentException(String.format("Last key (%s) in keyToTxnId does not point (%d) to the end of the array (%d);\nkeyToTxnId=%s", keys.get(keys.size() - 1), keyToTxnId[keys.size() - 1], keyToTxnId.length, Arrays.toString(keyToTxnId)));
         checkValid();
     }
 
