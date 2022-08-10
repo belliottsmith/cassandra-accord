@@ -1,5 +1,6 @@
 package accord.utils;
 
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -18,6 +19,11 @@ public interface Gen<A> {
     default <B> Gen<B> map(Function<A, B> fn)
     {
         return r -> fn.apply(this.next(r));
+    }
+
+    default <B> Gen<B> map(BiFunction<Random, A, B> fn)
+    {
+        return r -> fn.apply(r, this.next(r));
     }
 
     default Gen<A> filter(Predicate<A> fn)

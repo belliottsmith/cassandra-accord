@@ -82,13 +82,7 @@ class SortedArraysTest
     @Test
     public void testLinearUnion()
     {
-        Gen<Integer[]> gen = Gens.arrays(Integer.class, Gens.ints().all())
-                .unique()
-                .ofSizeBetween(0, 100)
-                .map(a -> {
-                    Arrays.sort(a);
-                    return a;
-                });
+        Gen<Integer[]> gen = sortedUniqueIntegerArray();
         qt().forAll(gen, gen).check((a, b) -> {
             Set<Integer> seen = new HashSet<>();
             Stream.of(a).forEach(seen::add);
@@ -103,13 +97,7 @@ class SortedArraysTest
     @Test
     public void testLinearIntersection()
     {
-        Gen<Integer[]> gen = Gens.arrays(Integer.class, Gens.ints().all())
-                .unique()
-                .ofSizeBetween(0, 100)
-                .map(a -> {
-                    Arrays.sort(a);
-                    return a;
-                });
+        Gen<Integer[]> gen = sortedUniqueIntegerArray();
         qt().withSeed(3576953691942488024L).forAll(gen, gen).check((a, b) -> {
             Set<Integer> left = new HashSet<>(Arrays.asList(a));
             Set<Integer> right = new HashSet<>(Arrays.asList(b));
@@ -122,6 +110,37 @@ class SortedArraysTest
         });
     }
 
+    @Test
+    public void testLinearIntersectionWithSubset()
+    {
+        class P
+        {
+            final Integer[] full, subset;
+
+            P(Integer[] full, Integer[] subset) {
+                this.full = full;
+                this.subset = subset;
+            }
+        }
+        Gen<P> gen = Gens.arrays(Integer.class, Gens.ints().all())
+                .unique()
+                .ofSizeBetween(2, 100)
+                .map(a -> {
+                    Arrays.sort(a);
+                    return a;
+                }).map((r, full) -> {
+                    int to = r.nextInt(1, full.length);
+                    int offset = r.nextInt(0, to);
+                    return new P(full, Arrays.copyOfRange(full, offset, to));
+                });
+        qt().forAll(gen).check(p -> {
+            Integer[] expected = p.subset;
+            // use assertEquals to detect expected pointer-equals actual
+            // this is to make sure the optimization to detect perfect subsets is the path used for the return
+            Assertions.assertEquals(expected, SortedArrays.linearIntersection(p.full, p.subset, Integer[]::new));
+            Assertions.assertEquals(expected, SortedArrays.linearIntersection(p.subset, p.full, Integer[]::new));
+        });
+    }
 
     private static int indexOfNth(String original, String search, int n)
     {
@@ -162,6 +181,16 @@ class SortedArraysTest
     private static Gen<int[]> uniqueInts()
     {
         return Gens.arrays(Gens.ints().all()).unique().ofSizeBetween(1, 100);
+    }
+
+    private static Gen<Integer[]> sortedUniqueIntegerArray() {
+        return Gens.arrays(Integer.class, Gens.ints().all())
+                .unique()
+                .ofSizeBetween(0, 100)
+                .map(a -> {
+                    Arrays.sort(a);
+                    return a;
+                });
     }
 
     private static class Pair<T>
