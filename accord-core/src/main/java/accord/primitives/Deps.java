@@ -565,6 +565,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         int[] remapLeft, remapRight, out = null;
         synchronized (Deps.class)
         {
+            // TODO: this isn't actually optimal, as we may allocate an array we don't need
             remapLeft = takeFromCache(this.txnIds.length);
             remapRight = takeFromCache(that.txnIds.length);
         }

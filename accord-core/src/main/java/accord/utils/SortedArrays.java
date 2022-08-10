@@ -9,6 +9,7 @@ import javax.annotation.Nullable;
 
 import static java.util.Arrays.*;
 
+// TODO (now): javadoc
 public class SortedArrays
 {
     /**
