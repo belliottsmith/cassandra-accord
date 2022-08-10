@@ -21,6 +21,7 @@ import java.util.stream.LongStream;
 
 import accord.primitives.*;
 import accord.primitives.Deps.Builder;
+import accord.utils.Gen;
 import accord.utils.Gens;
 import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
@@ -299,7 +300,7 @@ public class DepsTest
             this.test = test;
         }
 
-        static Deps generate(Random random)
+        static Deps generate(Gen.Random random)
         {
             int epochRange = 3;
             int realRange = 50;
