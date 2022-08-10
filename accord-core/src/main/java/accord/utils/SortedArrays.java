@@ -161,11 +161,8 @@ public class SortedArrays
                 }
             }
 
-            if (!hasMatch)
-                return allocate.apply(0);
-
             if (result == null)
-                return left;
+                return hasMatch ? left : allocate.apply(0);
         }
         else
         {
@@ -188,11 +185,9 @@ public class SortedArrays
                     break;
                 }
             }
-            if (!hasMatch)
-                return allocate.apply(0);
 
             if (result == null)
-                return right;
+                return hasMatch ? right : allocate.apply(0);
         }
 
         while (leftIdx < left.length && rightIdx < right.length)

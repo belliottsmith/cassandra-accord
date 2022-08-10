@@ -99,7 +99,7 @@ class SortedArraysTest
     public void testLinearIntersection()
     {
         Gen<Integer[]> gen = sortedUniqueIntegerArray();
-        qt().withSeed(-6416679495733509868L).forAll(gen, gen).check((a, b) -> {
+        qt().forAll(gen, gen).check((a, b) -> {
             Set<Integer> left = new HashSet<>(Arrays.asList(a));
             Set<Integer> right = new HashSet<>(Arrays.asList(b));
             Set<Integer> intersection = Sets.intersection(left, right);
