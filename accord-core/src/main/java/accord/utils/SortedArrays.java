@@ -49,8 +49,9 @@ public class SortedArrays
 
             if (result == null)
             {
-                if (rightIdx == right.length)
+                if (rightIdx == right.length) // all elements matched, so can return the other array
                     return left;
+                // no elements matched or only a subset matched
                 result = allocate.apply(left.length + (right.length - rightIdx));
                 resultSize = leftIdx;
                 System.arraycopy(left, 0, result, 0, resultSize);
@@ -78,8 +79,9 @@ public class SortedArrays
 
             if (result == null)
             {
-                if (leftIdx == left.length)
+                if (leftIdx == left.length) // all elements matched, so can return the other array
                     return right;
+                // no elements matched or only a subset matched
                 result = allocate.apply(right.length + (left.length - leftIdx));
                 resultSize = rightIdx;
                 System.arraycopy(right, 0, result, 0, resultSize);
