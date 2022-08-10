@@ -1,5 +1,6 @@
 package accord.utils;
 
+import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -8,6 +9,7 @@ import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import static accord.utils.Property.qt;
 
@@ -25,6 +27,24 @@ class SortedArraysTest
 //                assertRemapperProperty(i, src, trg, result);
 //        });
 //    }
+
+    private static void assertRemapperProperty(int i, Long[] src, Long[] trg, int[] result)
+    {
+        if (!(result[i] == -1 || Objects.equals(src[i], trg[result[i]])))
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.append("i = ").append(i).append('\n');
+            sb.append(src[i]).append(" != ").append(trg[result[i]]).append('\n');
+            sb.append("src:\n").append(Arrays.toString(src)).append('\n');
+            sb.append("trg:\n").append(Arrays.toString(trg)).append('\n');
+            String str = Arrays.toString(result);
+            sb.append("result:\n").append(str).append('\n');
+            for (int j = 0, idx = indexOfNth(str, ",", i); j <= idx; j++)
+                sb.append(' ');
+            sb.append('^');
+            throw new AssertionError(sb.toString());
+        }
+    }
 
     @Test
     public void testSearch()
@@ -59,24 +79,91 @@ class SortedArraysTest
         });
     }
 
-    //TODO: linearUnion
-
-    private static void assertRemapperProperty(int i, Long[] src, Long[] trg, int[] result)
+    @Test
+    public void testLinearUnion()
     {
-        if (!(result[i] == -1 || Objects.equals(src[i], trg[result[i]])))
+        Gen<Integer[]> gen = sortedUniqueIntegerArray();
+        qt().forAll(gen, gen).check((a, b) -> {
+            Set<Integer> seen = new HashSet<>();
+            Stream.of(a).forEach(seen::add);
+            Stream.of(b).forEach(seen::add);
+            Integer[] expected = seen.toArray(Integer[]::new);
+            Arrays.sort(expected);
+
+            assertArrayEquals(expected, SortedArrays.linearUnion(a, b, Integer[]::new));
+            assertArrayEquals(expected, SortedArrays.linearUnion(b, a, Integer[]::new));
+        });
+    }
+
+    @Test
+    public void testLinearIntersection()
+    {
+        Gen<Integer[]> gen = sortedUniqueIntegerArray();
+        qt().forAll(gen, gen).check((a, b) -> {
+            Set<Integer> left = new HashSet<>(Arrays.asList(a));
+            Set<Integer> right = new HashSet<>(Arrays.asList(b));
+            Set<Integer> intersection = Sets.intersection(left, right);
+            Integer[] expected = intersection.toArray(Integer[]::new);
+            Arrays.sort(expected);
+
+            assertArrayEquals(expected, SortedArrays.linearIntersection(a, b, Integer[]::new));
+            assertArrayEquals(expected, SortedArrays.linearIntersection(b, a, Integer[]::new));
+        });
+    }
+
+    @Test
+    public void testLinearIntersectionWithSubset()
+    {
+        class P
         {
-            StringBuilder sb = new StringBuilder();
-            sb.append("i = ").append(i).append('\n');
-            sb.append(src[i]).append(" != ").append(trg[result[i]]).append('\n');
-            sb.append("src:\n").append(Arrays.toString(src)).append('\n');
-            sb.append("trg:\n").append(Arrays.toString(trg)).append('\n');
-            String str = Arrays.toString(result);
-            sb.append("result:\n").append(str).append('\n');
-            for (int j = 0, idx = indexOfNth(str, ",", i); j <= idx; j++)
-                sb.append(' ');
-            sb.append('^');
-            throw new AssertionError(sb.toString());
+            final Integer[] full, subset;
+
+            P(Integer[] full, Integer[] subset) {
+                this.full = full;
+                this.subset = subset;
+            }
         }
+        Gen<P> gen = Gens.arrays(Integer.class, Gens.ints().all())
+                .unique()
+                .ofSizeBetween(2, 100)
+                .map(a -> {
+                    Arrays.sort(a);
+                    return a;
+                }).map((r, full) -> {
+                    int to = r.nextInt(1, full.length);
+                    int offset = r.nextInt(0, to);
+                    return new P(full, Arrays.copyOfRange(full, offset, to));
+                });
+        qt().forAll(gen).check(p -> {
+            Integer[] expected = p.subset;
+            // use assertEquals to detect expected pointer-equals actual
+            // this is to make sure the optimization to detect perfect subsets is the path used for the return
+            Assertions.assertEquals(expected, SortedArrays.linearIntersection(p.full, p.subset, Integer[]::new));
+            Assertions.assertEquals(expected, SortedArrays.linearIntersection(p.subset, p.full, Integer[]::new));
+        });
+    }
+
+    @Test
+    public void testLinearDifference()
+    {
+        Gen<Integer[]> gen = sortedUniqueIntegerArray();
+        qt().forAll(gen, gen).check((a, b) -> {
+            Set<Integer> left = new HashSet<>(Arrays.asList(a));
+            Set<Integer> right = new HashSet<>(Arrays.asList(b));
+
+            {
+                Set<Integer> difference = Sets.difference(left, right);
+                Integer[] expected = difference.toArray(Integer[]::new);
+                Arrays.sort(expected);
+                assertArrayEquals(expected, SortedArrays.linearDifference(a, b, Integer[]::new));
+            }
+            {
+                Set<Integer> difference = Sets.difference(right, left);
+                Integer[] expected = difference.toArray(Integer[]::new);
+                Arrays.sort(expected);
+                assertArrayEquals(expected, SortedArrays.linearDifference(b, a, Integer[]::new));
+            }
+        });
     }
 
     private static int indexOfNth(String original, String search, int n)
@@ -103,7 +190,7 @@ class SortedArraysTest
             T[] src = gen.next(random);
             Arrays.sort(src);
             int to = random.nextInt(0, src.length);
-            int offset = random.nextInt(0, to);
+            int offset = to == 0 ? 0 : random.nextInt(0, to);
             T[] trg = Arrays.copyOfRange(src, offset, to);
             return new Pair<>(src, trg);
         };
@@ -111,29 +198,46 @@ class SortedArraysTest
 
     private static Gen<Long[]> longs()
     {
-        return random -> {
-            int size = random.nextInt(99) + 1;
-            Long[] array = new Long[size];
-            for (int i = 0; i < size; i++)
-                array[i] = random.nextLong();
-            return array;
-        };
+        // need Long rather than long
+        return Gens.arrays(Long.class, Gens.longs().all()).ofSizeBetween(1, 100);
     }
 
     private static Gen<int[]> uniqueInts()
     {
-        return random -> {
-            int size = random.nextInt(99) + 1;
-            int[] array = new int[size];
-            Set<Integer> dedup = new HashSet<>();
-            for (int i = 0; i < size; i++)
+        return Gens.arrays(Gens.ints().all()).unique().ofSizeBetween(1, 100);
+    }
+
+    private static Gen<Integer[]> sortedUniqueIntegerArray() {
+        return Gens.arrays(Integer.class, Gens.ints().all())
+                .unique()
+                .ofSizeBetween(0, 100)
+                .map(a -> {
+                    Arrays.sort(a);
+                    return a;
+                });
+    }
+
+    private static void assertArrayEquals(Object[] expected, Object[] actual)
+    {
+        Assertions.assertArrayEquals(expected, actual, () -> {
+            // default error msg is not as useful as it could be, and since this class always works with sorted data
+            // attempt to find first miss-match and return a useful log
+            StringBuilder sb = new StringBuilder();
+            sb.append("Expected: ").append(Arrays.toString(expected)).append('\n');
+            sb.append("Actual:   ").append(Arrays.toString(actual)).append('\n');
+            int length = Math.min(expected.length, actual.length);
+            if (length != 0)
             {
-                int value;
-                while (!dedup.add(value = random.nextInt())) {}
-                array[i] = value;
+                for (int i = 0; i < length; i++)
+                {
+                    Object l = expected[i];
+                    Object r = actual[i];
+                    if (!Objects.equals(l, r))
+                        sb.append("Difference detected at index ").append(i).append("; left=").append(l).append(", right=").append(r).append('\n');
+                }
             }
-            return array;
-        };
+            return sb.toString();
+        });
     }
 
     private static class Pair<T>

@@ -53,8 +53,9 @@ public class SortedArrays
 
             if (result == null)
             {
-                if (rightIdx == right.length)
+                if (rightIdx == right.length) // all elements matched, so can return the other array
                     return left;
+                // no elements matched or only a subset matched
                 result = allocate.apply(left.length + (right.length - rightIdx));
                 resultSize = leftIdx;
                 System.arraycopy(left, 0, result, 0, resultSize);
@@ -85,8 +86,9 @@ public class SortedArrays
 
             if (result == null)
             {
-                if (leftIdx == left.length)
+                if (leftIdx == left.length) // all elements matched, so can return the other array
                     return right;
+                // no elements matched or only a subset matched
                 result = allocate.apply(right.length + (left.length - leftIdx));
                 resultSize = rightIdx;
                 System.arraycopy(right, 0, result, 0, resultSize);
@@ -149,6 +151,7 @@ public class SortedArrays
         // first pick a subset candidate, and merge both until we encounter an element not present in the other array
         if (left.length <= right.length)
         {
+            boolean hasMatch = false;
             while (leftIdx < left.length && rightIdx < right.length)
             {
                 T leftKey = left[leftIdx];
@@ -159,6 +162,8 @@ public class SortedArrays
                 {
                     rightIdx += 1;
                     leftIdx += cmp == 0 ? 1 : 0;
+                    if (cmp == 0)
+                        hasMatch = true;
                 }
                 else
                 {
@@ -170,10 +175,11 @@ public class SortedArrays
             }
 
             if (result == null)
-                return left;
+                return hasMatch ? left : allocate.apply(0);
         }
         else
         {
+            boolean hasMatch = false;
             while (leftIdx < left.length && rightIdx < right.length)
             {
                 T leftKey = left[leftIdx];
@@ -184,6 +190,8 @@ public class SortedArrays
                 {
                     leftIdx += 1;
                     rightIdx += cmp == 0 ? 1 : 0;
+                    if (cmp == 0)
+                        hasMatch = true;
                 }
                 else
                 {
@@ -195,7 +203,7 @@ public class SortedArrays
             }
 
             if (result == null)
-                return right;
+                return hasMatch ? right : allocate.apply(0);
         }
 
         while (leftIdx < left.length && rightIdx < right.length)
@@ -210,11 +218,8 @@ public class SortedArrays
                 rightIdx++;
                 result[resultSize++] = leftKey;
             }
-            else
-            {
-                if (cmp < 0) leftIdx++;
-                else rightIdx++;
-            }
+            else if (cmp < 0) leftIdx++;
+            else rightIdx++;
         }
 
         if (resultSize < result.length)
@@ -283,6 +288,8 @@ public class SortedArrays
                 ++rightIdx;
             }
         }
+        while (leftIdx < left.length)
+            result[resultSize++] = left[leftIdx++];
 
         if (resultSize < result.length)
             result = Arrays.copyOf(result, resultSize);

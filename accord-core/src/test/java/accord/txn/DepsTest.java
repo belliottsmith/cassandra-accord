@@ -13,16 +13,13 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 
 import accord.primitives.*;
 import accord.primitives.Deps.Builder;
 import accord.utils.Gen;
-import accord.utils.Gens;
 import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Assumptions;
@@ -97,7 +94,7 @@ public class DepsTest
     @Test
     public void testIterator()
     {
-        property(deps -> {
+        qt().forAll(Deps::generate).check(deps -> {
             Builder builder = new Builder(deps.test.keys());
             for (Map.Entry<Key, TxnId> e : deps.test)
                 builder.add(e.getKey(), e.getValue());
@@ -108,10 +105,12 @@ public class DepsTest
     @Test
     public void testForEachOnUniqueEndInclusive()
     {
-        property(deps -> {
+        qt().forAll(Gen.of(Deps::generate).filter(d -> d.test.keys().size() >= 2)).check(deps -> {
             Keys keys = deps.test.keys();
             Key start = keys.get(0);
             Key end = keys.get(keys.size() - 1);
+            if (start.equals(end))
+                throw new AssertionError(start + " == " + end);
 
             TreeSet<TxnId> seen = new TreeSet<>();
             deps.test.forEachOn(new KeyRanges(KeyRange.range(start, end, false, true)), ignore -> true, txnId -> {
@@ -132,7 +131,7 @@ public class DepsTest
     @Test
     public void testForEachOnUniqueStartInclusive()
     {
-        property(deps -> {
+        qt().forAll(Gen.of(Deps::generate).filter(d -> d.test.keys().size() >= 2)).check(deps -> {
             Keys keys = deps.test.keys();
             Key start = keys.get(0);
             Key end = keys.get(keys.size() - 1);
@@ -156,7 +155,7 @@ public class DepsTest
     @Test
     public void testForEachOnUniqueNoMatch()
     {
-        property(deps -> {
+        qt().forAll(Gen.of(Deps::generate).filter(d -> d.test.keys().size() >= 2)).check(deps -> {
             Keys keys = deps.test.keys();
             Key start = IntHashKey.forHash(Integer.MIN_VALUE);
             Key end = keys.get(0);
@@ -173,20 +172,7 @@ public class DepsTest
     @Test
     public void testMergeFull()
     {
-        qt().forAll(lists(Deps::generate).ofSizeBetween(0, 20)).check(list -> {
-            testMergedProperty(keys(list), list);
-        });
-    }
-
-    @Test
-    public void testMergePartial()
-    {
-        qt().withSeed(2166268934702838083L).forAll(lists(Deps::generate).ofSizeBetween(0, 20), Gens.random()).check((list, random) -> {
-            Keys keys = keys(list);
-            // filter out specific keys
-            keys = new Keys(keys.stream().filter(ignore -> random.nextBoolean()).collect(Collectors.toSet()));
-            testMergedProperty(keys, list);
-        });
+        qt().forAll(lists(Deps::generate).ofSizeBetween(0, 20)).check(list -> testMergedProperty(keys(list), list));
     }
 
     private static Keys keys(List<Deps> list) {
@@ -195,76 +181,63 @@ public class DepsTest
 
     private static void testMergedProperty(Keys keys, List<Deps> list)
     {
-        KeyRanges ranges = keys.isEmpty() ? KeyRanges.EMPTY : new KeyRanges(KeyRange.range(keys.get(0), keys.get(keys.size() - 1), true, true));
         Deps expected = Deps.merge(keys, list);
         expected.testSimpleEquality();
-        accord.primitives.Deps merged = accord.primitives.Deps.merge(keys, list, a -> a.test);
+
+        // slightly redundant due to Deps.merge using this method... it is here for completeness
+        Assertions.assertEquals(expected.test, accord.primitives.Deps.merge(keys, list, a -> a.test));
+        Assertions.assertEquals(expected.test, list.stream().map(a -> a.test).reduce(accord.primitives.Deps.NONE, accord.primitives.Deps::with));
+
+        // Keys is the superset of all keys, so no filtering is needed
         Builder builder = new Builder(keys);
-        // can't do forEach due to Builder will fail if you add a key not provided in keys
-        list.forEach(d -> d.test.forEachOn(ranges, i -> true, (key, txnId) -> builder.add(key, txnId)));
-        accord.primitives.Deps built = builder.build();
-
-        accord.primitives.Deps with = list.stream().map(a -> a.test).reduce(accord.primitives.Deps.NONE, accord.primitives.Deps::with);
-
-        Assertions.assertEquals(expected.test, merged);
-        Assertions.assertEquals(expected.test, built);
-        Assertions.assertEquals(expected.test, with);
+        list.forEach(d -> d.test.forEach(e -> builder.add(e.getKey(), e.getValue())));
+        Assertions.assertEquals(expected.test, builder.build());
     }
 
     //TODO remove, this was mostly for review to better grasp "why"
     @Test
     public void hackyBenchmark()
     {
-        // comment out to run.. for some reason @Ignore isn't present in junit 5
-//        Assumptions.assumeTrue(false);
+        // comment out to run... for some reason @Ignore isn't present in junit 5
+        Assumptions.assumeTrue(false, "Benchmark is not meant to be run automatically, so comment out if you want to run this");
 
         qt().withExamples(10).forAll(lists(Deps::generate).ofSizeBetween(1, 20)).check(list -> {
             Keys keys = keys(list);
-            int size = 0;
-            for (Deps deps : list)
-                size += deps.test.totalCount();
 
             // warmup
-            benchmarkMerge(keys, list);
-            benchmarkBuilderForEach(keys, list);
-            String postfix = "(No.=" + list.size() + ", keys=" + keys.size() + ", size=" + size + ")";
+            benchmarkMerge(list);
+            benchmarkBuilderForEach(list);
+            String postfix = "(size=" + list.size() + ", keys=" + keys.size() + ")";
 
             // test
-            benchmark("builder forEach" + postfix, () -> benchmarkBuilderForEach(keys, list));
-            benchmark("merge" + postfix, () -> benchmarkMerge(keys, list));
-            benchmark("with" + postfix, () -> benchmarkWith(keys, list));
+            benchmark("merge" + postfix, () -> benchmarkMerge(list));
+            benchmark("builder forEach" + postfix, () -> benchmarkBuilderForEach(list));
         });
     }
 
     private static void benchmark(String name, Runnable task) {
         com.sun.management.ThreadMXBean jvmThreading = (com.sun.management.ThreadMXBean) ManagementFactory.getPlatformMXBean(ThreadMXBean.class);
 
-        System.gc();
-        System.runFinalization();
         long[] attempts = new long[42];
 
         long startAlloc = jvmThreading.getThreadAllocatedBytes(Thread.currentThread().getId());
         for (int i = 0; i < attempts.length; i++)
         {
+            System.gc();
+            System.runFinalization();
             long start = System.nanoTime();
             task.run();
             attempts[i] = System.nanoTime() - start;
         }
-
-        long startGc = System.nanoTime();
-        System.gc();
-        System.runFinalization();
-        long endGc = System.nanoTime();
-
         long endAlloc = jvmThreading.getThreadAllocatedBytes(Thread.currentThread().getId());
         double avgPerCallNanos = LongStream.of(attempts).average().getAsDouble() / 1000; // div by 1k to show per call time
-        double avgGcPerCallNanos = (endGc - startGc) / (attempts.length * 1000d); // div by 1k to show per call time
-        logger.info("Benchmark[name={}] avg {}ms, {}ms GC, allocated {} MiB", name, new DecimalFormat("#,###.##").format(avgPerCallNanos / 1000), new DecimalFormat("#,###.##").format(avgGcPerCallNanos / 1000), (endAlloc - startAlloc) / 1024 / 1024 );
+        logger.info("Benchmark[name={}] avg {}ms, allocated {} MiB", name, new DecimalFormat("#,###.##").format(avgPerCallNanos / 1000), (endAlloc - startAlloc) / 1024 / 1024 );
     }
 
-    private static accord.primitives.Deps benchmarkBuilderForEach(Keys keys, List<Deps> list) {
+    private static accord.primitives.Deps benchmarkBuilderForEach(List<Deps> list) {
         accord.primitives.Deps merged = null;
 //        Keys keys = list.get(0).test.keys();
+        Keys keys = keys(list);
 //        KeyRanges ranges = new KeyRanges(KeyRange.range(keys.get(0), keys.get(keys.size() - 1), true, true));
         for (int loop = 0; loop < 1000; loop++)
         {
@@ -281,32 +254,13 @@ public class DepsTest
         return merged;
     }
 
-    private static accord.primitives.Deps benchmarkMerge(Keys keys, List<Deps> list) {
+    private static accord.primitives.Deps benchmarkMerge(List<Deps> list) {
         accord.primitives.Deps merged = null;
-//        Keys keys = list.get(0).test.keys();
+        Keys keys = keys(list);
         for (int i = 0; i < 1000; i++)
             merged = accord.primitives.Deps.merge(keys, list, d -> d.test);
 
         return merged;
-    }
-
-    private static accord.primitives.Deps benchmarkWith(Keys keys, List<Deps> list) {
-        accord.primitives.Deps merged = null;
-//        Keys keys = list.get(0).test.keys();
-        for (int i = 0; i < 1000; i++)
-        {
-            merged = list.stream().map(v -> v.test).reduce(accord.primitives.Deps.NONE, accord.primitives.Deps::with);
-        }
-
-        return merged;
-    }
-
-    private static void property(Consumer<Deps> test)
-    {
-        qt().forAll(Deps::generate).check(deps -> {
-            deps.testSimpleEquality();
-            test.accept(deps);
-        });
     }
 
     static class Deps
@@ -326,28 +280,22 @@ public class DepsTest
             int realRange = 50;
             int logicalRange = 10;
             double uniqueTxnIdsPercentage = 0.66D;
-            int uniqueTxnIds = nextPositive(random, (int) ((realRange * logicalRange * epochRange) * uniqueTxnIdsPercentage));
+            int uniqueTxnIds = random.nextPositive((int) ((realRange * logicalRange * epochRange) * uniqueTxnIdsPercentage));
 
-            int nodeRange = nextPositive(random, 4);
-            int uniqueKeys = nextPositive(random , 20);
-            int emptyKeys = random.nextInt(10);
-            int totalCount = nextPositive(random, uniqueKeys * next(random, 2, 200));
-            return generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, uniqueKeys + emptyKeys, totalCount);
-        }
-
-        private static int nextPositive(Random random, int upperExclusive)
-        {
-            return random.nextInt(upperExclusive - 1) + 1;
-        }
-
-        private static int next(Random random, int lower, int upperExclusive)
-        {
-            return random.nextInt(upperExclusive - lower + 1) + lower;
+            int nodeRange = random.nextPositive(4);
+            int uniqueKeys = random.nextInt(2, 200);
+            int emptyKeys = random.nextInt(0, 10);
+            int keyRange = random.nextInt(uniqueKeys + emptyKeys, 400);
+            int totalCount = random.nextPositive(1000);
+            Deps deps = generate(random, uniqueTxnIds, epochRange, realRange, logicalRange, nodeRange, uniqueKeys, emptyKeys, keyRange, totalCount);
+            deps.testSimpleEquality();
+            return deps;
         }
 
         static Deps generate(Random random, int uniqueTxnIds, int epochRange, int realRange, int logicalRange, int nodeRange,
                              int uniqueKeys, int emptyKeys, int keyRange, int totalCount)
         {
+            // populateKeys is a subset of keys
             Keys populateKeys, keys;
             {
                 TreeSet<Key> tmp = new TreeSet<>();
