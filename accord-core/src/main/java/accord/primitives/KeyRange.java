@@ -162,7 +162,7 @@ public abstract class KeyRange<K extends Key<K>> implements Comparable<K>
 
     private KeyRange(K start, K end)
     {
-        Preconditions.checkArgument(start.compareTo(end) <= 0);
+        Preconditions.checkArgument(start.compareTo(end) < 0);
         this.start = start;
         this.end = end;
     }

@@ -105,23 +105,6 @@ public class DepsTest
     }
 
     @Test
-    public void testForEachOnUniqueBetween()
-    {
-        property(deps -> {
-            Keys keys = deps.test.keys();
-            Key start = keys.get(0);
-            Key end = keys.get(keys.size() - 1);
-
-            TreeSet<TxnId> seen = new TreeSet<>();
-            deps.test.forEachOn(new KeyRanges(KeyRange.range(start, end, true, true)), ignore -> true, txnId -> {
-                if (!seen.add(txnId))
-                    throw new AssertionError("Seen " + txnId + " multiple times");
-            });
-            Assertions.assertEquals(deps.invertCanonical().keySet(), new TreeSet<>(seen));
-        });
-    }
-
-    @Test
     public void testForEachOnUniqueEndInclusive()
     {
         property(deps -> {
@@ -220,8 +203,11 @@ public class DepsTest
         list.forEach(d -> d.test.forEachOn(ranges, i -> true, (key, txnId) -> builder.add(key, txnId)));
         accord.primitives.Deps built = builder.build();
 
+        accord.primitives.Deps with = list.stream().map(a -> a.test).reduce(accord.primitives.Deps.NONE, accord.primitives.Deps::with);
+
         Assertions.assertEquals(expected.test, merged);
         Assertions.assertEquals(expected.test, built);
+        Assertions.assertEquals(expected.test, with);
     }
 
     //TODO remove, this was mostly for review to better grasp "why"
