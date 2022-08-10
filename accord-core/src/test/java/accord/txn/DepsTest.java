@@ -198,8 +198,8 @@ public class DepsTest
     @Test
     public void hackyBenchmark()
     {
-        // comment out to run.. for some reason @Ignore isn't present in junit 5
-        Assumptions.assumeTrue(false);
+        // comment out to run... for some reason @Ignore isn't present in junit 5
+        Assumptions.assumeTrue(false, "Benchmark is not meant to be run automatically, so comment out if you want to run this");
 
         qt().withExamples(10).forAll(lists(Deps::generate).ofSizeBetween(1, 20)).check(list -> {
             Keys keys = keys(list);
@@ -256,7 +256,6 @@ public class DepsTest
 
     private static accord.primitives.Deps benchmarkMerge(List<Deps> list) {
         accord.primitives.Deps merged = null;
-//        Keys keys = list.get(0).test.keys();
         Keys keys = keys(list);
         for (int i = 0; i < 1000; i++)
             merged = accord.primitives.Deps.merge(keys, list, d -> d.test);
