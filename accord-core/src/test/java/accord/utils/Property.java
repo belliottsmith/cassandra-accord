@@ -2,6 +2,7 @@ package accord.utils;
 
 import accord.utils.Gen.Random;
 
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
@@ -14,12 +15,15 @@ public class Property
         protected long seed = ThreadLocalRandom.current().nextLong();
         protected int examples = 100;
 
+        protected boolean pure = true;
+
         protected Common() {
         }
 
         protected Common(Common<?> other) {
             this.seed = other.seed;
             this.examples = other.examples;
+            this.pure = other.pure;
         }
 
         public T withSeed(long seed)
@@ -36,9 +40,10 @@ public class Property
             return (T) this;
         }
 
-        protected String propertyMessage()
+        public T withPure(boolean pure)
         {
-            return "Seed=" + seed + "\nExamples=" + examples;
+            this.pure = pure;
+            return (T) this;
         }
     }
 
@@ -55,6 +60,33 @@ public class Property
         }
     }
 
+    private static Object normalizeValue(Object value)
+    {
+        if (value == null)
+            return null;
+        if (value.getClass().isArray() && !value.getClass().getComponentType().isPrimitive())
+            return Arrays.asList((Object[]) value);
+        return value;
+    }
+
+    private static String propertyError(Common<?> input, Throwable cause, Object... values)
+    {
+        StringBuilder sb = new StringBuilder();
+        // return "Seed=" + seed + "\nExamples=" + examples;
+        sb.append("Property error detected:\nSeed = ").append(input.seed).append('\n');
+        sb.append("Examples = ").append(input.examples).append('\n');
+        sb.append("Pure = ").append(input.pure).append('\n');
+        if (cause != null)
+            sb.append("Error: ").append(cause.getMessage()).append('\n');
+        if (values != null)
+        {
+            sb.append("Values:\n");
+            for (int i = 0; i < values.length; i++)
+                sb.append('\t').append(i).append(" = ").append(normalizeValue(values[i])).append('\n');
+        }
+        return sb.toString();
+    }
+
     public static class SingleBuilder<T> extends Common<SingleBuilder<T>>
     {
         private final Gen<T> gen;
@@ -69,13 +101,19 @@ public class Property
             Random random = new Random(seed);
             for (int i = 0; i < examples; i++)
             {
+                T value = null;
                 try
                 {
-                    fn.accept(gen.next(random));
+                    fn.accept(value = gen.next(random));
                 }
                 catch (Throwable t)
                 {
-                    throw new PropertyError(propertyMessage(), t);
+                    throw new PropertyError(propertyError(this, t, value), t);
+                }
+                if (pure)
+                {
+                    seed = random.nextLong();
+                    random.setSeed(seed);
                 }
             }
         }
@@ -83,13 +121,13 @@ public class Property
 
     public static class DoubleBuilder<A, B> extends Common<DoubleBuilder<A, B>>
     {
-        private final Gen<A> a;
-        private final Gen<B> b;
+        private final Gen<A> aGen;
+        private final Gen<B> bGen;
 
-        private DoubleBuilder(Gen<A> a, Gen<B> b, Common<?> other) {
+        private DoubleBuilder(Gen<A> aGen, Gen<B> bGen, Common<?> other) {
             super(other);
-            this.a = Objects.requireNonNull(a);
-            this.b = Objects.requireNonNull(b);
+            this.aGen = Objects.requireNonNull(aGen);
+            this.bGen = Objects.requireNonNull(bGen);
         }
 
         public void check(BiConsumer<A, B> fn)
@@ -97,13 +135,20 @@ public class Property
             Random random = new Random(seed);
             for (int i = 0; i < examples; i++)
             {
+                A a = null;
+                B b = null;
                 try
                 {
-                    fn.accept(a.next(random), b.next(random));
+                    fn.accept(a = aGen.next(random), b = bGen.next(random));
                 }
                 catch (Throwable t)
                 {
-                    throw new PropertyError(propertyMessage(), t);
+                    throw new PropertyError(propertyError(this, t, a, b), t);
+                }
+                if (pure)
+                {
+                    seed = random.nextLong();
+                    random.setSeed(seed);
                 }
             }
         }

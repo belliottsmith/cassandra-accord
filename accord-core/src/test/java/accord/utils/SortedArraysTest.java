@@ -1,5 +1,6 @@
 package accord.utils;
 
+import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -8,6 +9,7 @@ import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import static accord.utils.Property.qt;
 
@@ -24,6 +26,24 @@ class SortedArraysTest
             for (int i = 0; i < result.length; i++)
                 assertRemapperProperty(i, src, trg, result);
         });
+    }
+
+    private static void assertRemapperProperty(int i, Long[] src, Long[] trg, int[] result)
+    {
+        if (!(result[i] == -1 || Objects.equals(src[i], trg[result[i]])))
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.append("i = ").append(i).append('\n');
+            sb.append(src[i]).append(" != ").append(trg[result[i]]).append('\n');
+            sb.append("src:\n").append(Arrays.toString(src)).append('\n');
+            sb.append("trg:\n").append(Arrays.toString(trg)).append('\n');
+            String str = Arrays.toString(result);
+            sb.append("result:\n").append(str).append('\n');
+            for (int j = 0, idx = indexOfNth(str, ",", i); j <= idx; j++)
+                sb.append(' ');
+            sb.append('^');
+            throw new AssertionError(sb.toString());
+        }
     }
 
     @Test
@@ -59,25 +79,49 @@ class SortedArraysTest
         });
     }
 
-    //TODO: linearUnion
-
-    private static void assertRemapperProperty(int i, Long[] src, Long[] trg, int[] result)
+    @Test
+    public void testLinearUnion()
     {
-        if (!(result[i] == -1 || Objects.equals(src[i], trg[result[i]])))
-        {
-            StringBuilder sb = new StringBuilder();
-            sb.append("i = ").append(i).append('\n');
-            sb.append(src[i]).append(" != ").append(trg[result[i]]).append('\n');
-            sb.append("src:\n").append(Arrays.toString(src)).append('\n');
-            sb.append("trg:\n").append(Arrays.toString(trg)).append('\n');
-            String str = Arrays.toString(result);
-            sb.append("result:\n").append(str).append('\n');
-            for (int j = 0, idx = indexOfNth(str, ",", i); j <= idx; j++)
-                sb.append(' ');
-            sb.append('^');
-            throw new AssertionError(sb.toString());
-        }
+        Gen<Integer[]> gen = Gens.arrays(Integer.class, Gens.ints().all())
+                .unique()
+                .ofSizeBetween(0, 100)
+                .map(a -> {
+                    Arrays.sort(a);
+                    return a;
+                });
+        qt().forAll(gen, gen).check((a, b) -> {
+            Set<Integer> seen = new HashSet<>();
+            Stream.of(a).forEach(seen::add);
+            Stream.of(b).forEach(seen::add);
+            Integer[] actual = SortedArrays.linearUnion(a, b, Integer[]::new);
+            Integer[] expected = seen.toArray(Integer[]::new);
+            Arrays.sort(expected);
+            Assertions.assertArrayEquals(expected, actual);
+        });
     }
+
+    @Test
+    public void testLinearIntersection()
+    {
+        Gen<Integer[]> gen = Gens.arrays(Integer.class, Gens.ints().all())
+                .unique()
+                .ofSizeBetween(0, 100)
+                .map(a -> {
+                    Arrays.sort(a);
+                    return a;
+                });
+        qt().withSeed(3576953691942488024L).forAll(gen, gen).check((a, b) -> {
+            Set<Integer> left = new HashSet<>(Arrays.asList(a));
+            Set<Integer> right = new HashSet<>(Arrays.asList(b));
+            Set<Integer> intersection = Sets.intersection(left, right);
+            Integer[] expected = intersection.toArray(Integer[]::new);
+            Arrays.sort(expected);
+
+            Integer[] actual = SortedArrays.linearIntersection(a, b, Integer[]::new);
+            Assertions.assertArrayEquals(expected, actual);
+        });
+    }
+
 
     private static int indexOfNth(String original, String search, int n)
     {
@@ -103,7 +147,7 @@ class SortedArraysTest
             T[] src = gen.next(random);
             Arrays.sort(src);
             int to = random.nextInt(0, src.length);
-            int offset = random.nextInt(0, to);
+            int offset = to == 0 ? 0 : random.nextInt(0, to);
             T[] trg = Arrays.copyOfRange(src, offset, to);
             return new Pair<>(src, trg);
         };
@@ -111,29 +155,13 @@ class SortedArraysTest
 
     private static Gen<Long[]> longs()
     {
-        return random -> {
-            int size = random.nextInt(99) + 1;
-            Long[] array = new Long[size];
-            for (int i = 0; i < size; i++)
-                array[i] = random.nextLong();
-            return array;
-        };
+        // need Long rather than long
+        return Gens.arrays(Long.class, Gens.longs().all()).ofSizeBetween(1, 100);
     }
 
     private static Gen<int[]> uniqueInts()
     {
-        return random -> {
-            int size = random.nextInt(99) + 1;
-            int[] array = new int[size];
-            Set<Integer> dedup = new HashSet<>();
-            for (int i = 0; i < size; i++)
-            {
-                int value;
-                while (!dedup.add(value = random.nextInt())) {}
-                array[i] = value;
-            }
-            return array;
-        };
+        return Gens.arrays(Gens.ints().all()).unique().ofSizeBetween(1, 100);
     }
 
     private static class Pair<T>
