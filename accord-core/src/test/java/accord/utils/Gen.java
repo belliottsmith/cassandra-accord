@@ -16,9 +16,19 @@ public interface Gen<A> {
             super(seed);
         }
 
-        public int nextInt(int lower, int upperExclusive)
+        public int nextInt(int lower, int upper)
         {
-            return nextInt(upperExclusive - lower + 1) + lower;
+            return nextInt(upper - lower + 1) + lower;
+        }
+
+        public int allPositive()
+        {
+            return nextInt(1, Integer.MAX_VALUE);
+        }
+
+        public int nextPositive(int upper)
+        {
+            return nextInt(1, upper);
         }
     }
 }

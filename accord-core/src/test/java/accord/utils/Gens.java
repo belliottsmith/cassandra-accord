@@ -37,7 +37,7 @@ public class Gens {
             Preconditions.checkArgument(minSize >= 0);
             Preconditions.checkArgument(maxSize >= minSize);
             return r -> {
-                int size = r.nextInt(minSize, maxSize + 1);
+                int size = r.nextInt(minSize, maxSize);
                 List<T> list = new ArrayList<>(size);
                 for (int i = 0; i < size; i++)
                     list.add(fn.next(r));
