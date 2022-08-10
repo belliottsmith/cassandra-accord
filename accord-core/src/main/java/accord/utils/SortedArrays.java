@@ -266,6 +266,8 @@ public class SortedArrays
                 ++rightIdx;
             }
         }
+        while (leftIdx < left.length)
+            result[resultSize++] = left[leftIdx++];
 
         if (resultSize < result.length)
             result = Arrays.copyOf(result, resultSize);

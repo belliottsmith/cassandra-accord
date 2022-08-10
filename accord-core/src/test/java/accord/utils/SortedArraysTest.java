@@ -111,29 +111,6 @@ class SortedArraysTest
         });
     }
 
-    private static void assertArrayEquals(Object[] expected, Object[] actual)
-    {
-        Assertions.assertArrayEquals(expected, actual, () -> {
-            // default error msg is not as useful as it could be, and since this class always works with sorted data
-            // attempt to find first miss-match and return a useful log
-            StringBuilder sb = new StringBuilder();
-            sb.append("Expected: ").append(Arrays.toString(expected)).append('\n');
-            sb.append("Actual:   ").append(Arrays.toString(actual)).append('\n');
-            int length = Math.min(expected.length, actual.length);
-            if (length != 0)
-            {
-                for (int i = 0; i < length; i++)
-                {
-                    Object l = expected[i];
-                    Object r = actual[i];
-                    if (!Objects.equals(l, r))
-                        sb.append("Difference detected at index ").append(i).append("; left=").append(l).append(", right=").append(r).append('\n');
-                }
-            }
-            return sb.toString();
-        });
-    }
-
     @Test
     public void testLinearIntersectionWithSubset()
     {
@@ -163,6 +140,29 @@ class SortedArraysTest
             // this is to make sure the optimization to detect perfect subsets is the path used for the return
             Assertions.assertEquals(expected, SortedArrays.linearIntersection(p.full, p.subset, Integer[]::new));
             Assertions.assertEquals(expected, SortedArrays.linearIntersection(p.subset, p.full, Integer[]::new));
+        });
+    }
+
+    @Test
+    public void testLinearDifference()
+    {
+        Gen<Integer[]> gen = sortedUniqueIntegerArray();
+        qt().withExamples(Integer.MAX_VALUE).forAll(gen, gen).check((a, b) -> {
+            Set<Integer> left = new HashSet<>(Arrays.asList(a));
+            Set<Integer> right = new HashSet<>(Arrays.asList(b));
+
+            {
+                Set<Integer> difference = Sets.difference(left, right);
+                Integer[] expected = difference.toArray(Integer[]::new);
+                Arrays.sort(expected);
+                assertArrayEquals(expected, SortedArrays.linearDifference(a, b, Integer[]::new));
+            }
+            {
+                Set<Integer> difference = Sets.difference(right, left);
+                Integer[] expected = difference.toArray(Integer[]::new);
+                Arrays.sort(expected);
+                assertArrayEquals(expected, SortedArrays.linearDifference(b, a, Integer[]::new));
+            }
         });
     }
 
@@ -215,6 +215,29 @@ class SortedArraysTest
                     Arrays.sort(a);
                     return a;
                 });
+    }
+
+    private static void assertArrayEquals(Object[] expected, Object[] actual)
+    {
+        Assertions.assertArrayEquals(expected, actual, () -> {
+            // default error msg is not as useful as it could be, and since this class always works with sorted data
+            // attempt to find first miss-match and return a useful log
+            StringBuilder sb = new StringBuilder();
+            sb.append("Expected: ").append(Arrays.toString(expected)).append('\n');
+            sb.append("Actual:   ").append(Arrays.toString(actual)).append('\n');
+            int length = Math.min(expected.length, actual.length);
+            if (length != 0)
+            {
+                for (int i = 0; i < length; i++)
+                {
+                    Object l = expected[i];
+                    Object r = actual[i];
+                    if (!Objects.equals(l, r))
+                        sb.append("Difference detected at index ").append(i).append("; left=").append(l).append(", right=").append(r).append('\n');
+                }
+            }
+            return sb.toString();
+        });
     }
 
     private static class Pair<T>
