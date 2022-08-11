@@ -207,7 +207,10 @@ public class DepsTest
             // warmup
             benchmarkMerge(list);
             benchmarkBuilderForEach(list);
-            String postfix = "(size=" + list.size() + ", keys=" + keys.size() + ")";
+            int totalCount = 0;
+            for (Deps deps : list)
+                totalCount += deps.test.totalCount();
+            String postfix = "(size=" + list.size() + ", keys=" + keys.size() + ", total=" + totalCount + ")";
 
             // test
             benchmark("merge" + postfix, () -> benchmarkMerge(list));
