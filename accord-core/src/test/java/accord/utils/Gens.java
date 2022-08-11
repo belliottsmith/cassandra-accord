@@ -56,7 +56,6 @@ public class Gens {
 
         public Gen.IntGen between(int min, int max)
         {
-            Preconditions.checkArgument(min >= 0);
             Preconditions.checkArgument(max >= min);
             if (min == max)
                 return of(min);
@@ -79,7 +78,6 @@ public class Gens {
         }
 
         public Gen.LongGen between(long min, long max) {
-            Preconditions.checkArgument(min >= 0);
             Preconditions.checkArgument(max >= min);
             if (min == max)
                 return of(min);

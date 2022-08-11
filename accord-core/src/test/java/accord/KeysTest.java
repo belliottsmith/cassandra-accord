@@ -1,6 +1,8 @@
 package accord;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 import accord.api.Key;
@@ -9,10 +11,14 @@ import accord.primitives.KeyRange;
 import accord.primitives.KeyRanges;
 import accord.primitives.Keys;
 
+import accord.utils.Gen;
+import accord.utils.Gens;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import static accord.impl.IntKey.keys;
+import static accord.impl.IntKey.range;
+import static accord.utils.Property.qt;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class KeysTest
@@ -94,5 +100,100 @@ public class KeysTest
         Assertions.assertFalse(keys.containsAll(keys(250, 235)));
         Assertions.assertFalse(keys.containsAll(keys(250, 400)));
 
+    }
+
+    @Test
+    public void slice()
+    {
+        Gen<List<IntKey>> gen = Gens.lists(Gens.ints().between(-1000, 1000).map(IntKey::key))
+                .unique()
+                .ofSizeBetween(2, 40)
+                .map(a -> {
+                    Collections.sort(a);
+                    return a;
+                });
+        qt().withExamples(Integer.MAX_VALUE).forAll(gen).check(list -> {
+            Keys keys = new Keys(list);
+            // end-inclusive
+            int first = list.get(0).key;
+            int last = list.get(list.size() - 1).key;
+            // exclusive, inclusive
+            KeyRange<IntKey> before = IntKey.range(Integer.MIN_VALUE, first - 1);
+            KeyRange<IntKey> after = IntKey.range(last, Integer.MAX_VALUE);
+
+            Assertions.assertEquals(Keys.EMPTY, keys.slice(ranges(before, after)));
+
+            // remove from the middle
+            for (int i = 1; i < keys.size() - 1; i++)
+            {
+                IntKey previous = list.get(i - 1);
+                IntKey exclude = list.get(i);
+                List<IntKey> expected = new ArrayList<>(list);
+                expected.remove(exclude);
+
+                KeyRanges allButI = ranges(
+                        before,
+                        // exclusive, inclusive
+                        range(first - 2, previous.key), // use first - 2 to make sure we don't do range(first, first)
+                        range(previous.key - 1, exclude.key - 1),
+                        range(exclude.key, last),
+                        after);
+                Assertions.assertEquals(new Keys(expected), keys.slice(allButI), "Expected to exclude " + exclude + " at index " + i);
+            }
+
+            // remove the first
+            {
+                List<IntKey> expected = new ArrayList<>(list);
+                expected.remove(IntKey.key(first));
+
+                KeyRanges allButI = ranges(
+                        before,
+                        // exclusive, inclusive
+                        range(first, last),
+                        after);
+                Assertions.assertEquals(new Keys(expected), keys.slice(allButI), "Expected to exclude " + first + " at index " + 0);
+            }
+            // remove the last
+            {
+                List<IntKey> expected = new ArrayList<>(list);
+                expected.remove(IntKey.key(last));
+
+                KeyRanges allButI = ranges(
+                        before,
+                        // exclusive, inclusive
+                        range(first - 1, last - 1),
+                        range(last, Integer.MAX_VALUE),
+                        after);
+                Assertions.assertEquals(new Keys(expected), keys.slice(allButI), "Expected to exclude " + first + " at index " + 0);
+            }
+        });
+    }
+
+    @Test
+    public void sliceWithOverlappingRanges()
+    {
+        Gen<List<IntKey>> gen = Gens.lists(Gens.ints().between(-1000, 1000).map(IntKey::key))
+                .unique()
+                .ofSizeBetween(2, 40)
+                .map(a -> {
+                    Collections.sort(a);
+                    return a;
+                });
+        qt().withSeed(-5138448682093070423L).withExamples(Integer.MAX_VALUE).forAll(gen).check(list -> {
+            Keys keys = new Keys(list);
+            // end-inclusive
+            int first = list.get(0).key;
+            int last = list.get(list.size() - 1).key;
+            List<KeyRange> ranges = new ArrayList<>();
+            ranges.add(range(Integer.MIN_VALUE, Integer.MAX_VALUE));
+            ranges.add(range(-1, 1));
+            ranges.add(range(-100, 100));
+            ranges.add(range(first, last));
+            ranges.add(range(first - 1, last - 1));
+            ranges.add(range(first + 1, last + 1));
+            Collections.sort(ranges, Comparator.comparing(KeyRange::end));
+
+            Assertions.assertEquals(keys, keys.slice(new KeyRanges(ranges)), "Ranges should include the whole domain, so nothing should be removed!");
+        });
     }
 }
