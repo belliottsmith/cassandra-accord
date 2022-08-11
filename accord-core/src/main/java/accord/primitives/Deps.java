@@ -1,6 +1,8 @@
 package accord.primitives;
 
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -480,12 +482,14 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         if (remapLeft == null && keys == leftKeys)
         {
+            // "this" knows all the TxnId and Keys already, but do both agree on what Keys map to TxnIds?
             noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
             {
                 int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
                 if (ck < 0)
                 {
-                    o += left[lk] - l;
+                    // "this" knows of a key not present in "that"
+                    o += left[lk] - l; // logically append the key's TxnIds to the size
                     l = left[lk];
                     assert o == l && ok == lk && left[ok] == o;
                     ok++;
@@ -493,10 +497,16 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 }
                 else if (ck > 0)
                 {
-                    throw new IllegalStateException();
+                    // if this happened there is a bug with keys.union or keys are not actually sorted
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("'this' knows all keys, yet 'that' knew of 'that'.keys[").append(rk).append("] = ").append(rightKeys.get(rk)).append("; which is unknown!\n");
+                    sb.append("'this'.keys = ").append(leftKeys).append('\n');
+                    sb.append("'that'.keys = ").append(rightKeys).append('\n');
+                    throw new IllegalStateException(sb.toString());
                 }
                 else
                 {
+                    // both "this" and "that" know of the key
                     while (l < left[lk] && r < right[rk])
                     {
                         int nextLeft = left[l];
@@ -504,11 +514,13 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                         if (nextLeft < nextRight)
                         {
+                            // "this" knows of the txn that "that" didn't
                             o++;
                             l++;
                         }
                         else if (nextRight < nextLeft)
                         {
+                            // "that" thinks a TxnID depends on Key but "this" doesn't, need to include this knowledge
                             out = copy(left, o, left.length + right.length - r);
                             break noOp;
                         }
@@ -543,15 +555,23 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
         else if (remapRight == null && keys == rightKeys)
         {
+            // "that" knows all the TxnId and keys already, but "this" does not
             noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
             {
                 int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
                 if (ck < 0)
                 {
-                    throw new IllegalStateException();
+                    // if this happened there is a bug with keys.union or keys are not actually sorted
+                    //TODO avoid copy/paste?
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("'this' knows all keys, yet 'that' knew of 'that'.keys[").append(rk).append("] = ").append(rightKeys.get(rk)).append("; which is unknown!\n");
+                    sb.append("'this'.keys = ").append(leftKeys).append('\n');
+                    sb.append("'that'.keys = ").append(rightKeys).append('\n');
+                    throw new IllegalStateException(sb.toString());
                 }
                 else if (ck > 0)
                 {
+                    // "that" knows of a key not present in "this"
                     o += right[rk] - r;
                     r = right[rk];
                     assert o == r && ok == rk && right[ok] == o;
@@ -560,6 +580,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 }
                 else
                 {
+                    // both "this" and "that" know of the key
                     while (l < left[lk] && r < right[rk])
                     {
                         int nextLeft = remap(left[l], remapLeft);
@@ -567,11 +588,13 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                         if (nextLeft < nextRight)
                         {
+                            // "this" thinks a TxnID depends on Key but "that" doesn't, need to include this knowledge
                             out = copy(right, o, right.length + left.length - l);
                             break noOp;
                         }
                         else if (nextRight < nextLeft)
                         {
+                            // "that" knows of the txn that "this" didn't
                             o++;
                             r++;
                         }
@@ -907,6 +930,11 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         return txnIds[i];
     }
 
+    public Collection<TxnId> txnIds()
+    {
+        return List.of(txnIds);
+    }
+
     @Override
     public Iterator<Map.Entry<Key, TxnId>> iterator()
     {
@@ -930,6 +958,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             }
         };
     }
+
 
     @Override
     public String toString()
