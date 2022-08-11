@@ -10,9 +10,25 @@ import javax.annotation.Nullable;
 // TODO (now): javadoc
 public class SortedArrays
 {
+    private static final class SimpleBufferCompleter implements BufferCompleter
+    {
+        static final SimpleBufferCompleter INSTANCE = new SimpleBufferCompleter();
+
+        @Override
+        public <T> T[] complete(IntFunction<T[]> allocator, T[] buffer, int size)
+        {
+            if (size == buffer.length)
+                return buffer;
+
+            T[] target = allocator.apply(size);
+            System.arraycopy(buffer, 0, target, 0, size);
+            return target;
+        }
+    }
+
     public interface IntBufferFactory
     {
-        int[] get(int minSize);
+        int[] allocateInts(int minSize);
     }
 
     public interface IntBufferCompleter
@@ -28,35 +44,41 @@ public class SortedArrays
     public interface IntBufferManager extends IntBufferFactory, IntBufferCompleter, IntBufferDiscarder
     {
     }
-
-    public interface BufferFactory<T>
+    
+    public interface BufferFactory
     {
-        T[] get(int minSize);
+        <T> T[] get(IntFunction<T[]> allocator, int minSize);
     }
 
-    public interface BufferCompleter<T>
+    public interface BufferCompleter
     {
         // must handle (null, 0) -> empty array
-        T[] complete(T[] buffer, int size);
+        <T> T[] complete(IntFunction<T[]> allocator, T[] buffer, int size);
     }
 
-    public interface BufferDiscarder<T>
+    public interface BufferDiscarder
     {
-        void discard(T[] buffer);
+        void discard(Object[] buffer);
     }
 
-    public interface BufferManager<T> extends BufferFactory<T>, BufferCompleter<T>, BufferDiscarder<T>
+    public interface BufferManager extends BufferFactory, BufferCompleter, BufferDiscarder
     {
+        int lengthOfLast(Object[] left, int leftLength, Object[] right, int rightLength, Object[] buffer);
     }
 
-    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, BufferFactory<T> factory)
+    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, IntFunction<T[]> allocator)
     {
-        return linearUnion(left, right, factory, Arrays::copyOf, ignore -> {});
+        return linearUnion(left, right, IntFunction::apply, SimpleBufferCompleter.INSTANCE, ignore -> {}, allocator);
     }
 
-    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, BufferManager<T> buffers)
+    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, BufferManager buffers, IntFunction<T[]> allocator)
     {
-        return linearUnion(left, right, buffers, buffers, buffers);
+        return linearUnion(left, right, buffers, buffers, buffers, allocator);
+    }
+
+    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, int leftLength, T[] right, int rightLength, BufferManager buffers, IntFunction<T[]> allocator)
+    {
+        return linearUnion(left, leftLength, right, rightLength, buffers, buffers, buffers, allocator);
     }
 
     /**
@@ -65,8 +87,15 @@ public class SortedArrays
      *
      * TODO: introduce exponential search optimised version
      */
-    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, BufferFactory<T> factory,
-                                                                    BufferCompleter<T> completer, BufferDiscarder<T> discarder)
+    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, BufferFactory factory,
+                                                                    BufferCompleter completer, BufferDiscarder discarder,
+                                                                    IntFunction<T[]> allocator)
+    {
+        return linearUnion(left, left.length, right, right.length, factory, completer, discarder, allocator);
+    }
+    
+    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, int leftLength, T[] right, int rightLength, BufferFactory factory,
+                                                                    BufferCompleter completer, BufferDiscarder discarder, IntFunction<T[]> allocator)
     {
         int leftIdx = 0;
         int rightIdx = 0;
@@ -76,9 +105,9 @@ public class SortedArrays
 
         // first, pick the superset candidate and merge the two until we find the first missing item
         // if none found, return the superset candidate
-        if (left.length >= right.length)
+        if (leftLength >= rightLength)
         {
-            while (leftIdx < left.length && rightIdx < right.length)
+            while (leftIdx < leftLength && rightIdx < rightLength)
             {
                 T leftKey = left[leftIdx];
                 T rightKey = right[rightIdx];
@@ -92,7 +121,7 @@ public class SortedArrays
                 else
                 {
                     resultSize = leftIdx;
-                    result = factory.get(resultSize + (left.length - leftIdx) + (right.length - (rightIdx - 1)));
+                    result = factory.get(allocator, resultSize + (leftLength - leftIdx) + (rightLength - (rightIdx - 1)));
                     System.arraycopy(left, 0, result, 0, resultSize);
                     result[resultSize++] = right[rightIdx++];
                     break;
@@ -101,17 +130,17 @@ public class SortedArrays
 
             if (result == null)
             {
-                if (rightIdx == right.length) // all elements matched, so can return the other array
+                if (rightIdx == rightLength) // all elements matched, so can return the other array
                     return left;
                 // no elements matched or only a subset matched
-                result = factory.get(left.length + (right.length - rightIdx));
+                result = factory.get(allocator, leftLength + (rightLength - rightIdx));
                 resultSize = leftIdx;
                 System.arraycopy(left, 0, result, 0, resultSize);
             }
         }
         else
         {
-            while (leftIdx < left.length && rightIdx < right.length)
+            while (leftIdx < leftLength && rightIdx < rightLength)
             {
                 T leftKey = left[leftIdx];
                 T rightKey = right[rightIdx];
@@ -125,7 +154,7 @@ public class SortedArrays
                 else
                 {
                     resultSize = rightIdx;
-                    result = factory.get(resultSize + (left.length - (leftIdx - 1)) + (right.length - rightIdx));
+                    result = factory.get(allocator, resultSize + (leftLength - (leftIdx - 1)) + (rightLength - rightIdx));
                     System.arraycopy(right, 0, result, 0, resultSize);
                     result[resultSize++] = left[leftIdx++];
                     break;
@@ -134,10 +163,10 @@ public class SortedArrays
 
             if (result == null)
             {
-                if (leftIdx == left.length) // all elements matched, so can return the other array
+                if (leftIdx == leftLength) // all elements matched, so can return the other array
                     return right;
                 // no elements matched or only a subset matched
-                result = factory.get(right.length + (left.length - leftIdx));
+                result = factory.get(allocator, rightLength + (leftLength - leftIdx));
                 resultSize = rightIdx;
                 System.arraycopy(right, 0, result, 0, resultSize);
             }
@@ -145,8 +174,7 @@ public class SortedArrays
 
         try
         {
-
-            while (leftIdx < left.length && rightIdx < right.length)
+            while (leftIdx < leftLength && rightIdx < rightLength)
             {
                 T leftKey = left[leftIdx];
                 T rightKey = right[rightIdx];
@@ -172,13 +200,13 @@ public class SortedArrays
                 result[resultSize++] = minKey;
             }
 
-            while (leftIdx < left.length)
+            while (leftIdx < leftLength)
                 result[resultSize++] = left[leftIdx++];
 
-            while (rightIdx < right.length)
+            while (rightIdx < rightLength)
                 result[resultSize++] = right[rightIdx++];
 
-            return completer.complete(result, resultSize);
+            return completer.complete(allocator, result, resultSize);
         }
         finally
         {
@@ -186,14 +214,14 @@ public class SortedArrays
         }
     }
 
-    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, BufferFactory<T> factory)
+    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, IntFunction<T[]> allocator)
     {
-        return linearIntersection(left, right, factory, Arrays::copyOf, ignore -> {});
+        return linearIntersection(left, right, IntFunction::apply, SimpleBufferCompleter.INSTANCE, ignore -> {}, allocator);
     }
 
-    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, BufferManager<T> buffers)
+    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, BufferManager buffers, IntFunction<T[]> allocator)
     {
-        return linearIntersection(left, right, buffers, buffers, buffers);
+        return linearIntersection(left, right, buffers, buffers, buffers, allocator);
     }
 
 
@@ -204,8 +232,9 @@ public class SortedArrays
      * TODO: introduce exponential search optimised version
      */
     @SuppressWarnings("unused") // was used until recently, might be used again?
-    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, BufferFactory<T> factory,
-                                                                           BufferCompleter<T> completer, BufferDiscarder<T> discarder)
+    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, BufferFactory factory,
+                                                                           BufferCompleter completer, BufferDiscarder discarder,
+                                                                           IntFunction<T[]> allocator)
     {
         int leftIdx = 0;
         int rightIdx = 0;
@@ -233,14 +262,14 @@ public class SortedArrays
                 else
                 {
                     resultSize = leftIdx++;
-                    result = factory.get(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
+                    result = factory.get(allocator, resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
                     System.arraycopy(left, 0, result, 0, resultSize);
                     break;
                 }
             }
 
             if (result == null)
-                return hasMatch ? left : completer.complete(null, 0);
+                return hasMatch ? left : completer.complete(allocator, null, 0);
         }
         else
         {
@@ -261,14 +290,14 @@ public class SortedArrays
                 else
                 {
                     resultSize = rightIdx++;
-                    result = factory.get(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
+                    result = factory.get(allocator, resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
                     System.arraycopy(right, 0, result, 0, resultSize);
                     break;
                 }
             }
 
             if (result == null)
-                return hasMatch ? right : completer.complete(null, 0);
+                return hasMatch ? right : completer.complete(allocator, null, 0);
         }
 
         try
@@ -290,7 +319,7 @@ public class SortedArrays
                 else rightIdx++;
             }
 
-            return completer.complete(result, resultSize);
+            return completer.complete(allocator, result, resultSize);
         }
         finally
         {
@@ -627,7 +656,7 @@ public class SortedArrays
         if (src == trg || trgLength == srcLength)
             return null;
 
-        int[] result = factory.get(srcLength);
+        int[] result = factory.allocateInts(srcLength);
 
         int i = 0, j = 0;
         while (i < srcLength && j < trgLength)

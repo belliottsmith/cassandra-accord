@@ -6,6 +6,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import accord.utils.CachedArrays;
 import accord.utils.MergeIterator;
 
 import accord.api.Key;
@@ -14,9 +15,8 @@ import accord.local.CommandStore;
 import accord.utils.InlineHeap;
 import accord.utils.SortedArrays;
 
-import static accord.utils.CachedArrays.ints;
-import static accord.utils.SortedArrays.remap;
-import static accord.utils.SortedArrays.remapToSuperset;
+import static accord.utils.CachedArrays.*;
+import static accord.utils.SortedArrays.*;
 
 // TODO (now): switch to RoutingKey
 public class Deps implements Iterable<Map.Entry<Key, TxnId>>
@@ -213,7 +213,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
     }
 
-    public static <T> Deps merge(Keys keys, List<T> merge, Function<T, Deps> getter)
+    public static <T> Deps mergeWithPriorityHeaps(Keys keys, List<T> merge, Function<T, Deps> getter)
     {
         // collect non-empty inputs
         int streamCount = 0;
@@ -276,18 +276,15 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
 
         int[] result;
-        synchronized (Deps.class)
+        int maxStreamSize = 0, totalStreamSize = 0;
+        for (int streamIndex = 0 ; streamIndex < streamCount ; ++streamIndex)
         {
-            int maxStreamSize = 0, totalStreamSize = 0;
-            for (int streamIndex = 0 ; streamIndex < streamCount ; ++streamIndex)
-            {
-                MergeStream stream = streams[streamIndex];
-                stream.init(keys, txnIds);
-                maxStreamSize = Math.max(maxStreamSize, stream.input.length - stream.keyCount);
-                totalStreamSize += stream.input.length - stream.keyCount;
-            }
-            result = takeFromCache(keys.size() + Math.min(maxStreamSize * 2, totalStreamSize)); // TODO: use cached temporary array
+            MergeStream stream = streams[streamIndex];
+            stream.init(keys, txnIds);
+            maxStreamSize = Math.max(maxStreamSize, stream.input.length - stream.keyCount);
+            totalStreamSize += stream.input.length - stream.keyCount;
         }
+        result = ints().allocateInts(keys.size() + Math.min(maxStreamSize * 2, totalStreamSize)); // TODO: use cached temporary array
 
         try
         {
@@ -377,16 +374,137 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             while (keyIndex < keys.size())
                 result[keyIndex++] = resultIndex;
 
-            return new Deps(keys, txnIds, Arrays.copyOf(result, resultIndex));
+            return new Deps(keys, txnIds, ints().complete(result, resultIndex));
         }
         finally
         {
-            returnToCache(result);
+            ints().discard(result);
             for (int i = 0 ; i < streamCount ; ++i)
             {
                 if (streams[i] != null)
                     streams[i].dealloc();
             }
+        }
+    }
+
+    static class LinearMerger extends CachedArrays.SavingManager implements DepsFunction<Object>
+    {
+        Key[] bufKeys;
+        TxnId[] bufTxnIds;
+        int[] buf = null;
+        int bufKeysLength, bufTxnIdsLength = 0, bufLength = 0;
+        Deps from = null, last = null;
+
+        LinearMerger()
+        {
+            super(objects(), ints());
+        }
+
+        @Override
+        public Object construct(Key[] keys, int keysLength, TxnId[] txnIds, int txnIdsLength, int[] out, int outLength)
+        {
+            if (from == null)
+            {
+                objects().discard(bufKeys);
+                bufKeys = null;
+                objects().discard(bufTxnIds);
+                bufTxnIds = null;
+                ints().discard(buf);
+                buf = null;
+            }
+            else if (from.keyToTxnId != out)
+            {
+                from = null;
+                bufKeys = keys;
+                bufKeysLength = keysLength;
+                bufTxnIds = txnIds;
+                bufTxnIdsLength = txnIdsLength;
+                buf = out;
+                bufLength = outLength;
+                if (last.keyToTxnId == out)
+                    from = last;
+            }
+            else
+            {
+                assert keys == bufKeys && keysLength == bufKeysLength;
+                assert txnIds == bufTxnIds && txnIdsLength == bufTxnIdsLength;
+                assert outLength == bufLength;
+            }
+            return null;
+        }
+
+        void update(Deps deps)
+        {
+            if (buf == null)
+            {
+                bufKeys = deps.keys.keys;
+                bufKeysLength = deps.keys.keys.length;
+                buf = deps.keyToTxnId;
+                bufLength = deps.keyToTxnId.length;
+                bufTxnIds = deps.txnIds;
+                bufTxnIdsLength = deps.txnIds.length;
+                from = deps;
+                return;
+            }
+
+            from = null;
+            last = deps;
+            linearUnion(
+                    bufKeys, bufKeysLength, bufTxnIds, bufTxnIdsLength, buf, bufLength,
+                    deps.keys.keys, deps.keys.keys.length, deps.txnIds, deps.txnIds.length, deps.keyToTxnId, deps.keyToTxnId.length,
+                    this, this, this
+            );
+        }
+
+        Deps get()
+        {
+            if (buf == null)
+                return NONE;
+
+            if (from != null)
+                return from;
+
+            return new Deps(
+                    new Keys(objects().complete(Key[]::new, bufKeys, bufKeysLength), true),
+                    objects().complete(TxnId[]::new, bufTxnIds, bufTxnIdsLength),
+                    ints().complete(buf, bufLength));
+        }
+
+        void discard()
+        {
+            if (buf != null)
+            {
+                ints().discard(buf);
+                buf = null;
+            }
+            if (bufTxnIds != null)
+            {
+                objects().discard(bufTxnIds);
+                bufTxnIds = null;
+            }
+        }
+    }
+
+    public static <T> Deps linearMerge(List<T> merge, Function<T, Deps> getter)
+    {
+        LinearMerger linearMerger = new LinearMerger();
+        try
+        {
+            int mergeIndex = 0, mergeSize = merge.size();
+            while (mergeIndex < mergeSize)
+            {
+                Deps deps = getter.apply(merge.get(mergeIndex++));
+                if (deps == null || deps.isEmpty())
+                    continue;
+
+                linearMerger.update(deps);
+            }
+
+            return linearMerger.get();
+        }
+        finally
+        {
+            linearMerger.discard();
         }
     }
 
@@ -430,17 +548,38 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             return this;
 
         Keys select = keys.slice(ranges);
-        if (select.isEmpty())
-            return NONE;
 
         if (select.size() == keys.size())
             return this;
+
+        return selectInternal(select);
+    }
+
+    public Deps select(Keys select)
+    {
+        if (isEmpty())
+            return this;
+
+        if (select.equals(keys))
+            return this;
+
+        return selectInternal(select);
+    }
+
+    private Deps selectInternal(Keys select)
+    {
+        if (select.isEmpty())
+            return NONE;
 
         int i = 0;
         int offset = select.size();
         for (int j = 0 ; j < select.size() ; ++j)
         {
-            i = keys.findNext(select.get(j), i);
+            int findi = keys.findNext(select.get(j), i);
+            if (findi < 0)
+                continue;
+
+            i = findi;
             offset += keyToTxnId[i] - (i == 0 ? keys.size() : keyToTxnId[i - 1]);
         }
 
@@ -451,11 +590,15 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         offset = select.size();
         for (int j = 0 ; j < select.size() ; ++j)
         {
-            i = keys.findNext(select.get(j), i);
-            int start = i == 0 ? keys.size() : src[i - 1];
-            int count = src[i] - start;
-            System.arraycopy(src, start, trg, offset, count);
-            offset += count;
+            int findi = keys.findNext(select.get(j), i);
+            if (findi >= 0)
+            {
+                i = findi;
+                int start = i == 0 ? keys.size() : src[i - 1];
+                int count = src[i] - start;
+                System.arraycopy(src, start, trg, offset, count);
+                offset += count;
+            }
             trg[j] = offset;
         }
 
@@ -506,32 +649,56 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
     {
         if (isEmpty() || that.isEmpty())
             return isEmpty() ? that : this;
+        
+        return linearUnion(
+                this.keys.keys, this.keys.keys.length, this.txnIds, this.txnIds.length, this.keyToTxnId, this.keyToTxnId.length,
+                that.keys.keys, that.keys.keys.length, that.txnIds, that.txnIds.length, that.keyToTxnId, that.keyToTxnId.length,
+                objects(), ints(),
+                (keys, keysLength, txnIds, txnIdsLength, out, outLength) ->
+                        new Deps(new Keys(objects().complete(Key[]::new, keys, keysLength), true),
+                                objects().complete(TxnId[]::new, txnIds, txnIdsLength),
+                                ints().complete(out, outLength))
+                );
+    }
 
+    interface DepsFunction<T>
+    {
+        T construct(Key[] keys, int keysLength, TxnId[] txnIds, int txnIdsLength, int[] out, int outLength);
+    }
+
+    private static <T> T linearUnion(Key[] leftKeys, int leftKeysLength, TxnId[] leftTxnIds, int leftTxnIdsLength, int[] left, int leftLength,
+                                     Key[] rightKeys, int rightKeysLength, TxnId[] rightTxnIds, int rightTxnIdsLength, int[] right, int rightLength,
+                                     BufferManager objectBuffers, IntBufferManager intBuffers, DepsFunction<T> constructResult
+                                     )
+    {
+        Key[] outKeys = null;
+        TxnId[] outTxnIds = null;
         int[] remapLeft = null, remapRight = null, out = null;
+
         try
         {
-            Keys keys = this.keys.union(that.keys);
-            TxnId[] txnIds = SortedArrays.linearUnion(this.txnIds, that.txnIds, TxnId[]::new);
+            // TODO: this is a little clunky to get back the buffer and its length
+            outKeys = SortedArrays.linearUnion(leftKeys, leftKeysLength, rightKeys, rightKeysLength, objectBuffers, Key[]::new);
+            int outKeysLength = objectBuffers.lengthOfLast(leftKeys, leftKeysLength, rightKeys, rightKeysLength, outKeys);
+            outTxnIds = SortedArrays.linearUnion(leftTxnIds, leftTxnIdsLength, rightTxnIds, rightTxnIdsLength, objectBuffers, TxnId[]::new);
+            int outTxnIdsLength = objectBuffers.lengthOfLast(leftTxnIds, leftTxnIdsLength, rightTxnIds, rightTxnIdsLength, outTxnIds);
 
-            remapLeft = remapToSuperset(this.txnIds, txnIds);
-            remapRight = remapToSuperset(that.txnIds, txnIds);
+            remapLeft = remapToSuperset(leftTxnIds, leftTxnIdsLength, outTxnIds, outTxnIdsLength, ints());
+            remapRight = remapToSuperset(rightTxnIds, rightTxnIdsLength, outTxnIds, outTxnIdsLength, ints());
 
-            Keys leftKeys = this.keys, rightKeys = that.keys;
-            int[] left = keyToTxnId, right = that.keyToTxnId;
-
-            if (remapLeft == null && remapRight == null && Arrays.equals(left, right)
-                && keys.size() == leftKeys.size() && keys.size() == rightKeys.size())
+            if (remapLeft == null && remapRight == null && Arrays.equals(left, 0, leftLength, right, 0, rightLength)
+                && leftKeysLength == rightKeysLength)
             {
-                return this;
+                return constructResult.construct(leftKeys, leftKeysLength, leftTxnIds, leftTxnIdsLength, left, leftLength);
             }
 
-            int lk = 0, rk = 0, ok = 0, l = this.keys.size(), r = that.keys.size(), o = keys.size();
+            int lk = 0, rk = 0, ok = 0, l = leftKeysLength, r = rightKeysLength, o = outKeysLength;
 
-            if (remapLeft == null && keys == leftKeys)
+            if (remapLeft == null && outKeys == leftKeys)
             {
-                noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
+                noOp: while (lk < leftKeysLength && rk < rightKeysLength)
                 {
-                    int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
+                    int ck = leftKeys[lk].compareTo(rightKeys[rk]);
                     if (ck < 0)
                     {
                         o += left[lk] - l;
@@ -558,7 +725,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                             }
                             else if (nextRight < nextLeft)
                             {
-                                out = copy(left, o, left.length + right.length - r);
+                                out = copy(left, o, leftLength + rightLength - r, intBuffers);
                                 break noOp;
                             }
                             else
@@ -576,7 +743,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                         }
                         else if (r < right[rk])
                         {
-                            out = copy(left, o, left.length + right.length - r);
+                            out = copy(left, o, leftLength + rightLength - r, intBuffers);
                             break;
                         }
 
@@ -588,13 +755,13 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 }
 
                 if (out == null)
-                    return this;
+                    return constructResult.construct(leftKeys, leftKeysLength, leftTxnIds, leftTxnIdsLength, left, leftLength);
             }
-            else if (remapRight == null && keys == rightKeys)
+            else if (remapRight == null && outKeys == rightKeys)
             {
-                noOp: while (lk < leftKeys.size() && rk < rightKeys.size())
+                noOp: while (lk < leftKeysLength && rk < rightKeysLength)
                 {
-                    int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
+                    int ck = leftKeys[lk].compareTo(rightKeys[rk]);
                     if (ck < 0)
                     {
                         throw new IllegalStateException();
@@ -616,7 +783,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                             if (nextLeft < nextRight)
                             {
-                                out = copy(right, o, right.length + left.length - l);
+                                out = copy(right, o, rightLength + leftLength - l, intBuffers);
                                 break noOp;
                             }
                             else if (nextRight < nextLeft)
@@ -634,7 +801,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                         if (l < left[lk])
                         {
-                            out = copy(right, o, right.length + left.length - l);
+                            out = copy(right, o, rightLength + leftLength - l, intBuffers);
                             break;
                         }
                         else if (r < right[rk])
@@ -651,16 +818,16 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 }
 
                 if (out == null)
-                    return that;
+                    return constructResult.construct(rightKeys, rightKeysLength, rightTxnIds, rightTxnIdsLength, right, rightLength);
             }
             else
             {
-                out = takeFromCache(left.length + right.length);
+                out = ints().allocateInts(leftLength + rightLength);
             }
 
-            while (lk < leftKeys.size() && rk < rightKeys.size())
+            while (lk < leftKeysLength && rk < rightKeysLength)
             {
-                int ck = leftKeys.get(lk).compareTo(rightKeys.get(rk));
+                int ck = leftKeys[lk].compareTo(rightKeys[rk]);
                 if (ck < 0)
                 {
                     while (l < left[lk])
@@ -707,7 +874,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 }
             }
 
-            while (lk < leftKeys.size())
+            while (lk < leftKeysLength)
             {
                 while (l < left[lk])
                     out[o++] = remap(left[l++], remapLeft);
@@ -715,7 +882,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 lk++;
             }
 
-            while (rk < rightKeys.size())
+            while (rk < rightKeysLength)
             {
                 while (r < right[rk])
                     out[o++] = remap(right[r++], remapRight);
@@ -723,29 +890,31 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 rk++;
             }
 
-            out = Arrays.copyOf(out, o);
-            return new Deps(keys, txnIds, out);
+            return constructResult.construct(outKeys, outKeysLength, outTxnIds, outTxnIdsLength, out, o);
         }
         finally
         {
-            synchronized (Deps.class)
-            {
-                if (remapLeft != null)
-                    returnToCache(remapLeft);
-                if (remapRight != null)
-                    returnToCache(remapRight);
-                if (out != null)
-                    returnToCache(out);
-            }
+            if (outKeys != null)
+                objectBuffers.discard(outKeys);
+            if (outTxnIds != null)
+                objectBuffers.discard(outTxnIds);
+            if (out != null)
+                intBuffers.discard(out);
+            if (remapLeft != null)
+                ints().discard(remapLeft);
+            if (remapRight != null)
+                ints().discard(remapRight);
         }
     }
 
-    private static int[] copy(int[] src, int to, int length)
+    private static int[] copy(int[] src, int to, int length, IntBufferManager bufferManager)
     {
         if (length == 0)
             return NO_INTS;
 
-        int[] result = new int[length];
+        int[] result = bufferManager.allocateInts(length);
+        if (result.length < length)
+            throw new AssertionError();
         System.arraycopy(src, 0, result, 0, to);
         return result;
     }
@@ -1098,7 +1267,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 {
                     Key key = keys.get(i);
                     TxnId txnId = txnIds[keyToTxnId[i]];
-                    throw new AssertionError(String.format("Duplicate TxnId (%s) found for key {}", txnId, key));
+                    throw new AssertionError(String.format("Duplicate TxnId (%s) found for key %s", txnId, key));
                 }
                 i++;
             }

@@ -185,7 +185,7 @@ public class DepsTest
         expected.testSimpleEquality();
 
         // slightly redundant due to Deps.merge using this method... it is here for completeness
-        Assertions.assertEquals(expected.test, accord.primitives.Deps.merge(keys, list, a -> a.test));
+        Assertions.assertEquals(expected.test, accord.primitives.Deps.linearMerge(list, a -> a.test));
         Assertions.assertEquals(expected.test, list.stream().map(a -> a.test).reduce(accord.primitives.Deps.NONE, accord.primitives.Deps::with));
 
         // Keys is the superset of all keys, so no filtering is needed
@@ -199,7 +199,7 @@ public class DepsTest
     public void hackyBenchmark()
     {
         // comment out to run... for some reason @Ignore isn't present in junit 5
-        Assumptions.assumeTrue(false, "Benchmark is not meant to be run automatically, so comment out if you want to run this");
+//        Assumptions.assumeTrue(false, "Benchmark is not meant to be run automatically, so comment out if you want to run this");
 
         qt().withExamples(10).forAll(lists(Deps::generate).ofSizeBetween(1, 20)).check(list -> {
             Keys keys = keys(list);
@@ -258,7 +258,7 @@ public class DepsTest
         accord.primitives.Deps merged = null;
         Keys keys = keys(list);
         for (int i = 0; i < 1000; i++)
-            merged = accord.primitives.Deps.merge(keys, list, d -> d.test);
+            merged = accord.primitives.Deps.linearMerge(list, d -> d.test);
 
         return merged;
     }
@@ -405,7 +405,7 @@ public class DepsTest
                     canonical.computeIfAbsent(e.getKey(), ignore -> new TreeSet<>()).addAll(e.getValue());
             }
 
-            return new Deps(canonical, accord.primitives.Deps.merge(keys, deps, d -> d.test));
+            return new Deps(canonical, accord.primitives.Deps.linearMerge(deps, d -> d.test));
         }
 
         static Deps merge(List<Deps> deps)

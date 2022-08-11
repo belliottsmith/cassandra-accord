@@ -103,7 +103,7 @@ class Propose implements Callback<AcceptReply>
     private void onAccepted()
     {
         isDone = true;
-        Deps deps = Deps.merge(txn.keys, acceptOks, ok -> ok.deps);
+        Deps deps = Deps.linearMerge(acceptOks, ok -> ok.deps);
         Execute.execute(node, txnId, txn, homeKey, executeAt, deps, callback);
     }
 

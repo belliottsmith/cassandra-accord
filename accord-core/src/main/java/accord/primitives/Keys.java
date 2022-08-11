@@ -15,8 +15,6 @@ import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.IntBufferFactory;
 import org.apache.cassandra.utils.concurrent.Inline;
 
-import javax.annotation.Nullable;
-
 @SuppressWarnings("rawtypes")
 // TODO: this should probably be a BTree
 // TODO: check that foldl call-sites are inlined and optimised by HotSpot
@@ -39,8 +37,14 @@ public class Keys implements Iterable<Key>
 
     public Keys(Key[] keys)
     {
+        this(keys, false);
+    }
+
+    public Keys(Key[] keys, boolean isSorted)
+    {
         this.keys = keys;
-        Arrays.sort(keys);
+        if (!isSorted)
+            Arrays.sort(keys);
     }
 
     @Override
