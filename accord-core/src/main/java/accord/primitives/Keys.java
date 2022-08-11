@@ -12,6 +12,7 @@ import accord.utils.IndexedFoldToLong;
 import accord.utils.IndexedPredicate;
 import accord.utils.IndexedRangeFoldToLong;
 import accord.utils.SortedArrays;
+import accord.utils.SortedArrays.IntBufferFactory;
 import org.apache.cassandra.utils.concurrent.Inline;
 
 import javax.annotation.Nullable;
@@ -432,9 +433,9 @@ public class Keys implements Iterable<Key>
         return remapToSuperset(target, null);
     }
 
-    public int[] remapToSuperset(Keys target, @Nullable int[] result)
+    public int[] remapToSuperset(Keys target, IntBufferFactory ints)
     {
-        return SortedArrays.remapToSuperset(keys, target.keys, result);
+        return SortedArrays.remapToSuperset(keys, target.keys, ints);
     }
 
     public static Keys union(Keys as, Keys bs)

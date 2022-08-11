@@ -14,16 +14,13 @@ import accord.local.CommandStore;
 import accord.utils.InlineHeap;
 import accord.utils.SortedArrays;
 
+import static accord.utils.CachedArrays.ints;
 import static accord.utils.SortedArrays.remap;
 import static accord.utils.SortedArrays.remapToSuperset;
 
 // TODO (now): switch to RoutingKey
 public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 {
-    private static final int MAX_CACHED_ARRAY_COUNT = 64; // means 2MiB total
-    private static final int[] ARRAY_CACHE_SIZE = new int[14];
-    private static final int[][][] ARRAY_CACHE = new int[14][MAX_CACHED_ARRAY_COUNT][];
-
     private static final TxnId[] NO_TXNIDS = new TxnId[0];
     private static final int[] NO_INTS = new int[0];
     public static final Deps NONE = new Deps(Keys.EMPTY, NO_TXNIDS, NO_INTS);
@@ -187,16 +184,8 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         private void init(Keys keys, TxnId[] txnIds)
         {
-            int[] remapTxnIds = takeFromCache(source.txnIds.length);
-            this.remapTxnIds = remapToSuperset(source.txnIds, txnIds, remapTxnIds);
-            if (this.remapTxnIds == null)
-                returnToCache(remapTxnIds);
-
-            int[] remapKeys = takeFromCache(source.keys.size());
-            this.remapKeys = source.keys.remapToSuperset(keys, remapKeys);
-            if (this.remapKeys == null)
-                returnToCache(remapKeys);
-
+            this.remapTxnIds = remapToSuperset(source.txnIds, txnIds, ints());
+            this.remapKeys = source.keys.remapToSuperset(keys, ints());
             while (input[keyIndex] == keyCount)
                 ++keyIndex;
             this.index = keyCount;
@@ -218,53 +207,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         private void dealloc()
         {
             if (remapTxnIds != null)
-                returnToCache(remapTxnIds);
+                ints().discard(remapTxnIds);
             if (remapKeys != null)
-                returnToCache(remapKeys);
-        }
-    }
-
-    private static int[] takeFromCache(int size)
-    {
-        if (size == 0)
-            return NO_INTS;
-
-        int log2 = 32 - Integer.numberOfLeadingZeros(size - 1);
-        if (log2 > ARRAY_CACHE_SIZE.length)
-            return new int[size];
-
-        if (ARRAY_CACHE_SIZE[log2] < MAX_CACHED_ARRAY_COUNT)
-        {
-            ARRAY_CACHE_SIZE[log2]++;
-            return new int[1 << log2];
-        }
-
-        for (int i = 0 ; i < ARRAY_CACHE[log2].length ; ++i)
-        {
-            if (ARRAY_CACHE[log2][i] != null)
-            {
-                int[] result = ARRAY_CACHE[log2][i];
-                ARRAY_CACHE[log2][i] = null;
-                return result;
-            }
-        }
-
-        return new int[size];
-    }
-
-    private static void returnToCache(int[] array)
-    {
-        if (Integer.bitCount(array.length) != 1)
-            return;
-
-        int log2 = 31 - Integer.numberOfLeadingZeros(array.length);
-        for (int i = 0 ; i < ARRAY_CACHE[log2].length ; ++i)
-        {
-            if (ARRAY_CACHE[log2][i] == null)
-            {
-                ARRAY_CACHE[log2][i] = array;
-                break;
-            }
+                ints().discard(remapKeys);
         }
     }
 
@@ -562,34 +507,14 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         if (isEmpty() || that.isEmpty())
             return isEmpty() ? that : this;
 
-        int[] remapLeft, remapRight, out = null;
-        synchronized (Deps.class)
-        {
-            // TODO: this isn't actually optimal, as we may allocate an array we don't need
-            remapLeft = takeFromCache(this.txnIds.length);
-            remapRight = takeFromCache(that.txnIds.length);
-        }
-
+        int[] remapLeft = null, remapRight = null, out = null;
         try
         {
-
             Keys keys = this.keys.union(that.keys);
             TxnId[] txnIds = SortedArrays.linearUnion(this.txnIds, that.txnIds, TxnId[]::new);
 
-            int[] tmpRemapLeft = remapToSuperset(this.txnIds, txnIds, remapLeft);
-            int[] tmpRemapRight = remapToSuperset(that.txnIds, txnIds, remapRight);
-            if (tmpRemapLeft == null || tmpRemapRight == null)
-            {
-                synchronized (Deps.class)
-                {
-                    if (tmpRemapLeft == null)
-                        returnToCache(remapLeft);
-                    if (tmpRemapRight == null)
-                        returnToCache(remapRight);
-                }
-            }
-            remapLeft = tmpRemapLeft;
-            remapRight = tmpRemapRight;
+            remapLeft = remapToSuperset(this.txnIds, txnIds);
+            remapRight = remapToSuperset(that.txnIds, txnIds);
 
             Keys leftKeys = this.keys, rightKeys = that.keys;
             int[] left = keyToTxnId, right = that.keyToTxnId;

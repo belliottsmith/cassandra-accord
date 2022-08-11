@@ -7,18 +7,66 @@ import org.apache.cassandra.utils.concurrent.Inline;
 
 import javax.annotation.Nullable;
 
-import static java.util.Arrays.*;
-
 // TODO (now): javadoc
 public class SortedArrays
 {
+    public interface IntBufferFactory
+    {
+        int[] get(int minSize);
+    }
+
+    public interface IntBufferCompleter
+    {
+        int[] complete(int[] buffer, int size);
+    }
+
+    public interface IntBufferDiscarder
+    {
+        void discard(int[] buffer);
+    }
+
+    public interface IntBufferManager extends IntBufferFactory, IntBufferCompleter, IntBufferDiscarder
+    {
+    }
+
+    public interface BufferFactory<T>
+    {
+        T[] get(int minSize);
+    }
+
+    public interface BufferCompleter<T>
+    {
+        // must handle (null, 0) -> empty array
+        T[] complete(T[] buffer, int size);
+    }
+
+    public interface BufferDiscarder<T>
+    {
+        void discard(T[] buffer);
+    }
+
+    public interface BufferManager<T> extends BufferFactory<T>, BufferCompleter<T>, BufferDiscarder<T>
+    {
+    }
+
+    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, BufferFactory<T> factory)
+    {
+        return linearUnion(left, right, factory, Arrays::copyOf, ignore -> {});
+    }
+
+    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, BufferManager<T> buffers)
+    {
+        return linearUnion(left, right, buffers, buffers, buffers);
+    }
+
     /**
      * Given two sorted arrays, return an array containing the elements present in either, preferentially returning one
      * of the inputs if it contains all elements of the other.
      *
      * TODO: introduce exponential search optimised version
      */
-    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, IntFunction<T[]> allocate)
+    public static <T extends Comparable<? super T>> T[] linearUnion(T[] left, T[] right, BufferFactory<T> factory,
+                                                                    BufferCompleter<T> completer, BufferDiscarder<T> discarder)
     {
         int leftIdx = 0;
         int rightIdx = 0;
@@ -44,7 +92,7 @@ public class SortedArrays
                 else
                 {
                     resultSize = leftIdx;
-                    result = allocate.apply(resultSize + (left.length - leftIdx) + (right.length - (rightIdx - 1)));
+                    result = factory.get(resultSize + (left.length - leftIdx) + (right.length - (rightIdx - 1)));
                     System.arraycopy(left, 0, result, 0, resultSize);
                     result[resultSize++] = right[rightIdx++];
                     break;
@@ -56,7 +104,7 @@ public class SortedArrays
                 if (rightIdx == right.length) // all elements matched, so can return the other array
                     return left;
                 // no elements matched or only a subset matched
-                result = allocate.apply(left.length + (right.length - rightIdx));
+                result = factory.get(left.length + (right.length - rightIdx));
                 resultSize = leftIdx;
                 System.arraycopy(left, 0, result, 0, resultSize);
             }
@@ -77,7 +125,7 @@ public class SortedArrays
                 else
                 {
                     resultSize = rightIdx;
-                    result = allocate.apply(resultSize + (left.length - (leftIdx - 1)) + (right.length - rightIdx));
+                    result = factory.get(resultSize + (left.length - (leftIdx - 1)) + (right.length - rightIdx));
                     System.arraycopy(right, 0, result, 0, resultSize);
                     result[resultSize++] = left[leftIdx++];
                     break;
@@ -89,49 +137,65 @@ public class SortedArrays
                 if (leftIdx == left.length) // all elements matched, so can return the other array
                     return right;
                 // no elements matched or only a subset matched
-                result = allocate.apply(right.length + (left.length - leftIdx));
+                result = factory.get(right.length + (left.length - leftIdx));
                 resultSize = rightIdx;
                 System.arraycopy(right, 0, result, 0, resultSize);
             }
         }
 
-        while (leftIdx < left.length && rightIdx < right.length)
+        try
         {
-            T leftKey = left[leftIdx];
-            T rightKey = right[rightIdx];
-            int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
 
-            T minKey;
-            if (cmp == 0)
+            while (leftIdx < left.length && rightIdx < right.length)
             {
-                leftIdx++;
-                rightIdx++;
-                minKey = leftKey;
+                T leftKey = left[leftIdx];
+                T rightKey = right[rightIdx];
+                int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
+
+                T minKey;
+                if (cmp == 0)
+                {
+                    leftIdx++;
+                    rightIdx++;
+                    minKey = leftKey;
+                }
+                else if (cmp < 0)
+                {
+                    leftIdx++;
+                    minKey = leftKey;
+                }
+                else
+                {
+                    rightIdx++;
+                    minKey = rightKey;
+                }
+                result[resultSize++] = minKey;
             }
-            else if (cmp < 0)
-            {
-                leftIdx++;
-                minKey = leftKey;
-            }
-            else
-            {
-                rightIdx++;
-                minKey = rightKey;
-            }
-            result[resultSize++] = minKey;
+
+            while (leftIdx < left.length)
+                result[resultSize++] = left[leftIdx++];
+
+            while (rightIdx < right.length)
+                result[resultSize++] = right[rightIdx++];
+
+            return completer.complete(result, resultSize);
         }
-
-        while (leftIdx < left.length)
-            result[resultSize++] = left[leftIdx++];
-
-        while (rightIdx < right.length)
-            result[resultSize++] = right[rightIdx++];
-
-        if (resultSize < result.length)
-            result = copyOf(result, resultSize);
-
-        return result;
+        finally
+        {
+            discarder.discard(result);
+        }
     }
+
+    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, BufferFactory<T> factory)
+    {
+        return linearIntersection(left, right, factory, Arrays::copyOf, ignore -> {});
+    }
+
+    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, BufferManager<T> buffers)
+    {
+        return linearIntersection(left, right, buffers, buffers, buffers);
+    }
+
 
     /**
      * Given two sorted arrays, return the elements present only in both, preferentially returning one of the inputs if
@@ -140,7 +204,8 @@ public class SortedArrays
      * TODO: introduce exponential search optimised version
      */
     @SuppressWarnings("unused") // was used until recently, might be used again?
-    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, IntFunction<T[]> allocate)
+    public static <T extends Comparable<? super T>> T[] linearIntersection(T[] left, T[] right, BufferFactory<T> factory,
+                                                                           BufferCompleter<T> completer, BufferDiscarder<T> discarder)
     {
         int leftIdx = 0;
         int rightIdx = 0;
@@ -168,14 +233,14 @@ public class SortedArrays
                 else
                 {
                     resultSize = leftIdx++;
-                    result = allocate.apply(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
+                    result = factory.get(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
                     System.arraycopy(left, 0, result, 0, resultSize);
                     break;
                 }
             }
 
             if (result == null)
-                return hasMatch ? left : allocate.apply(0);
+                return hasMatch ? left : completer.complete(null, 0);
         }
         else
         {
@@ -196,36 +261,41 @@ public class SortedArrays
                 else
                 {
                     resultSize = rightIdx++;
-                    result = allocate.apply(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
+                    result = factory.get(resultSize + Math.min(left.length - leftIdx, right.length - rightIdx));
                     System.arraycopy(right, 0, result, 0, resultSize);
                     break;
                 }
             }
 
             if (result == null)
-                return hasMatch ? right : allocate.apply(0);
+                return hasMatch ? right : completer.complete(null, 0);
         }
 
-        while (leftIdx < left.length && rightIdx < right.length)
+        try
         {
-            T leftKey = left[leftIdx];
-            T rightKey = right[rightIdx];
-            int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
 
-            if (cmp == 0)
+            while (leftIdx < left.length && rightIdx < right.length)
             {
-                leftIdx++;
-                rightIdx++;
-                result[resultSize++] = leftKey;
-            }
-            else if (cmp < 0) leftIdx++;
-            else rightIdx++;
-        }
+                T leftKey = left[leftIdx];
+                T rightKey = right[rightIdx];
+                int cmp = leftKey == rightKey ? 0 : leftKey.compareTo(rightKey);
 
-        if (resultSize < result.length)
-            result = Arrays.copyOf(result, resultSize);
-        
-        return result;
+                if (cmp == 0)
+                {
+                    leftIdx++;
+                    rightIdx++;
+                    result[resultSize++] = leftKey;
+                }
+                else if (cmp < 0) leftIdx++;
+                else rightIdx++;
+            }
+
+            return completer.complete(result, resultSize);
+        }
+        finally
+        {
+            discarder.discard(result);
+        }
     }
 
     /**
@@ -534,15 +604,14 @@ public class SortedArrays
         return ((long)ai << 32) | bi;
     }
 
-    @Nullable
     public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, T[] trg)
     {
-        return remapToSuperset(src, trg, null);
+        return remapToSuperset(src, trg, int[]::new);
     }
 
-    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, T[] trg, @Nullable int[] result)
+    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, T[] trg, IntBufferFactory factory)
     {
-        return remapToSuperset(src, src.length, trg, trg.length, result);
+        return remapToSuperset(src, src.length, trg, trg.length, factory);
     }
 
     /**
@@ -552,12 +621,13 @@ public class SortedArrays
      * That is, {@code result[i] == -1 || src[i].equals(trg[result[i]])}
      */
     @Nullable
-    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, int srcLength, T[] trg, int trgLength, int[] result)
+    public static <T extends Comparable<? super T>> int[] remapToSuperset(T[] src, int srcLength, T[] trg, int trgLength,
+                                                                          IntBufferFactory factory)
     {
-        if (src == trg || trgLength == srcLength) return null;
+        if (src == trg || trgLength == srcLength)
+            return null;
 
-        if (result == null)
-            result = new int[srcLength];
+        int[] result = factory.get(srcLength);
 
         int i = 0, j = 0;
         while (i < srcLength && j < trgLength)
