@@ -14,6 +14,7 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.utils.InlineHeap;
 import accord.utils.SortedArrays;
+import com.google.common.base.Preconditions;
 
 import static accord.utils.CachedArrays.*;
 import static accord.utils.SortedArrays.*;
@@ -405,12 +406,21 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         {
             if (from == null)
             {
-                objects().discard(bufKeys);
-                bufKeys = null;
-                objects().discard(bufTxnIds);
-                bufTxnIds = null;
-                ints().discard(buf);
-                buf = null;
+                if (keys != bufKeys)
+                {
+                    objects().discard(bufKeys);
+                    bufKeys = null;
+                }
+                if (txnIds != bufTxnIds)
+                {
+                    objects().discard(bufTxnIds);
+                    bufTxnIds = null;
+                }
+                if (out != buf)
+                {
+                    ints().discard(buf);
+                    buf = null;
+                }
             }
             else if (from.keyToTxnId != out)
             {
@@ -428,9 +438,9 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             }
             else
             {
-                assert keys == bufKeys && keysLength == bufKeysLength;
-                assert txnIds == bufTxnIds && txnIdsLength == bufTxnIdsLength;
-                assert outLength == bufLength;
+                Preconditions.checkState(keys == bufKeys && keysLength == bufKeysLength);
+                Preconditions.checkState(txnIds == bufTxnIds && txnIdsLength == bufTxnIdsLength);
+                Preconditions.checkState(outLength == bufLength);
             }
             return null;
         }
@@ -456,10 +466,10 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             );
             if (buf == deps.keyToTxnId)
             {
+                Preconditions.checkState(deps.keys.keys == bufKeys && deps.keys.keys.length == bufKeysLength);
+                Preconditions.checkState(deps.txnIds == bufTxnIds && deps.txnIds.length == bufTxnIdsLength);
+                Preconditions.checkState(deps.keyToTxnId.length == bufLength);
                 from = deps;
-                assert deps.keys.keys == bufKeys && deps.keys.keys.length == bufKeysLength;
-                assert deps.txnIds == bufTxnIds && deps.txnIds.length == bufTxnIdsLength;
-                assert deps.keyToTxnId.length == bufLength;
             }
         }
 
