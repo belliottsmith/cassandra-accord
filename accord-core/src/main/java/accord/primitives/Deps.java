@@ -750,7 +750,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 keyToTxnId[k++] = o;
 
             int remapped = remapTxnIds[this.keyToTxnId[i]];
-            if (remapped > 0)
+            if (remapped >= 0)
                 keyToTxnId[o++] = remapped;
             ++i;
         }
