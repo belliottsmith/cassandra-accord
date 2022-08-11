@@ -112,7 +112,7 @@ public class KeysTest
                     Collections.sort(a);
                     return a;
                 });
-        qt().withExamples(Integer.MAX_VALUE).forAll(gen).check(list -> {
+        qt().forAll(gen).check(list -> {
             Keys keys = new Keys(list);
             // end-inclusive
             int first = list.get(0).key;
@@ -166,34 +166,6 @@ public class KeysTest
                         after);
                 Assertions.assertEquals(new Keys(expected), keys.slice(allButI), "Expected to exclude " + first + " at index " + 0);
             }
-        });
-    }
-
-    @Test
-    public void sliceWithOverlappingRanges()
-    {
-        Gen<List<IntKey>> gen = Gens.lists(Gens.ints().between(-1000, 1000).map(IntKey::key))
-                .unique()
-                .ofSizeBetween(2, 40)
-                .map(a -> {
-                    Collections.sort(a);
-                    return a;
-                });
-        qt().withSeed(-5138448682093070423L).withExamples(Integer.MAX_VALUE).forAll(gen).check(list -> {
-            Keys keys = new Keys(list);
-            // end-inclusive
-            int first = list.get(0).key;
-            int last = list.get(list.size() - 1).key;
-            List<KeyRange> ranges = new ArrayList<>();
-            ranges.add(range(Integer.MIN_VALUE, Integer.MAX_VALUE));
-            ranges.add(range(-1, 1));
-            ranges.add(range(-100, 100));
-            ranges.add(range(first, last));
-            ranges.add(range(first - 1, last - 1));
-            ranges.add(range(first + 1, last + 1));
-            Collections.sort(ranges, Comparator.comparing(KeyRange::end));
-
-            Assertions.assertEquals(keys, keys.slice(new KeyRanges(ranges)), "Ranges should include the whole domain, so nothing should be removed!");
         });
     }
 }
