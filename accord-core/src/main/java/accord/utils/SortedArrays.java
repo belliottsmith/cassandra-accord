@@ -286,27 +286,38 @@ public class SortedArrays
             if (ari < 0)
             {
                 if (ai == slice.length)
-                    return slice;
+                    return slice; // all elements of slice were found in select, so can return the array unchanged
 
+                // The first (ai - 1) elements are present (without a gap), so copy just that subset
                 return Arrays.copyOf(slice, ai);
             }
 
             int nextai = (int)(ari >>> 32);
             if (ai != nextai)
             {
+                // A gap is detected in slice!
+                // When ai == nextai we "consume" it and move to the last instance of slice[ai], then choose the next element,
+                // this means that ai currently points to an element in slice where it is not known if its present in select,
+                // so != implies a gap is detected!
                 resultCount = ai;
                 result = factory.apply(ai + (slice.length - nextai));
                 System.arraycopy(slice, 0, result, 0, resultCount);
                 ai = nextai;
+                ri = (int)ari;
                 break;
             }
 
             ri = (int)ari;
+            // In cases where duplicates are present in slice, find the last instance of slice[ai], and move past it.
+            // slice[ai] is known to be present, so need to check the next element.
             ai = exponentialSearch(slice, nextai, slice.length, select[ri], cmp2, Search.FLOOR) + 1;
         }
 
         while (true)
         {
+            // Find the next element after the last element matching select[ri] and copy from slice into result
+            // nextai may be negative (such as -1), so the +1 may keep it negative OR set 0, since 0 < 0 is false
+            // it is safe to avoid checking for negative values
             int nextai = exponentialSearch(slice, ai, slice.length, select[ri], cmp2, Search.FLOOR) + 1;
             while (ai < nextai)
                 result[resultCount++] = slice[ai++];
