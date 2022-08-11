@@ -393,7 +393,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         TxnId[] bufTxnIds;
         int[] buf = null;
         int bufKeysLength, bufTxnIdsLength = 0, bufLength = 0;
-        Deps from = null, last = null;
+        Deps from = null;
 
         LinearMerger()
         {
@@ -415,14 +415,16 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             else if (from.keyToTxnId != out)
             {
                 from = null;
+            }
+
+            if (from == null)
+            {
                 bufKeys = keys;
                 bufKeysLength = keysLength;
                 bufTxnIds = txnIds;
                 bufTxnIdsLength = txnIdsLength;
                 buf = out;
                 bufLength = outLength;
-                if (last.keyToTxnId == out)
-                    from = last;
             }
             else
             {
@@ -447,13 +449,18 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 return;
             }
 
-            from = null;
-            last = deps;
             linearUnion(
                     bufKeys, bufKeysLength, bufTxnIds, bufTxnIdsLength, buf, bufLength,
                     deps.keys.keys, deps.keys.keys.length, deps.txnIds, deps.txnIds.length, deps.keyToTxnId, deps.keyToTxnId.length,
                     this, this, this
             );
+            if (buf == deps.keyToTxnId)
+            {
+                from = deps;
+                assert deps.keys.keys == bufKeys && deps.keys.keys.length == bufKeysLength;
+                assert deps.txnIds == bufTxnIds && deps.txnIds.length == bufTxnIdsLength;
+                assert deps.keyToTxnId.length == bufLength;
+            }
         }
 
         Deps get()

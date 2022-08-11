@@ -68,7 +68,7 @@ public class CachedArrays
                 return NO_INTS;
 
             int log2 = 32 - Integer.numberOfLeadingZeros(minSize - 1);
-            if (log2 > sizes.length)
+            if (log2 >= sizes.length)
                 return new int[minSize];
 
             if (sizes[log2] < MAX_CACHED_ARRAY_COUNT)
@@ -139,7 +139,7 @@ public class CachedArrays
                 return allocator.apply(0);
 
             int log2 = 32 - Integer.numberOfLeadingZeros(minSize - 1);
-            if (log2 > sizes.length)
+            if (log2 >= sizes.length)
                 return allocator.apply(minSize);
 
             if (sizes[log2] < MAX_CACHED_ARRAY_COUNT)
