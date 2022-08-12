@@ -2,7 +2,6 @@ package accord.primitives;
 
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -12,8 +11,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
-
-import com.google.common.base.Preconditions;
 
 import accord.api.Key;
 import accord.local.Command;
