@@ -62,7 +62,7 @@ public class KeyRangeTest
         Key[] keys = new Key[values.length];
         for (int i=0; i<values.length; i++)
             keys[i] = IntKey.key(values[i]);
-        return new Keys(keys);
+        return Keys.of(keys);
     }
 
     private static void assertInvalidKeyRange(int start, int end)

@@ -152,7 +152,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                     if (keysToTxnIdCounts[i] > 0)
                         newKeys[keyIndex++] = keys.get(i);
                 }
-                keys = new Keys(newKeys);
+                keys = Keys.of(newKeys);
             }
 
             return new Deps(keys, txnIds, result);
@@ -794,7 +794,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         Key[] result = new Key[end - start];
         for (int i = start ; i < end ; ++i)
             result[i - start] = keys.get(txnIdToKey[i]);
-        return new Keys(result);
+        return Keys.of(result);
     }
 
     private void ensureTxnIdToKey()

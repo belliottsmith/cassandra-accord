@@ -180,7 +180,7 @@ public class Json
             while (in.hasNext())
                 keys.add(MaelstromKey.read(in));
             in.endArray();
-            return new Keys(keys.toArray(Key[]::new));
+            return Keys.of(keys.toArray(Key[]::new));
         }
     };
 
@@ -330,7 +330,7 @@ public class Json
             }
             in.endArray();
 
-            Keys keys = new Keys(entries.stream().map(Entry::getKey).sorted().toArray(Key[]::new));
+            Keys keys = Keys.of(entries.stream().map(Entry::getKey).sorted().toArray(Key[]::new));
             Deps.Builder builder = Deps.builder(keys);
             for (Entry entry : entries)
                 builder.add(entry.getKey(), entry.getValue());

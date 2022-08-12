@@ -35,10 +35,14 @@ public class Keys implements Iterable<Key>
         Arrays.sort(this.keys);
     }
 
-    public Keys(Key[] keys)
+    /**
+     * Creates Keys with the sorted array.  This requires the caller knows that the keys are in fact sorted and should
+     * call {@link #of(Key[])} if it isn't known.
+     * @param keys sorted
+     */
+    private Keys(Key[] keys)
     {
         this.keys = keys;
-        Arrays.sort(keys);
     }
 
     @Override
@@ -171,6 +175,12 @@ public class Keys implements Iterable<Key>
         };
     }
 
+    public static Keys of(Key[] keys)
+    {
+        Arrays.sort(keys);
+        return new Keys(keys);
+    }
+
     public static Keys of(Key k0, Key... kn)
     {
         Key[] keys = new Key[kn.length + 1];
@@ -178,6 +188,7 @@ public class Keys implements Iterable<Key>
         for (int i=0; i<kn.length; i++)
             keys[i + 1] = kn[i];
 
+        Arrays.sort(keys);
         return new Keys(keys);
     }
 
