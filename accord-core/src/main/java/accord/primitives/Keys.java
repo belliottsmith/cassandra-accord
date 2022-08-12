@@ -90,7 +90,8 @@ public class Keys implements Iterable<Key>
         Key[] selection = new Key[indexes.length];
         for (int i = 0 ; i < indexes.length ; ++i)
             selection[i] = keys[indexes[i]];
-        return new Keys(selection);
+        // use "of" as it isn't known that indexes is sorted
+        return Keys.of(selection);
     }
 
     /**
@@ -188,8 +189,7 @@ public class Keys implements Iterable<Key>
         for (int i=0; i<kn.length; i++)
             keys[i + 1] = kn[i];
 
-        Arrays.sort(keys);
-        return new Keys(keys);
+        return of(keys);
     }
 
     public boolean any(KeyRanges ranges, Predicate<Key> predicate)
