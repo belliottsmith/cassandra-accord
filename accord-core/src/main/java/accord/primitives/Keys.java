@@ -122,6 +122,8 @@ public class Keys implements Iterable<Key>
 
     public int search(int lowerBound, int upperBound, Object key, Comparator<Object> comparator)
     {
+        //TODO If Keys becomes Keys<K extends Key> then can switch to AsymmetricComparator
+        // Caller is KeyRange which is generic, so we get K != Key type
         return Arrays.binarySearch(keys, lowerBound, upperBound, key, comparator);
     }
 
