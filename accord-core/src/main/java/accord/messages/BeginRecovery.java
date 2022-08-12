@@ -78,7 +78,7 @@ public class BeginRecovery extends TxnRequest
                 // committed txns with an earlier txnid and have our txnid as a dependency
                 earlierCommittedWitness = committedStartedBefore(instance, txnId, txn.keys)
                                           .filter(c -> c.savedDeps().contains(txnId))
-                                          .collect(() -> Deps.builder(txn.keys), Deps.Builder::add, (a, b) -> { throw new IllegalStateException(); })
+                                          .collect(Deps.collector(txn.keys))
                                           .build();
 
                 // accepted txns with an earlier txnid that don't have our txnid as a dependency
@@ -86,7 +86,7 @@ public class BeginRecovery extends TxnRequest
                                               .filter(c -> c.is(Accepted)
                                                            && !c.savedDeps().contains(txnId)
                                                            && c.executeAt().compareTo(txnId) > 0)
-                                              .collect(() -> Deps.builder(txn.keys), Deps.Builder::add, (a, b) -> { throw new IllegalStateException(); })
+                                              .collect(Deps.collector(txn.keys))
                                               .build();
             }
             return new RecoverOk(txnId, command.status(), command.accepted(), command.executeAt(), deps, earlierCommittedWitness, earlierAcceptedNoWitness, rejectsFastPath, command.writes(), command.result());

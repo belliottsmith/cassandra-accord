@@ -11,6 +11,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.stream.Collector;
 
 import accord.api.Key;
 import accord.local.Command;
@@ -342,6 +343,11 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             result = Arrays.copyOf(result, resultIndex);
 
         return new Deps(keys, txnIds, result);
+    }
+
+    public static Collector<Command, Builder, Builder> collector(Keys keys)
+    {
+        return Collector.of(() -> Deps.builder(keys), Deps.Builder::add, (a, b) -> { throw new IllegalStateException(); });
     }
 
     final Keys keys; // unique Keys
