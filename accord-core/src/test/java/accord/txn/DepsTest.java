@@ -93,7 +93,7 @@ public class DepsTest
     @Test
     public void testWithout()
     {
-        qt().withExamples(Integer.MAX_VALUE).forAll(Deps::generate).check(deps -> {
+        qt().forAll(Deps::generate).check(deps -> {
             // no matches
             Assertions.assertSame(deps.test, deps.test.without(ignore -> false));
             // all match
