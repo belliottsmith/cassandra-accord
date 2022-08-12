@@ -245,12 +245,12 @@ public class Coordinate extends AsyncFuture<Result> implements Callback<PreAccep
         if (tracker.hasMetFastPathCriteria())
         {
             preAcceptIsDone = true;
-            Deps deps = Deps.linearMerge(preAcceptOks, ok -> ok.witnessedAt.equals(txnId) ? ok.deps : null);
+            Deps deps = Deps.merge(preAcceptOks, ok -> ok.witnessedAt.equals(txnId) ? ok.deps : null);
             Execute.execute(node, txnId, txn, homeKey, txnId, deps, this);
         }
         else
         {
-            Deps deps = Deps.linearMerge(preAcceptOks, ok -> ok.deps);
+            Deps deps = Deps.merge(preAcceptOks, ok -> ok.deps);
             Timestamp executeAt; {
                 Timestamp accumulate = Timestamp.NONE;
                 for (PreAcceptOk preAcceptOk : preAcceptOks)

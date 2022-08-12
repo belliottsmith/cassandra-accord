@@ -6,13 +6,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import accord.api.Key;
-import accord.utils.IndexedFold;
-import accord.utils.IndexedFoldIntersectToLong;
-import accord.utils.IndexedFoldToLong;
-import accord.utils.IndexedPredicate;
-import accord.utils.IndexedRangeFoldToLong;
-import accord.utils.SortedArrays;
-import accord.utils.SortedArrays.IntBufferFactory;
+import accord.utils.*;
+import accord.utils.ArrayBuffers.IntBufferAllocator;
 import org.apache.cassandra.utils.concurrent.Inline;
 
 @SuppressWarnings("rawtypes")
@@ -118,7 +113,7 @@ public class Keys implements Iterable<Key>
 
     public Keys slice(KeyRanges ranges)
     {
-        return wrap(SortedArrays.sliceWithOverlaps(keys, ranges.ranges, Key[]::new, (k, r) -> -r.compareTo(k), KeyRange::compareTo));
+        return wrap(SortedArrays.sliceWithMultipleMatches(keys, ranges.ranges, Key[]::new, (k, r) -> -r.compareTo(k), KeyRange::compareTo));
     }
 
     public int search(int lowerBound, int upperBound, Object key, Comparator<Object> comparator)
@@ -437,7 +432,7 @@ public class Keys implements Iterable<Key>
         return remapToSuperset(target, null);
     }
 
-    public int[] remapToSuperset(Keys target, IntBufferFactory ints)
+    public int[] remapToSuperset(Keys target, IntBufferAllocator ints)
     {
         return SortedArrays.remapToSuperset(keys, target.keys, ints);
     }

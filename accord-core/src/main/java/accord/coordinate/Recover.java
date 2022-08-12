@@ -260,9 +260,9 @@ public class Recover extends AsyncFuture<Result> implements Callback<RecoverRepl
         }
 
         // should all be PreAccept
-        Deps deps = Deps.linearMerge(recoverOks, ok -> ok.deps);
-        Deps earlierAcceptedNoWitness = Deps.linearMerge(recoverOks, ok -> ok.earlierAcceptedNoWitness);
-        Deps earlierCommittedWitness = Deps.linearMerge(recoverOks, ok -> ok.earlierCommittedWitness);
+        Deps deps = Deps.merge(recoverOks, ok -> ok.deps);
+        Deps earlierAcceptedNoWitness = Deps.merge(recoverOks, ok -> ok.earlierAcceptedNoWitness);
+        Deps earlierCommittedWitness = Deps.merge(recoverOks, ok -> ok.earlierCommittedWitness);
         Timestamp maxExecuteAt = txnId;
         boolean rejectsFastPath = false;
         for (RecoverOk ok : recoverOks)

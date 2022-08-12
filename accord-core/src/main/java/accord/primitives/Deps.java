@@ -6,7 +6,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
-import accord.utils.CachedArrays;
+import accord.utils.ArrayBuffers;
 import accord.utils.MergeIterator;
 
 import accord.api.Key;
@@ -16,7 +16,7 @@ import accord.utils.InlineHeap;
 import accord.utils.SortedArrays;
 import com.google.common.base.Preconditions;
 
-import static accord.utils.CachedArrays.*;
+import static accord.utils.ArrayBuffers.*;
 import static accord.utils.SortedArrays.*;
 
 // TODO (now): switch to RoutingKey
@@ -388,7 +388,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
     }
 
-    static class LinearMerger extends CachedArrays.SavingManager implements DepsFunction<Object>
+    private static class LinearMerger extends ArrayBuffers.SavingManager implements DepsConstructor<Object>
     {
         Key[] bufKeys;
         TxnId[] bufTxnIds;
@@ -502,7 +502,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
     }
 
-    public static <T> Deps linearMerge(List<T> merge, Function<T, Deps> getter)
+    public static <T> Deps merge(List<T> merge, Function<T, Deps> getter)
     {
         LinearMerger linearMerger = new LinearMerger();
         try
@@ -678,14 +678,14 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 );
     }
 
-    interface DepsFunction<T>
+    interface DepsConstructor<T>
     {
         T construct(Key[] keys, int keysLength, TxnId[] txnIds, int txnIdsLength, int[] out, int outLength);
     }
 
     private static <T> T linearUnion(Key[] leftKeys, int leftKeysLength, TxnId[] leftTxnIds, int leftTxnIdsLength, int[] left, int leftLength,
                                      Key[] rightKeys, int rightKeysLength, TxnId[] rightTxnIds, int rightTxnIdsLength, int[] right, int rightLength,
-                                     BufferManager objectBuffers, IntBufferManager intBuffers, DepsFunction<T> constructResult
+                                     BufferManager objectBuffers, IntBufferManager intBuffers, DepsConstructor<T> constructor
                                      )
     {
         Key[] outKeys = null;
@@ -694,11 +694,11 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
         try
         {
-            // TODO: this is a little clunky to get back the buffer and its length
-            outKeys = SortedArrays.linearUnion(leftKeys, leftKeysLength, rightKeys, rightKeysLength, objectBuffers, Key[]::new);
-            int outKeysLength = objectBuffers.lengthOfLast(leftKeys, leftKeysLength, rightKeys, rightKeysLength, outKeys);
-            outTxnIds = SortedArrays.linearUnion(leftTxnIds, leftTxnIdsLength, rightTxnIds, rightTxnIdsLength, objectBuffers, TxnId[]::new);
-            int outTxnIdsLength = objectBuffers.lengthOfLast(leftTxnIds, leftTxnIdsLength, rightTxnIds, rightTxnIdsLength, outTxnIds);
+            // TODO: this is a little clunky for getting back the buffer and its length
+            outKeys = SortedArrays.linearUnion(leftKeys, leftKeysLength, rightKeys, rightKeysLength, Key[]::new, objectBuffers);
+            int outKeysLength = objectBuffers.lengthOfLast(outKeys);
+            outTxnIds = SortedArrays.linearUnion(leftTxnIds, leftTxnIdsLength, rightTxnIds, rightTxnIdsLength, TxnId[]::new, objectBuffers);
+            int outTxnIdsLength = objectBuffers.lengthOfLast(outTxnIds);
 
             remapLeft = remapToSuperset(leftTxnIds, leftTxnIdsLength, outTxnIds, outTxnIdsLength, ints());
             remapRight = remapToSuperset(rightTxnIds, rightTxnIdsLength, outTxnIds, outTxnIdsLength, ints());
@@ -706,7 +706,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             if (remapLeft == null && remapRight == null && Arrays.equals(left, 0, leftLength, right, 0, rightLength)
                 && leftKeysLength == rightKeysLength)
             {
-                return constructResult.construct(leftKeys, leftKeysLength, leftTxnIds, leftTxnIdsLength, left, leftLength);
+                return constructor.construct(leftKeys, leftKeysLength, leftTxnIds, leftTxnIdsLength, left, leftLength);
             }
 
             int lk = 0, rk = 0, ok = 0, l = leftKeysLength, r = rightKeysLength, o = outKeysLength;
@@ -772,7 +772,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 }
 
                 if (out == null)
-                    return constructResult.construct(leftKeys, leftKeysLength, leftTxnIds, leftTxnIdsLength, left, leftLength);
+                    return constructor.construct(leftKeys, leftKeysLength, leftTxnIds, leftTxnIdsLength, left, leftLength);
             }
             else if (remapRight == null && outKeys == rightKeys)
             {
@@ -835,7 +835,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 }
 
                 if (out == null)
-                    return constructResult.construct(rightKeys, rightKeysLength, rightTxnIds, rightTxnIdsLength, right, rightLength);
+                    return constructor.construct(rightKeys, rightKeysLength, rightTxnIds, rightTxnIdsLength, right, rightLength);
             }
             else
             {
@@ -907,7 +907,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 rk++;
             }
 
-            return constructResult.construct(outKeys, outKeysLength, outTxnIds, outTxnIdsLength, out, o);
+            return constructor.construct(outKeys, outKeysLength, outTxnIds, outTxnIdsLength, out, o);
         }
         finally
         {

@@ -22,7 +22,6 @@ import accord.primitives.Deps.Builder;
 import accord.utils.Gen;
 import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 import org.slf4j.Logger;
@@ -185,7 +184,7 @@ public class DepsTest
         expected.testSimpleEquality();
 
         // slightly redundant due to Deps.merge using this method... it is here for completeness
-        Assertions.assertEquals(expected.test, accord.primitives.Deps.linearMerge(list, a -> a.test));
+        Assertions.assertEquals(expected.test, accord.primitives.Deps.merge(list, a -> a.test));
         Assertions.assertEquals(expected.test, list.stream().map(a -> a.test).reduce(accord.primitives.Deps.NONE, accord.primitives.Deps::with));
 
         // Keys is the superset of all keys, so no filtering is needed
@@ -261,7 +260,7 @@ public class DepsTest
         accord.primitives.Deps merged = null;
         Keys keys = keys(list);
         for (int i = 0; i < 1000; i++)
-            merged = accord.primitives.Deps.linearMerge(list, d -> d.test);
+            merged = accord.primitives.Deps.merge(list, d -> d.test);
 
         return merged;
     }
@@ -408,7 +407,7 @@ public class DepsTest
                     canonical.computeIfAbsent(e.getKey(), ignore -> new TreeSet<>()).addAll(e.getValue());
             }
 
-            return new Deps(canonical, accord.primitives.Deps.linearMerge(deps, d -> d.test));
+            return new Deps(canonical, accord.primitives.Deps.merge(deps, d -> d.test));
         }
 
         static Deps merge(List<Deps> deps)

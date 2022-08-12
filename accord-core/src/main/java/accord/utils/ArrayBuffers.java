@@ -2,11 +2,12 @@ package accord.utils;
 
 import accord.api.Key;
 import accord.primitives.TxnId;
+import com.google.common.base.Preconditions;
 
 import java.util.Arrays;
 import java.util.function.IntFunction;
 
-public class CachedArrays
+public class ArrayBuffers
 {
     private static final int MAX_CACHED_ARRAY_COUNT = 64; // means 2MiB total
     private static final int[] NO_INTS = new int[0];
@@ -15,6 +16,7 @@ public class CachedArrays
 
     private static final IntArrayCache INTS = new IntArrayCache();
     private static final SharedObjectArrayCache OBJECTS = new SharedObjectArrayCache();
+    static final NoCachingManager NO_CACHING = new NoCachingManager();
 
     public static final IntFunction<int[]> ALLOCATE_INTS = size -> size == 0 ? NO_INTS : new int[size];
     public static final IntFunction<TxnId[]> ALLOCATE_TXNIDS = size -> size == 0 ? NO_TXNIDS : new TxnId[size];
@@ -24,13 +26,74 @@ public class CachedArrays
     {
         return INTS;
     }
+
     public static SharedObjectArrayCache objects()
     {
         return OBJECTS;
     }
+    public static BufferManager noCaching() { return NO_CACHING; }
+
+    private static final class NoCachingManager implements BufferManager
+    {
+        @Override
+        public void discard(Object[] buffer)
+        {
+        }
+
+        @Override
+        public <T> T[] get(IntFunction<T[]> allocator, int minSize)
+        {
+            return allocator.apply(minSize);
+        }
+
+        @Override
+        public int lengthOfLast(Object[] buffer)
+        {
+            return buffer.length;
+        }
+
+        @Override
+        public <T> T[] complete(IntFunction<T[]> allocator, T[] buffer, int size)
+        {
+            if (size == buffer.length)
+                return buffer;
+
+            T[] target = allocator.apply(size);
+            System.arraycopy(buffer, 0, target, 0, size);
+            return target;
+        }
+
+        @Override
+        public <T> T[] completeWithExisting(T[] buffer, int size)
+        {
+            Preconditions.checkArgument(buffer.length == size);
+            return buffer;
+        }
+    }
+
+    public interface IntBufferAllocator
+    {
+        int[] allocateInts(int minSize);
+    }
+
+    public interface IntBufferManager extends IntBufferAllocator
+    {
+        int[] complete(int[] buffer, int size);
+        void discard(int[] buffer);
+    }
+
+    public interface BufferManager
+    {
+        void discard(Object[] buffer);
+        <T> T[] get(IntFunction<T[]> allocator, int minSize);
+        int lengthOfLast(Object[] buffer);
+        // must handle (null, 0) -> empty array
+        <T> T[] complete(IntFunction<T[]> allocator, T[] buffer, int size);
+        <T> T[] completeWithExisting(T[] buffer, int size);
+    }
 
     // TODO: this is much too simple, need to make smarter before prod, with some thread local caching, local and global size limits
-    public static class IntArrayCache implements SortedArrays.IntBufferManager
+    public static class IntArrayCache implements IntBufferManager
     {
         private final int[] sizes = new int[14];
         private final int[][][] caches = new int[14][MAX_CACHED_ARRAY_COUNT][];
@@ -91,7 +154,8 @@ public class CachedArrays
         }
     }
 
-    public static class SharedObjectArrayCache implements SortedArrays.BufferManager
+    // TODO: this is much too simple, need to make smarter before prod, with some thread local caching, local and global size limits
+    public static class SharedObjectArrayCache implements BufferManager
     {
         private final int[] sizes = new int[14];
         private final Object[][][] caches;
@@ -111,7 +175,13 @@ public class CachedArrays
             return result;
         }
 
-        public int lengthOfLast(Object[] left, int leftLength, Object[] right, int rightLength, Object[] buffer)
+        @Override
+        public <T> T[] completeWithExisting(T[] buffer, int size) 
+        {
+            return buffer;
+        }
+
+        public int lengthOfLast(Object[] buffer)
         {
             return buffer.length;
         }
@@ -162,13 +232,13 @@ public class CachedArrays
         }
     }
 
-    public static class SavingManager implements SortedArrays.BufferManager, SortedArrays.IntBufferManager
+    public static class SavingManager implements ArrayBuffers.BufferManager, ArrayBuffers.IntBufferManager
     {
-        final SortedArrays.BufferManager objs;
-        final SortedArrays.IntBufferManager ints;
+        final ArrayBuffers.BufferManager objs;
+        final ArrayBuffers.IntBufferManager ints;
         int length;
 
-        public SavingManager(SortedArrays.BufferManager objs, SortedArrays.IntBufferManager ints)
+        public SavingManager(ArrayBuffers.BufferManager objs, ArrayBuffers.IntBufferManager ints)
         {
             this.objs = objs;
             this.ints = ints;
@@ -189,15 +259,20 @@ public class CachedArrays
         }
 
         @Override
+        public <T> T[] completeWithExisting(T[] buffer, int size)
+        {
+            length = size;
+            return buffer;
+        }
+
+        @Override
         public void discard(Object[] buffer)
         {
         }
 
-        public int lengthOfLast(Object[] left, int leftLength, Object[] right, int rightLength, Object[] buffer)
+        public int lengthOfLast(Object[] buffer)
         {
-            if (left == buffer) return leftLength;
-            else if (right == buffer) return rightLength;
-            else return length;
+            return length;
         }
 
         @Override
