@@ -148,11 +148,6 @@ public class PreAccept extends WithUnsynced
         }
     }
 
-//    static Dependencies calculateDeps(CommandStore commandStore, TxnId txnId, Txn txn, Timestamp executeAt)
-//    {
-//        return calculateDeps(commandStore, txnId, txn.keys, txn.update.keys(), executeAt);
-//    }
-//
     static Deps calculateDeps(CommandStore commandStore, TxnId txnId, Txn txn, Timestamp executeAt)
     {
         // TODO (now): do not use Txn
