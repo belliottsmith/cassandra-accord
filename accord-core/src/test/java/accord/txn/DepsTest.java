@@ -36,7 +36,6 @@ import static accord.utils.Gens.lists;
 import static accord.utils.Property.qt;
 
 // TODO (now): test Keys with no contents
-// TODO (now): test without
 public class DepsTest
 {
     private static final Logger logger = LoggerFactory.getLogger(DepsTest.class);
@@ -88,6 +87,52 @@ public class DepsTest
             cur = cur.with(supplier.get());
             testOneDeps(random, cur, 200);
         }
+    }
+
+    @Test
+    public void testWithout()
+    {
+        qt().forAll(Deps::generate).check(deps -> {
+            // no matches
+            Assertions.assertSame(deps.test, deps.test.without(ignore -> false));
+            // all match
+            Assertions.assertSame(accord.primitives.Deps.NONE, deps.test.without(ignore -> true));
+
+            // remove specific TxnId
+            for (TxnId txnId : deps.test.txnIds())
+            {
+                accord.primitives.Deps without = deps.test.without(i -> i.equals(txnId));
+                // Was the TxnId removed?
+                List<TxnId> expectedTxnId = new ArrayList<>(deps.test.txnIds());
+                expectedTxnId.remove(txnId);
+                Assertions.assertEquals(expectedTxnId, without.txnIds());
+
+                Assertions.assertEquals(Keys.EMPTY, without.someKeys(txnId));
+                // all other keys are fine?
+                for (TxnId other : deps.test.txnIds())
+                {
+                    if (other == txnId)
+                        continue;
+                    Assertions.assertEquals(deps.test.someKeys(other), without.someKeys(other), "someKeys(" + other + ")");
+                }
+
+                // check each key
+                for (Key key : deps.test.keys())
+                {
+                    List<TxnId> expected = get(deps.test, key);
+                    expected.remove(txnId);
+
+                    Assertions.assertEquals(expected, get(without, key), () -> "TxnId " + txnId + " is expected to be removed for key " + key);
+                }
+            }
+        });
+    }
+
+    private static List<TxnId> get(accord.primitives.Deps deps, Key key)
+    {
+        List<TxnId> ids = new ArrayList<>();
+        deps.forEach(key, ids::add);
+        return ids;
     }
 
     @Test
@@ -174,7 +219,10 @@ public class DepsTest
         qt().forAll(lists(Deps::generate).ofSizeBetween(0, 20)).check(list -> testMergedProperty(keys(list), list));
     }
 
-    private static Keys keys(List<Deps> list) {
+    //TODO test "with" where TxnId and Keys are the same, but Key -> [TxnId] does not match
+
+    private static Keys keys(List<Deps> list)
+    {
         return list.stream().map(d -> d.test.keys()).reduce(Keys.EMPTY, (l, r) -> Keys.union(l, r));
     }
 

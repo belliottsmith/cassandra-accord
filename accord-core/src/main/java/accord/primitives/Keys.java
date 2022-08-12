@@ -30,16 +30,14 @@ public class Keys implements Iterable<Key>
         Arrays.sort(this.keys);
     }
 
-    public Keys(Key[] keys)
-    {
-        this(keys, false);
-    }
-
-    public Keys(Key[] keys, boolean isSorted)
+    /**
+     * Creates Keys with the sorted array.  This requires the caller knows that the keys are in fact sorted and should
+     * call {@link #of(Key[])} if it isn't known.
+     * @param keys sorted
+     */
+    private Keys(Key[] keys)
     {
         this.keys = keys;
-        if (!isSorted)
-            Arrays.sort(keys);
     }
 
     @Override
@@ -87,7 +85,8 @@ public class Keys implements Iterable<Key>
         Key[] selection = new Key[indexes.length];
         for (int i = 0 ; i < indexes.length ; ++i)
             selection[i] = keys[indexes[i]];
-        return new Keys(selection);
+        // use "of" as it isn't known that indexes is sorted
+        return Keys.of(selection);
     }
 
     /**
@@ -118,6 +117,8 @@ public class Keys implements Iterable<Key>
 
     public int search(int lowerBound, int upperBound, Object key, Comparator<Object> comparator)
     {
+        //TODO If Keys becomes Keys<K extends Key> then can switch to AsymmetricComparator
+        // Caller is KeyRange which is generic, so we get K != Key type
         return Arrays.binarySearch(keys, lowerBound, upperBound, key, comparator);
     }
 
@@ -172,13 +173,24 @@ public class Keys implements Iterable<Key>
         };
     }
 
-    public static Keys of(Key k0, Key... kn)
+    public static Keys of(Key ... keys)
     {
-        Key[] keys = new Key[kn.length + 1];
-        keys[0] = k0;
-        for (int i=0; i<kn.length; i++)
-            keys[i + 1] = kn[i];
+        Arrays.sort(keys);
+        return new Keys(keys);
+    }
 
+    public static Keys ofSorted(Key ... keys)
+    {
+        for (int i = 1 ; i < keys.length ; ++i)
+        {
+            if (keys[i - 1].compareTo(keys[i]) >= 0)
+                throw new IllegalArgumentException(Arrays.toString(keys) + " is not sorted");
+        }
+        return new Keys(keys);
+    }
+
+    static Keys ofSortedUnchecked(Key ... keys)
+    {
         return new Keys(keys);
     }
 

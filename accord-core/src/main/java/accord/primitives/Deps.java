@@ -1,18 +1,24 @@
 package accord.primitives;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
 import accord.utils.ArrayBuffers;
-import accord.utils.MergeIterator;
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
 
 import accord.api.Key;
 import accord.local.Command;
 import accord.local.CommandStore;
-import accord.utils.InlineHeap;
 import accord.utils.SortedArrays;
 import com.google.common.base.Preconditions;
 
@@ -25,6 +31,11 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
     private static final TxnId[] NO_TXNIDS = new TxnId[0];
     private static final int[] NO_INTS = new int[0];
     public static final Deps NONE = new Deps(Keys.EMPTY, NO_TXNIDS, NO_INTS);
+
+    public static Collector<Command, Builder, Builder> collector(Keys keys)
+    {
+        return Collector.of(() -> Deps.builder(keys), Deps.Builder::add, (a, b) -> { throw new IllegalStateException(); });
+    }
 
     public static class Builder
     {
@@ -149,7 +160,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                     if (keysToTxnIdCounts[i] > 0)
                         newKeys[keyIndex++] = keys.get(i);
                 }
-                keys = new Keys(newKeys);
+                keys = Keys.of(newKeys);
             }
 
             return new Deps(keys, txnIds, result);
@@ -159,233 +170,6 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
     public static Builder builder(Keys keys)
     {
         return new Builder(keys);
-    }
-
-    static class MergeStream implements Iterator<TxnId>
-    {
-        final Deps source;
-        // TODO: could share backing array for all of these if we want, with an additional offset
-        final int[] input;
-        final int keyCount;
-        int[] remapTxnIds; // TODO: use cached backing array
-        int[] remapKeys; // TODO: use cached backing array
-        int keyIndex;
-        int index;
-        int endIndex;
-
-        // to implement Iterator<TxnId>
-        int txnIdIdx;
-
-        MergeStream(Deps source)
-        {
-            this.source = source;
-            this.input = source.keyToTxnId;
-            this.keyCount = source.keys.size();
-        }
-
-        private void init(Keys keys, TxnId[] txnIds)
-        {
-            this.remapTxnIds = remapToSuperset(source.txnIds, txnIds, ints());
-            this.remapKeys = source.keys.remapToSuperset(keys, ints());
-            while (input[keyIndex] == keyCount)
-                ++keyIndex;
-            this.index = keyCount;
-            this.endIndex = input[keyIndex];
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            return txnIdIdx < source.txnIdCount();
-        }
-
-        @Override
-        public TxnId next()
-        {
-            return source.txnId(txnIdIdx++);
-        }
-
-        private void dealloc()
-        {
-            if (remapTxnIds != null)
-                ints().discard(remapTxnIds);
-            if (remapKeys != null)
-                ints().discard(remapKeys);
-        }
-    }
-
-    public static <T> Deps mergeWithPriorityHeaps(Keys keys, List<T> merge, Function<T, Deps> getter)
-    {
-        // collect non-empty inputs
-        int streamCount = 0;
-        MergeStream[] streams = new MergeStream[merge.size()];
-        for (T t : merge)
-        {
-            Deps deps = getter.apply(t);
-            if (deps != null && !deps.isEmpty())
-                streams[streamCount++] = new MergeStream(deps);
-        }
-
-        {
-            // first sort by size and remove identical collections
-            Arrays.sort(streams, 0, streamCount, (a, b) -> {
-                int c = Integer.compare(b.input.length, a.input.length);
-                if (c == 0) c = Integer.compare(b.keyCount, a.keyCount);
-                if (c == 0) c = Integer.compare(b.source.txnIds.length, a.source.txnIds.length);
-                return c;
-            });
-
-            // remove duplicates
-            int diff = 0;
-            for (int i = 1 ; i < streamCount ; i++)
-            {
-                if (streams[i - 1].source.equals(streams[i].source)) ++diff;
-                else if (diff > 0) streams[i - diff] = streams[i];
-            }
-            streamCount -= diff;
-        }
-
-        switch (streamCount)
-        {
-            case 0: return NONE;
-            case 1: return streams[0].source;
-            case 2: return streams[0].source.with(streams[1].source);
-        }
-
-        TxnId[] txnIds;
-        {
-            MergeIterator<TxnId, TxnId> iter = MergeIterator.get(Arrays.asList(streams).subList(0, streamCount), TxnId::compareTo, new MergeIterator.Reducer<>()
-            {
-                TxnId txnId;
-
-                @Override
-                public void reduce(int idx, TxnId current)
-                {
-                    txnId = current;
-                }
-
-                @Override
-                protected TxnId getReduced()
-                {
-                    return txnId;
-                }
-            });
-            List<TxnId> tmp = new ArrayList<>(streams[0].source.txnIdCount());
-            while (iter.hasNext())
-                tmp.add(iter.next());
-            txnIds = tmp.toArray(TxnId[]::new);
-        }
-
-        int[] result;
-        int maxStreamSize = 0, totalStreamSize = 0;
-        for (int streamIndex = 0 ; streamIndex < streamCount ; ++streamIndex)
-        {
-            MergeStream stream = streams[streamIndex];
-            stream.init(keys, txnIds);
-            maxStreamSize = Math.max(maxStreamSize, stream.input.length - stream.keyCount);
-            totalStreamSize += stream.input.length - stream.keyCount;
-        }
-        result = ints().allocateInts(keys.size() + Math.min(maxStreamSize * 2, totalStreamSize)); // TODO: use cached temporary array
-
-        try
-        {
-            int resultIndex = keys.size();
-            int[] keyHeap = InlineHeap.create(streamCount); // TODO: use cached temporary array
-            int[] txnIdHeap = InlineHeap.create(streamCount); // TODO: use cached temporary array
-
-            // build a heap of keys and streams, so we can merge those streams with overlapping keys
-            int keyHeapSize = 0;
-            for (int stream = 0 ; stream < streamCount ; ++stream)
-            {
-                InlineHeap.set(keyHeap, keyHeapSize++, remap(0, streams[stream].remapKeys), stream);
-            }
-
-            int keyIndex = 0;
-            keyHeapSize = InlineHeap.heapify(keyHeap, keyHeapSize);
-            while (keyHeapSize > 0)
-            {
-                // while the heap is non-empty, pop the streams matching the top key and insert them into their own heap
-
-                // if we have keys with no contents, fill in zeroes
-                while (keyIndex < InlineHeap.key(keyHeap, 0))
-                {
-                    if (keyIndex == result.length)
-                        result = Arrays.copyOf(result, result.length * 2);
-
-                    result[keyIndex++] = resultIndex;
-                }
-
-                int txnIdHeapSize = InlineHeap.consume(keyHeap, keyHeapSize, (key, streamIndex, size) -> {
-                    MergeStream stream = streams[streamIndex];
-                    InlineHeap.set(txnIdHeap, size, remap(stream.input[stream.index], stream.remapTxnIds), streamIndex);
-                    return size + 1;
-                }, 0);
-
-                if (txnIdHeapSize > 1)
-                {
-                    txnIdHeapSize = InlineHeap.heapify(txnIdHeap, txnIdHeapSize);
-                    do
-                    {
-                        if (resultIndex + txnIdHeapSize >= result.length)
-                            result = Arrays.copyOf(result, Math.max((resultIndex + txnIdHeapSize) * 2, resultIndex + (resultIndex/2)));
-
-                        result[resultIndex++] = InlineHeap.key(txnIdHeap, 0);
-                        InlineHeap.consume(txnIdHeap, txnIdHeapSize, (key, stream, v) -> 0, 0);
-
-                        txnIdHeapSize = InlineHeap.advance(txnIdHeap, txnIdHeapSize, streamIndex -> {
-                            MergeStream stream = streams[streamIndex];
-                            int index = ++stream.index;
-                            if (index == stream.endIndex)
-                                return Integer.MIN_VALUE;
-                            return remap(stream.input[index], stream.remapTxnIds);
-                        });
-                    }
-                    while (txnIdHeapSize > 1);
-                }
-
-                // fast path when one remaining source for this key
-                if (txnIdHeapSize > 0)
-                {
-                    int streamIndex = InlineHeap.stream(txnIdHeap, 0);
-                    MergeStream stream = streams[streamIndex];
-                    int index = stream.index;
-                    int endIndex = stream.endIndex;
-                    int count = endIndex - index;
-                    if (result.length < resultIndex + count)
-                        result = Arrays.copyOf(result, Math.max(result.length + (result.length / 2), resultIndex + count));
-
-                    while (index < endIndex)
-                        result[resultIndex++] = remap(stream.input[index++], stream.remapTxnIds);
-
-                    stream.index = index;
-                    stream.endIndex = stream.input[++stream.keyIndex];
-                }
-
-                result[keyIndex++] = resultIndex;
-                keyHeapSize = InlineHeap.advance(keyHeap, keyHeapSize, streamIndex -> {
-                    MergeStream stream = streams[streamIndex];
-                    while (stream.index == stream.endIndex && stream.keyIndex < stream.keyCount)
-                        stream.endIndex = stream.input[++stream.keyIndex];
-                    return stream.keyIndex == stream.keyCount
-                           ? Integer.MIN_VALUE
-                           : remap(stream.keyIndex, stream.remapKeys);
-                });
-            }
-
-            while (keyIndex < keys.size())
-                result[keyIndex++] = resultIndex;
-
-            return new Deps(keys, txnIds, ints().complete(result, resultIndex));
-        }
-        finally
-        {
-            ints().discard(result);
-            for (int i = 0 ; i < streamCount ; ++i)
-            {
-                if (streams[i] != null)
-                    streams[i].dealloc();
-            }
-        }
     }
 
     private static class LinearMerger extends ArrayBuffers.SavingManager implements DepsConstructor<Object>
@@ -482,7 +266,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 return from;
 
             return new Deps(
-                    new Keys(objects().complete(Key[]::new, bufKeys, bufKeysLength), true),
+                    Keys.ofSortedUnchecked(objects().complete(Key[]::new, bufKeys, bufKeysLength)),
                     objects().complete(TxnId[]::new, bufTxnIds, bufTxnIdsLength),
                     ints().complete(buf, bufLength));
         }
@@ -672,7 +456,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 that.keys.keys, that.keys.keys.length, that.txnIds, that.txnIds.length, that.keyToTxnId, that.keyToTxnId.length,
                 objects(), ints(),
                 (keys, keysLength, txnIds, txnIdsLength, out, outLength) ->
-                        new Deps(new Keys(objects().complete(Key[]::new, keys, keysLength), true),
+                        new Deps(Keys.ofSortedUnchecked(objects().complete(Key[]::new, keys, keysLength)),
                                 objects().complete(TxnId[]::new, txnIds, txnIdsLength),
                                 ints().complete(out, outLength))
                 );
@@ -713,12 +497,14 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
             if (remapLeft == null && outKeys == leftKeys)
             {
+                // "this" knows all the TxnId and Keys already, but do both agree on what Keys map to TxnIds?
                 noOp: while (lk < leftKeysLength && rk < rightKeysLength)
                 {
                     int ck = leftKeys[lk].compareTo(rightKeys[rk]);
                     if (ck < 0)
                     {
-                        o += left[lk] - l;
+                        // "this" knows of a key not present in "that"
+                        o += left[lk] - l; // logically append the key's TxnIds to the size
                         l = left[lk];
                         assert o == l && ok == lk && left[ok] == o;
                         ok++;
@@ -726,10 +512,12 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                     }
                     else if (ck > 0)
                     {
-                        throw new IllegalStateException();
+                        // if this happened there is a bug with keys.union or keys are not actually sorted
+                        throwUnexpectedMissingKeyException(leftKeys, lk, leftKeysLength, rightKeys, rk, rightKeysLength, true);
                     }
                     else
                     {
+                        // both "this" and "that" know of the key
                         while (l < left[lk] && r < right[rk])
                         {
                             int nextLeft = left[l];
@@ -737,6 +525,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                             if (nextLeft < nextRight)
                             {
+                                // "this" knows of the txn that "that" didn't
                                 o++;
                                 l++;
                             }
@@ -760,6 +549,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                         }
                         else if (r < right[rk])
                         {
+                            // "that" thinks a TxnID depends on Key but "this" doesn't, need to include this knowledge
                             out = copy(left, o, leftLength + rightLength - r, intBuffers);
                             break;
                         }
@@ -776,12 +566,14 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
             }
             else if (remapRight == null && outKeys == rightKeys)
             {
+                // "that" knows all the TxnId and keys already, but "this" does not
                 noOp: while (lk < leftKeysLength && rk < rightKeysLength)
                 {
                     int ck = leftKeys[lk].compareTo(rightKeys[rk]);
                     if (ck < 0)
                     {
-                        throw new IllegalStateException();
+                        // if this happened there is a bug with keys.union or keys are not actually sorted
+                        throwUnexpectedMissingKeyException(leftKeys, lk, leftKeysLength, rightKeys, rk, rightKeysLength, false);
                     }
                     else if (ck > 0)
                     {
@@ -793,6 +585,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                     }
                     else
                     {
+                        // both "this" and "that" know of the key
                         while (l < left[lk] && r < right[rk])
                         {
                             int nextLeft = remap(left[l], remapLeft);
@@ -800,11 +593,13 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
 
                             if (nextLeft < nextRight)
                             {
+                                // "this" thinks a TxnID depends on Key but "that" doesn't, need to include this knowledge
                                 out = copy(right, o, rightLength + leftLength - l, intBuffers);
                                 break noOp;
                             }
                             else if (nextRight < nextLeft)
                             {
+                                // "that" knows of the txn that "this" didn't
                                 o++;
                                 r++;
                             }
@@ -924,6 +719,19 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         }
     }
 
+    private static void throwUnexpectedMissingKeyException(Key[] leftKeys, int leftKeyIndex, int leftKeyLength, Key[] rightKeys, int rightKeyIndex, int rightKeyLength, boolean isMissingLeft)
+    {
+        StringBuilder sb = new StringBuilder();
+        String missing = isMissingLeft ? "left" : "right";
+        String extra = isMissingLeft ? "right" : "left";
+        sb.append(missing).append(" knows all keys, yet ").append(extra).append(" knew of an extra key at indexes left[")
+                .append(leftKeyIndex).append("] = ").append(leftKeys[leftKeyIndex])
+                .append(", right[").append(rightKeyIndex).append("] = ").append(rightKeys[rightKeyIndex]).append("\n");
+        sb.append("leftKeys = ").append(Arrays.stream(leftKeys, 0, leftKeyLength).map(Object::toString).collect(Collectors.joining())).append('\n');
+        sb.append("rightKeys = ").append(Arrays.stream(rightKeys, 0, rightKeyLength).map(Object::toString).collect(Collectors.joining())).append('\n');
+
+    }
+
     private static int[] copy(int[] src, int to, int length, IntBufferManager bufferManager)
     {
         if (length == 0)
@@ -973,7 +781,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
                 keyToTxnId[k++] = o;
 
             int remapped = remapTxnIds[this.keyToTxnId[i]];
-            if (remapped > 0)
+            if (remapped >= 0)
                 keyToTxnId[o++] = remapped;
             ++i;
         }
@@ -1014,7 +822,7 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
         Key[] result = new Key[end - start];
         for (int i = start ; i < end ; ++i)
             result[i - start] = keys.get(txnIdToKey[i]);
-        return new Keys(result);
+        return Keys.of(result);
     }
 
     private void ensureTxnIdToKey()
@@ -1156,6 +964,11 @@ public class Deps implements Iterable<Map.Entry<Key, TxnId>>
     public TxnId txnId(int i)
     {
         return txnIds[i];
+    }
+
+    public Collection<TxnId> txnIds()
+    {
+        return List.of(txnIds);
     }
 
     @Override

@@ -87,7 +87,7 @@ public class IntHashKey implements Key<IntHashKey>
         for (int i=0; i<kn.length; i++)
             keys[i + 1] = key(kn[i]);
 
-        return new Keys(keys);
+        return Keys.of(keys);
     }
 
     public static KeyRange<IntHashKey>[] ranges(int count)

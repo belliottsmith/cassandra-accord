@@ -4,8 +4,11 @@ import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.IntStream;
@@ -49,17 +52,24 @@ class SortedArraysTest
     @Test
     public void testSearch()
     {
-        qt().forAll(uniqueInts()).check(array -> {
+        qt().forAll(Gens.arrays(Gens.ints().all()).unique().ofSizeBetween(1, 100)).check(array -> {
             Arrays.sort(array);
             Integer[] jint = IntStream.of(array).mapToObj(Integer::valueOf).toArray(Integer[]::new);
             for (int i = 0; i < array.length; i++)
             {
                 int find = array[i];
+                int expectedOnToExclusion = -(i + 1);
+
                 Assertions.assertEquals(i, SortedArrays.exponentialSearch(array, 0, array.length, find));
+                Assertions.assertEquals(expectedOnToExclusion, SortedArrays.exponentialSearch(array, 0, i, find));
+
                 for (SortedArrays.Search search : SortedArrays.Search.values())
                 {
                     Assertions.assertEquals(i, SortedArrays.exponentialSearch(jint, 0, array.length, find, Integer::compare, search));
+                    Assertions.assertEquals(expectedOnToExclusion, SortedArrays.exponentialSearch(jint, 0, i, find, Integer::compare, search));
+
                     Assertions.assertEquals(i, SortedArrays.binarySearch(jint, 0, array.length, find, Integer::compare, search));
+                    Assertions.assertEquals(expectedOnToExclusion, SortedArrays.binarySearch(jint, 0, i, find, Integer::compare, search));
                 }
 
                 // uses Search.FAST
@@ -76,6 +86,48 @@ class SortedArraysTest
                 Assertions.assertEquals(left, right);
                 Assertions.assertEquals(left, i);
             }
+        });
+    }
+
+    @Test
+    public void testNextIntersection()
+    {
+        Gen<Integer[]> gen = Gens.arrays(Integer.class, Gens.ints().between(0, 100))
+                .unique()
+                .ofSizeBetween(0, 10)
+                .map(a -> {
+                    Arrays.sort(a);
+                    return a;
+                });
+        qt().forAll(gen, gen).check((a, b) -> {
+            // find all intersections
+            List<Long> expected = new ArrayList<>();
+            for (int i = 0; i < a.length; i++)
+            {
+                for (int j = 0; j < b.length; j++)
+                {
+                    if (a[i].equals(b[j]))
+                    {
+                        long ab = ((long)i << 32) | j;
+                        expected.add(ab);
+                    }
+                }
+            }
+            List<Long> seen = new ArrayList<>(expected.size());
+            int ai = 0, bi = 0;
+            while (ai < a.length && bi < b.length)
+            {
+                long ab = SortedArrays.findNextIntersection(a, ai, b, bi, Integer::compare);
+                if (ab == -1)
+                    return; // no more matches...
+                seen.add(ab);
+                ai = (int) (ab >>> 32);
+                bi = (int) ab;
+                // since data is unique just "consume" both pointers so can find the next one
+                ai++;
+                bi++;
+            }
+            assertArrayEquals(expected.toArray(), seen.toArray());
         });
     }
 
@@ -166,6 +218,41 @@ class SortedArraysTest
         });
     }
 
+    @Test
+    public void testInsert()
+    {
+        Gen<Integer[]> gen = Gens.arrays(Integer.class, Gens.ints().all()).ofSizeBetween(0, 42).map(a -> {
+            Arrays.sort(a);
+            return a;
+        });
+        qt().forAll(gen, Gens.random()).check((array, random) -> {
+            // insert w/e already exists
+            Set<Integer> uniq = new HashSet<>();
+            for (int i = 0; i < array.length; i++)
+            {
+                Integer value = array[i];
+                Assertions.assertEquals(array, SortedArrays.insert(array, value, Integer[]::new));
+                uniq.add(value);
+            }
+
+            // insert something not present
+            int numToAdd = random.nextInt(1, 10);
+            List<Integer> expected = new ArrayList<>(array.length + numToAdd);
+            expected.addAll(Arrays.asList(array));
+            for (int i = 0; i < numToAdd; i++)
+            {
+                int value;
+                while (!uniq.add((value = random.nextInt()))) {}
+                Integer[] updated = SortedArrays.insert(array, value, Integer[]::new);
+                Assertions.assertNotEquals(array, updated);
+                expected.add(value);
+                array = updated;
+            }
+            Collections.sort(expected);
+            assertArrayEquals(expected.toArray(new Integer[0]), array);
+        });
+    }
+
     private static int indexOfNth(String original, String search, int n)
     {
         String str = original;
@@ -200,11 +287,6 @@ class SortedArraysTest
     {
         // need Long rather than long
         return Gens.arrays(Long.class, Gens.longs().all()).ofSizeBetween(1, 100);
-    }
-
-    private static Gen<int[]> uniqueInts()
-    {
-        return Gens.arrays(Gens.ints().all()).unique().ofSizeBetween(1, 100);
     }
 
     private static Gen<Integer[]> sortedUniqueIntegerArray() {

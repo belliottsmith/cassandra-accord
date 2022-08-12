@@ -11,12 +11,17 @@ import java.util.*;
 
 public class KeyRanges implements Iterable<KeyRange>
 {
-    public static final KeyRanges EMPTY = new KeyRanges(new KeyRange[0]);
+    public static final KeyRanges EMPTY = new KeyRanges(new KeyRange[0], true);
 
     // TODO: fix raw parameterized use
     final KeyRange[] ranges;
 
     public KeyRanges(KeyRange... ranges)
+    {
+        this(ranges, false);
+    }
+
+    public KeyRanges(KeyRange[] ranges, boolean isSortedAndDeoverlapped)
     {
         Preconditions.checkNotNull(ranges);
         this.ranges = ranges;
@@ -95,7 +100,7 @@ public class KeyRanges implements Iterable<KeyRange>
         KeyRange[] selection = new KeyRange[indexes.length];
         for (int i=0; i<indexes.length; i++)
             selection[i] = ranges[indexes[i]];
-        return new KeyRanges(selection);
+        return new KeyRanges(selection, true);
     }
 
     public boolean intersects(Keys keys)
@@ -193,7 +198,7 @@ public class KeyRanges implements Iterable<KeyRange>
             if (thisRange != null)
                 result.add(thisRange);
         }
-        return new KeyRanges(result.toArray(KeyRange[]::new));
+        return new KeyRanges(result.toArray(KeyRange[]::new), true);
     }
 
     /**
@@ -340,7 +345,7 @@ public class KeyRanges implements Iterable<KeyRange>
         if (resultCount < result.length)
             result = Arrays.copyOf(result, resultCount);
 
-        return new KeyRanges(result);
+        return new KeyRanges(result, true);
     }
 
     public KeyRanges mergeTouching()
@@ -353,7 +358,7 @@ public class KeyRanges implements Iterable<KeyRange>
         if (count == result.length)
             return this;
         result = Arrays.copyOf(result, count);
-        return new KeyRanges(result);
+        return new KeyRanges(result, true);
     }
 
     private static int copyAndMergeTouching(KeyRange[] src, int srcPosition, KeyRange[] trg, int trgPosition, int srcCount)

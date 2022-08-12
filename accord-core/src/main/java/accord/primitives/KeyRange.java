@@ -224,6 +224,7 @@ public abstract class KeyRange<K extends Key<K>> implements Comparable<K>
      * Returns a negative integer, zero, or a positive integer as the provided key is greater than, contained by,
      * or less than this range.
      */
+    @Override
     public abstract int compareTo(K key);
 
     public boolean containsKey(K key)

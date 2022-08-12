@@ -49,7 +49,7 @@ public class IntKey implements Key<IntKey>
         for (int i=0; i<kn.length; i++)
             keys[i + 1] = new IntKey(kn[i]);
 
-        return new Keys(keys);
+        return Keys.of(keys);
     }
 
     public static Keys keys(int[] keyArray)
@@ -58,7 +58,7 @@ public class IntKey implements Key<IntKey>
         for (int i=0; i<keyArray.length; i++)
             keys[i] = new IntKey(keyArray[i]);
 
-        return new Keys(keys);
+        return Keys.of(keys);
     }
 
     public static KeyRange<IntKey> range(IntKey start, IntKey end)

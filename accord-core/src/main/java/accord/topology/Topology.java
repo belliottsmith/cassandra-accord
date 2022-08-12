@@ -45,7 +45,7 @@ public class Topology extends AbstractCollection<Shard>
     public Topology(long epoch, Shard... shards)
     {
         this.epoch = epoch;
-        this.ranges = new KeyRanges(Arrays.stream(shards).map(shard -> shard.range).toArray(KeyRange[]::new));
+        this.ranges = new KeyRanges(Arrays.stream(shards).map(shard -> shard.range).toArray(KeyRange[]::new), true);
         this.shards = shards;
         this.subsetOfRanges = ranges;
         this.supersetRangeIndexes = IntStream.range(0, shards.length).toArray();
