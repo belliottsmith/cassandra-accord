@@ -233,7 +233,7 @@ public class AsyncResults
     /**
      * Creates an AsyncResult for the given chain. This calls begin on the supplied chain
      */
-    public static <V> AsyncResult<V> forChain(AsyncChain<V> chain)
+    static <V> AsyncResult<V> forChain(AsyncChain<V> chain)
     {
         return new Chain<>(chain);
     }
