@@ -2,7 +2,6 @@ package accord.utils.async;
 
 import com.google.common.base.Preconditions;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
