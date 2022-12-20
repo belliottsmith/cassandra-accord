@@ -53,8 +53,6 @@ public interface AsyncChain<V>
 
     default AsyncResult<V> beginAsResult()
     {
-        AsyncResult.Settable<V> result = AsyncResults.settable();
-        begin(result.settingCallback());
-        return result;
+        return AsyncResults.forChain(this);
     }
 }
