@@ -28,6 +28,7 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
+import accord.utils.Invariants;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 
@@ -93,6 +94,9 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
         void begin()
         {
+            Invariants.checkArgument(next != null);
+            BiConsumer<? super V, Throwable> next = this.next;
+            this.next = null;
             begin(next);
         }
 
