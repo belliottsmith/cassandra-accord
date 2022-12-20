@@ -7,51 +7,54 @@ import java.util.function.BiConsumer;
  * Handle for async computations that supports multiple listeners and registering
  * listeners after the computation has started
  */
-public interface AsyncResult<V>
+public interface AsyncResult<V> extends AsyncChain<V>
 {
-    void addCallback(BiConsumer<? super V, Throwable> callback);
+    AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback);
 
-    default void addCallback(Runnable runnable)
+    default AsyncResult<V> addCallback(Runnable runnable)
     {
-        addCallback((unused, failure) -> {
+        return addCallback((unused, failure) -> {
             if (failure == null) runnable.run();
             else throw new RuntimeException(failure);
         });
     }
 
-    default void addCallback(Runnable runnable, Executor executor)
+    default AsyncResult<V> addCallback(Runnable runnable, Executor executor)
     {
         addCallback(AsyncCallbacks.inExecutor(runnable, executor));
-    }
-
-    default AsyncChain<V> toChain()
-    {
-        return new AsyncChains.Head<V>()
-        {
-            @Override
-            public void begin(BiConsumer<? super V, Throwable> callback)
-            {
-                AsyncResult.this.addCallback(callback);
-            }
-        };
+        return this;
     }
 
     boolean isDone();
     boolean isSuccess();
 
-    default void addCallback(BiConsumer<? super V, Throwable> callback, Executor executor)
+    default AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback, Executor executor)
     {
         addCallback(AsyncCallbacks.inExecutor(callback, executor));
+        return this;
     }
 
-    default void addListener(Runnable runnable)
+    default AsyncResult<V> addListener(Runnable runnable)
     {
         addCallback(runnable);
+        return this;
     }
 
-    default void addListener(Runnable runnable, Executor executor)
+    default AsyncResult<V> addListener(Runnable runnable, Executor executor)
     {
         addCallback(runnable, executor);
+        return this;
+    }
+
+    @Override
+    default void begin(BiConsumer<? super V, Throwable> callback)
+    {
+        addCallback(callback);
+    }
+
+    default AsyncResult<V> beginAsResult()
+    {
+        return this;
     }
 
     interface Settable<V> extends AsyncResult<V>
