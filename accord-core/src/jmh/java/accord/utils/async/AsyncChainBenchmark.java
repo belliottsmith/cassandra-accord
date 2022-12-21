@@ -17,69 +17,170 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 // To run faster, uncomment the below
-//@Fork(1)
-//@Warmup(iterations = 1, time = 1, timeUnit = TimeUnit.SECONDS)
-//@Measurement(iterations = 1, time = 1, timeUnit = TimeUnit.SECONDS)
+@Fork(1)
+@Warmup(iterations = 1, time = 5, timeUnit = TimeUnit.SECONDS)
+@Measurement(iterations = 1, time = 5, timeUnit = TimeUnit.SECONDS)
 public class AsyncChainBenchmark {
-    @Param({"1", "2", "3", "4", "5"})
-    int chainSize;
 
     @Benchmark
-    public AsyncResult<Integer> chainMap()
+    public AsyncResult<Integer> chainMap1()
     {
-        AsyncChain<Integer> accum = AsyncResults.success(0).toChain();
-        for (int i = 0; i < chainSize; i++)
-            accum = accum.map(AsyncChainBenchmark::map);
-        return accum.beginAsResult();
+        return AsyncResults.success(0)
+                .map(AsyncChainBenchmark::map)
+                .beginAsResult();
     }
 
     @Benchmark
-    public AsyncResult<Integer> chainFlatMap()
+    public AsyncResult<Integer> chainMap2()
     {
-        AsyncChain<Integer> accum = AsyncResults.success(0).toChain();
-        for (int i = 0; i < chainSize; i++)
-            accum = accum.flatMap(a -> flatMap(a).toChain());
-        return accum.beginAsResult();
+        return AsyncResults.success(0)
+                .map(AsyncChainBenchmark::map)
+                .map(AsyncChainBenchmark::map)
+                .beginAsResult();
     }
 
     @Benchmark
-    public AsyncResult<Integer> resultMap()
+    public AsyncResult<Integer> chainMap3()
     {
-        AsyncResult<Integer> accum = AsyncResults.success(0);
-        for (int i = 0; i < chainSize; i++)
-            accum = accum.map(AsyncChainBenchmark::map);
-        return accum;
+        return AsyncResults.success(0)
+                .map(AsyncChainBenchmark::map)
+                .map(AsyncChainBenchmark::map)
+                .map(AsyncChainBenchmark::map)
+                .beginAsResult();
     }
 
     @Benchmark
-    public AsyncResult<Integer> resultFlatMap()
+    public AsyncResult<Integer> chainFlatMap1()
     {
-        AsyncResult<Integer> accum = AsyncResults.success(0);
-        for (int i = 0; i < chainSize; i++)
-            accum = accum.flatMap(AsyncChainBenchmark::flatMap);
-        return accum;
+        return AsyncResults.success(0)
+                .flatMap(a -> flatMap(a))
+                .beginAsResult();
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> chainFlatMap2()
+    {
+        return AsyncResults.success(0)
+                .flatMap(a -> flatMap(a))
+                .flatMap(a -> flatMap(a))
+                .beginAsResult();
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> chainFlatMap3()
+    {
+        return AsyncResults.success(0)
+                .flatMap(a -> flatMap(a))
+                .flatMap(a -> flatMap(a))
+                .flatMap(a -> flatMap(a))
+                .beginAsResult();
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> resultMap1()
+    {
+        return AsyncResults.success(0)
+                .map2(AsyncChainBenchmark::map);
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> resultMap2()
+    {
+        return AsyncResults.success(0)
+                .map2(AsyncChainBenchmark::map)
+                .map2(AsyncChainBenchmark::map);
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> resultMap3()
+    {
+        return AsyncResults.success(0)
+                .map2(AsyncChainBenchmark::map)
+                .map2(AsyncChainBenchmark::map)
+                .map2(AsyncChainBenchmark::map);
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> resultFlatMap1()
+    {
+        return AsyncResults.success(0)
+                .flatMap2(AsyncChainBenchmark::flatMap);
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> resultFlatMap2()
+    {
+        return AsyncResults.success(0)
+                .flatMap2(AsyncChainBenchmark::flatMap)
+                .flatMap2(AsyncChainBenchmark::flatMap);
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> resultFlatMap3()
+    {
+        return AsyncResults.success(0)
+                .flatMap2(AsyncChainBenchmark::flatMap)
+                .flatMap2(AsyncChainBenchmark::flatMap)
+                .flatMap2(AsyncChainBenchmark::flatMap);
     }
 
 
     @Benchmark
-    public AsyncResult<Integer> chainMapAndBack()
+    public AsyncResult<Integer> chainMapAndBack1()
     {
-        AsyncResult<Integer> accum = AsyncResults.success(0);
-        for (int i = 0; i < chainSize; i++)
-            accum = accum.toChain().map(AsyncChainBenchmark::map).beginAsResult();
-        return accum;
+        return AsyncResults.success(0)
+                .map(AsyncChainBenchmark::map)
+                .beginAsResult();
     }
 
     @Benchmark
-    public AsyncResult<Integer> chainFlatMapAndBack()
+    public AsyncResult<Integer> chainMapAndBack2()
     {
-        AsyncResult<Integer> accum = AsyncResults.success(0);
-        for (int i = 0; i < chainSize; i++)
-            accum = accum.toChain().flatMap(a -> flatMap(a).toChain()).beginAsResult();
-        return accum;
+        return AsyncResults.success(0)
+                .map(AsyncChainBenchmark::map)
+                .map(AsyncChainBenchmark::map)
+                .beginAsResult();
     }
 
-    private static <A> A map(A a) {
+    @Benchmark
+    public AsyncResult<Integer> chainMapAndBack3()
+    {
+        return AsyncResults.success(0)
+                .map(AsyncChainBenchmark::map)
+                .map(AsyncChainBenchmark::map)
+                .map(AsyncChainBenchmark::map)
+                .beginAsResult();
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> chainFlatMapAndBack1()
+    {
+        return AsyncResults.success(0)
+                .flatMap(a -> flatMap(a))
+                .beginAsResult();
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> chainFlatMapAndBack2()
+    {
+        return AsyncResults.success(0)
+                .flatMap(a -> flatMap(a))
+                .flatMap(a -> flatMap(a))
+                .beginAsResult();
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> chainFlatMapAndBack3()
+    {
+        return AsyncResults.success(0)
+                .flatMap(a -> flatMap(a))
+                .flatMap(a -> flatMap(a))
+                .flatMap(a -> flatMap(a))
+                .beginAsResult();
+    }
+
+    private static <A> A map(A a)
+    {
         return a;
     }
 

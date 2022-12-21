@@ -33,7 +33,7 @@ public class AsyncCallbacks
     public static <T> BiConsumer<? super T, Throwable> inExecutor(Runnable runnable, Executor executor)
     {
         return (result, throwable) -> {
-            if (throwable != null) executor.execute(runnable);
+            if (throwable == null) executor.execute(runnable);
             else throw new RuntimeException(throwable);
         };
     }

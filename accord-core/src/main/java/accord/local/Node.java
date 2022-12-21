@@ -202,7 +202,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         else
         {
             configService.fetchTopologyForEpoch(epoch);
-            topology.awaitEpoch(epoch).listen(runnable);
+            topology.awaitEpoch(epoch).addCallback(runnable);
         }
     }
 
@@ -216,7 +216,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         else
         {
             configService.fetchTopologyForEpoch(epoch);
-            return topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get());
+            return topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get()).beginAsResult();
         }
     }
 
@@ -381,7 +381,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         AsyncResult<Result> result = withEpoch(txnId.epoch, () -> initiateCoordination(txnId, txn));
         coordinating.putIfAbsent(txnId, result);
         // TODO: if we fail, nominate another node to try instead
-        result.listen((success, fail) -> coordinating.remove(txnId, result));
+        result.addCallback((success, fail) -> coordinating.remove(txnId, result));
         return result;
     }
 
@@ -475,7 +475,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
             return future;
         });
         coordinating.putIfAbsent(txnId, result);
-        result.listen((success, fail) -> {
+        result.addCallback((success, fail) -> {
             coordinating.remove(txnId, result);
             // TODO: if we fail, nominate another node to try instead
         });

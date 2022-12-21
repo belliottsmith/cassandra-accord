@@ -1,5 +1,7 @@
 package accord.utils.async;
 
+import com.google.common.util.concurrent.MoreExecutors;
+
 import javax.annotation.Nullable;
 import java.util.concurrent.Executor;
 import java.util.function.BiConsumer;
@@ -9,32 +11,22 @@ import java.util.function.Function;
  * Handle for async computations that supports multiple listeners and registering
  * listeners after the computation has started
  */
-public interface AsyncResult<V>
+public interface AsyncResult<V> extends AsyncChain<V>
 {
-    void listen(BiConsumer<? super V, Throwable> callback, @Nullable Executor executor);
+    AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback);
 
-    default void listen(BiConsumer<? super V, Throwable> callback)
+    default AsyncResult<V> addCallback(Runnable runnable)
     {
-        listen(callback, null);
-    }
-
-    default void listen(Runnable runnable)
-    {
-        listen((unused, failure) -> {
+        return addCallback((unused, failure) -> {
             if (failure == null) runnable.run();
             else throw new RuntimeException(failure);
         });
     }
 
-    default void listen(Runnable runnable, Executor executor)
-    {
-        listen(AsyncCallbacks.inExecutor(runnable, executor));
-    }
-
-    default <T> AsyncResult<T> map(Function<? super V, ? extends T> mapper, Executor executor)
+    default <T> AsyncResult<T> map2(Function<? super V, ? extends T> mapper, Executor executor)
     {
         AsyncResult.Settable<T> settable = AsyncResults.settable();
-        listen((success, failure) -> {
+        addCallback((success, failure) -> {
             if (failure != null)
             {
                 settable.setFailure(failure);
@@ -53,15 +45,20 @@ public interface AsyncResult<V>
         return settable;
     }
 
-    default <T> AsyncResult<T> map(Function<? super V, ? extends T> mapper)
+    default <T> AsyncResult<T> map2(Function<? super V, ? extends T> mapper)
     {
-        return map(mapper, null);
+        return map2(mapper, MoreExecutors.directExecutor());
     }
 
-    default <T> AsyncResult<T> flatMap(Function<? super V, ? extends AsyncResult<T>> mapper, Executor executor)
+    default <T> AsyncResult<T> flatMap2(Function<? super V, ? extends AsyncResult<T>> mapper)
+    {
+        return flatMap2(mapper, MoreExecutors.directExecutor());
+    }
+
+    default <T> AsyncResult<T> flatMap2(Function<? super V, ? extends AsyncResult<T>> mapper, Executor executor)
     {
         AsyncResult.Settable<T> settable = AsyncResults.settable();
-        listen((success, failure) -> {
+        addCallback((success, failure) -> {
            if (failure != null)
            {
                settable.setFailure(failure);
@@ -70,7 +67,7 @@ public interface AsyncResult<V>
            try
            {
                AsyncResult<T> next = mapper.apply(success);
-               next.listen((s2, f2) -> {
+               next.addCallback((s2, f2) -> {
                    if (f2 != null)
                    {
                        settable.tryFailure(f2);
@@ -87,44 +84,39 @@ public interface AsyncResult<V>
         return settable;
     }
 
-    default <T> AsyncResult<T> flatMap(Function<? super V, ? extends AsyncResult<T>> mapper)
+    default AsyncResult<V> addCallback(Runnable runnable, Executor executor)
     {
-        return flatMap(mapper, null);
-    }
-
-    default AsyncChain<V> toChain()
-    {
-        return new AsyncChains.Head<V>()
-        {
-            @Override
-            public void begin(BiConsumer<? super V, Throwable> callback)
-            {
-                listen(callback);
-            }
-        };
+        addCallback(AsyncCallbacks.inExecutor(runnable, executor));
+        return this;
     }
 
     boolean isDone();
     boolean isSuccess();
 
-    default void addCallback(BiConsumer<? super V, Throwable> callback)
+    default AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback, Executor executor)
     {
-        listen(callback);
+        return addCallback(AsyncCallbacks.inExecutor(callback, executor));
     }
 
-    default void addCallback(BiConsumer<? super V, Throwable> callback, Executor executor)
+    default AsyncResult<V> addListener(Runnable runnable)
     {
-        listen(callback, executor);
+        return addCallback(runnable);
     }
 
-    default void addListener(Runnable runnable)
+    default AsyncResult<V> addListener(Runnable runnable, Executor executor)
     {
-        listen(runnable);
+        return addCallback(runnable, executor);
     }
 
-    default void addListener(Runnable runnable, Executor executor)
+    @Override
+    default void begin(BiConsumer<? super V, Throwable> callback)
     {
-        listen(runnable, executor);
+        addCallback(callback);
+    }
+
+    default AsyncResult<V> beginAsResult()
+    {
+        return this;
     }
 
     interface Settable<V> extends AsyncResult<V>

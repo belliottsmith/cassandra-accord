@@ -2,7 +2,6 @@ package accord.utils.async;
 
 import com.google.common.base.Preconditions;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -11,6 +10,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 
 public class AsyncResults
 {
@@ -102,6 +102,19 @@ public class AsyncResults
                 throw new IllegalStateException("Result has already been set on " + this);
         }
 
+        private  AsyncChain<V> newChain()
+        {
+            return new AsyncChains.Head<V>()
+            {
+                @Override
+                public void begin(BiConsumer<? super V, Throwable> callback)
+                {
+                    AbstractResult.this.addCallback(callback);
+                }
+            };
+        }
+
+
         void setResult(V result, Throwable failure)
         {
             if (!trySetResult(result, failure))
@@ -109,7 +122,19 @@ public class AsyncResults
         }
 
         @Override
-        public void listen(BiConsumer<? super V, Throwable> callback, Executor executor)
+        public <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper)
+        {
+            return newChain().map(mapper);
+        }
+
+        @Override
+        public <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper)
+        {
+            return newChain().flatMap(mapper);
+        }
+
+        @Override
+        public AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback)
         {
             Listener<V> listener = null;
             while (true)
@@ -119,14 +144,14 @@ public class AsyncResults
                 {
                     Result<V> result = (Result<V>) current;
                     callback.accept(result.value, result.failure);
-                    return;
+                    return null;
                 }
                 if (listener == null)
-                    listener = new Listener<>(callback, executor);
+                    listener = new Listener<>(callback, null);
 
                 listener.next = (Listener<V>) current;
                 if (STATE.compareAndSet(this, current, listener))
-                    return;
+                    return this;
             }
         }
 
@@ -154,7 +179,6 @@ public class AsyncResults
 
     public static class Settable<V> extends AbstractResult<V> implements AsyncResult.Settable<V>
     {
-
         @Override
         public boolean trySuccess(V value)
         {
@@ -185,9 +209,35 @@ public class AsyncResults
             this.failure = failure;
         }
 
+        private AsyncChain<V> newChain()
+        {
+            return new AsyncChains.Head<V>()
+            {
+                @Override
+                public void begin(BiConsumer<? super V, Throwable> callback)
+                {
+                    AsyncResults.Immediate.this.addCallback(callback);
+                }
+            };
+        }
+
         @Override
-        public void listen(BiConsumer<? super V, Throwable> callback, Executor executor) {
-            AsyncResults.notify(executor, callback, value, failure);
+        public <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper)
+        {
+            return newChain().map(mapper);
+        }
+
+        @Override
+        public <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper)
+        {
+            return newChain().flatMap(mapper);
+        }
+
+        @Override
+        public AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback)
+        {
+            callback.accept(value, failure);
+            return this;
         }
 
         @Override
@@ -259,26 +309,18 @@ public class AsyncResults
         return new Settable<>();
     }
 
-    private static <V> List<AsyncChain<V>> toChains(List<AsyncResult<V>> results)
-    {
-        List<AsyncChain<V>> chains = new ArrayList<>(results.size());
-        for (int i=0,mi=results.size(); i<mi; i++)
-            chains.add(results.get(i).toChain());
-        return chains;
-    }
-
-    public static <V> AsyncChain<List<V>> all(List<AsyncResult<V>> results)
+    public static <V> AsyncChain<List<V>> all(List<AsyncChain<V>> results)
     {
         Preconditions.checkArgument(!results.isEmpty());
-        return new AsyncChainCombiner.All<>(toChains(results));
+        return new AsyncChainCombiner.All<>(results);
     }
 
-    public static <V> AsyncChain<V> reduce(List<AsyncResult<V>> notifiers, BiFunction<V, V, V> reducer)
+    public static <V> AsyncChain<V> reduce(List<AsyncChain<V>> results, BiFunction<V, V, V> reducer)
     {
-        Preconditions.checkArgument(!notifiers.isEmpty());
-        if (notifiers.size() == 1)
-            return notifiers.get(0).toChain();
-        return new AsyncChainCombiner.Reduce<>(toChains(notifiers), reducer);
+        Preconditions.checkArgument(!results.isEmpty());
+        if (results.size() == 1)
+            return results.get(0);
+        return new AsyncChainCombiner.Reduce<>(results, reducer);
     }
 
     public static <V> V getBlocking(AsyncResult<V> notifier) throws InterruptedException

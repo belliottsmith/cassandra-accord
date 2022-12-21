@@ -281,13 +281,13 @@ public class TopologyUpdates
 
     public AsyncResult<Void> syncEpoch(Node originator, long epoch, Collection<Node.Id> cluster)
     {
-        AsyncResult<Void> notifier = dieExceptionally(sync(originator, epoch).toChain()
+        AsyncResult<Void> result = dieExceptionally(sync(originator, epoch)
                 .flatMap(v -> MessageTask.apply(originator, cluster, "SyncComplete:" + epoch, (node, from, onDone) -> {
                     node.onEpochSyncComplete(originator.id(), epoch);
                     onDone.accept(true);
-                }).toChain()).beginAsResult());
-        notifier.addCallback((unused, throwable) -> pendingTopologies.remove(epoch));
-        return notifier;
+                })).beginAsResult());
+        result.addCallback((unused, throwable) -> pendingTopologies.remove(epoch));
+        return result;
     }
 
     public int pendingTopologies()
