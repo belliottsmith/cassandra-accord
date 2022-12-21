@@ -102,7 +102,7 @@ public class AsyncResults
                 throw new IllegalStateException("Result has already been set on " + this);
         }
 
-        private  AsyncChain<V> newChain()
+        private AsyncChain<V> newChain()
         {
             return new AsyncChains.Head<V>()
             {

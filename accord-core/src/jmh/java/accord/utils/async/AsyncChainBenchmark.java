@@ -1,5 +1,6 @@
 package accord.utils.async;
 
+import com.google.common.util.concurrent.MoreExecutors;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -18,165 +19,206 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 // To run faster, uncomment the below
 @Fork(1)
-@Warmup(iterations = 1, time = 5, timeUnit = TimeUnit.SECONDS)
-@Measurement(iterations = 1, time = 5, timeUnit = TimeUnit.SECONDS)
+@Warmup(iterations = 2, time = 10, timeUnit = TimeUnit.SECONDS)
+@Measurement(iterations = 1, time = 10, timeUnit = TimeUnit.SECONDS)
 public class AsyncChainBenchmark {
 
     @Benchmark
     public AsyncResult<Integer> chainMap1()
     {
-        return AsyncResults.success(0)
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
                 .map(AsyncChainBenchmark::map)
                 .beginAsResult();
+        head.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> chainMap2()
     {
-        return AsyncResults.success(0)
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
                 .map(AsyncChainBenchmark::map)
                 .map(AsyncChainBenchmark::map)
                 .beginAsResult();
+        head.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> chainMap3()
     {
-        return AsyncResults.success(0)
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
                 .map(AsyncChainBenchmark::map)
                 .map(AsyncChainBenchmark::map)
                 .map(AsyncChainBenchmark::map)
                 .beginAsResult();
+        head.trySuccess(0);
+        return result;
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> chainFlatMapResult1()
+    {
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map1 = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap2(i -> map1)
+                .beginAsResult();
+        head.trySuccess(0);
+        map1.trySuccess(0);
+        return result;
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> chainFlatMapResult2()
+    {
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map1 = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map2 = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap2(i -> map1)
+                .flatMap2(i -> map2)
+                .beginAsResult();
+        head.trySuccess(0);
+        map1.trySuccess(0);
+        map2.trySuccess(0);
+        return result;
+    }
+
+    @Benchmark
+    public AsyncResult<Integer> chainFlatMapResult3()
+    {
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map1 = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map2 = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map3 = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap(a -> map1)
+                .flatMap(a -> map2)
+                .flatMap(a -> map3)
+                .beginAsResult();
+        head.trySuccess(0);
+        map1.trySuccess(0);
+        map2.trySuccess(0);
+        map3.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> chainFlatMap1()
     {
-        return AsyncResults.success(0)
-                .flatMap(a -> flatMap(a))
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap(i -> AsyncChains.ofCallable(MoreExecutors.directExecutor(), () -> 0))
                 .beginAsResult();
+        head.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> chainFlatMap2()
     {
-        return AsyncResults.success(0)
-                .flatMap(a -> flatMap(a))
-                .flatMap(a -> flatMap(a))
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap(i -> AsyncChains.ofCallable(MoreExecutors.directExecutor(), () -> 0))
+                .flatMap(i -> AsyncChains.ofCallable(MoreExecutors.directExecutor(), () -> 0))
                 .beginAsResult();
+        head.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> chainFlatMap3()
     {
-        return AsyncResults.success(0)
-                .flatMap(a -> flatMap(a))
-                .flatMap(a -> flatMap(a))
-                .flatMap(a -> flatMap(a))
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap(i -> AsyncChains.ofCallable(MoreExecutors.directExecutor(), () -> 0))
+                .flatMap(i -> AsyncChains.ofCallable(MoreExecutors.directExecutor(), () -> 0))
+                .flatMap(i -> AsyncChains.ofCallable(MoreExecutors.directExecutor(), () -> 0))
                 .beginAsResult();
+        head.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> resultMap1()
     {
-        return AsyncResults.success(0)
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
                 .map2(AsyncChainBenchmark::map);
+        head.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> resultMap2()
     {
-        return AsyncResults.success(0)
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
                 .map2(AsyncChainBenchmark::map)
                 .map2(AsyncChainBenchmark::map);
+        head.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> resultMap3()
     {
-        return AsyncResults.success(0)
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult<Integer> result = head
                 .map2(AsyncChainBenchmark::map)
                 .map2(AsyncChainBenchmark::map)
                 .map2(AsyncChainBenchmark::map);
+        head.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> resultFlatMap1()
     {
-        return AsyncResults.success(0)
-                .flatMap2(AsyncChainBenchmark::flatMap);
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map1 = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap2(i -> map1);
+        head.trySuccess(0);
+        map1.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> resultFlatMap2()
     {
-        return AsyncResults.success(0)
-                .flatMap2(AsyncChainBenchmark::flatMap)
-                .flatMap2(AsyncChainBenchmark::flatMap);
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map1 = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map2 = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap2(i -> map1)
+                .flatMap2(i -> map2);
+        head.trySuccess(0);
+        map1.trySuccess(0);
+        map2.trySuccess(0);
+        return result;
     }
 
     @Benchmark
     public AsyncResult<Integer> resultFlatMap3()
     {
-        return AsyncResults.success(0)
-                .flatMap2(AsyncChainBenchmark::flatMap)
-                .flatMap2(AsyncChainBenchmark::flatMap)
-                .flatMap2(AsyncChainBenchmark::flatMap);
-    }
-
-
-    @Benchmark
-    public AsyncResult<Integer> chainMapAndBack1()
-    {
-        return AsyncResults.success(0)
-                .map(AsyncChainBenchmark::map)
-                .beginAsResult();
-    }
-
-    @Benchmark
-    public AsyncResult<Integer> chainMapAndBack2()
-    {
-        return AsyncResults.success(0)
-                .map(AsyncChainBenchmark::map)
-                .map(AsyncChainBenchmark::map)
-                .beginAsResult();
-    }
-
-    @Benchmark
-    public AsyncResult<Integer> chainMapAndBack3()
-    {
-        return AsyncResults.success(0)
-                .map(AsyncChainBenchmark::map)
-                .map(AsyncChainBenchmark::map)
-                .map(AsyncChainBenchmark::map)
-                .beginAsResult();
-    }
-
-    @Benchmark
-    public AsyncResult<Integer> chainFlatMapAndBack1()
-    {
-        return AsyncResults.success(0)
-                .flatMap(a -> flatMap(a))
-                .beginAsResult();
-    }
-
-    @Benchmark
-    public AsyncResult<Integer> chainFlatMapAndBack2()
-    {
-        return AsyncResults.success(0)
-                .flatMap(a -> flatMap(a))
-                .flatMap(a -> flatMap(a))
-                .beginAsResult();
-    }
-
-    @Benchmark
-    public AsyncResult<Integer> chainFlatMapAndBack3()
-    {
-        return AsyncResults.success(0)
-                .flatMap(a -> flatMap(a))
-                .flatMap(a -> flatMap(a))
-                .flatMap(a -> flatMap(a))
-                .beginAsResult();
+        AsyncResult.Settable<Integer> head = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map1 = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map2 = AsyncResults.settable();
+        AsyncResult.Settable<Integer> map3 = AsyncResults.settable();
+        AsyncResult<Integer> result = head
+                .flatMap2(i -> map1)
+                .flatMap2(i -> map2)
+                .flatMap2(i -> map3);
+        head.trySuccess(0);
+        map1.trySuccess(0);
+        map2.trySuccess(0);
+        map3.trySuccess(0);
+        return result;
     }
 
     private static <A> A map(A a)

@@ -88,7 +88,6 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     {
         protected Head()
         {
-            super(null);
             next = this;
         }
 
@@ -228,6 +227,10 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     AsyncChains(Head<?> head)
     {
         this.next = (BiConsumer) head;
+    }
+
+    AsyncChains()
+    {
     }
 
     @Override

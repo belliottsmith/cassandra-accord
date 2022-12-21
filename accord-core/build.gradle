@@ -45,6 +45,7 @@ dependencies {
 }
 
 jmh {
+    // profilers = ['gc', 'async:libPath=/Users/belliottsmith/code/async-profiler-2.9-macos/build/libasyncProfiler.dylib']
     profilers = ['gc']
 }
 
