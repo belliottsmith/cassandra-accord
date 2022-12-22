@@ -28,49 +28,53 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import accord.utils.Invariants;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Nomenclature:
- *  register: the values associated with a given key
- *  step: a logical point in the causal sequence of events for a register
- *  step index: the index of a step; since we observe a strictly growing sequence this translates directly to
- *              the length of an observed sequence for a key. This imposes a total causal order for a given register
- *              (sequences [], [1], [1,2] have step indexes of 0, 1 and 2 respectively, with 2 necessarily happening after 1 and 0)
- *  predecessor: a step for a referent key that must occur before the referring step and key.
- *               two kinds: 1) those values for keys [B,C..) at step index i for a read of key A, precede key A's step index i +1
- *                          2) those values for keys [B,C..) at step index i for a write of key A, precede key A's step index i
- *  max predecessor: the maximum predecessor that may be reached via any predecessor relation
- *
+ * register: the values associated with a given key
+ * step: a logical point in the causal sequence of events for a register
+ * step index: the index of a step; since we observe a strictly growing sequence this translates directly to
+ *             the length of an observed sequence for a key. This imposes a total causal order for a given register
+ *             (sequences [], [1], [1,2] have step indexes of 0, 1 and 2 respectively, with 2 necessarily happening after 1 and 0)
+ * predecessor: a step for a referent key that must occur before the referring step and key.
+ *              two kinds: 1) those values for keys [B,C..) at step index i for a read of key A, precede key A's step index i +1
+ *                         2) those values for keys [B,C..) at step index i for a write of key A, precede key A's step index i
+ * max predecessor: the maximum predecessor that may be reached via any predecessor relation
+ * <p>
  * Ensure there are no timestamp cycles in the implied list of predecessors, i.e. that we have a strict serializable order.
  * That is, we maintain links to the maximum predecessor step for each key, at each step for each key, and see if we can
  * find a path of predecessors that would witness us.
- *
+ * <p>
  * TODO: find and report a path when we encounter a violation
  */
 public class StrictSerializabilityVerifier
 {
+    private static final Logger logger = LoggerFactory.getLogger(StrictSerializabilityVerifier.class);
+
     /**
      * A link to the maximum predecessor node for a given key reachable from the transitive closure of predecessor
      * relations from a given register's observation (i.e. for a given sequence observed for a given key).
-     *
+     * <p>
      * A predecessor is an absolute happens-before relationship. This is created either:
      *  1) by witnessing some read for key A coincident with a write for key B,
      *     therefore the write for key B happened strictly after the write for key A; or
      *  2) any value for key A witnessed alongside a step index i for key B happens before i+1 for key B.
-     *
+     * <p>
      * For every observation step index i for key A, we have an outgoing MaxPredecessor link to every key.
      * This object both maintains the current maximum predecessor step index reachable via the transitive closure
      * of happens-before relationships, but represents a back-link from that step index for the referred-to key,
      * so that when its own predecessor memoized maximum predecessor values are updated we can propagate them here.
-     *
+     * <p>
      * In essence, each node in the happens-before graph maintains a link to every possible frontier of its transitive
      * closure in the graph, so that each time that frontier is updated the internal nodes that reference it are updated
      * to the new frontier. This ensures ~computationally optimal maintenance of this transitive closure at the expense
      * of quadratic memory utilisation, but for small numbers of unique keys this remains quite manageable (i.e. steps*keys^2)
-     *
+     * <p>
      * This graph can be interpreted quite simply: if any step index for a key can reach itself (or a successor) via
      * the transitive closure of happens-before relations then there is a serializability violation.
      */
@@ -143,6 +147,7 @@ public class StrictSerializabilityVerifier
     static class UnknownStepPredecessor extends MaxPredecessor
     {
         final UnknownStepHolder holder;
+
         UnknownStepPredecessor(Step successor, UnknownStepHolder holder)
         {
             super(successor.ofKey, successor, holder.step.ofKey);
@@ -217,9 +222,9 @@ public class StrictSerializabilityVerifier
         final int[] maxPeers;
 
         /**
-         *  The maximum _step_ of the corresponding key's sequence that was witnessed by any transitive predecessor of this key for this step.
-         *  That is, if we look at the directly preceding step for this key (which must by definition precede this step) and explore all of
-         *  its predecessors in the same manner, what is the highest step we can reach for each key.
+         * The maximum _step_ of the corresponding key's sequence that was witnessed by any transitive predecessor of this key for this step.
+         * That is, if we look at the directly preceding step for this key (which must by definition precede this step) and explore all of
+         * its predecessors in the same manner, what is the highest step we can reach for each key.
          */
         final MaxPredecessor[] maxPredecessors;
 
@@ -315,7 +320,7 @@ public class StrictSerializabilityVerifier
         boolean updatePeers(int[] newPeers, UnknownStepHolder[] unknownSteps)
         {
             boolean updated = false;
-            for (int key = 0 ; key < newPeers.length ; ++key)
+            for (int key = 0; key < newPeers.length; ++key)
             {
                 int newPeer = newPeers[key];
                 int maxPeer = maxPeers[key];
@@ -349,7 +354,7 @@ public class StrictSerializabilityVerifier
                 return false;
 
             boolean updated = false;
-            for (int key = 0 ; key < reads.length ; ++key)
+            for (int key = 0; key < reads.length; ++key)
             {
                 if (reads[key] == null)
                     continue;
@@ -381,7 +386,7 @@ public class StrictSerializabilityVerifier
             }
 
             boolean updated = false;
-            for (int key = 0 ; key < maxPredecessors.length ; ++key)
+            for (int key = 0; key < maxPredecessors.length; ++key)
             {
                 MaxPredecessor newMaxPredecessor = propagate.maxPredecessors[key];
 
@@ -444,11 +449,11 @@ public class StrictSerializabilityVerifier
         public String toString()
         {
             return "{key: " + ofKey +
-                   ", peers:" + Arrays.toString(maxPeers) +
-                   ", preds:" + Arrays.toString(maxPredecessors) +
-                   (unknownStepPeers != null ? ", peers?:" + unknownStepPeers : "") +
-                   (unknownStepPredecessors != null ? ", preds?:" + unknownStepPredecessors.values() : "") +
-                   "}";
+                    ", peers:" + Arrays.toString(maxPeers) +
+                    ", preds:" + Arrays.toString(maxPredecessors) +
+                    (unknownStepPeers != null ? ", peers?:" + unknownStepPeers : "") +
+                    (unknownStepPredecessors != null ? ", preds?:" + unknownStepPredecessors.values() : "") +
+                    "}";
         }
     }
 
@@ -458,10 +463,10 @@ public class StrictSerializabilityVerifier
         /**
          * Any write value we don't know the step index for because we did not perform a coincident read;
          * we wait until we witness a read containing the
-         *
+         * <p>
          * TODO: report a violation if we have witnessed a sequence missing any of these deferred operations
          *       that started after they finished
-         *
+         * <p>
          * TODO: handle writes with unknown outcome
          */
 
@@ -476,7 +481,7 @@ public class StrictSerializabilityVerifier
         void newSequence(int[] oldSequence, int[] newSequence)
         {
             boolean updated = false;
-            for (int i = oldSequence.length ; i < newSequence.length ; ++i)
+            for (int i = oldSequence.length; i < newSequence.length; ++i)
             {
                 UnknownStepHolder unknownStep = byWriteValue.remove(newSequence[i]);
                 if (unknownStep != null)
@@ -490,6 +495,12 @@ public class StrictSerializabilityVerifier
                 reset();
             else if (updated)
                 recompute();
+        }
+
+        @Override
+        boolean witnessedBetween(int start, int end, boolean isWrite)
+        {
+            return false;
         }
 
         @Override
@@ -545,7 +556,7 @@ public class StrictSerializabilityVerifier
     }
 
     /**
-     *  The history of observations for a given key, or the set of nodes in the graph of observations for this key.
+     * The history of observations for a given key, or the set of nodes in the graph of observations for this key.
      */
     class Register
     {
@@ -562,9 +573,15 @@ public class StrictSerializabilityVerifier
             this.futureWrites = new FutureWrites(key, keyCount);
         }
 
+        void print()
+        {
+            for (Map.Entry<Integer, UnknownStepHolder> e : futureWrites.byWriteValue.entrySet())
+                logger.error("{}: {} -> ({}, {}, {})", key, e.getKey(), e.getValue().writeValue, e.getValue().start, e.getValue().end);
+        }
+
         private void updateSequence(int[] sequence, int maybeWrite)
         {
-            for (int i = 0, max = Math.min(sequence.length, this.sequence.length) ; i < max ; ++i)
+            for (int i = 0, max = Math.min(sequence.length, this.sequence.length); i < max; ++i)
             {
                 if (sequence[i] != this.sequence[i])
                     throw new HistoryViolation(key, "Inconsistent sequences on " + key + ": " + Arrays.toString(this.sequence) + " vs " + Arrays.toString(sequence));
@@ -606,7 +623,9 @@ public class StrictSerializabilityVerifier
                 steps = Arrays.copyOf(steps, Math.max(i + 1, steps.length * 2));
 
             steps[i] = step;
-            while (--i >= 0 && steps[i] == null) {}
+            while (--i >= 0 && steps[i] == null)
+            {
+            }
             if (i >= 0)
             {
                 step.setSuccessor(steps[i].successor);
@@ -616,12 +635,13 @@ public class StrictSerializabilityVerifier
             else
             {
                 i = step.ofStepIndex;
-                while (++i < steps.length && steps[i] == null) {}
+                while (++i < steps.length && steps[i] == null)
+                {
+                }
                 Step successor = i < steps.length ? steps[i] : futureWrites;
                 step.setSuccessor(successor);
                 propagateToDirectSuccessor(step, successor);
             }
-
         }
 
         private void updatePeersAndPredecessors(int[] newPeers, int[][] reads, int[] writes, int start, int end, UnknownStepHolder[] unknownSteps)
@@ -738,7 +758,7 @@ public class StrictSerializabilityVerifier
 
     /**
      * Buffer a new read observation.
-     *
+     * <p>
      * Note that this should EXCLUDE any witnessed write for this key.
      * This is to simplify the creation of direct happens-before edges with observations for other keys
      * that are implied by the witnessing of a write (and is also marginally more efficient).
@@ -771,7 +791,7 @@ public class StrictSerializabilityVerifier
     public void apply(int start, int end)
     {
         boolean hasUnknownSteps = false;
-        for (int k = 0; k < bufReads.length ; ++k)
+        for (int k = 0; k < bufReads.length; ++k)
         {
             if (bufWrites[k] >= 0 && bufReads[k] == null)
             {
@@ -782,7 +802,7 @@ public class StrictSerializabilityVerifier
             }
         }
 
-        for (int k = 0; k < bufReads.length ; ++k)
+        for (int k = 0; k < bufReads.length; ++k)
         {
             if (bufWrites[k] >= 0 || bufReads[k] != null)
             {
@@ -791,7 +811,8 @@ public class StrictSerializabilityVerifier
 
                 registers[k].updatePeersAndPredecessors(bufNewPeerSteps, bufReads, bufWrites, start, end, hasUnknownSteps ? bufUnknownSteps : null);
             }
-            registers[k].checkForUnwitnessed(start);
+            if (bufReads[k] != null)
+                registers[k].checkForUnwitnessed(start);
         }
 
         refreshTransitive();
@@ -803,5 +824,19 @@ public class StrictSerializabilityVerifier
         {
             registers[next.ofKey].propagateToSuccessor(next.predecessorStep, next.ofStep);
         }
+    }
+
+    public void print()
+    {
+        for (Register r : registers)
+        {
+            if (r == null) continue;
+            r.print();
+        }
+    }
+
+    public void print(int k)
+    {
+        registers[k].print();
     }
 }
