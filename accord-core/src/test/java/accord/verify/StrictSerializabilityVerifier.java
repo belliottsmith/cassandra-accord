@@ -353,7 +353,7 @@ public class StrictSerializabilityVerifier
                 return false;
 
             boolean updated = false;
-            for (int key = 0; key < reads.length; ++key)
+            for (int key = 0 ; key < reads.length ; ++key)
             {
                 if (reads[key] == null)
                     continue;
@@ -385,7 +385,7 @@ public class StrictSerializabilityVerifier
             }
 
             boolean updated = false;
-            for (int key = 0; key < maxPredecessors.length; ++key)
+            for (int key = 0 ; key < maxPredecessors.length ; ++key)
             {
                 MaxPredecessor newMaxPredecessor = propagate.maxPredecessors[key];
 
@@ -580,7 +580,7 @@ public class StrictSerializabilityVerifier
 
         private void updateSequence(int[] sequence, int maybeWrite)
         {
-            for (int i = 0, max = Math.min(sequence.length, this.sequence.length) ; i < max; ++i)
+            for (int i = 0, max = Math.min(sequence.length, this.sequence.length) ; i < max ; ++i)
             {
                 if (sequence[i] != this.sequence[i])
                     throw new HistoryViolation(key, "Inconsistent sequences on " + key + ": " + Arrays.toString(this.sequence) + " vs " + Arrays.toString(sequence));
