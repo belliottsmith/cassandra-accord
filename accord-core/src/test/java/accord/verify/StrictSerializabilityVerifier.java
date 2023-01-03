@@ -448,11 +448,11 @@ public class StrictSerializabilityVerifier
         public String toString()
         {
             return "{key: " + ofKey +
-                    ", peers:" + Arrays.toString(maxPeers) +
-                    ", preds:" + Arrays.toString(maxPredecessors) +
-                    (unknownStepPeers != null ? ", peers?:" + unknownStepPeers : "") +
-                    (unknownStepPredecessors != null ? ", preds?:" + unknownStepPredecessors.values() : "") +
-                    "}";
+                   ", peers:" + Arrays.toString(maxPeers) +
+                   ", preds:" + Arrays.toString(maxPredecessors) +
+                   (unknownStepPeers != null ? ", peers?:" + unknownStepPeers : "") +
+                   (unknownStepPredecessors != null ? ", preds?:" + unknownStepPredecessors.values() : "") +
+                   "}";
         }
     }
 
