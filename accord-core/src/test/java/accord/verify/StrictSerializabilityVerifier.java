@@ -623,9 +623,7 @@ public class StrictSerializabilityVerifier
                 steps = Arrays.copyOf(steps, Math.max(i + 1, steps.length * 2));
 
             steps[i] = step;
-            while (--i >= 0 && steps[i] == null)
-            {
-            }
+            while (--i >= 0 && steps[i] == null) {}
             if (i >= 0)
             {
                 step.setSuccessor(steps[i].successor);
