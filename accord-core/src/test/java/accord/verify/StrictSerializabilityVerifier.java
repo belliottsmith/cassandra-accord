@@ -221,9 +221,9 @@ public class StrictSerializabilityVerifier
         final int[] maxPeers;
 
         /**
-         * The maximum _step_ of the corresponding key's sequence that was witnessed by any transitive predecessor of this key for this step.
-         * That is, if we look at the directly preceding step for this key (which must by definition precede this step) and explore all of
-         * its predecessors in the same manner, what is the highest step we can reach for each key.
+         *  The maximum _step_ of the corresponding key's sequence that was witnessed by any transitive predecessor of this key for this step.
+         *  That is, if we look at the directly preceding step for this key (which must by definition precede this step) and explore all of
+         *  its predecessors in the same manner, what is the highest step we can reach for each key.
          */
         final MaxPredecessor[] maxPredecessors;
 
