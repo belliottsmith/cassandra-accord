@@ -319,7 +319,7 @@ public class StrictSerializabilityVerifier
         boolean updatePeers(int[] newPeers, UnknownStepHolder[] unknownSteps)
         {
             boolean updated = false;
-            for (int key = 0; key < newPeers.length; ++key)
+            for (int key = 0 ; key < newPeers.length ; ++key)
             {
                 int newPeer = newPeers[key];
                 int maxPeer = maxPeers[key];
@@ -353,7 +353,7 @@ public class StrictSerializabilityVerifier
                 return false;
 
             boolean updated = false;
-            for (int key = 0; key < reads.length; ++key)
+            for (int key = 0 ; key < reads.length ; ++key)
             {
                 if (reads[key] == null)
                     continue;
@@ -385,7 +385,7 @@ public class StrictSerializabilityVerifier
             }
 
             boolean updated = false;
-            for (int key = 0; key < maxPredecessors.length; ++key)
+            for (int key = 0 ; key < maxPredecessors.length ; ++key)
             {
                 MaxPredecessor newMaxPredecessor = propagate.maxPredecessors[key];
 
@@ -480,7 +480,7 @@ public class StrictSerializabilityVerifier
         void newSequence(int[] oldSequence, int[] newSequence)
         {
             boolean updated = false;
-            for (int i = oldSequence.length; i < newSequence.length; ++i)
+            for (int i = oldSequence.length ; i < newSequence.length ; ++i)
             {
                 UnknownStepHolder unknownStep = byWriteValue.remove(newSequence[i]);
                 if (unknownStep != null)
@@ -580,7 +580,7 @@ public class StrictSerializabilityVerifier
 
         private void updateSequence(int[] sequence, int maybeWrite)
         {
-            for (int i = 0, max = Math.min(sequence.length, this.sequence.length); i < max; ++i)
+            for (int i = 0, max = Math.min(sequence.length, this.sequence.length) ; i < max; ++i)
             {
                 if (sequence[i] != this.sequence[i])
                     throw new HistoryViolation(key, "Inconsistent sequences on " + key + ": " + Arrays.toString(this.sequence) + " vs " + Arrays.toString(sequence));
@@ -786,7 +786,7 @@ public class StrictSerializabilityVerifier
     public void apply(int start, int end)
     {
         boolean hasUnknownSteps = false;
-        for (int k = 0; k < bufReads.length; ++k)
+        for (int k = 0; k < bufReads.length ; ++k)
         {
             if (bufWrites[k] >= 0 && bufReads[k] == null)
             {
@@ -797,7 +797,7 @@ public class StrictSerializabilityVerifier
             }
         }
 
-        for (int k = 0; k < bufReads.length; ++k)
+        for (int k = 0; k < bufReads.length ; ++k)
         {
             if (bufWrites[k] >= 0 || bufReads[k] != null)
             {
