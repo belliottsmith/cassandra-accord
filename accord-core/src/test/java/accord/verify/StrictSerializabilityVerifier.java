@@ -555,7 +555,7 @@ public class StrictSerializabilityVerifier
     }
 
     /**
-     * The history of observations for a given key, or the set of nodes in the graph of observations for this key.
+     *  The history of observations for a given key, or the set of nodes in the graph of observations for this key.
      */
     class Register
     {
