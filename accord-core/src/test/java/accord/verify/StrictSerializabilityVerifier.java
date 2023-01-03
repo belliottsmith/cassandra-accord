@@ -633,9 +633,7 @@ public class StrictSerializabilityVerifier
             else
             {
                 i = step.ofStepIndex;
-                while (++i < steps.length && steps[i] == null)
-                {
-                }
+                while (++i < steps.length && steps[i] == null) {}
                 Step successor = i < steps.length ? steps[i] : futureWrites;
                 step.setSuccessor(successor);
                 propagateToDirectSuccessor(step, successor);
