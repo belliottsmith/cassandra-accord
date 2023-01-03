@@ -28,7 +28,6 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
@@ -36,15 +35,15 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Nomenclature:
- * register: the values associated with a given key
- * step: a logical point in the causal sequence of events for a register
- * step index: the index of a step; since we observe a strictly growing sequence this translates directly to
- *             the length of an observed sequence for a key. This imposes a total causal order for a given register
- *             (sequences [], [1], [1,2] have step indexes of 0, 1 and 2 respectively, with 2 necessarily happening after 1 and 0)
- * predecessor: a step for a referent key that must occur before the referring step and key.
- *              two kinds: 1) those values for keys [B,C..) at step index i for a read of key A, precede key A's step index i +1
- *                         2) those values for keys [B,C..) at step index i for a write of key A, precede key A's step index i
- * max predecessor: the maximum predecessor that may be reached via any predecessor relation
+ *  register: the values associated with a given key
+ *  step: a logical point in the causal sequence of events for a register
+ *  step index: the index of a step; since we observe a strictly growing sequence this translates directly to
+ *              the length of an observed sequence for a key. This imposes a total causal order for a given register
+ *              (sequences [], [1], [1,2] have step indexes of 0, 1 and 2 respectively, with 2 necessarily happening after 1 and 0)
+ *  predecessor: a step for a referent key that must occur before the referring step and key.
+ *               two kinds: 1) those values for keys [B,C..) at step index i for a read of key A, precede key A's step index i +1
+ *                          2) those values for keys [B,C..) at step index i for a write of key A, precede key A's step index i
+ *  max predecessor: the maximum predecessor that may be reached via any predecessor relation
  * <p>
  * Ensure there are no timestamp cycles in the implied list of predecessors, i.e. that we have a strict serializable order.
  * That is, we maintain links to the maximum predecessor step for each key, at each step for each key, and see if we can
