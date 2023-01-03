@@ -319,7 +319,7 @@ public class StrictSerializabilityVerifier
         boolean updatePeers(int[] newPeers, UnknownStepHolder[] unknownSteps)
         {
             boolean updated = false;
-            for (int key = 0 ; key < newPeers.length ; ++key)
+            for (int key = 0; key < newPeers.length; ++key)
             {
                 int newPeer = newPeers[key];
                 int maxPeer = maxPeers[key];
@@ -353,7 +353,7 @@ public class StrictSerializabilityVerifier
                 return false;
 
             boolean updated = false;
-            for (int key = 0 ; key < reads.length ; ++key)
+            for (int key = 0; key < reads.length; ++key)
             {
                 if (reads[key] == null)
                     continue;
@@ -385,7 +385,7 @@ public class StrictSerializabilityVerifier
             }
 
             boolean updated = false;
-            for (int key = 0 ; key < maxPredecessors.length ; ++key)
+            for (int key = 0; key < maxPredecessors.length; ++key)
             {
                 MaxPredecessor newMaxPredecessor = propagate.maxPredecessors[key];
 
