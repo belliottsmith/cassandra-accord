@@ -319,7 +319,7 @@ public class StrictSerializabilityVerifier
         boolean updatePeers(int[] newPeers, UnknownStepHolder[] unknownSteps)
         {
             boolean updated = false;
-            for (int key = 0; key < newPeers.length; ++key)
+            for (int key = 0 ; key < newPeers.length ; ++key)
             {
                 int newPeer = newPeers[key];
                 int maxPeer = maxPeers[key];
