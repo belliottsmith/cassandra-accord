@@ -19,6 +19,7 @@
 package accord.verify;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -43,14 +44,35 @@ public class StrictSerializabilityVerifierTest
 
         History w(int writeKey, int writeSeq)
         {
-            return rw(writeKey, writeSeq, null);
+            return rw(writeKey, writeSeq, (int[])null);
+        }
+
+        History ws(int ... writes)
+        {
+            return rw(writes, (int[])null);
         }
 
         History rw(int writeKey, int writeSeq, int ... reads)
         {
+            int[] writes;
+            if (writeKey < 0)
+            {
+                writes = new int[0];
+            }
+            else
+            {
+                writes = new int[writeKey + 1];
+                Arrays.fill(writes, -1);
+                writes[writeKey] = writeSeq;
+            }
+            return rw(writes, reads);
+        }
+
+        History rw(int[] writes, int ... reads)
+        {
             int start = overlap > 0 ? this.overlap : ++nextAt;
             int end = ++nextAt;
-            observations.add(new Observation(writeKey, writeSeq, reads, start, end));
+            observations.add(new Observation(writes, reads, start, end));
             return this;
         }
 
@@ -96,8 +118,11 @@ public class StrictSerializabilityVerifierTest
                             verifier.witnessRead(key, SEQUENCES[observation.reads[key] + 1]);
                     }
                 }
-                if (observation.writeKey >= 0)
-                    verifier.witnessWrite(observation.writeKey, observation.writeSeq);
+                for (int j = 0 ; j < observation.writes.length ; ++j)
+                {
+                    if (observation.writes[j] >= 0)
+                        verifier.witnessWrite(j, observation.writes[j]);
+                }
 
                 if (i == observations.size() - 1) onLast.accept(() -> verifier.apply(observation.start, observation.end));
                 else verifier.apply(observation.start, observation.end);
@@ -107,15 +132,13 @@ public class StrictSerializabilityVerifierTest
 
     static class Observation
     {
-        final int writeKey;
-        final int writeSeq;
+        final int[] writes;
         final int[] reads;
         final int start, end;
 
-        Observation(int writeKey, int writeSeq, int[] reads, int start, int end)
+        Observation(int[] writes, int[] reads, int start, int end)
         {
-            this.writeKey = writeKey;
-            this.writeSeq = writeSeq;
+            this.writes = writes;
             this.reads = reads;
             this.start = start;
             this.end = end;
@@ -166,5 +189,16 @@ public class StrictSerializabilityVerifierTest
     {
         new History(1).r(0).w(0, 1).r(1).assertNoViolation();
         new History(1).rw(0, 1, 0).r(1).assertNoViolation();
+    }
+
+    @Test
+    public void blindWrites()
+    {
+        new History(2).ws(1, 1).r(1, -1).ws(-1, 2).assertNoViolation();
+        new History(2).ws(1, 1).ws(-1, 2).assertNoViolation();
+        new History(2).ws(1, 1).ws(2, 2).r(2).assertNoViolation();
+        new History(2).ws(1, 1).ws(2, 2).r(2).r(1).assertViolation();
+        new History(2).ws(1, 1).overlap().ws(2, 2).r(2).r(1).deoverlap().r(2).assertNoViolation();
+        new History(2).ws(1, 1).ws(2, 2).r(1).assertViolation();
     }
 }
