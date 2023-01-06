@@ -458,7 +458,6 @@ public class StrictSerializabilityVerifier
 
     class FutureWrites extends Step
     {
-
         /**
          * Any write value we don't know the step index for because we did not perform a coincident read;
          * we wait until we witness a read containing the
@@ -805,9 +804,9 @@ public class StrictSerializabilityVerifier
                     registers[k].updateSequence(bufReads[k], bufWrites[k]);
 
                 registers[k].updatePeersAndPredecessors(bufNewPeerSteps, bufReads, bufWrites, start, end, hasUnknownSteps ? bufUnknownSteps : null);
+                if (bufReads[k] != null)
+                    registers[k].checkForUnwitnessed(start);
             }
-            if (bufReads[k] != null)
-                registers[k].checkForUnwitnessed(start);
         }
 
         refreshTransitive();
