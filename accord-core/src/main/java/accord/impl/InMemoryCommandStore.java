@@ -447,7 +447,7 @@ public class InMemoryCommandStore
 
     public static class Synchronized extends SyncCommandStore
     {
-        public static class SynchronizedState extends State implements SyncCommandStores.SafeSyncCommandStore
+        public static class SynchronizedState extends InMemoryCommandStore.State implements SyncCommandStores.SafeSyncCommandStore
         {
             public SynchronizedState(NodeTimeService time, Agent agent, DataStore store, ProgressLog progressLog, RangesForEpochHolder rangesForEpoch, CommandStore commandStore)
             {
@@ -549,7 +549,7 @@ public class InMemoryCommandStore
             }
         }
 
-        class AsyncState extends State implements SafeCommandStore
+        class AsyncState extends InMemoryCommandStore.State implements SafeCommandStore
         {
             public AsyncState(NodeTimeService time, Agent agent, DataStore store, ProgressLog progressLog, RangesForEpochHolder rangesForEpoch, CommandStore commandStore)
             {
@@ -596,7 +596,7 @@ public class InMemoryCommandStore
             return state.agent();
         }
 
-        private State safeStore()
+        private InMemoryCommandStore.State safeStore()
         {
             state.refreshRanges();
             return state;

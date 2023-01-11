@@ -35,7 +35,6 @@ import java.util.stream.Stream;
 
 import static accord.local.SafeCommandStore.TestDep.*;
 import static accord.local.SafeCommandStore.TestKind.Ws;
-import static accord.local.Status.KnownDeps.DepsUnknown;
 import static accord.local.Status.PreAccepted;
 import static accord.local.Status.PreCommitted;
 
@@ -82,8 +81,9 @@ public class InMemoryCommandsForKey extends CommandsForKey
 
             for (Command cmd : (testTimestamp == TestTimestamp.BEFORE ? commands.headMap(timestamp, false) : commands.tailMap(timestamp, false)).values())
             {
+                // want to only ignore reads when we ask for writes, as we want to see any Sync operations for topology changes and state compaction
                 if (testKind == Ws && cmd.txnId().isRead()) continue;
-                    // If we don't have any dependencies, we treat a dependency filter as a mismatch
+                // If we don't have any dependencies, we treat a dependency filter as a mismatch
                 if (testDep != ANY_DEPS && (!cmd.known().deps.hasProposedOrDecidedDeps() || (cmd.partialDeps().contains(depId) != (testDep == WITH))))
                     continue;
                 if (minStatus != null && minStatus.compareTo(cmd.status()) > 0)

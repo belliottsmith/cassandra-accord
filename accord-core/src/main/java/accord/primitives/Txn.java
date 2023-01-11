@@ -32,13 +32,14 @@ import org.apache.cassandra.utils.concurrent.Future;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import static accord.primitives.Routables.Slice.Overlapping;
-
 public interface Txn
 {
     enum Kind
     {
-        Read, Write;
+        Read,
+        Write,
+        /** A pseudo-transaction that invalidates older transactions that it does not witness */
+        ExclusiveSync;
         // in future: BlindWrite, Interactive?
 
         private static final Kind[] VALUES = Kind.values();
