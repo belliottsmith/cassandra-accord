@@ -32,6 +32,7 @@ import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import static java.util.stream.Collectors.joining;
 
 /**
  * Nomenclature:
@@ -232,6 +233,7 @@ public class StrictSerializabilityVerifier
         Map<Step, UnknownStepPredecessor> unknownStepPredecessors;
         Runnable onChange;
 
+        final int writeValue;
         int ofStepIndex;
 
         /**
@@ -251,9 +253,10 @@ public class StrictSerializabilityVerifier
 
         int maxPredecessorWrittenAfter = Integer.MIN_VALUE;
 
-        Step(int key, int stepIndex, int keyCount)
+        Step(int key, int stepIndex, int keyCount, int writeValue)
         {
             super(key, null, key);
+            this.writeValue = writeValue;
             this.ofStep = this;
             this.ofStepIndex = stepIndex;
             this.maxPeers = new int[keyCount];
@@ -316,21 +319,21 @@ public class StrictSerializabilityVerifier
             successor.predecessorStep = this;
         }
 
-        boolean updatePeers(int[] newPeers, UnknownStepHolder[] unknownSteps)
+        boolean updatePeers(int[] newPeerSteps, UnknownStepHolder[] newBlindWrites)
         {
             boolean updated = false;
-            for (int key = 0 ; key < newPeers.length ; ++key)
+            for (int key = 0 ; key < newPeerSteps.length ; ++key)
             {
-                int newPeer = newPeers[key];
+                int newPeer = newPeerSteps[key];
                 int maxPeer = maxPeers[key];
                 if (newPeer > maxPeer)
                 {
                     updated = true;
-                    maxPeers[key] = newPeers[key];
+                    maxPeers[key] = newPeerSteps[key];
                 }
-                if (unknownSteps != null)
+                if (newBlindWrites != null)
                 {
-                    UnknownStepHolder unknownStep = unknownSteps[key];
+                    UnknownStepHolder unknownStep = newBlindWrites[key];
                     if (unknownStep != null && unknownStep.step != this)
                     {
                         if (unknownStepPeers == null)
@@ -447,15 +450,19 @@ public class StrictSerializabilityVerifier
         @Override
         public String toString()
         {
-            return "{key: " + ofKey +
-                   ", peers:" + Arrays.toString(maxPeers) +
-                   ", preds:" + Arrays.toString(maxPredecessors) +
-                   (unknownStepPeers != null ? ", peers?:" + unknownStepPeers : "") +
-                   (unknownStepPredecessors != null ? ", preds?:" + unknownStepPredecessors.values() : "") +
-                   "}";
+            StringBuilder builder = new StringBuilder("{key: " + ofKey);
+            if (ofStepIndex < 0)
+                builder.append(", value: ").append(writeValue);
+            builder.append(", peers:").append(Arrays.toString(maxPeers))
+                    .append(", preds:").append(Arrays.toString(maxPredecessors))
+                    .append(unknownStepPeers != null ? ", peers?:" + unknownStepPeers : "")
+                    .append(unknownStepPredecessors != null ? ", preds?:" + unknownStepPredecessors.values() : "")
+                    .append("}");
+            return builder.toString();
         }
     }
 
+    // TODO (expected, testing): rethink this concept - should it be a Step? Does it provide any value? If not, it's more confusing.
     class FutureWrites extends Step
     {
         /**
@@ -473,7 +480,7 @@ public class StrictSerializabilityVerifier
 
         FutureWrites(int key, int keyCount)
         {
-            super(key, Integer.MAX_VALUE, keyCount);
+            super(key, Integer.MAX_VALUE, keyCount, Integer.MIN_VALUE);
         }
 
         void newSequence(int[] oldSequence, int[] newSequence)
@@ -504,7 +511,7 @@ public class StrictSerializabilityVerifier
         @Override
         boolean updatePeers(int[] newPeers, UnknownStepHolder[] unknownSteps)
         {
-            return unknownSteps[ofKey].step.updatePeers(newPeers, unknownSteps);
+            return false;
         }
 
         @Override
@@ -518,9 +525,14 @@ public class StrictSerializabilityVerifier
         @Override
         boolean updatePredecessorsOfWrite(int[][] reads, int[] writes, StrictSerializabilityVerifier verifier)
         {
-            for (UnknownStepHolder holder : byWriteValue.values())
-                holder.step.updatePredecessorsOfWrite(reads, writes, verifier);
-            return super.updatePredecessorsOfWrite(reads, writes, verifier);
+            // TODO (required): this evidently wasn't carefully considered at the time, and removing it improves things
+            //                  but what if anything this trying to achieve?
+            //                  probably we DO want to update the predecessors of any NEW step. perhaps we also want
+            //                  and we probably want some additional unit tests around blind writes
+//            for (UnknownStepHolder holder : byWriteValue.values())
+//                holder.step.updatePredecessorsOfWrite(reads, writes, verifier);
+//            return super.updatePredecessorsOfWrite(reads, writes, verifier);
+            return false;
         }
 
         void recompute()
@@ -532,15 +544,15 @@ public class StrictSerializabilityVerifier
                 witnessedBetween(deferred.start, deferred.end, true);
         }
 
-        void register(UnknownStepHolder[] unknownSteps, int start, int end)
+        void register(UnknownStepHolder[] newBlindWrites, int start, int end)
         {
-            UnknownStepHolder unknownStep = unknownSteps[ofKey];
+            UnknownStepHolder unknownStep = newBlindWrites[ofKey];
             if (null != byWriteValue.putIfAbsent(unknownStep.writeValue, unknownStep))
                 throw new AssertionError();
             if (null != byTimestamp.putIfAbsent(end, unknownStep))
                 throw new AssertionError();
-            // TODO: verify this propagation by unit test
-            unknownSteps[ofKey].step.receiveKnowledgePhasedPredecessors(this, StrictSerializabilityVerifier.this);
+            // TODO (desired, testing): verify this propagation by unit test
+            newBlindWrites[ofKey].step.receiveKnowledgePhasedPredecessors(this, StrictSerializabilityVerifier.this);
         }
 
         public void checkForUnwitnessed(int start)
@@ -550,6 +562,11 @@ public class StrictSerializabilityVerifier
                 Collection<UnknownStepHolder> notWitnessed = byTimestamp.headMap(start, false).values();
                 throw new HistoryViolation(ofKey, "Writes not witnessed: " + notWitnessed);
             }
+        }
+
+        public String toString()
+        {
+            return "FutureWrites:[" + byTimestamp.values().stream().map(s -> s.writeValue).map(Object::toString).collect(joining(",")) + ']';
         }
     }
 
@@ -610,7 +627,7 @@ public class StrictSerializabilityVerifier
                 steps = Arrays.copyOf(steps, Math.max(step + 1, steps.length * 2));
 
             if (steps[step] == null)
-                insert(new Step(key, step, keyCount));
+                insert(new Step(key, step, keyCount, step == 0 ? -1 : sequence[step - 1]));
             return steps[step];
         }
 
@@ -638,25 +655,25 @@ public class StrictSerializabilityVerifier
             }
         }
 
-        private void updatePeersAndPredecessors(int[] newPeers, int[][] reads, int[] writes, int start, int end, UnknownStepHolder[] unknownSteps)
+        private void updatePeersAndPredecessors(int[] newPeerSteps, int[][] reads, int[] writes, int start, int end, UnknownStepHolder[] newBlindWrites)
         {
             Step step;
-            boolean updated = false;
-            if (newPeers[key] >= 0)
+            boolean updated;
+            if (newPeerSteps[key] >= 0)
             {
-                step = step(newPeers[key]);
+                step = step(newPeerSteps[key]);
             }
-            else if (unknownSteps != null && unknownSteps[key] != null)
+            else if (newBlindWrites != null && newBlindWrites[key] != null)
             {
                 assert writes[key] >= 0;
-                futureWrites.register(unknownSteps, start, end);
-                step = futureWrites;
+                futureWrites.register(newBlindWrites, start, end);
+                step = newBlindWrites[key].step;
             }
             else
             {
                 throw new IllegalStateException();
             }
-            updated = step.updatePeers(newPeers, unknownSteps);
+            updated = step.updatePeers(newPeerSteps, newBlindWrites);
             updated |= step.updatePredecessorsOfWrite(reads, writes, StrictSerializabilityVerifier.this);
             updated |= step.witnessedBetween(start, end, writes[key] >= 0);
             if (updated)
@@ -697,7 +714,13 @@ public class StrictSerializabilityVerifier
             if (step.successor != null)
                 propagateToDirectSuccessor(step, step.successor);
             if (step.onChange != null)
-                step.onChange.run();
+            {
+                // prevent reentrancy
+                Runnable run = step.onChange;
+                step.onChange = null;
+                run.run();
+                step.onChange = run;
+            }
         }
 
         void checkForUnwitnessed(int start)
@@ -791,18 +814,20 @@ public class StrictSerializabilityVerifier
             {
                 int i = Arrays.binarySearch(registers[k].sequence, bufWrites[k]);
                 if (i >= 0) bufNewPeerSteps[k] = i + 1;
-                else bufUnknownSteps[k] = new UnknownStepHolder(bufWrites[k], start, end, new Step(k, Integer.MAX_VALUE, keyCount));
+                else bufUnknownSteps[k] = new UnknownStepHolder(bufWrites[k], start, end, new Step(k, Integer.MAX_VALUE, keyCount, bufWrites[k]));
                 hasUnknownSteps |= i < 0;
             }
         }
 
         for (int k = 0; k < bufReads.length ; ++k)
         {
+            if (bufReads[k] != null)
+                registers[k].updateSequence(bufReads[k], bufWrites[k]);
+        }
+        for (int k = 0; k < bufReads.length ; ++k)
+        {
             if (bufWrites[k] >= 0 || bufReads[k] != null)
             {
-                if (bufReads[k] != null)
-                    registers[k].updateSequence(bufReads[k], bufWrites[k]);
-
                 registers[k].updatePeersAndPredecessors(bufNewPeerSteps, bufReads, bufWrites, start, end, hasUnknownSteps ? bufUnknownSteps : null);
                 if (bufReads[k] != null)
                     registers[k].checkForUnwitnessed(start);
