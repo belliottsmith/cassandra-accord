@@ -22,8 +22,14 @@ import accord.api.*;
 import accord.api.ProgressLog;
 import accord.api.DataStore;
 import accord.local.CommandStores.RangesForEpochHolder;
+import accord.primitives.Seekables;
+import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
+import accord.utils.ReducingIntervalMap;
+import accord.utils.ReducingRangeMap;
 import org.apache.cassandra.utils.concurrent.Future;
 
+import javax.annotation.Nullable;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -43,6 +49,8 @@ public abstract class CommandStore
     }
 
     private final int id; // unique id
+    @Nullable
+    ReducingRangeMap<Timestamp> minimumTimestamp;
 
     public CommandStore(int id)
     {
@@ -52,6 +60,14 @@ public abstract class CommandStore
     public int id()
     {
         return id;
+    }
+
+    Timestamp preaccept(TxnId txnId, Seekables<?, ?> keys, SafeCommandStore safeStore)
+    {
+        Timestamp executeAt = safeStore.preaccept(txnId, keys);
+        if (minimumTimestamp != null)
+            executeAt = minimumTimestamp.reduce(keys, Timestamp::max, executeAt);
+        return executeAt;
     }
 
     public abstract Agent agent();

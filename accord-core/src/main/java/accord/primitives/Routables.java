@@ -136,6 +136,17 @@ public interface Routables<K extends Routable, U extends Routables<K, ?>> extend
      * Terminate once we hit {@code terminalValue}.
      */
     @Inline
+    static <Input extends RoutableKey, T> T foldl(AbstractKeys<Input, ?> inputs, Routables<?, ?> matching, IndexedFold<? super Input, T> fold, T initialValue)
+    {
+        switch (matching.domain())
+        {
+            default: throw new AssertionError();
+            case Key: return Helper.foldl(AbstractKeys::findNextIntersection, Helper::findLimit, inputs, (AbstractKeys<?,?>)matching, fold, initialValue);
+            case Range: return Helper.foldl(AbstractKeys::findNextIntersection, Helper::findLimit, inputs, (AbstractRanges<?>)matching, fold, initialValue);
+        }
+    }
+
+    @Inline
     static <Input extends RoutableKey> long foldl(AbstractKeys<Input, ?> inputs, AbstractRanges<?> matching, IndexedFoldToLong<? super Input> fold, long param, long initialValue, long terminalValue)
     {
         return Helper.foldl(AbstractKeys::findNextIntersection, Helper::findLimit, inputs, matching, fold, param, initialValue, terminalValue);
@@ -360,6 +371,16 @@ public interface Routables<K extends Routable, U extends Routables<K, ?>> extend
         }
 
         static int findLimit(AbstractRanges<?> ls, int li, AbstractKeys<?, ?> rs, int ri)
+        {
+            RoutableKey r = rs.get(ri);
+
+            int nextl = ls.findNext(li + 1, r, FLOOR);
+            if (nextl < 0) nextl = -1 - nextl;
+            else nextl++;
+            return nextl;
+        }
+
+        static int findLimit(AbstractKeys<?, ?> ls, int li, AbstractKeys<?, ?> rs, int ri)
         {
             RoutableKey r = rs.get(ri);
 

@@ -254,7 +254,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
             //  - assign each shard _and_ process a unique id, and use both as components of the timestamp
             // if we are performing recovery (i.e. non-zero ballot), do not permit a fast path decision as we want to
             // invalidate any transactions that were not completed by their initial coordinator
-            if (ballot.equals(Ballot.ZERO)) setExecuteAt(safeStore.preaccept(txnId, partialTxn.keys()));
+            if (ballot.equals(Ballot.ZERO)) setExecuteAt(safeStore.commandStore().preaccept(txnId, partialTxn.keys(), safeStore));
             else setExecuteAt(safeStore.time().uniqueNow(txnId));
 
             if (status() == NotWitnessed)
