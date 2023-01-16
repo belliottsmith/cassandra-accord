@@ -105,7 +105,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                         configurationService,
                         nowSupplier,
                         () -> store,
-                        new ShardDistributor.EvenSplit(8, new IntKey.Splitter()),
+                        new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()),
                         new TestAgent(),
                         new Random(random.nextLong()),
                         new ThreadPoolScheduler(),

@@ -7,6 +7,7 @@ import accord.utils.Invariants;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 
 public interface ShardDistributor
 {
@@ -31,9 +32,9 @@ public interface ShardDistributor
         }
 
         final int numberOfShards;
-        final Splitter<T> splitter;
+        final Function<Ranges, ? extends Splitter<T>> splitter;
 
-        public EvenSplit(int numberOfShards, Splitter<T> splitter)
+        public EvenSplit(int numberOfShards, Function<Ranges, ? extends Splitter<T>> splitter)
         {
             this.numberOfShards = numberOfShards;
             this.splitter = splitter;
@@ -45,35 +46,36 @@ public interface ShardDistributor
             if (ranges.isEmpty())
                 return Collections.emptyList();
 
-            T totalSize = zero();
+            Splitter<T> splitter = this.splitter.apply(ranges);
+            T totalSize = splitter.zero();
             for (int i = 0 ; i < ranges.size() ; ++i)
-                totalSize = add(totalSize, splitter.sizeOf(ranges.get(i)));
+                totalSize = splitter.add(totalSize, splitter.sizeOf(ranges.get(i)));
 
-            if (compare(totalSize, zero()) <= 0)
+            if (splitter.compare(totalSize, splitter.zero()) <= 0)
                 throw new IllegalStateException();
 
             int numberOfShards = splitter.min(totalSize, this.numberOfShards);
-            T shardSize = divide(totalSize, numberOfShards);
+            T shardSize = splitter.divide(totalSize, numberOfShards);
             List<Range> buffer = new ArrayList<>(ranges.size());
             List<Ranges> result = new ArrayList<>(numberOfShards);
             int ri = 0;
-            T rOffset = zero();
+            T rOffset = splitter.zero();
             T rSize = splitter.sizeOf(ranges.get(0));
             while (result.size() < numberOfShards)
             {
-                T required = result.size() < numberOfShards - 1 ? shardSize : subtract(totalSize, multiply(shardSize, (numberOfShards - 1)));
+                T required = result.size() < numberOfShards - 1 ? shardSize : splitter.subtract(totalSize, splitter.multiply(shardSize, (numberOfShards - 1)));
                 while (true)
                 {
-                    if (compare(subtract(rSize, rOffset), required) >= 0)
+                    if (splitter.compare(splitter.subtract(rSize, rOffset), required) >= 0)
                     {
-                        buffer.add(splitter.subRange(ranges.get(ri), rOffset, add(rOffset, required)));
+                        buffer.add(splitter.subRange(ranges.get(ri), rOffset, splitter.add(rOffset, required)));
                         result.add(Ranges.ofSortedAndDeoverlapped(buffer.toArray(new Range[0])));
                         buffer.clear();
-                        rOffset = add(rOffset, required);
-                        if (compare(rOffset, rSize) >= 0 && ++ri < ranges.size())
+                        rOffset = splitter.add(rOffset, required);
+                        if (splitter.compare(rOffset, rSize) >= 0 && ++ri < ranges.size())
                         {
-                            Invariants.checkState(compare(rOffset, rSize) == 0);
-                            rOffset = zero();
+                            Invariants.checkState(splitter.compare(rOffset, rSize) == 0);
+                            rOffset = splitter.zero();
                             rSize = splitter.sizeOf(ranges.get(ri));
                         }
                         break;
@@ -81,43 +83,13 @@ public interface ShardDistributor
                     else
                     {
                         buffer.add(splitter.subRange(ranges.get(ri), rOffset, rSize));
-                        required = subtract(required, subtract(rSize, rOffset));
-                        rOffset = zero();
+                        required = splitter.subtract(required, splitter.subtract(rSize, rOffset));
+                        rOffset = splitter.zero();
                         rSize = splitter.sizeOf(ranges.get(++ri));
                     }
                 }
             }
             return result;
-        }
-
-        private int compare(T a, T b)
-        {
-            return splitter.compare(a, b);
-        }
-
-        private T add(T a, T b)
-        {
-            return splitter.add(a, b);
-        }
-
-        private T subtract(T a, T b)
-        {
-            return splitter.subtract(a, b);
-        }
-
-        private T multiply(T a, int constant)
-        {
-            return splitter.multiply(a, constant);
-        }
-
-        private T divide(T a, int constant)
-        {
-            return splitter.divide(a, constant);
-        }
-
-        private T zero()
-        {
-            return splitter.zero();
         }
     }
 }
