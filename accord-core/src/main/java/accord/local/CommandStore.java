@@ -22,16 +22,16 @@ import accord.api.*;
 import accord.api.ProgressLog;
 import accord.api.DataStore;
 import accord.local.CommandStores.RangesForEpochHolder;
-import accord.primitives.Seekables;
-import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
-import accord.utils.ReducingIntervalMap;
+import accord.primitives.*;
 import accord.utils.ReducingRangeMap;
 import org.apache.cassandra.utils.concurrent.Future;
 
 import javax.annotation.Nullable;
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
+
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 /**
  * Single threaded internal shard of accord transaction metadata
@@ -49,8 +49,9 @@ public abstract class CommandStore
     }
 
     private final int id; // unique id
-    @Nullable
-    ReducingRangeMap<Timestamp> minimumTimestamp;
+
+    // TODO (expected): schedule regular pruning of this collection
+    @Nullable ReducingRangeMap<Timestamp> rejectBefore;
 
     public CommandStore(int id)
     {
@@ -62,12 +63,34 @@ public abstract class CommandStore
         return id;
     }
 
+    protected void setRejectBefore(ReducingRangeMap<Timestamp> newRejectBefore)
+    {
+        this.rejectBefore = newRejectBefore;
+    }
+
     Timestamp preaccept(TxnId txnId, Seekables<?, ?> keys, SafeCommandStore safeStore)
     {
-        Timestamp executeAt = safeStore.preaccept(txnId, keys);
-        if (minimumTimestamp != null)
-            executeAt = minimumTimestamp.reduce(keys, Timestamp::max, executeAt);
-        return executeAt;
+        NodeTimeService time = safeStore.time();
+        boolean isExpired = agent().isExpired(txnId, safeStore.time().now());
+        if (rejectBefore != null && !isExpired)
+            isExpired = null == rejectBefore.foldl(keys, (rejectIfBefore, test) -> rejectIfBefore.compareTo(test) >= 0 ? null : test, txnId, Objects::isNull);
+
+        if (isExpired)
+            return time.uniqueNow(txnId).asRejected();
+
+        if (txnId.rw() == ExclusiveSyncPoint)
+        {
+            Ranges ranges = (Ranges)keys;
+            ReducingRangeMap<Timestamp> newRejectBefore = rejectBefore != null ? rejectBefore : new ReducingRangeMap<>(Timestamp.NONE);
+            newRejectBefore = ReducingRangeMap.add(newRejectBefore, ranges, txnId, Timestamp::max);
+            setRejectBefore(newRejectBefore);
+        }
+
+        Timestamp maxConflict = safeStore.maxConflict(keys, safeStore.ranges().at(txnId.epoch()));
+        if (txnId.compareTo(maxConflict) > 0 && txnId.epoch() >= time.epoch())
+            return txnId;
+
+        return time.uniqueNow(maxConflict);
     }
 
     public abstract Agent agent();

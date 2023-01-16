@@ -87,8 +87,7 @@ public interface SafeCommandStore
     ProgressLog progressLog();
     NodeTimeService time();
     CommandStores.RangesForEpoch ranges();
-    long latestEpoch();
-    Timestamp preaccept(TxnId txnId, Seekables<?, ?> keys);
+    Timestamp maxConflict(Seekables<?, ?> keys, Ranges slice);
 
     Future<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
     <T> Future<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> function);

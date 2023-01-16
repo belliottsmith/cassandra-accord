@@ -38,8 +38,8 @@ public interface Txn
     {
         Read,
         Write,
-        /** A pseudo-transaction that invalidates older transactions that it does not witness */
-        ExclusiveSync;
+        /** A pseudo-transaction that invalidates transactions with lower TxnId that it does not witness */
+        ExclusiveSyncPoint;
         // in future: BlindWrite, Interactive?
 
         private static final Kind[] VALUES = Kind.values();
@@ -86,7 +86,7 @@ public interface Txn
             this.query = query;
         }
 
-        protected InMemory(@Nonnull Kind kind, @Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nullable Query query, @Nullable Update update)
+        public InMemory(@Nonnull Kind kind, @Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nullable Query query, @Nullable Update update)
         {
             this.kind = kind;
             this.keys = keys;

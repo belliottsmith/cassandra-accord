@@ -26,10 +26,13 @@ import accord.primitives.*;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.ExecutionException;
+
 import static accord.Utils.*;
 import static accord.impl.IntKey.keys;
 import static accord.impl.IntKey.range;
 import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 
 public class CoordinateTest
@@ -50,6 +53,7 @@ public class CoordinateTest
             Assertions.assertEquals(MockStore.RESULT, result);
         }
     }
+
     @Test
     void simpleRangeTest() throws Throwable
     {
@@ -64,6 +68,38 @@ public class CoordinateTest
             FullRangeRoute route = keys.toRoute(keys.get(0).someIntersectingRoutingKey(null));
             Result result = Coordinate.coordinate(node, txnId, txn, route).get();
             Assertions.assertEquals(MockStore.RESULT, result);
+        }
+    }
+
+    @Test
+    void exclusiveSyncTest() throws Throwable
+    {
+        try (MockCluster cluster = MockCluster.builder().build())
+        {
+            Node node = cluster.get(1);
+            Assertions.assertNotNull(node);
+
+            TxnId oldId1 = node.nextTxnId(Write, Key);
+            TxnId oldId2 = node.nextTxnId(Write, Key);
+
+            CoordinateSyncPoint.exclusive(node, ranges(range(1, 2))).get();
+            try
+            {
+                Keys keys = keys(1);
+                Txn txn = writeTxn(keys);
+                FullKeyRoute route = keys.toRoute(keys.get(0).someIntersectingRoutingKey(null));
+                Coordinate.coordinate(node, oldId1, txn, route).get();
+                Assertions.fail();
+            }
+            catch (ExecutionException e)
+            {
+                Assertions.assertEquals(Invalidated.class, e.getCause().getClass());
+            }
+
+            Keys keys = keys(2);
+            Txn txn = writeTxn(keys);
+            FullKeyRoute route = keys.toRoute(keys.get(0).someIntersectingRoutingKey(null));
+            Coordinate.coordinate(node, oldId2, txn, route).get();
         }
     }
 

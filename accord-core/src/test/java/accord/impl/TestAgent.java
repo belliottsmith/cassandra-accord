@@ -18,12 +18,12 @@
 
 package accord.impl;
 
+import accord.impl.mock.MockStore;
 import accord.local.Node;
 import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Command;
-import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
+import accord.primitives.*;
 
 import java.util.concurrent.TimeUnit;
 
@@ -57,5 +57,11 @@ public class TestAgent implements Agent
     public boolean isExpired(TxnId initiated, long now)
     {
         return TimeUnit.SECONDS.convert(now - initiated.hlc(), TimeUnit.MICROSECONDS) >= 10;
+    }
+
+    @Override
+    public Txn emptyTxn(Txn.Kind kind, Seekables<?, ?> keysOrRanges)
+    {
+        return new Txn.InMemory(kind, keysOrRanges, MockStore.read(Keys.EMPTY), MockStore.QUERY, null);
     }
 }

@@ -170,23 +170,6 @@ public class InMemoryCommandStore
             return rangesForEpoch;
         }
 
-        @Override
-        public long latestEpoch()
-        {
-            return time.epoch();
-        }
-
-        @Override
-        public Timestamp preaccept(TxnId txnId, Seekables<?, ?> keys)
-        {
-            Timestamp max = maxConflict(keys, ranges().at(txnId.epoch()));
-            long epoch = latestEpoch();
-            if (txnId.compareTo(max) > 0 && txnId.epoch() >= epoch && !agent.isExpired(txnId, time.now()))
-                return txnId;
-
-            return time.uniqueNow(max);
-        }
-
         void refreshRanges()
         {
             rangesForEpoch = rangesForEpochHolder.get();
@@ -198,7 +181,8 @@ public class InMemoryCommandStore
             return time;
         }
 
-        private Timestamp maxConflict(Seekables<?, ?> keysOrRanges, Ranges slice)
+        @Override
+        public Timestamp maxConflict(Seekables<?, ?> keysOrRanges, Ranges slice)
         {
             Timestamp timestamp = mapReduceForKey(keysOrRanges, slice, (forKey, prev) -> Timestamp.max(forKey.max(), prev), Timestamp.NONE, null);
             Seekables<?, ?> sliced = keysOrRanges.slice(slice, Minimal);

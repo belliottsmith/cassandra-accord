@@ -20,8 +20,7 @@ package accord.api;
 
 import accord.local.Node;
 import accord.local.Command;
-import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
+import accord.primitives.*;
 
 /**
  * Facility for augmenting node behaviour at specific points
@@ -53,4 +52,6 @@ public interface Agent extends UncaughtExceptionListener
     void onHandledException(Throwable t);
 
     boolean isExpired(TxnId initiated, long now);
+
+    Txn emptyTxn(Txn.Kind kind, Seekables<?, ?> keysOrRanges);
 }

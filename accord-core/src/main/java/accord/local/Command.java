@@ -489,7 +489,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
 
         Ranges coordinateRanges = coordinateRanges(safeStore);
         Ranges executeRanges = executeRanges(safeStore, executeAt);
-        if (untilEpoch < safeStore.latestEpoch())
+        if (untilEpoch < safeStore.time().epoch())
         {
             Ranges expectedRanges = safeStore.ranges().between(executeAt.epoch(), untilEpoch);
             Invariants.checkState(expectedRanges.containsAll(executeRanges));

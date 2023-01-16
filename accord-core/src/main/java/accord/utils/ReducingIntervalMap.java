@@ -17,6 +17,8 @@ import java.util.stream.IntStream;
  * and a simple function is sufficient to merge values inserted to overlapping ranges.
  *
  * A simple sorted array of bounds is sufficient to represent the state and perform efficient lookups.
+ *
+ * TODO (desired): use a mutable b-tree instead
  */
 public class ReducingIntervalMap<K extends Comparable<? super K>, V>
 {
@@ -200,6 +202,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
 
         public V find(K key)
         {
+            // TODO (low priority, efficiency): assume ascending iteration and use expSearch
             if (idx < 0 || !contains(idx, key))
                 idx = indexOf(key);
             return value(idx);

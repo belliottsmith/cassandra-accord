@@ -38,6 +38,7 @@ import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestKind.RorWs;
 import static accord.local.SafeCommandStore.TestKind.Ws;
 import static accord.local.SafeCommandStore.TestTimestamp.STARTED_BEFORE;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
 {
@@ -90,6 +91,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     @Override
     public PreAcceptReply apply(SafeCommandStore safeStore)
     {
+        // TODO (desired): restore consistency with paper, either by changing code or paper
         // note: this diverges from the paper, in that instead of waiting for JoinShard,
         //       we PreAccept to both old and new topologies and require quorums in both.
         //       This necessitates sending to ALL replicas of old topology, not only electorate (as fast path may be unreachable).
