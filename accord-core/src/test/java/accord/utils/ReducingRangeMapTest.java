@@ -29,6 +29,7 @@ import java.util.stream.IntStream;
 import accord.api.RoutingKey;
 import accord.impl.IntKey;
 import accord.local.Node;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -55,6 +56,13 @@ public class ReducingRangeMapTest
     private static RoutingKey rk(int t)
     {
         return new IntKey.Routing(t);
+    }
+    private static RoutingKey rk(Random random)
+    {
+        int rk = random.nextInt();
+        if (random.nextBoolean()) rk = -rk;
+        if (rk == MAX_VALUE) --rk;
+        return new IntKey.Routing(rk);
     }
 
     private static Timestamp none()
@@ -204,7 +212,8 @@ public class ReducingRangeMapTest
     }
 
     @Test
-    public void testRandomTrims() throws ExecutionException, InterruptedException {
+    public void testRandomTrims() throws ExecutionException, InterruptedException
+    {
         ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
         List<Future<Void>> results = new ArrayList<>();
         int count = 1000;
@@ -244,7 +253,7 @@ public class ReducingRangeMapTest
                 .collect(Collectors.toList());
     }
 
-    private Void testRandomTrims(long seed, int numberOfAdditions, int maxNumberOfRangesPerAddition, float maxCoveragePerRange, float chanceOfMinRoutingKey)
+    private void testRandomTrims(long seed, int numberOfAdditions, int maxNumberOfRangesPerAddition, float maxCoveragePerRange, float chanceOfMinRoutingKey)
     {
         Random random = new Random(seed);
         logger.info("Seed {} ({}, {}, {}, {})", seed, numberOfAdditions, maxNumberOfRangesPerAddition, maxCoveragePerRange, chanceOfMinRoutingKey);
@@ -300,7 +309,6 @@ public class ReducingRangeMapTest
             merged = ReducingRangeMap.merge(merged, split, Timestamp::max);
 
         Assertions.assertEquals(history, merged);
-        return null;
     }
 
     @Test
@@ -363,24 +371,7 @@ public class ReducingRangeMapTest
             check = check.merge(add);
 //        check.serdeser();
 
-        for (RoutingKey routingKey : check.canonical.keySet())
-        {
-            RoutingKey tk = (RoutingKey) routingKey;
-            Assertions.assertEquals(check.get(decr(tk)), check.test.get(decr(tk)), id);
-            Assertions.assertEquals(check.get(tk), check.test.get(routingKey), id);
-            Assertions.assertEquals(check.get(incr(tk)), check.test.get(incr(routingKey)), id);
-        }
-
-        // check some random
-        {
-            int count = 1000;
-            while (count-- > 0)
-            {
-                RoutingKey routingKey = rk(random.nextInt());
-                Assertions.assertEquals(check.get(routingKey), check.test.get(routingKey), id);
-            }
-        }
-
+        check.validate(random, id);
     }
 
     static class RandomMap
@@ -487,6 +478,91 @@ public class ReducingRangeMapTest
 
             canonical.subMap(range.start(), true, range.end(), false)
                     .entrySet().forEach(e -> e.setValue(Timestamp.max(e.getValue(), timestamp)));
+        }
+
+        void validate(Random random, String id)
+        {
+            for (RoutingKey rk : canonical.keySet())
+            {
+                Assertions.assertEquals(get(decr(rk)), test.get(decr(rk)), id);
+                Assertions.assertEquals(get(rk), test.get(rk), id);
+                Assertions.assertEquals(get(incr(rk)), test.get(incr(rk)), id);
+            }
+
+            // check some random
+            {
+                int remaining = 1000;
+                while (remaining-- > 0)
+                {
+                    RoutingKey routingKey = rk(random);
+                    Assertions.assertEquals(get(routingKey), test.get(routingKey), id);
+                }
+            }
+
+            // validate foldl
+            {
+                int remaining = 100;
+                while (remaining-- > 0)
+                {
+                    int count = 1 + random.nextInt(20);
+                    RoutingKeys keys;
+                    Ranges ranges;
+                    {
+                        RoutingKey[] tmp = new RoutingKey[count];
+                        for (int i = 0 ; i < tmp.length ; ++i)
+                            tmp[i] = rk(random);
+                        keys = RoutingKeys.of(tmp);
+                        Range[] tmp2 = new Range[(keys.size() + 1) / 2];
+                        int i = 0, c = 0;
+                        if (keys.size() % 2 == 1 && random.nextBoolean())
+                            tmp2[c++] = r(MINIMUM_EXCL, keys.get(i++));
+                        while (i + 1 < keys.size())
+                        {
+                            tmp2[c++] = r(keys.get(i), keys.get(i+1));
+                            i += 2;
+                        }
+                        if (i < keys.size())
+                            tmp2[c++] = r(keys.get(i++), MAXIMUM_EXCL);
+                        ranges = Ranges.of(tmp2);
+                    }
+
+                    List<Timestamp> foldl = test.foldl(keys, (timestamp, timestamps) -> {
+                            if (timestamps.isEmpty() || !timestamps.get(timestamps.size() - 1).equals(timestamp))
+                                timestamps.add(timestamp);
+                            return timestamps;
+                        }, new ArrayList<>(), ignore -> false);
+
+                    List<Timestamp> canonFoldl = new ArrayList<>();
+                    for (RoutingKey key : keys)
+                    {
+                        Timestamp next = get(key);
+                        if (canonFoldl.isEmpty() || !canonFoldl.get(canonFoldl.size() - 1).equals(next))
+                            canonFoldl.add(next);
+                    }
+                    Assertions.assertEquals(canonFoldl, foldl, id);
+
+                    foldl = test.foldl(ranges, (timestamp, timestamps) -> {
+                        if (timestamps.isEmpty() || !timestamps.get(timestamps.size() - 1).equals(timestamp))
+                            timestamps.add(timestamp);
+                        return timestamps;
+                    }, new ArrayList<>(), ignore -> false);
+
+                    canonFoldl.clear();
+                    for (Range range : ranges)
+                    {
+                        RoutingKey start = canonical.floorKey(range.start());
+                        RoutingKey end = canonical.floorKey(range.end());
+                        for (Timestamp next : canonical.subMap(start, true, end, false).values())
+                        {
+                            if (canonFoldl.isEmpty() || !canonFoldl.get(canonFoldl.size() - 1).equals(next))
+                                canonFoldl.add(next);
+                        }
+                    }
+                    Assertions.assertEquals(canonFoldl, foldl, id);
+                }
+
+
+            }
         }
     }
 }
