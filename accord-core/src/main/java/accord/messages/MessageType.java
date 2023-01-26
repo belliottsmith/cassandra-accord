@@ -48,12 +48,14 @@ public enum MessageType
     INFORM_HOME_DURABLE_REQ  (true ),
     CHECK_STATUS_REQ         (false),
     CHECK_STATUS_RSP         (false),
-    FETCH_DATA_REQ           (false),
-    FETCH_DATA_RSP           (false),
-    SET_SHARD_DURABLE_REQ    (true ),
-    SET_GLOBALLY_DURABLE_REQ (true ),
-    QUERY_DURABLE_BEFORE_REQ (false),
-    QUERY_DURABLE_BEFORE_RSP (false),
+    FETCH_DATA_REQ                   (false),
+    FETCH_DATA_RSP                   (false),
+    SET_SHARD_DURABLE_REQ            (true ),
+    SET_GLOBALLY_DURABLE_REQ         (true ),
+    QUERY_DURABLE_BEFORE_REQ         (false),
+    QUERY_DURABLE_BEFORE_RSP         (false),
+    WAIT_UNTIL_APPLIED_REQ           (false),
+    APPLY_AND_WAIT_UNTIL_APPLIED_REQ (true)
     ;
 
     /**

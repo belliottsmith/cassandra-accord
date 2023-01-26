@@ -18,21 +18,6 @@
 
 package accord.local;
 
-import accord.api.*;
-import accord.api.ConfigurationService.EpochReady;
-import accord.primitives.*;
-import accord.topology.Topology;
-import accord.utils.MapReduce;
-import accord.utils.MapReduceConsume;
-
-import com.google.common.annotations.VisibleForTesting;
-
-import accord.utils.RandomSource;
-import org.agrona.collections.Hashing;
-import org.agrona.collections.Int2ObjectHashMap;
-import accord.utils.async.AsyncChain;
-import accord.utils.async.AsyncChains;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -43,8 +28,33 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-
 import javax.annotation.Nonnull;
+
+import com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import accord.api.Agent;
+import accord.api.ConfigurationService.EpochReady;
+import accord.api.DataStore;
+import accord.api.Key;
+import accord.api.ProgressLog;
+import accord.api.RoutingKey;
+import accord.primitives.Range;
+import accord.primitives.Ranges;
+import accord.primitives.Routables;
+import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
+import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
+import accord.topology.Topology;
+import accord.utils.MapReduce;
+import accord.utils.MapReduceConsume;
+import accord.utils.RandomSource;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
+import org.agrona.collections.Hashing;
+import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.ConfigurationService.EpochReady.done;
 import static accord.local.PreLoadContext.empty;
@@ -57,6 +67,9 @@ import static java.util.stream.Collectors.toList;
  */
 public abstract class CommandStores
 {
+    @SuppressWarnings("unused")
+    private static final Logger logger = LoggerFactory.getLogger(CommandStores.class);
+
     public interface Factory
     {
         CommandStores create(NodeTimeService time,
@@ -440,6 +453,12 @@ public abstract class CommandStores
                     throw new IllegalStateException();
 
                 return null;
+            }
+
+            @Override
+            public String toString()
+            {
+                return forEach.getClass().getName();
             }
         });
     }

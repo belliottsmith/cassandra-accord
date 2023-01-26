@@ -27,6 +27,7 @@ import accord.messages.Callback;
 import accord.messages.ReadData;
 import accord.messages.SetShardDurable;
 import accord.messages.WaitUntilApplied;
+import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.topology.Topologies;
 import accord.utils.async.AsyncResult;
@@ -40,18 +41,18 @@ public class CoordinateShardDurable extends SettableResult<Void> implements Call
     final Node node;
     final Set<Node.Id> nonParticipants;
     final AppliedTracker tracker;
-    final SyncPoint exclusiveSyncPoint;
+    final SyncPoint<Ranges> exclusiveSyncPoint;
 
-    private CoordinateShardDurable(Node node, SyncPoint exclusiveSyncPoint, Set<Node.Id> nonParticipants)
+    private CoordinateShardDurable(Node node, SyncPoint<Ranges> exclusiveSyncPoint, Set<Node.Id> nonParticipants)
     {
-        Topologies topologies = node.topology().forEpoch(exclusiveSyncPoint.ranges, exclusiveSyncPoint.sourceEpoch());
+        Topologies topologies = node.topology().forEpoch(exclusiveSyncPoint.keysOrRanges, exclusiveSyncPoint.sourceEpoch());
         this.node = node;
         this.tracker = new AppliedTracker(topologies, nonParticipants);
         this.exclusiveSyncPoint = exclusiveSyncPoint;
         this.nonParticipants = nonParticipants;
     }
 
-    public static AsyncResult<Void> coordinate(Node node, SyncPoint exclusiveSyncPoint, Set<Node.Id> nonParticipants)
+    public static AsyncResult<Void> coordinate(Node node, SyncPoint<Ranges> exclusiveSyncPoint, Set<Node.Id> nonParticipants)
     {
         CoordinateShardDurable coordinate = new CoordinateShardDurable(node, exclusiveSyncPoint, nonParticipants);
         coordinate.start();
@@ -61,7 +62,7 @@ public class CoordinateShardDurable extends SettableResult<Void> implements Call
     private void start()
     {
         // TODO (expected): we don't need to WaitUntilApplied - it's good enough to WaitUntilPreApplied
-        node.send(tracker.nodes(), to -> new WaitUntilApplied(to, tracker.topologies(), exclusiveSyncPoint.syncId, exclusiveSyncPoint.ranges, exclusiveSyncPoint.syncId), this);
+        node.send(tracker.nodes(), to -> new WaitUntilApplied(to, tracker.topologies(), exclusiveSyncPoint.syncId, exclusiveSyncPoint.keysOrRanges, exclusiveSyncPoint.syncId), this);
     }
 
     @Override
@@ -95,7 +96,7 @@ public class CoordinateShardDurable extends SettableResult<Void> implements Call
         {
             if (tracker.recordSuccess(from) == RequestStatus.Success)
             {
-                node.configService().reportEpochRedundant(exclusiveSyncPoint.ranges, exclusiveSyncPoint.syncId.epoch());
+                node.configService().reportEpochRedundant(exclusiveSyncPoint.keysOrRanges, exclusiveSyncPoint.syncId.epoch());
                 node.send(tracker.nodes(), new SetShardDurable(exclusiveSyncPoint));
                 trySuccess(null);
             }

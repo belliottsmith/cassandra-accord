@@ -18,7 +18,14 @@
 
 package accord.local;
 
+import java.util.Objects;
+
+import com.google.common.collect.ImmutableSortedSet;
+
 import accord.api.Data;
+import accord.api.Result;
+import accord.api.RoutingKey;
+import accord.api.VisibleForImplementation;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.Keys;
@@ -32,18 +39,9 @@ import accord.primitives.Writes;
 import accord.utils.ImmutableBitSet;
 import accord.utils.IndexedQuadConsumer;
 import accord.utils.Invariants;
-
-import javax.annotation.Nullable;
-
-import accord.api.Result;
-import accord.api.RoutingKey;
-import accord.api.VisibleForImplementation;
 import accord.utils.SimpleBitSet;
 import accord.utils.async.AsyncChain;
-
-import com.google.common.collect.ImmutableSortedSet;
-
-import java.util.*;
+import javax.annotation.Nullable;
 
 import static accord.local.Listeners.Immutable.EMPTY;
 import static accord.local.SaveStatus.Invalidated;
@@ -53,7 +51,8 @@ import static accord.local.Status.Durability.Local;
 import static accord.local.Status.Durability.NotDurable;
 import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
 import static accord.utils.SortedArrays.forEachIntersection;
-import static accord.utils.Utils.*;
+import static accord.utils.Utils.ensureImmutable;
+import static accord.utils.Utils.ensureMutable;
 import static java.lang.String.format;
 
 public abstract class Command implements CommonAttributes
@@ -333,7 +332,7 @@ public abstract class Command implements CommonAttributes
     @Override
     public abstract Status.Durability durability();
     @Override
-    public abstract Listeners.Immutable durableListeners();
+    public abstract Listeners.Immutable<DurableAndIdempotentListener> durableListeners();
     public abstract SaveStatus saveStatus();
 
     static boolean isSameClass(Command command, Class<? extends Command> klass)

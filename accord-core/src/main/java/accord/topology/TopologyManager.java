@@ -27,6 +27,17 @@ import java.util.function.Function;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.Function;
+
+import com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.RoutingKey;
 import accord.api.TopologySorter;
 import accord.coordinate.tracking.QuorumTracker;
@@ -61,6 +72,9 @@ import static accord.utils.Invariants.nonNull;
  */
 public class TopologyManager
 {
+    @SuppressWarnings("unused")
+    private static final Logger logger = LoggerFactory.getLogger(TopologyManager.class);
+
     private static final AsyncResult<Void> SUCCESS = AsyncResults.success(null);
     static class EpochState
     {

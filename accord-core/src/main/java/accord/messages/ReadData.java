@@ -21,30 +21,58 @@ package accord.messages;
 import java.util.BitSet;
 import javax.annotation.Nullable;
 
-import accord.api.Data;
-import accord.primitives.Participants;
-import accord.topology.Topologies;
-import accord.utils.Invariants;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Data;
 import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.messages.ReadData.ReadNack;
 import accord.primitives.PartialTxn;
+import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.topology.Topologies;
+import accord.utils.Invariants;
 
 import static accord.messages.MessageType.READ_RSP;
 import static accord.messages.TxnRequest.computeWaitForEpoch;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 
 // TODO (required, efficiency): dedup - can currently have infinite pending reads that will be executed independently
-public abstract class ReadData extends AbstractEpochRequest<ReadData.ReadNack>
+public abstract class ReadData extends AbstractEpochRequest<ReadNack>
 {
     private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
+
+    public enum ReadType
+    {
+        readTxnData(0),
+        waitUntilApplied(1),
+        applyThenWaitUntilApplied(2);
+
+        public final byte val;
+
+        ReadType(int val)
+        {
+            this.val = (byte)val;
+        }
+
+        @SuppressWarnings("unused")
+        public static ReadType fromValue(byte val)
+        {
+            switch (val)
+            {
+                case 0:
+                    return readTxnData;
+                case 1:
+                    return applyThenWaitUntilApplied;
+                default:
+                    throw new IllegalArgumentException("Unrecognized ReadType value " + val);
+            }
+        }
+    }
 
     // TODO (expected, cleanup): should this be a Route?
     public final Participants<?> readScope;
@@ -69,9 +97,16 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.ReadNack>
         this.waitForEpoch = waitForEpoch;
     }
 
+    public ReadType kind()
+    {
+        throw new UnsupportedOperationException();
+    }
+
     protected abstract void cancel();
     protected abstract long executeAtEpoch();
     protected abstract void reply(@Nullable Ranges unavailable, @Nullable Data data);
+
+    protected void onAllReadsComplete() {}
 
     @Override
     public long waitForEpoch()
@@ -129,7 +164,10 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.ReadNack>
         // and prevents races where we respond before dispatching all the required reads (if the reads are
         // completing faster than the reads can be setup on all required shards)
         if (-1 == --waitingOnCount)
+        {
+            onAllReadsComplete();
             reply(this.unavailable, data);
+        }
     }
 
     protected synchronized void readComplete(CommandStore commandStore, @Nullable Data result, @Nullable Ranges unavailable)
