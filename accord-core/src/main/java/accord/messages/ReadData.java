@@ -183,6 +183,7 @@ public class ReadData extends AbstractEpochRequest<ReadData.ReadNack> implements
                 : r1.compareTo(r2) >= 0 ? r1 : r2;
     }
 
+    // TODO should this be synchronized or can it be removed?
     @Override
     public synchronized void accept(ReadNack reply, Throwable failure)
     {
@@ -211,10 +212,12 @@ public class ReadData extends AbstractEpochRequest<ReadData.ReadNack> implements
             node.reply(replyTo, replyContext, new ReadOk(data));
     }
 
+    // TODO should this be synchronized or can it be removed?
     private synchronized void readComplete(CommandStore commandStore, Data result)
     {
         Preconditions.checkState(waitingOn.get(commandStore.id()));
         logger.trace("{}: read completed on {}", txnId, commandStore);
+        // TODO looks like me injecting the null result for barriers is already handled here?
         if (result != null)
             data = data == null ? result : data.merge(result);
 

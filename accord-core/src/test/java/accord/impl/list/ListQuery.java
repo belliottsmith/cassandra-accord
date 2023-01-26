@@ -28,7 +28,10 @@ import accord.api.Key;
 import accord.api.Query;
 import accord.api.Result;
 import accord.primitives.Keys;
+import accord.primitives.Seekables;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import org.jetbrains.annotations.NotNull;
 
 public class ListQuery implements Query
 {
@@ -42,7 +45,7 @@ public class ListQuery implements Query
     }
 
     @Override
-    public Result compute(TxnId txnId, Data data, Read untypedRead, Update update)
+    public Result compute(@NotNull TxnId txnId, @NotNull Timestamp executeAt, @NotNull Seekables<?, ?> keys, Data data, Read untypedRead, Update update)
     {
         ListRead read = (ListRead) untypedRead;
         Keys responseKeys = Keys.ofSortedUnique(((ListData)data).keySet());

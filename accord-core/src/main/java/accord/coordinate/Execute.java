@@ -66,7 +66,7 @@ class Execute extends ReadCoordinator<ReadReply>
         {
             Topologies sendTo = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
             Topologies applyTo = node.topology().forEpoch(route, executeAt.epoch());
-            Result result = txn.result(txnId, null);
+            Result result = txn.result(txnId, executeAt, null);
             Persist.persist(node, sendTo, applyTo, txnId, route, txn, executeAt, deps, txn.execute(executeAt, null), result);
             callback.accept(result, null);
         }
@@ -129,7 +129,7 @@ class Execute extends ReadCoordinator<ReadReply>
     {
         if (failure == null)
         {
-            Result result = txn.result(txnId, data);
+            Result result = txn.result(txnId, executeAt, data);
             callback.accept(result, null);
             // avoid re-calculating topologies if it is unchanged
             Topologies sendTo = txnId.epoch() == executeAt.epoch() ? applyTo : node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());

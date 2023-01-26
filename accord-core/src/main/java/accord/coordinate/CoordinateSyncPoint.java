@@ -84,7 +84,7 @@ public class CoordinateSyncPoint extends CoordinatePreAccept<SyncPoint>
                 @Override
                 void onAccepted()
                 {
-                    node.send(tracker.nodes(), id -> new Apply(id, tracker.topologies(), tracker.topologies(), txnId.epoch(), txnId, route, txnId, deps, txn.execute(txnId, null), txn.result(txnId, null)));
+                    node.send(tracker.nodes(), id -> new Apply(id, tracker.topologies(), tracker.topologies(), txnId.epoch(), txnId, route, txnId, deps, txn.execute(txnId, null), txn.result(txnId, txnId, null)));
                     accept(new SyncPoint(txnId, deps), null);
                 }
             }.start();
