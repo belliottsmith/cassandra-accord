@@ -576,13 +576,23 @@ public class InMemoryCommandStore
 
         public SingleThread(int id, NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, RangesForEpochHolder rangesForEpoch)
         {
-            super(id);
-            executor = Executors.newSingleThreadExecutor(r -> {
+            this(id, time, agent, store, progressLogFactory, rangesForEpoch, Executors.newSingleThreadExecutor(r -> {
                 Thread thread = new Thread(r);
                 thread.setName(CommandStore.class.getSimpleName() + '[' + time.id() + ']');
                 return thread;
-            });
+            }));
+        }
+
+        private SingleThread(int id, NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, RangesForEpochHolder rangesForEpoch, ExecutorService executor)
+        {
+            super(id);
+            this.executor = executor;
             state = newState(time, agent, store, progressLogFactory, rangesForEpoch);
+        }
+
+        public static CommandStore.Factory factory(ExecutorService executor)
+        {
+            return (id, time, agent, store, progressLogFactory, rangesForEpoch) -> new SingleThread(id, time, agent, store, progressLogFactory, rangesForEpoch, executor);
         }
 
         AsyncState newState(NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, RangesForEpochHolder rangesForEpoch)
