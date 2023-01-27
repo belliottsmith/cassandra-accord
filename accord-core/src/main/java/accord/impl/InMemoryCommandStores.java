@@ -61,7 +61,6 @@ public class InMemoryCommandStores
         }
     }
 
-
     public static class SingleThread extends AsyncCommandStores
     {
         public SingleThread(NodeTimeService time, Agent agent, DataStore store, ShardDistributor shardDistributor, ProgressLog.Factory progressLogFactory)

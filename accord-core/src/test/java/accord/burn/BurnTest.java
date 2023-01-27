@@ -297,7 +297,6 @@ public class BurnTest
     public static void main(String[] args) throws Exception
     {
 //        Long overrideSeed = null;
-
         int count = 1;
         Long overrideSeed = 8602265915508619975L;
         LongSupplier seedGenerator = ThreadLocalRandom.current()::nextLong;
