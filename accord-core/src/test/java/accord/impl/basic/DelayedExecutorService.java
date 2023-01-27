@@ -1,14 +1,13 @@
 package accord.impl.basic;
 
-import org.jetbrains.annotations.NotNull;
+import org.apache.cassandra.concurrent.FutureTask;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RunnableFuture;
 import java.util.concurrent.TimeUnit;
 
 public class DelayedExecutorService extends AbstractExecutorService
@@ -34,12 +33,12 @@ public class DelayedExecutorService extends AbstractExecutorService
         return new Task<>(callable);
     }
 
-    private Task<?> newTaskFor(@NotNull Runnable command) {
+    private Task<?> newTaskFor(Runnable command) {
         return command instanceof Task ? (Task<?>) command : newTaskFor(command, null);
     }
 
     @Override
-    public void execute(@NotNull Runnable command) {
+    public void execute(Runnable command) {
         Task<?> task = newTaskFor(command);
         int jitterMillis = THREAD_SCHEDULING_OVERHEAD_MILLIS + random.nextInt(1000);
         pending.add(task, jitterMillis, TimeUnit.MILLISECONDS);
@@ -49,10 +48,9 @@ public class DelayedExecutorService extends AbstractExecutorService
     public void shutdown() {
     }
 
-    @NotNull
     @Override
     public List<Runnable> shutdownNow() {
-        return null;
+        return Collections.emptyList();
     }
 
     @Override
@@ -66,31 +64,17 @@ public class DelayedExecutorService extends AbstractExecutorService
     }
 
     @Override
-    public boolean awaitTermination(long timeout, @NotNull TimeUnit unit) {
+    public boolean awaitTermination(long timeout, TimeUnit unit) {
         return false;
     }
 
 
-    private static class Task<T> extends CompletableFuture<T> implements RunnableFuture<T>, Pending
+    private static class Task<T> extends FutureTask<T> implements Pending
     {
-        private final Callable<T> fn;
 
         public Task(Callable<T> fn)
         {
-            this.fn = fn;
-        }
-
-        @Override
-        public void run()
-        {
-            try
-            {
-                complete(fn.call());
-            }
-            catch (Throwable t)
-            {
-                completeExceptionally(t);
-            }
+            super(fn);
         }
     }
 }
