@@ -37,7 +37,7 @@ public class InformHomeDurable implements Request
             Command command = safeStore.command(txnId);
             command.setDurability(safeStore, durability, homeKey, executeAt);
             safeStore.progressLog().durable(command, persistedOn);
-        }).addCallback(node.agent());
+        }).begin(node.agent());
     }
 
     @Override
