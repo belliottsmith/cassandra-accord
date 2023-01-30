@@ -1,6 +1,7 @@
 package accord.burn.random;
 
 import java.util.Objects;
+import java.util.Random;
 
 public class SegmentedIntRange implements RandomInt
 {
@@ -14,9 +15,9 @@ public class SegmentedIntRange implements RandomInt
     }
 
     @Override
-    public int getInt()
+    public int getInt(Random randomSource)
     {
-        if (largeDecision.get()) return large.getInt();
-        return small.getInt();
+        if (largeDecision.get(randomSource)) return large.getInt(randomSource);
+        return small.getInt(randomSource);
     }
 }

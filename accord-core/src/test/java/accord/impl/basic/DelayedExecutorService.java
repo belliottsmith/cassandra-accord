@@ -17,17 +17,19 @@ import java.util.concurrent.TimeUnit;
 public class DelayedExecutorService extends AbstractExecutorService
 {
     private final PendingQueue pending;
+    private final Random random;
     private final RandomInt jitterInNano;
 
     public DelayedExecutorService(PendingQueue pending, Random random)
     {
         this.pending = pending;
+        this.random = random;
         this.jitterInNano = new SegmentedIntRange(
-                new IntRange(random, microToNanos(0), microToNanos(50)),
-                new IntRange(random, microToNanos(50), msToNanos(5)),
+                new IntRange(microToNanos(0), microToNanos(50)),
+                new IntRange(microToNanos(50), msToNanos(5)),
                 // this is different from Apache Cassandra Simulator as this is computed differently for each executor
                 // rather than being a global config
-                new Decision.FixedChance(random, new IntRange(random, 1, 10).getInt() / 100f)
+                new Decision.FixedChance(new IntRange(1, 10).getInt(random) / 100f)
         );
     }
 
@@ -61,7 +63,7 @@ public class DelayedExecutorService extends AbstractExecutorService
     @Override
     public void execute(Runnable command)
     {
-        pending.add(newTaskFor(command), jitterInNano.getInt(), TimeUnit.NANOSECONDS);
+        pending.add(newTaskFor(command), jitterInNano.getInt(random), TimeUnit.NANOSECONDS);
     }
 
     @Override

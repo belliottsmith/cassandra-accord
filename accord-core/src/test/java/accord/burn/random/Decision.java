@@ -4,23 +4,21 @@ import java.util.Random;
 
 public interface Decision
 {
-    boolean get();
+    boolean get(Random randomSource);
 
     public static class FixedChance implements Decision
     {
-        private final Random random;
         private final float chance;
 
-        public FixedChance(Random random, float chance)
+        public FixedChance(float chance)
         {
-            this.random = random;
             this.chance = chance;
         }
 
         @Override
-        public boolean get()
+        public boolean get(Random randomSource)
         {
-            return random.nextFloat() < chance;
+            return randomSource.nextFloat() < chance;
         }
     }
 }
