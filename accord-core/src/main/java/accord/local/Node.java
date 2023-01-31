@@ -62,11 +62,11 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
     public static class Id implements Comparable<Id>
     {
         public static final Id NONE = new Id(0);
-        public static final Id MAX = new Id(Long.MAX_VALUE);
+        public static final Id MAX = new Id(Integer.MAX_VALUE);
 
-        public final long id;
+        public final int id;
 
-        public Id(long id)
+        public Id(int id)
         {
             this.id = id;
         }
@@ -74,7 +74,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         @Override
         public int hashCode()
         {
-            return Long.hashCode(id);
+            return Integer.hashCode(id);
         }
 
         @Override
@@ -91,12 +91,12 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         @Override
         public int compareTo(Id that)
         {
-            return Long.compare(this.id, that.id);
+            return Integer.compare(this.id, that.id);
         }
 
         public String toString()
         {
-            return Long.toString(id);
+            return Integer.toString(id);
         }
     }
 

@@ -6,7 +6,7 @@ import accord.local.*;
 import accord.local.Status.Known;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
-import com.carrotsearch.hppc.IntHashSet;
+import org.agrona.collections.IntHashSet;
 
 import static accord.messages.Defer.Ready.Expired;
 import static accord.messages.Defer.Ready.No;
@@ -18,7 +18,7 @@ class Defer implements CommandListener
 
     final Function<Command, Ready> waitUntil;
     final TxnRequest<?> request;
-    final IntHashSet waitingOn = new IntHashSet(); // TODO (easy): use Agrona when available
+    final IntHashSet waitingOn = new IntHashSet();
     int waitingOnCount;
     boolean isDone;
 
