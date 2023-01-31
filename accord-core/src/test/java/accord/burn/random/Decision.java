@@ -10,7 +10,7 @@ public interface Decision
 //        Random rs = new Random(0);
         Random rs = new Random();
         //TODO ranges < 16384 always returns 1...
-        Decision desc = new RandomWalkPeriodChance(new IntRange(1 * 1000, 10 * 1000), rs);
+        Decision desc = new RandomWalkPeriodChance(new IntRange(0, 100), 5, rs);
 //        Decision desc = new FixedChance(new IntRange(1, 10).getInt(rs) / 100f);
         int trueSeq = 0;
         int trueCount = 0;
@@ -51,14 +51,19 @@ public interface Decision
     public static class RandomWalkPeriodChance implements Decision
     {
         private final IntRange range;
-        private final int midPoint;
+        private final int targetBound;
         private final long maxStepSize;
         private long cur;
 
-        public RandomWalkPeriodChance(IntRange range, Random random)
+        public RandomWalkPeriodChance(IntRange range, int targetBound, Random random)
         {
+            if (range.max - range.min < 1 << 14)
+            {
+                range = new IntRange(range.min * 10000, range.max * 1000);
+                targetBound = targetBound * 10000;
+            }
             this.range = range;
-            this.midPoint = (range.max - range.min) / 2;
+            this.targetBound = targetBound;
             this.maxStepSize = maxStepSize(range, random);
             this.cur = range.getInt(random);
         }
@@ -71,7 +76,7 @@ public interface Decision
             long cur = this.cur;
             this.cur = step > 0 ? Math.min(range.max, cur + step)
                     : Math.max(range.min, cur + step);
-            return midPoint <= cur;
+            return targetBound <= cur;
         }
 
         private long uniform(Random random, long min, long max)
