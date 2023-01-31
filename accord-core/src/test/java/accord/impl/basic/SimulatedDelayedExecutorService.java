@@ -14,13 +14,13 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-public class DelayedExecutorService extends AbstractExecutorService
+public class SimulatedDelayedExecutorService extends AbstractExecutorService
 {
     private final PendingQueue pending;
     private final Random random;
     private final RandomInt jitterInNano;
 
-    public DelayedExecutorService(PendingQueue pending, Random random)
+    public SimulatedDelayedExecutorService(PendingQueue pending, Random random)
     {
         this.pending = pending;
         this.random = random;
