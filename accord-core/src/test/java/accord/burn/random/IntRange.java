@@ -4,12 +4,14 @@ import java.util.Random;
 
 public class IntRange implements RandomInt
 {
-    private final int min, maxDelta;
+    public final int min, max;
+    private final int maxDelta;
 
     public IntRange(int min, int max)
     {
         if (min >= max) throw new IllegalArgumentException(String.format("Min (%s) should be less than max (%d).", min, max));
         this.min = min;
+        this.max = max;
         this.maxDelta = max - min + 1;
     }
 
