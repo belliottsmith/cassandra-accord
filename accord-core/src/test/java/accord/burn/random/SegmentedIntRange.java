@@ -8,7 +8,8 @@ public class SegmentedIntRange implements RandomInt
     private final RandomInt small, large;
     private final Decision chooseLargeChance;
 
-    public SegmentedIntRange(RandomInt small, RandomInt large, Decision chooseLargeChance) {
+    public SegmentedIntRange(RandomInt small, RandomInt large, Decision chooseLargeChance)
+    {
         this.small = Objects.requireNonNull(small);
         this.large = Objects.requireNonNull(large);
         this.chooseLargeChance = Objects.requireNonNull(chooseLargeChance);
