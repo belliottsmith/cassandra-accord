@@ -38,7 +38,19 @@ public interface Txn
     {
         Read,
         Write,
-        /** A pseudo-transaction that invalidates transactions with lower TxnId that it does not witness */
+
+        /**
+         * A pseudo-transaction whose deps represent the complete set of transactions that may execute before it,
+         * without interfering with their execution.
+         *
+         * A SyncPoint is unique in that it agrees not only an executeAt but also a precise collection of dependencies,
+         * so that is effect on invalidation of earlier transactions is durable. This is most useful for ExclusiveSyncPoint.
+         */
+        SyncPoint,
+
+        /**
+         * A SyncPoint that invalidates transactions with lower TxnId that it does not witness
+         */
         ExclusiveSyncPoint;
         // in future: BlindWrite, Interactive?
 
@@ -52,6 +64,16 @@ public interface Txn
         public boolean isRead()
         {
             return this == Read;
+        }
+
+        /**
+         * Note that it is only possible to do this for transactions whose execution time is not dependent on
+         * others, i.e. where we may safely propose executeAt = txnId regardless of when it is witnessed by
+         * replicas
+         */
+        public boolean proposesDeps()
+        {
+            return this == ExclusiveSyncPoint;
         }
 
         public static Kind ofOrdinal(int ordinal)

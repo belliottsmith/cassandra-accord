@@ -35,6 +35,7 @@ import accord.primitives.*;
 import accord.primitives.TxnId;
 
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
+import static accord.local.SafeCommandStore.TestKind.Any;
 import static accord.local.SafeCommandStore.TestKind.RorWs;
 import static accord.local.SafeCommandStore.TestKind.Ws;
 import static accord.local.SafeCommandStore.TestTimestamp.STARTED_BEFORE;
@@ -228,7 +229,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
 
     private static <T extends Deps> T calculateDeps(SafeCommandStore commandStore, TxnId txnId, Seekables<?, ?> keys, Timestamp executeAt, Ranges ranges, Deps.AbstractBuilder<T> builder)
     {
-        TestKind testKind = txnId.rw().isWrite() ? RorWs : Ws;
+        TestKind testKind = TestKind.conflicts(txnId.rw());
         // could use MAY_EXECUTE_BEFORE to prune those we know execute later, but shouldn't usually be of much help
         // and would need to supply !hasOrderedTxnId
         commandStore.mapReduce(keys, ranges, testKind, STARTED_BEFORE, executeAt, ANY_DEPS, null, null, null,

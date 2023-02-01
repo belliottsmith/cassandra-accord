@@ -296,7 +296,7 @@ public class InMemoryCommandStore
                 if (maxStatus != null && command.status().compareTo(maxStatus) > 0)
                     continue;
 
-                if (testKind == Ws && command.txnId().rw().isRead())
+                if (!testKind.test(command.txnId().rw()))
                     continue;
 
                 if (testDep != ANY_DEPS)

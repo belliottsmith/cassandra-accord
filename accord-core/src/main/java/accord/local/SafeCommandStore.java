@@ -27,6 +27,10 @@ import org.apache.cassandra.utils.concurrent.Future;
 import javax.annotation.Nullable;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
+
+import static accord.primitives.Txn.Kind.Read;
+import static accord.primitives.Txn.Kind.Write;
 
 /**
  * A CommandStore with exclusive access; a reference to this should not be retained outside of the scope of the method
@@ -66,7 +70,37 @@ public interface SafeCommandStore
         EXECUTES_AFTER
     }
     enum TestDep { WITH, WITHOUT, ANY_DEPS }
-    enum TestKind { Ws, RorWs }
+    enum TestKind implements Predicate<Txn.Kind>
+    {
+        Ws, RorWs, Any;
+
+        public boolean test(Txn.Kind kind)
+        {
+            switch (this)
+            {
+                default: throw new AssertionError();
+                case Any: return true;
+                case Ws: return kind == Write;
+                case RorWs: return kind == Read || kind == Write;
+            }
+        }
+
+        public static TestKind conflicts(Txn.Kind kind)
+        {
+            switch (kind)
+            {
+                default: throw new AssertionError();
+                case Read:
+                    return Ws;
+                case Write:
+                    return RorWs;
+                case SyncPoint:
+                case ExclusiveSyncPoint:
+                    return Any;
+            }
+        }
+
+    }
 
     /**
      * Visits keys first and then ranges, both in ascending order.

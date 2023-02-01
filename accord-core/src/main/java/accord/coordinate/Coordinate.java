@@ -28,8 +28,12 @@ import accord.messages.PreAccept.PreAcceptOk;
 
 import org.apache.cassandra.utils.concurrent.Future;
 
+import static accord.coordinate.Propose.Invalidate.proposeAndCommitInvalidate;
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
+import static accord.coordinate.ProposeAndExecute.proposeAndExecute;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
+import static accord.primitives.Timestamp.mergeMax;
+import static accord.utils.Functions.foldl;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
@@ -61,12 +65,7 @@ public class Coordinate extends CoordinatePreAccept<Result>
         else
         {
             Deps deps = Deps.merge(successes, ok -> ok.deps);
-            Timestamp executeAt; {
-                Timestamp accumulate = Timestamp.NONE;
-                for (PreAcceptOk preAcceptOk : successes)
-                    accumulate = Timestamp.mergeMax(accumulate, preAcceptOk.witnessedAt);
-                executeAt = accumulate;
-            }
+            Timestamp executeAt = foldl(successes, (ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
 
             // TODO (low priority, efficiency): perhaps don't submit Accept immediately if we almost have enough for fast-path,
             //                                  but by sending accept we rule out hybrid fast-path
@@ -74,19 +73,7 @@ public class Coordinate extends CoordinatePreAccept<Result>
             //                                  node to respond before invalidating
             if (executeAt.isRejected() || node.agent().isExpired(txnId, executeAt.hlc()))
             {
-                proposeInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), (success, fail) -> {
-                    if (fail != null)
-                    {
-                        accept(null, fail);
-                    }
-                    else
-                    {
-                        node.withEpoch(executeAt.epoch(), () -> {
-                            commitInvalidate(node, txnId, route, executeAt);
-                            accept(null, new Invalidated(txnId, route.homeKey()));
-                        });
-                    }
-                });
+                proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, this);
             }
             else
             {
@@ -94,7 +81,7 @@ public class Coordinate extends CoordinatePreAccept<Result>
                     Topologies topologies = tracker.topologies();
                     if (executeAt.epoch() > txnId.epoch())
                         topologies = node.topology().withUnsyncedEpochs(route, txnId.epoch(), executeAt.epoch());
-                    Propose.propose(node, topologies, Ballot.ZERO, txnId, txn, route, executeAt, deps, this);
+                    proposeAndExecute(node, topologies, Ballot.ZERO, txnId, txn, route, executeAt, deps, this);
                 });
             }
         }

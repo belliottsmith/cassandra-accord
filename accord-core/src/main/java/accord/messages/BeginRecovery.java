@@ -39,6 +39,7 @@ import java.util.Collections;
 
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.SafeCommandStore.TestDep.WITHOUT;
+import static accord.local.SafeCommandStore.TestKind.Any;
 import static accord.local.SafeCommandStore.TestKind.RorWs;
 import static accord.local.SafeCommandStore.TestTimestamp.*;
 import static accord.local.Status.*;
@@ -117,6 +118,12 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
         else
         {
             Ranges ranges = safeStore.ranges().at(txnId.epoch());
+            // TODO (expected): if we can combine these with the earlierAcceptedNoWitness we can avoid persisting deps on Accept
+            //    the problem is we need some way to ensure liveness. If we were to store witnessedAt as a separate register
+            //    we could return these and filter them by whatever the max witnessedAt is that we discover, OR we could
+            //    filter on replicas to exclude any that are started after anything that is committed, since they will have to adopt
+            //    them as a dependency (but we have to make sure we consider dependency rules, so if there's no write and only reads)
+            //    we might still have new transactions block our execution.
             rejectsFastPath = hasAcceptedStartedAfterWithoutWitnessing(safeStore, txnId, ranges, partialTxn.keys());
             if (!rejectsFastPath)
                 rejectsFastPath = hasCommittedExecutesAfterWithoutWitnessing(safeStore, txnId, ranges, partialTxn.keys());
@@ -128,7 +135,12 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
             // accepted txns with an earlier txnid that don't have our txnid as a dependency
             earlierAcceptedNoWitness = acceptedStartedBeforeWithoutWitnessing(safeStore, txnId, ranges, partialTxn.keys());
         }
-        return new RecoverOk(txnId, command.status(), command.accepted(), command.executeAt(), deps, earlierCommittedWitness, earlierAcceptedNoWitness, rejectsFastPath, command.writes(), command.result());
+
+        Status status = command.status();
+        Ballot accepted = command.accepted();
+        Timestamp executeAt = command.executeAt();
+        PartialDeps acceptedDeps = status.phase.compareTo(Phase.Accept) >= 0 ? deps : PartialDeps.NONE;
+        return new RecoverOk(txnId, status, accepted, executeAt, deps, acceptedDeps, earlierCommittedWitness, earlierAcceptedNoWitness, rejectsFastPath, command.writes(), command.result());
     }
 
     @Override
@@ -152,16 +164,18 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
         if (!ok1.status.hasBeen(PreAccepted)) throw new IllegalStateException();
 
         PartialDeps deps = ok1.deps.with(ok2.deps);
+        PartialDeps acceptedDeps = ok1.deps == ok1.acceptedDeps && ok2.deps == ok2.acceptedDeps ? deps : ok1.acceptedDeps.with(ok2.acceptedDeps);
         Deps earlierCommittedWitness = ok1.earlierCommittedWitness.with(ok2.earlierCommittedWitness);
         Deps earlierAcceptedNoWitness = ok1.earlierAcceptedNoWitness.with(ok2.earlierAcceptedNoWitness)
                 .without(earlierCommittedWitness::contains);
         Timestamp timestamp = ok1.status == PreAccepted ? Timestamp.max(ok1.executeAt, ok2.executeAt) : ok1.executeAt;
 
         return new RecoverOk(
-                txnId, ok1.status, ok1.accepted, timestamp, deps,
-                earlierCommittedWitness, earlierAcceptedNoWitness,
-                ok1.rejectsFastPath | ok2.rejectsFastPath,
-                ok1.writes, ok1.result);
+            txnId, ok1.status, ok1.accepted, timestamp,
+            deps, acceptedDeps, earlierCommittedWitness, earlierAcceptedNoWitness,
+            ok1.rejectsFastPath | ok2.rejectsFastPath,
+            ok1.writes, ok1.result
+        );
     }
 
     @Override
@@ -216,19 +230,21 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
         public final Ballot accepted;
         public final Timestamp executeAt;
         public final PartialDeps deps;
+        public final PartialDeps acceptedDeps; // only those deps that have previously been proposed
         public final Deps earlierCommittedWitness;  // counter-point to earlierAcceptedNoWitness
         public final Deps earlierAcceptedNoWitness; // wait for these to commit
         public final boolean rejectsFastPath;
         public final Writes writes;
         public final Result result;
 
-        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, @Nonnull PartialDeps deps, Deps earlierCommittedWitness, Deps earlierAcceptedNoWitness, boolean rejectsFastPath, Writes writes, Result result)
+        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, @Nonnull PartialDeps deps, PartialDeps acceptedDeps, Deps earlierCommittedWitness, Deps earlierAcceptedNoWitness, boolean rejectsFastPath, Writes writes, Result result)
         {
             this.txnId = txnId;
             this.accepted = accepted;
             this.executeAt = executeAt;
             this.status = status;
             this.deps = Invariants.nonNull(deps);
+            this.acceptedDeps = acceptedDeps;
             this.earlierCommittedWitness = earlierCommittedWitness;
             this.earlierAcceptedNoWitness = earlierAcceptedNoWitness;
             this.rejectsFastPath = rejectsFastPath;
@@ -297,7 +313,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
     {
         try (Deps.Builder builder = Deps.builder())
         {
-            commandStore.mapReduce(keys, ranges, RorWs, STARTED_BEFORE, startedBefore, WITHOUT, startedBefore, Accepted, PreCommitted,
+            commandStore.mapReduce(keys, ranges, Any, STARTED_BEFORE, startedBefore, WITHOUT, startedBefore, Accepted, PreCommitted,
                     (keyOrRange, txnId, executeAt, prev) -> {
                         if (executeAt.compareTo(startedBefore) > 0)
                             builder.add(keyOrRange, txnId);
@@ -311,7 +327,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
     {
         try (Deps.Builder builder = Deps.builder())
         {
-            commandStore.mapReduce(keys, ranges, RorWs, STARTED_BEFORE, startedBefore, WITH, startedBefore, Committed, null,
+            commandStore.mapReduce(keys, ranges, Any, STARTED_BEFORE, startedBefore, WITH, startedBefore, Committed, null,
                     (keyOrRange, txnId, executeAt, prev) -> builder.add(keyOrRange, txnId), (Deps.AbstractBuilder<Deps>)builder, null);
             return builder.build();
         }
@@ -326,7 +342,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
          * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
          * has not witnessed us we can safely invalidate (us).
          */
-        return commandStore.mapReduce(keys, ranges, RorWs, STARTED_AFTER, startedAfter, WITHOUT, startedAfter, Accepted, PreCommitted,
+        return commandStore.mapReduce(keys, ranges, Any, STARTED_AFTER, startedAfter, WITHOUT, startedAfter, Accepted, PreCommitted,
                 (keyOrRange, txnId, executeAt, prev) -> true, false, true);
     }
 
@@ -339,7 +355,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
          * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
          * has not witnessed us we can safely invalidate it.
          */
-        return commandStore.mapReduce(keys, ranges, RorWs, EXECUTES_AFTER, startedAfter, WITHOUT, startedAfter, Committed, null,
+        return commandStore.mapReduce(keys, ranges, Any, EXECUTES_AFTER, startedAfter, WITHOUT, startedAfter, Committed, null,
                 (keyOrRange, txnId, executeAt, prev) -> true,false, true);
     }
 }
