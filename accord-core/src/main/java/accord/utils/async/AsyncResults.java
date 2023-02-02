@@ -73,13 +73,7 @@ public class AsyncResults
             return trySetResult(new Result<>(result, failure));
         }
 
-        void setResult(Result<V> result)
-        {
-            if (!trySetResult(result))
-                throw new IllegalStateException("Result has already been set on " + this);
-        }
-
-        private  AsyncChain<V> newChain()
+        private AsyncChain<V> newChain()
         {
             return new AsyncChains.Head<V>()
             {
@@ -90,7 +84,6 @@ public class AsyncResults
                 }
             };
         }
-
 
         void setResult(V result, Throwable failure)
         {

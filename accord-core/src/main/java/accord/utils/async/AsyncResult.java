@@ -74,16 +74,5 @@ public interface AsyncResult<V> extends AsyncChain<V>
             if (!tryFailure(throwable))
                 throw new IllegalStateException("Result has already been set on " + this);
         }
-
-        default BiConsumer<V, Throwable> settingCallback()
-        {
-            return (result, throwable) -> {
-
-                if (throwable == null)
-                    trySuccess(result);
-                else
-                    tryFailure(throwable);
-            };
-        }
     }
 }

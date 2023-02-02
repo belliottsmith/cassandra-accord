@@ -8,11 +8,12 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
-abstract class AsyncChainCombiner<I, O> extends AsyncChains.Head<O>
+import accord.utils.Invariants;
+
+abstract class AsyncChainCombiner<I, O> extends AsyncChains.AbstractHead<O, I>
 {
     private static final AtomicIntegerFieldUpdater<AsyncChainCombiner> REMAINING = AtomicIntegerFieldUpdater.newUpdater(AsyncChainCombiner.class, "remaining");
-    private volatile Object state;
-    private volatile BiConsumer<? super O, Throwable> callback;
+    private Object state;
     private volatile int remaining;
 
     protected AsyncChainCombiner(List<AsyncChain<I>> inputs)
@@ -57,48 +58,38 @@ abstract class AsyncChainCombiner<I, O> extends AsyncChains.Head<O>
 
     abstract void complete(I[] results, BiConsumer<? super O, Throwable> callback);
 
-    private void callback(int idx, I result, Throwable throwable)
+    public void accept(I result, Throwable throwable)
     {
         int current = remaining;
         if (current == 0)
             return;
 
-        if (throwable != null && REMAINING.compareAndSet(this, current, 0))
+        if (throwable != null && 0 != REMAINING.getAndSet(this, 0))
         {
-            callback.accept(null, throwable);
+            next.accept(null, throwable);
             return;
         }
 
+        int idx = REMAINING.decrementAndGet(this) & 0xffff;
         results()[idx] = result;
-        if (REMAINING.decrementAndGet(this) == 0)
-        {
-            try
-            {
-                complete(results(), callback);
-            }
-            catch (Throwable t)
-            {
-                callback.accept(null, t);
-            }
-        }
-    }
-
-    private BiConsumer<I, Throwable> callbackFor(int idx)
-    {
-        return (result, failure) -> callback(idx, result, failure);
+        if (REMAINING.addAndGet(this, -0x10000) == 0)
+            complete(results(), next);
     }
 
     @Override
     public void begin(BiConsumer<? super O, Throwable> callback)
     {
+        Invariants.checkState(next == null);
+        next = callback;
+
         List<? extends AsyncChain<? extends I>> chains = inputs();
+        Invariants.checkState(chains.size() <= 0xffff);
         state = new Object[chains.size()];
 
         int size = chains.size();
-        this.callback = callback;
         this.remaining = size;
         for (int i=0; i<size; i++)
-            chains.get(i).begin(callbackFor(i));
+            chains.get(i).begin(this);
     }
 
     static class All<V> extends AsyncChainCombiner<V, List<V>>
@@ -128,9 +119,19 @@ abstract class AsyncChainCombiner<I, O> extends AsyncChains.Head<O>
         @Override
         void complete(V[] results, BiConsumer<? super V, Throwable> callback)
         {
-            V result = results[0];
-            for (int i=1; i< results.length; i++)
-                result = reducer.apply(result, results[i]);
+            V result;
+            try
+            {
+                result = results[0];
+                for (int i=1; i< results.length; i++)
+                    result = reducer.apply(result, results[i]);
+            }
+            catch (Throwable t)
+            {
+                callback.accept(null, t);
+                return;
+            }
+
             callback.accept(result, null);
         }
 

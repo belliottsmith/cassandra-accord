@@ -81,12 +81,20 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    public abstract static class Head<V> extends AsyncChains<V> implements BiConsumer<V, Throwable>
+    /**
+     * The instigator of a chain of behaviours. The next pointer of the last element of a chain points to an AbstractHead,
+     * on which the begin method is invoked once the chain is ready to be processed.
+     *
+     * We only pretend to be a {@link BiConsumer} of the correct type to maintain the next pointer.
+     * For sophisticated use cases that want to implement {@link BiConsumer} for some other reason we permit declaring
+     * a different {@link BiConsumer} type here, though most implementations will want to extend {@link Head}.
+     */
+    public abstract static class AbstractHead<V, C> extends AsyncChains<V> implements BiConsumer<C, Throwable>
     {
-        protected Head()
+        protected AbstractHead()
         {
             super(null);
-            next = this;
+            next = (BiConsumer<? super V, Throwable>) this;
         }
 
         void begin()
@@ -96,6 +104,11 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
             this.next = null;
             begin(next);
         }
+    }
+
+    public abstract static class Head<V> extends AbstractHead<V, V>
+    {
+        protected Head() {}
 
         @Override
         public void accept(V v, Throwable throwable)
@@ -107,7 +120,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
     static abstract class Link<I, O> extends AsyncChains<O> implements BiConsumer<I, Throwable>
     {
-        protected Link(Head<?> head)
+        protected Link(AbstractHead<?, ?> head)
         {
             super(head);
         }
@@ -115,9 +128,9 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         @Override
         public void begin(BiConsumer<? super O, Throwable> callback)
         {
-            Preconditions.checkArgument(!(callback instanceof AsyncChains.Head));
-            Preconditions.checkState(next instanceof AsyncChains.Head);
-            Head<?> head = (Head<?>) next;
+            Preconditions.checkArgument(!(callback instanceof AsyncChains.AbstractHead));
+            Preconditions.checkState(next instanceof AsyncChains.AbstractHead);
+            AbstractHead<?, ?> head = (AbstractHead<?, ?>) next;
             next = callback;
             head.begin();
         }
@@ -125,7 +138,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
     public static abstract class Map<I, O> extends Link<I, O> implements Function<I, O>
     {
-        Map(Head<?> head)
+        Map(AbstractHead<?, ?> head)
         {
             super(head);
         }
@@ -142,7 +155,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     {
         final Function<? super I, ? extends O> map;
 
-        EncapsulatedMap(Head<?> head, Function<? super I, ? extends O> map)
+        EncapsulatedMap(AbstractHead<?, ?> head, Function<? super I, ? extends O> map)
         {
             super(head);
             this.map = map;
@@ -157,7 +170,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
     public static abstract class FlatMap<I, O> extends Link<I, O> implements Function<I, AsyncChain<O>>
     {
-        FlatMap(Head<?> head)
+        FlatMap(AbstractHead<?, ?> head)
         {
             super(head);
         }
@@ -174,7 +187,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     {
         final Function<? super I, ? extends AsyncChain<O>> map;
 
-        EncapsulatedFlatMap(Head<?> head, Function<? super I, ? extends AsyncChain<O>> map)
+        EncapsulatedFlatMap(AbstractHead<?, ?> head, Function<? super I, ? extends AsyncChain<O>> map)
         {
             super(head);
             this.map = map;
@@ -190,7 +203,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     // if extending Callback, be sure to invoke super.accept()
     static class Callback<I> extends Link<I, I>
     {
-        Callback(Head<?> head)
+        Callback(AbstractHead<?, ?> head)
         {
             super(head);
         }
@@ -206,7 +219,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     {
         final BiConsumer<? super I, Throwable> callback;
 
-        EncapsulatedCallback(Head<?> head, BiConsumer<? super I, Throwable> callback)
+        EncapsulatedCallback(AbstractHead<?, ?> head, BiConsumer<? super I, Throwable> callback)
         {
             super(head);
             this.callback = callback;
@@ -222,7 +235,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
     // either the thing we start, or the thing we do in follow-up
     BiConsumer<? super V, Throwable> next;
-    AsyncChains(Head<?> head)
+    AsyncChains(AbstractHead<?, ?> head)
     {
         this.next = (BiConsumer) head;
     }
@@ -247,19 +260,19 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
     // can be used by transformations that want efficiency, and can directly extend Link, FlatMap or Callback
     // (or perhaps some additional helper implementations that permit us to simply implement apply for Map and FlatMap)
-    <O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> add(Function<Head<?>, T> factory)
+    <O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> add(Function<AbstractHead<?, ?>, T> factory)
     {
-        Preconditions.checkState(next instanceof Head<?>);
-        Head<?> head = (Head<?>) next;
+        Preconditions.checkState(next instanceof AsyncChains.AbstractHead<?, ?>);
+        AbstractHead<?, ?> head = (AbstractHead<?, ?>) next;
         T result = factory.apply(head);
         next = result;
         return result;
     }
 
-    <P, O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> add(BiFunction<Head<?>, P, T> factory, P param)
+    <P, O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> add(BiFunction<AbstractHead<?, ?>, P, T> factory, P param)
     {
-        Preconditions.checkState(next instanceof Head<?>);
-        Head<?> head = (Head<?>) next;
+        Preconditions.checkState(next instanceof AsyncChains.AbstractHead<?, ?>);
+        AbstractHead<?, ?> head = (AbstractHead<?, ?>) next;
         T result = factory.apply(head, param);
         next = result;
         return result;
