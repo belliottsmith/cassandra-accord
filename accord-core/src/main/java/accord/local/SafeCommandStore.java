@@ -22,6 +22,7 @@ import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.ProgressLog;
 import accord.primitives.*;
+import accord.primitives.Txn.Kind;
 import org.apache.cassandra.utils.concurrent.Future;
 
 import javax.annotation.Nullable;
@@ -29,6 +30,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 
@@ -70,22 +72,24 @@ public interface SafeCommandStore
         EXECUTES_AFTER
     }
     enum TestDep { WITH, WITHOUT, ANY_DEPS }
-    enum TestKind implements Predicate<Txn.Kind>
+    enum TestKind implements Predicate<Kind>
     {
-        Ws, RorWs, Any;
+        Ws, RorWs, WsOrSyncPoint, SyncPoints, Any;
 
-        public boolean test(Txn.Kind kind)
+        public boolean test(Kind kind)
         {
             switch (this)
             {
                 default: throw new AssertionError();
                 case Any: return true;
+                case WsOrSyncPoint: return kind == Write || kind == Kind.SyncPoint || kind == ExclusiveSyncPoint;
+                case SyncPoints: return kind == Kind.SyncPoint || kind == ExclusiveSyncPoint;
                 case Ws: return kind == Write;
                 case RorWs: return kind == Read || kind == Write;
             }
         }
 
-        public static TestKind conflicts(Txn.Kind kind)
+        public static TestKind conflicts(Kind kind)
         {
             switch (kind)
             {
@@ -97,6 +101,21 @@ public interface SafeCommandStore
                 case SyncPoint:
                 case ExclusiveSyncPoint:
                     return Any;
+            }
+        }
+
+        public static TestKind shouldHaveWitnessed(Kind kind)
+        {
+            switch (kind)
+            {
+                default: throw new AssertionError();
+                case Read:
+                    return WsOrSyncPoint;
+                case Write:
+                    return Any;
+                case SyncPoint:
+                case ExclusiveSyncPoint:
+                    return SyncPoints;
             }
         }
 

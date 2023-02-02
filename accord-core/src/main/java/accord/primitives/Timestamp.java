@@ -27,6 +27,12 @@ import javax.annotation.Nonnull;
 public class Timestamp implements Comparable<Timestamp>
 {
     private static final int REJECTED_FLAG = 0x8000;
+
+    /**
+     * The set of flags we want to retain as we merge timestamps (e.g. when taking mergeMax).
+     * Today this is only the REJECTED_FLAG, but we may include additional flags in future (such as Committed, Applied..)
+     * which we may also want to retain when merging in other contexts (such as in Deps).
+     */
     private static final int MERGE_FLAGS = 0x8000;
 
     public static Timestamp fromBits(long msb, long lsb, Id node)

@@ -41,6 +41,7 @@ import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.SafeCommandStore.TestDep.WITHOUT;
 import static accord.local.SafeCommandStore.TestKind.Any;
 import static accord.local.SafeCommandStore.TestKind.RorWs;
+import static accord.local.SafeCommandStore.TestKind.shouldHaveWitnessed;
 import static accord.local.SafeCommandStore.TestTimestamp.*;
 import static accord.local.Status.*;
 import static accord.messages.PreAccept.calculatePartialDeps;
@@ -230,6 +231,16 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
         public final Ballot accepted;
         public final Timestamp executeAt;
         public final PartialDeps deps;
+        /**
+         * {@link Txn.Kind#SyncPoint} durably propose dependencies, that must be recovered;
+         * this field represents those deps from an accepted (or later) register, and so for such
+         * transactions if we invalidate transactions without a covering set of such deps, then when
+         * we *have* such a covering set of we may safely repropose them as they represent the same
+         * ones proposed by the original coordinator.
+         *
+         * This may also be used to reconstruct dependencies that have already been committed for standard
+         * transactions, to avoid having to perform additional work to assemble them.
+         */
         public final PartialDeps acceptedDeps; // only those deps that have previously been proposed
         public final Deps earlierCommittedWitness;  // counter-point to earlierAcceptedNoWitness
         public final Deps earlierAcceptedNoWitness; // wait for these to commit
@@ -313,7 +324,8 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
     {
         try (Deps.Builder builder = Deps.builder())
         {
-            commandStore.mapReduce(keys, ranges, Any, STARTED_BEFORE, startedBefore, WITHOUT, startedBefore, Accepted, PreCommitted,
+            // any transaction that started
+            commandStore.mapReduce(keys, ranges, shouldHaveWitnessed(startedBefore.rw()), STARTED_BEFORE, startedBefore, WITHOUT, startedBefore, Accepted, PreCommitted,
                     (keyOrRange, txnId, executeAt, prev) -> {
                         if (executeAt.compareTo(startedBefore) > 0)
                             builder.add(keyOrRange, txnId);
@@ -327,7 +339,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
     {
         try (Deps.Builder builder = Deps.builder())
         {
-            commandStore.mapReduce(keys, ranges, Any, STARTED_BEFORE, startedBefore, WITH, startedBefore, Committed, null,
+            commandStore.mapReduce(keys, ranges, shouldHaveWitnessed(startedBefore.rw()), STARTED_BEFORE, startedBefore, WITH, startedBefore, Committed, null,
                     (keyOrRange, txnId, executeAt, prev) -> builder.add(keyOrRange, txnId), (Deps.AbstractBuilder<Deps>)builder, null);
             return builder.build();
         }
@@ -342,7 +354,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
          * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
          * has not witnessed us we can safely invalidate (us).
          */
-        return commandStore.mapReduce(keys, ranges, Any, STARTED_AFTER, startedAfter, WITHOUT, startedAfter, Accepted, PreCommitted,
+        return commandStore.mapReduce(keys, ranges, shouldHaveWitnessed(startedAfter.rw()), STARTED_AFTER, startedAfter, WITHOUT, startedAfter, Accepted, PreCommitted,
                 (keyOrRange, txnId, executeAt, prev) -> true, false, true);
     }
 
@@ -355,7 +367,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
          * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
          * has not witnessed us we can safely invalidate it.
          */
-        return commandStore.mapReduce(keys, ranges, Any, EXECUTES_AFTER, startedAfter, WITHOUT, startedAfter, Committed, null,
+        return commandStore.mapReduce(keys, ranges, shouldHaveWitnessed(startedAfter.rw()), EXECUTES_AFTER, startedAfter, WITHOUT, startedAfter, Committed, null,
                 (keyOrRange, txnId, executeAt, prev) -> true,false, true);
     }
 }

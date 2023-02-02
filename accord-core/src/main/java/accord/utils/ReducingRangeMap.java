@@ -56,7 +56,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
     }
 
     /**
-     * returns a copy of this LinearRangeMap limited to the ranges supplied, with all other ranges reporting Ballot.none()
+     * returns a copy of this ReducingRangeMap limited to the ranges supplied, with all other ranges reporting the "zero" value
      */
     @VisibleForTesting
     static <V> ReducingRangeMap<V> trim(ReducingRangeMap<V> existing, Ranges ranges, BiFunction<V, V, V> reduce)

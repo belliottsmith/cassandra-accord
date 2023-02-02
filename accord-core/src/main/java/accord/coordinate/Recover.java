@@ -243,6 +243,13 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
                 case Accepted:
                 {
+                    // Today we send Deps for all Accept rounds, however their contract is different for SyncPoint
+                    // and regular transactions. The former require that their deps be durably agreed before they
+                    // proceed, but this is impossible for a regular transaction that may agree a later executeAt
+                    // than proposed. Deps for standard transactions are only used for recovery.
+                    // While we could safely behave identically here for them, we expect to stop sending deps in the
+                    // Accept round for these transactions as it is not necessary for correctness with some modifications
+                    // to recovery.
                     Deps deps;
                     if (txnId.rw().proposesDeps()) deps = tryMergeAcceptedDeps();
                     else deps = mergeDeps();
