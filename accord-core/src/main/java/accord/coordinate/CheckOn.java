@@ -192,7 +192,7 @@ public class CheckOn extends CheckShards
                     if (untilLocalEpoch >= full.executeAt.epoch())
                     {
                         confirm(Commands.commit(safeStore, txnId, maxRoute, progressKey, partialTxn, full.executeAt, partialDeps));
-                        confirm(Commands.apply(safeStore, txnId, untilLocalEpoch, maxRoute, full.executeAt, partialDeps, full.writes, full.result));
+                        confirm(Commands.apply(safeStore, txnId, untilLocalEpoch, maxRoute, progressKey, full.executeAt, partialDeps, full.writes, full.result));
                         break;
                     }
 

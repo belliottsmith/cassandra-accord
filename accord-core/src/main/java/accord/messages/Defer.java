@@ -20,6 +20,8 @@ package accord.messages;
 
 import java.util.function.Function;
 
+import javax.annotation.Nullable;
+
 import accord.local.*;
 import accord.local.Status.Known;
 import accord.primitives.TxnId;
@@ -68,13 +70,12 @@ class Defer implements CommandListener
     }
 
     @Override
-    public void onChange(SafeCommandStore safeStore, TxnId txnId)
+    public void onChange(SafeCommandStore safeStore, @Nullable SaveStatus prev, Command updated)
     {
-        Command command = safeStore.command(txnId);
-        Ready ready = waitUntil.apply(command);
+        Ready ready = waitUntil.apply(updated);
         if (ready == No) return;
 
-        Command.removeListener(safeStore, command, this);
+        Command.removeListener(safeStore, updated, this);
 
         if (ready == Expired) return;
 

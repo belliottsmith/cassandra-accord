@@ -18,11 +18,13 @@
 
 package accord.local;
 
+import javax.annotation.Nullable;
+
 import accord.primitives.TxnId;
 
 public interface CommandListener
 {
-    void onChange(SafeCommandStore safeStore, TxnId txnId);
+    void onChange(SafeCommandStore safeStore, @Nullable SaveStatus prev, Command updated);
 
     /**
      * Scope needed to run onChange

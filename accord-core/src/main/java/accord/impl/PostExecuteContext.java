@@ -16,9 +16,10 @@
  * limitations under the License.
  */
 
-package accord.local;
+package accord.impl;
 
-import accord.impl.CommandsForKey;
+import accord.local.Command;
+import accord.local.ContextValue;
 import accord.primitives.RoutableKey;
 import accord.primitives.TxnId;
 import com.google.common.collect.ImmutableMap;

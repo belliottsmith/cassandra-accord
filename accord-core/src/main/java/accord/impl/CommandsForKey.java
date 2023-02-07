@@ -290,9 +290,9 @@ public class CommandsForKey extends ImmutableState
         }
 
         @Override
-        public void onChange(SafeCommandStore safeStore, TxnId txnId)
+        public void onChange(SafeCommandStore safeStore, @Nullable SaveStatus prev, Command updated)
         {
-            CommandsForKeys.listenerUpdate(safeStore, safeStore.commandsForKey(listenerKey), safeStore.command(txnId));
+            CommandsForKeys.listenerUpdate(safeStore, ((AbstractSafeCommandStore)safeStore).commandsForKey(listenerKey), prev, updated);
         }
 
         @Override
@@ -469,7 +469,7 @@ public class CommandsForKey extends ImmutableState
 
     public static class Update
     {
-        private final SafeCommandStore safeStore;
+        private final AbstractSafeCommandStore safeStore;
         private boolean completed = false;
         private final Key key;
         private final CommandsForKey original;
@@ -483,7 +483,7 @@ public class CommandsForKey extends ImmutableState
         public Update(SafeCommandStore safeStore, CommandsForKey original)
         {
             original.checkCanUpdate();
-            this.safeStore = safeStore;
+            this.safeStore = (AbstractSafeCommandStore) safeStore;
             this.original = original;
             this.key = original.key;
             this.max = original.max;
@@ -545,25 +545,5 @@ public class CommandsForKey extends ImmutableState
             completed = true;
             return updated;
         }
-    }
-
-    public static CommandsForKey updateLastExecutionTimestamps(CommandsForKey current, SafeCommandStore safeStore, Timestamp executeAt, boolean isForWriteTxn)
-    {
-        Timestamp lastWrite = current.lastWriteTimestamp;
-
-        if (executeAt.compareTo(lastWrite) < 0)
-            throw new IllegalArgumentException(String.format("%s is less than the most recent write timestamp %s", executeAt, lastWrite));
-
-        Timestamp lastExecuted = current.lastExecutedTimestamp;
-        int cmp = executeAt.compareTo(lastExecuted);
-        // execute can be in the past if it's for a read and after the most recent write
-        if (cmp == 0 || (!isForWriteTxn && cmp < 0))
-            return current;
-        if (cmp < 0)
-            throw new IllegalArgumentException(String.format("%s is less than the most recent executed timestamp %s", executeAt, lastExecuted));
-
-        Update update = safeStore.beginUpdate(current);
-        update.updateLastExecutionTimestamps(executeAt, isForWriteTxn);
-        return update.complete();
     }
 }

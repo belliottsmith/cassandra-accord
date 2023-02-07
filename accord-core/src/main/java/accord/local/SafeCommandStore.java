@@ -21,9 +21,7 @@ package accord.local;
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.ProgressLog;
-import accord.impl.CommandsForKey;
 import accord.primitives.*;
-import accord.utils.async.AsyncCallbacks;
 
 import javax.annotation.Nullable;
 
@@ -47,12 +45,6 @@ public interface SafeCommandStore
      */
     Command ifLoaded(TxnId txnId);
     Command command(TxnId txnId);
-
-    CommandsForKey ifLoaded(RoutableKey key);
-    CommandsForKey commandsForKey(RoutableKey key);
-    CommandsForKey maybeCommandsForKey(RoutableKey key);
-
-
     boolean canExecuteWith(PreLoadContext context);
 
     /**
@@ -65,8 +57,8 @@ public interface SafeCommandStore
         commandStore().execute(context, safeStore -> {
             Command command = safeStore.command(txnId);
             CommandListener listener = Command.listener(listenerId);
-            Command.addListener(safeStore, command, listener);
-            listener.onChange(safeStore, txnId);
+            command = Command.addListener(safeStore, command, listener);
+            listener.onChange(safeStore, null, command);
         }).begin(agent());
     }
 
@@ -107,37 +99,22 @@ public interface SafeCommandStore
     long latestEpoch();
     Timestamp preaccept(TxnId txnId, Seekables<?, ?> keys);
 
-    default void notifyListeners(Command command)
+    default void notifyListeners(@Nullable SaveStatus prev, Command updated)
     {
-        TxnId txnId = command.txnId();
-        for (CommandListener listener : command.listeners())
+        TxnId txnId = updated.txnId();
+        for (CommandListener listener : updated.listeners())
         {
-            PreLoadContext context = listener.listenerPreLoadContext(command.txnId());
+            PreLoadContext context = listener.listenerPreLoadContext(updated.txnId());
             if (canExecuteWith(context))
             {
-                listener.onChange(this, txnId);
+                listener.onChange(this, prev, updated);
             }
             else
             {
-                commandStore().execute(context, safeStore -> listener.onChange(safeStore, txnId)).begin(agent());
+                commandStore().execute(context, safeStore -> listener.onChange(safeStore, null, safeStore.command(txnId))).begin(agent());
             }
         }
     }
 
-    Command.Update beginUpdate(Command command);
-
-    default Command.Update beginUpdate(TxnId txnId)
-    {
-        return beginUpdate(command(txnId));
-    }
-
-    void completeUpdate(Command.Update update, Command current, Command updated);
-
-    CommandsForKey.Update beginUpdate(CommandsForKey commandsForKey);
-
-    void completeUpdate(CommandsForKey.Update update, CommandsForKey current, CommandsForKey updated);
-
-    PostExecuteContext complete();
-
-    CommandsForKey.CommandLoader<?> cfkLoader();
+    <C extends Command> C update(Command prev, C updated);
 }

@@ -248,7 +248,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     for (Key key : keys)
                     {
                         if (!slice.contains(key)) continue;
-                        CommandsForKey forKey = safeStore.ifLoaded(key);
+                        CommandsForKey forKey = ((AbstractSafeCommandStore)safeStore).ifLoaded(key);
                         accumulate = map.apply(forKey, accumulate);
                         if (accumulate.equals(terminalValue))
                             return accumulate;
@@ -377,7 +377,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         };
     }
 
-    private static class InMemorySafeStore extends SafeCommandStores.AbstractSafeCommandStore
+    private static class InMemorySafeStore extends AbstractSafeCommandStore
     {
         private final InMemoryState state;
         private final CFKLoader cfkLoader;
@@ -387,6 +387,31 @@ public abstract class InMemoryCommandStore extends CommandStore
             super(context);
             this.cfkLoader = cfkLoader;
             this.state = state;
+        }
+
+        public AbstractSafeCommandStore.ContextState<RoutableKey, CommandsForKey, CommandsForKey.Update> commandsForKey()
+        {
+            return commandsForKey;
+        }
+
+        public CommandsForKey ifLoaded(RoutableKey key)
+        {
+            CommandsForKey cfk = getIfLoaded(key, commandsForKey, this::getIfLoaded, CommandsForKey.EMPTY);
+            if (cfk == null)
+                return null;
+            cfk = maybeConvertEmpty(key, cfk, commandsForKey, k -> new CommandsForKey((Key) k, cfkLoader()), CommandsForKey.EMPTY);
+            cfk.checkIsActive();
+            return cfk;
+        }
+
+        public CommandsForKey commandsForKey(RoutableKey key)
+        {
+            CommandsForKey cfk = commandsForKey.get(key);
+            if (cfk == null)
+                throw new IllegalStateException(String.format("%s was not specified in PreLoadContext", key));
+            cfk = maybeConvertEmpty(key, cfk, commandsForKey, k -> new CommandsForKey((Key) k, cfkLoader()), CommandsForKey.EMPTY);
+            cfk.checkIsActive();
+            return cfk;
         }
 
         @Override
@@ -616,19 +641,20 @@ public abstract class InMemoryCommandStore extends CommandStore
     }
 
     @Override
-    public SafeCommandStore beginOperation(PreExecuteContext context)
+    public SafeCommandStore beginOperation(PreLoadContext loadContext)
     {
+        PreExecuteContext executeContext = createPreExecuteCtx(loadContext);
         state.refreshRanges();
         if (current != null)
             throw new IllegalStateException("Another operation is in progress or it's store was not cleared");
-        current = createCommandStore(state, context);
+        current = createCommandStore(state, executeContext);
         current.commands().checkActive();
         current.commandsForKey().checkActive();
         return current;
     }
 
     @Override
-    public PostExecuteContext completeOperation(SafeCommandStore store)
+    public void completeOperation(SafeCommandStore store)
     {
         if (store != current)
             throw new IllegalStateException("This operation has already been cleared");
@@ -636,7 +662,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         current.commands().markDormant();
         current.commandsForKey().markDormant();
         current = null;
-        return result;
+        applyPostExecuteCtx(result);
     }
 
     private PreExecuteContext createPreExecuteCtx(PreLoadContext preLoadContext)
@@ -687,8 +713,7 @@ public abstract class InMemoryCommandStore extends CommandStore
 
     private <T> T executeInContext(CommandStore commandStore, PreLoadContext preLoadContext, Function<? super SafeCommandStore, T> function, boolean isDirectCall)
     {
-
-        SafeCommandStore safeStore = commandStore.beginOperation(createPreExecuteCtx(preLoadContext));
+        SafeCommandStore safeStore = ((InMemoryCommandStore)commandStore).beginOperation(preLoadContext);
         try
         {
             return function.apply(safeStore);
@@ -700,7 +725,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
         finally
         {
-            applyPostExecuteCtx(commandStore.completeOperation(safeStore));
+            ((InMemoryCommandStore)commandStore).completeOperation(safeStore);
         }
     }
 
@@ -896,7 +921,6 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return super.command(txnId);
             }
 
-            @Override
             public CommandsForKey commandsForKey(RoutableKey key)
             {
                 assertThread();
@@ -964,27 +988,6 @@ public abstract class InMemoryCommandStore extends CommandStore
             {
                 assertThread();
                 super.addListener(command, listener);
-            }
-
-            @Override
-            public Command.Update beginUpdate(Command command)
-            {
-                assertThread();
-                return super.beginUpdate(command);
-            }
-
-            @Override
-            public void completeUpdate(Command.Update update, Command current, Command updated)
-            {
-                assertThread();
-                super.completeUpdate(update, current, updated);
-            }
-
-            @Override
-            public PostExecuteContext complete()
-            {
-                assertThread();
-                return super.complete();
             }
         }
 

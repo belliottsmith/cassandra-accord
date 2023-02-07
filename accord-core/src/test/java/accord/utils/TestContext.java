@@ -21,7 +21,7 @@ package accord.utils;
 import accord.api.Key;
 import accord.local.Command;
 import accord.impl.CommandsForKey;
-import accord.local.PreExecuteContext;
+import accord.impl.PreExecuteContext;
 import accord.primitives.Keys;
 import accord.primitives.RoutableKey;
 import accord.primitives.Seekables;

@@ -110,12 +110,11 @@ public class ReadData extends AbstractEpochRequest<ReadData.ReadNack> implements
     }
 
     @Override
-    public synchronized void onChange(SafeCommandStore safeStore, TxnId txnId)
+    public synchronized void onChange(SafeCommandStore safeStore, @Nullable SaveStatus prev, Command updated)
     {
-        Command command = safeStore.command(txnId);
         logger.trace("{}: updating as listener in response to change on {} with status {} ({})",
-                this, command.txnId(), command.status(), command);
-        switch (command.status())
+                this, updated.txnId(), updated.status(), updated);
+        switch (updated.status())
         {
             default: throw new AssertionError();
             case NotWitnessed:
@@ -133,10 +132,10 @@ public class ReadData extends AbstractEpochRequest<ReadData.ReadNack> implements
             case ReadyToExecute:
         }
 
-        command = Command.removeListener(safeStore, command, this);
+        updated = Command.removeListener(safeStore, updated, this);
 
         if (!isObsolete)
-            read(safeStore, command.asCommitted());
+            read(safeStore, updated.asCommitted());
     }
 
     @Override

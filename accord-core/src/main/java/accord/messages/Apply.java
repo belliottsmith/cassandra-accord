@@ -84,7 +84,7 @@ public class Apply extends TxnRequest<ApplyReply>
     @Override
     public ApplyReply apply(SafeCommandStore safeStore)
     {
-        switch (Commands.apply(safeStore, txnId, untilEpoch, scope, executeAt, deps, writes, result))
+        switch (Commands.apply(safeStore, txnId, untilEpoch, scope, progressKey, executeAt, deps, writes, result))
         {
             default:
             case Insufficient:

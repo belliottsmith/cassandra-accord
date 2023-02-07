@@ -21,6 +21,8 @@ package accord.messages;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
+import javax.annotation.Nullable;
+
 import accord.local.*;
 import accord.local.Node.Id;
 import accord.primitives.*;
@@ -101,12 +103,11 @@ public class WaitOnCommit implements Request, MapReduceConsume<SafeCommandStore,
     }
 
     @Override
-    public void onChange(SafeCommandStore safeStore, TxnId txnId)
+    public void onChange(SafeCommandStore safeStore, @Nullable SaveStatus prev, Command updated)
     {
-        Command command = safeStore.command(txnId);
         logger.trace("{}: updating as listener in response to change on {} with status {} ({})",
-                this, command.txnId(), command.status(), command);
-        switch (command.status())
+                this, updated.txnId(), updated.status(), updated);
+        switch (updated.status())
         {
             default: throw new AssertionError();
             case NotWitnessed:
@@ -123,7 +124,7 @@ public class WaitOnCommit implements Request, MapReduceConsume<SafeCommandStore,
             case Invalidated:
         }
 
-        Command.removeListener(safeStore, command, this);
+        Command.removeListener(safeStore, updated, this);
         ack();
     }
 

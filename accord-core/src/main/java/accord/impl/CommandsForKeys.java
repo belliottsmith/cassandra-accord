@@ -18,9 +18,11 @@
 
 package accord.impl;
 
-import accord.api.Key;
+import javax.annotation.Nullable;
+
 import accord.local.Command;
 import accord.local.SafeCommandStore;
+import accord.local.SaveStatus;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import org.slf4j.Logger;
@@ -32,41 +34,30 @@ public class CommandsForKeys
 
     private CommandsForKeys() {}
 
-    public static boolean register(SafeCommandStore safeStore, CommandsForKey cfk, Command command)
-    {
-        CommandsForKey.Update update = safeStore.beginUpdate(cfk);
-        update.updateMax(command.executeAt());
-        update.byId().add(command.txnId(), command);
-        update.byExecuteAt().add(command.txnId(), command);
-        update.complete();
-        return true;
-    }
-
     public static void register(SafeCommandStore safeStore, Command command, RoutableKey key, Ranges slice)
     {
-        CommandsForKey cfk = safeStore.commandsForKey(key);
-        CommandsForKey.Update update = safeStore.beginUpdate(cfk);
+        AbstractSafeCommandStore store = (AbstractSafeCommandStore) safeStore;
+        CommandsForKey cfk = store.commandsForKey(key);
+        CommandsForKey.Update update = store.beginUpdate(cfk);
         update.updateMax(command.executeAt());
         update.byId().add(command.txnId(), command);
         update.byExecuteAt().add(command.txnId(), command);
         update.complete();
     }
 
-    static void register(SafeCommandStore safeStore, Key key, Command command)
-    {
-        register(safeStore, safeStore.commandsForKey(key), command);
-    }
-
-    public static void listenerUpdate(SafeCommandStore safeStore, CommandsForKey listener, Command command)
+    public static void listenerUpdate(SafeCommandStore safeStore, CommandsForKey listener, @Nullable SaveStatus prev, Command command)
     {
         if (logger.isTraceEnabled())
             logger.trace("[{}]: updating as listener in response to change on {} with status {} ({})",
                          listener.key(), command.txnId(), command.status(), command);
 
-        CommandsForKey.Update update = safeStore.beginUpdate(listener);
+        CommandsForKey.Update update = ((AbstractSafeCommandStore)safeStore).beginUpdate(listener);
         update.updateMax(command.executeAt());
         // add/remove the command on every listener update to avoid
         // special denormalization handling in Cassandra
+        if (prev != null && command.status().phase == prev.phase)
+            return;
+
         switch (command.status())
         {
             default: throw new AssertionError();
