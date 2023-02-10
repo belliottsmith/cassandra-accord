@@ -73,16 +73,6 @@ abstract class Propose<R> implements Callback<AcceptReply>
         this.acceptTracker = new QuorumTracker(topologies);
     }
 
-    public static void propose(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route,
-                                         Timestamp executeAt, Deps deps, BiConsumer<Void, Throwable> callback)
-    {
-        Propose<Void> propose = new Propose<Void>(node, topologies, ballot, txnId, txn, route, deps, executeAt, callback)
-        {
-            @Override void onAccepted() { callback.accept(null, null); }
-        };
-        propose.start();
-    }
-
     void start()
     {
         node.send(acceptTracker.nodes(), to -> new Accept(to, acceptTracker.topologies(), ballot, txnId, route, executeAt, txn.keys(), deps), this);

@@ -71,11 +71,11 @@ public abstract class CommandStore
     Timestamp preaccept(TxnId txnId, Seekables<?, ?> keys, SafeCommandStore safeStore)
     {
         NodeTimeService time = safeStore.time();
-        boolean isExpired = agent().isExpired(txnId, safeStore.time().now());
-        if (rejectBefore != null && !isExpired)
-            isExpired = null == rejectBefore.foldl(keys, (rejectIfBefore, test) -> rejectIfBefore.compareTo(test) >= 0 ? null : test, txnId, Objects::isNull);
+        boolean reject = agent().isExpired(txnId, safeStore.time().now());
+        if (rejectBefore != null && !reject)
+            reject = null == rejectBefore.foldl(keys, (rejectIfBefore, test) -> rejectIfBefore.compareTo(test) >= 0 ? null : test, txnId, Objects::isNull);
 
-        if (isExpired)
+        if (reject)
             return time.uniqueNow(txnId).asRejected();
 
         if (txnId.rw() == ExclusiveSyncPoint)
