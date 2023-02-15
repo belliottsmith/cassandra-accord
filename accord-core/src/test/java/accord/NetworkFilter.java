@@ -25,7 +25,15 @@ import com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayDeque;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 public class NetworkFilter
@@ -39,9 +47,58 @@ public class NetworkFilter
 
     Set<DiscardPredicate> discardPredicates = Sets.newConcurrentHashSet();
 
+    Map<Id, Long> delayedNodes = new ConcurrentHashMap<>();
+
+    Map<Id, Queue<Runnable>> corkedNodes = new ConcurrentHashMap<>();
+
     public boolean shouldDiscard(Id from, Id to, Message message)
     {
         return discardPredicates.stream().anyMatch(p -> p.check(from, to, message));
+    }
+
+    public long delayNanos(Id id)
+    {
+        return delayedNodes.getOrDefault(id, 0L);
+    }
+
+    public long delay(Id node, long delay, TimeUnit unit)
+    {
+        return delayedNodes.put(node,  unit.toNanos(delay));
+    }
+
+    public void cork(Id node)
+    {
+        synchronized (corkedNodes)
+        {
+            corkedNodes.putIfAbsent(node, new ArrayDeque<>());
+        }
+    }
+
+    public void uncork(Id node)
+    {
+        Queue<Runnable> corked;
+        synchronized (corkedNodes)
+        {
+            corked = corkedNodes.remove(node);
+        }
+        for (Runnable r : corked)
+            r.run();
+    }
+
+    public boolean maybeCork(Id node, Runnable r)
+    {
+        if (!corkedNodes.containsKey(node))
+            return false;
+        synchronized (corkedNodes)
+        {
+            Queue<Runnable> corked = corkedNodes.get(node);
+            if (corked != null)
+            {
+                corked.offer(r);
+                return true;
+            }
+        }
+        return false;
     }
 
     public void isolate(Id node)
@@ -88,5 +145,7 @@ public class NetworkFilter
     {
         logger.info("Clearing network filters");
         discardPredicates.clear();
+        corkedNodes.clear();
+        delayedNodes.clear();
     }
 }

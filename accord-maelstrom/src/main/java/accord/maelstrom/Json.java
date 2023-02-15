@@ -33,7 +33,7 @@ import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import accord.local.Node.Id;
 import accord.api.Key;
-import accord.messages.ReadData.ReadOk;
+import accord.messages.WhenReadyToExecute.ExecuteOk;
 
 public class Json
 {
@@ -447,10 +447,10 @@ public class Json
         }
     };
 
-    public static final TypeAdapter<ReadOk> READ_OK_ADAPTER = new TypeAdapter<ReadOk>()
+    public static final TypeAdapter<ExecuteOk> READ_OK_ADAPTER = new TypeAdapter<ExecuteOk>()
     {
         @Override
-        public void write(JsonWriter out, ReadOk value) throws IOException
+        public void write(JsonWriter out, ExecuteOk value) throws IOException
         {
             out.beginArray();
             for (Map.Entry<Key, Value> e : ((MaelstromData)value.data).entrySet())
@@ -464,7 +464,7 @@ public class Json
         }
 
         @Override
-        public ReadOk read(JsonReader in) throws IOException
+        public ExecuteOk read(JsonReader in) throws IOException
         {
             MaelstromData result = new MaelstromData();
             in.beginArray();
@@ -477,7 +477,7 @@ public class Json
                 in.endArray();
             }
             in.endArray();
-            return new ReadOk(result);
+            return new ExecuteOk(result);
         }
     };
 
@@ -510,7 +510,7 @@ public class Json
                                 .registerTypeAdapter(Value.class, Value.GSON_ADAPTER)
                                 .registerTypeAdapter(Writes.class, TXN_WRITES_ADAPTER)
                                 .registerTypeAdapter(MaelstromResult.class, MaelstromResult.GSON_ADAPTER)
-                                .registerTypeAdapter(ReadOk.class, READ_OK_ADAPTER)
+                                .registerTypeAdapter(ExecuteOk.class, READ_OK_ADAPTER)
                                 .registerTypeAdapter(Deps.class, Json.DEPS_ADAPTER)
                                 .registerTypeAdapter(Keys.class, KEYS_ADAPTER)
                                 .registerTypeAdapter(Body.class, Body.FAIL_READ)

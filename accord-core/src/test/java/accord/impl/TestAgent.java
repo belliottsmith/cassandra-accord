@@ -24,11 +24,17 @@ import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Command;
 import accord.primitives.*;
+import javax.annotation.Nonnull;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class TestAgent implements Agent
 {
+    public static final ConcurrentMap<TxnId, AtomicInteger> completedLocalBarriers = new ConcurrentHashMap<>();
+
     @Override
     public void onRecover(Node node, Result success, Throwable fail)
     {
@@ -64,4 +70,10 @@ public class TestAgent implements Agent
     {
         return new Txn.InMemory(kind, keysOrRanges, MockStore.read(Keys.EMPTY), MockStore.QUERY, null);
     }
+
+    @Override
+    public void onLocalBarrier(@Nonnull Seekables<?, ?> keysOrRanges, @Nonnull TxnId executeAt) {
+        completedLocalBarriers.computeIfAbsent(executeAt, ignored -> new AtomicInteger()).incrementAndGet();
+    }
+
 }

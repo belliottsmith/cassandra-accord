@@ -20,6 +20,7 @@ package accord.local;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -56,6 +57,8 @@ import accord.topology.TopologyManager;
 import net.nicoulaj.compilecommand.annotations.Inline;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
+
+import static accord.utils.Invariants.checkArgument;
 
 public class Node implements ConfigurationService.Listener, NodeTimeService
 {
@@ -362,6 +365,24 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         return new TxnId(uniqueNow(), rw, domain);
     }
 
+    /**
+     * Return a result when all the keys or ranges have applied a transaction in the specified epoch or later.
+     * This is useful for ensuring that all externally visible side effects of transaction application for prior epochs
+     * are visible at this node.
+     *
+     * If global is true then the barrier will wait for visibility to occur a quorum of replicas, but not locally.
+     *
+     * If global is false then the barrier will wait for local visibility to occur, but doesn't guarantee global just best effort.
+     *
+     * Ranges are only supported for global barriers.
+     *
+     * Returns the Timestamp the barrier actually ended up occurring at
+     */
+    public Future<Timestamp> barrier(Seekable keyOrRange, long minEpoch, boolean global)
+    {
+        return Barrier.barrier(this, keyOrRange, minEpoch, global);
+    }
+
     public Future<Result> coordinate(Txn txn)
     {
         return coordinate(nextTxnId(txn.kind(), txn.keys().domain()), txn);
@@ -485,7 +506,12 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         return future;
     }
 
-    public void receive(Request request, Id from, ReplyContext replyContext)
+    public void receive (Request request, Id from, ReplyContext replyContext)
+    {
+        receive(request, from, replyContext, 0);
+    }
+
+    public void receive(Request request, Id from, ReplyContext replyContext, long delayNanos)
     {
         long unknownEpoch = topology().maxUnknownEpoch(request);
         if (unknownEpoch > 0)
@@ -494,7 +520,11 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
             topology().awaitEpoch(unknownEpoch).addListener(() -> receive(request, from, replyContext));
             return;
         }
-        scheduler.now(() -> request.process(this, from, replyContext));
+        Runnable processMsg = () -> request.process(this, from, replyContext);
+        if (delayNanos > 0)
+            scheduler.once(processMsg, delayNanos, TimeUnit.NANOSECONDS);
+        else
+            scheduler.now(processMsg);
     }
 
     public Scheduler scheduler()

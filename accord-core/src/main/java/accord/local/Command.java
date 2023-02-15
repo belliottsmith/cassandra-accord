@@ -269,6 +269,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         set(safeStore, Ranges.EMPTY, coordinateRanges, shard, route, partialTxn, Set, null, Ignore);
 
         notifyListeners(safeStore);
+        logger.info("Preaccepting " + this);
         return AcceptOutcome.Success;
     }
 

@@ -25,19 +25,21 @@ import accord.api.Data;
 import accord.api.Result;
 import accord.local.Node;
 import accord.messages.ReadData;
-import accord.messages.ReadData.ReadNack;
-import accord.messages.ReadData.ReadOk;
+import accord.messages.WhenReadyToExecute.ExecuteNack;
+import accord.messages.WhenReadyToExecute.ExecuteOk;
 import accord.primitives.*;
+import accord.primitives.Txn.Kind;
 import accord.topology.Topologies;
-import accord.messages.ReadData.ReadReply;
+import accord.messages.WhenReadyToExecute.ExecuteReply;
 import accord.local.Node.Id;
 import accord.messages.Commit;
 import accord.topology.Topology;
 
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.messages.Commit.Kind.Maximal;
+import static accord.utils.Invariants.checkArgument;
 
-class Execute extends ReadCoordinator<ReadReply>
+class Execute extends ReadCoordinator<ExecuteReply>
 {
     final Txn txn;
     final Seekables<?, ?> readScope;
@@ -62,6 +64,12 @@ class Execute extends ReadCoordinator<ReadReply>
 
     public static void execute(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
     {
+        if (txn.kind() == Kind.SyncPoint)
+        {
+            checkArgument(txnId.equals(executeAt));
+            BlockOnDeps.blockOnDeps(node, txnId, txn, route, deps, callback);
+            return;
+        }
         if (txn.read().keys().isEmpty())
         {
             Topologies sendTo = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
@@ -90,17 +98,17 @@ class Execute extends ReadCoordinator<ReadReply>
     }
 
     @Override
-    protected Action process(Id from, ReadReply reply)
+    protected Action process(Id from, ExecuteReply reply)
     {
         if (reply.isOk())
         {
-            Data next = ((ReadOk) reply).data;
+            Data next = ((ExecuteOk) reply).data;
             if (next != null)
                 data = data == null ? next : data.merge(next);
             return Approve;
         }
 
-        ReadNack nack = (ReadNack) reply;
+        ExecuteNack nack = (ExecuteNack) reply;
         switch (nack)
         {
             default: throw new IllegalStateException();
