@@ -49,13 +49,13 @@ public class CoordinateSyncPoint extends CoordinatePreAccept<SyncPoint>
     private static final Logger logger = LoggerFactory.getLogger(CoordinateSyncPoint.class);
 
     // Whether to wait on the dependencies applying globally before returning a result
-    private final boolean global;
+    private final boolean async;
 
-    private CoordinateSyncPoint(Node node, TxnId txnId, Txn txn, FullRoute<?> route, boolean global)
+    private CoordinateSyncPoint(Node node, TxnId txnId, Txn txn, FullRoute<?> route, boolean async)
     {
         super(node, txnId, txn, route);
-        checkArgument(txnId.rw() == Kind.SyncPoint || !global);
-        this.global = global;
+        checkArgument(txnId.rw() == Kind.SyncPoint || !async);
+        this.async = async;
     }
 
     public static CoordinateSyncPoint exclusive(Node node, Seekables<?, ?> keysOrRanges)
@@ -63,9 +63,9 @@ public class CoordinateSyncPoint extends CoordinatePreAccept<SyncPoint>
         return coordinate(ExclusiveSyncPoint, node, keysOrRanges, false);
     }
 
-    public static CoordinateSyncPoint inclusive(Node node, Seekables<?, ?> keysOrRanges, boolean global)
+    public static CoordinateSyncPoint inclusive(Node node, Seekables<?, ?> keysOrRanges, boolean async)
     {
-        return coordinate(Kind.SyncPoint, node, keysOrRanges, global);
+        return coordinate(Kind.SyncPoint, node, keysOrRanges, async);
     }
 
     private static CoordinateSyncPoint coordinate(Kind kind, Node node, Seekables<?, ?> keysOrRanges, boolean global)
@@ -100,24 +100,24 @@ public class CoordinateSyncPoint extends CoordinatePreAccept<SyncPoint>
                     if (txnId.rw() == ExclusiveSyncPoint)
                     {
                         node.send(tracker.nodes(), id -> new Apply(id, tracker.topologies(), tracker.topologies(), txnId.epoch(), txnId, route, txnId, deps, txn.execute(txnId, null), txn.result(txnId, txnId, null)));
-                        accept(new SyncPoint(txnId, route.homeKey(), deps), null);
+                        accept(new SyncPoint(txnId, route.homeKey(), deps, true), null);
                     }
                     else
                     {
-                        logger.info("Sync point deps are " + deps);
+                        // If deps are empty there is nothing to wait on application for so we can return immediately
+                        boolean processAsyncCompletion = deps.isEmpty() || async;
                         BlockOnDeps.blockOnDeps(node, txnId, txn, route, deps, (result, throwable) -> {
-                            // Don't want to process completion twice and there is also thread safety concerns
-                            if (!global)
+                            // Don't want to process completion twice
+                            if (processAsyncCompletion)
                                 return;
                             if (throwable != null)
                                 accept(null, throwable);
                             else
-                                accept(new SyncPoint(txnId, route.homeKey(), deps), null);
+                                accept(new SyncPoint(txnId, route.homeKey(), deps, false), null);
                         });
-                        // Non-global wants to be notified immediately so it can wait on the local txn progress
-                        // and then proceed once the local replica is up to date
-                        if (!global)
-                            accept(new SyncPoint(txnId, route.homeKey(), deps), null);
+                        // Notify immediately and the caller can add a listener to command completion to track local application
+                        if (processAsyncCompletion)
+                            accept(new SyncPoint(txnId, route.homeKey(), deps, true), null);
                     }
                 }
             }.start();

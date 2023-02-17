@@ -20,6 +20,9 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.Data;
 import accord.api.Result;
 import accord.coordinate.ReadCoordinator.Action;
@@ -55,6 +58,8 @@ import static accord.messages.Commit.Kind.Maximal;
  */
 public class BlockOnDeps implements Callback<ExecuteReply>
 {
+    private static final Logger logger = LoggerFactory.getLogger(BlockOnDeps.class);
+
     final Node node;
     final TxnId txnId;
     final Txn txn;
@@ -133,6 +138,7 @@ public class BlockOnDeps implements Callback<ExecuteReply>
     @Override
     public void onFailure(Id from, Throwable failure)
     {
+        logger.error("Failure in blockOnDeps", failure);
         if (tracker.recordFailure(from) == Failed)
         {
             isDone = true;

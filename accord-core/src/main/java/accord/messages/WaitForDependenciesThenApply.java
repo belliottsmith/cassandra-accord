@@ -22,11 +22,12 @@ public class WaitForDependenciesThenApply extends WhenReadyToExecute
 {
     private static final Logger logger = LoggerFactory.getLogger(WhenReadyToExecute.class);
 
+    @SuppressWarnings("unused")
     public static class SerializerSupport
     {
-        public static WaitForDependenciesThenApply create(TxnId txnId, PartialRoute<?> route, PartialDeps deps, Seekables<?, ?> partialTxnKeys, Writes writes, Result result)
+        public static WaitForDependenciesThenApply create(TxnId txnId, PartialRoute<?> route, PartialDeps deps, Seekables<?, ?> partialTxnKeys, Writes writes, Result result, boolean notifyAgent)
         {
-            return new WaitForDependenciesThenApply(txnId, route, deps, partialTxnKeys, writes, result);
+            return new WaitForDependenciesThenApply(txnId, route, deps, partialTxnKeys, writes, result, notifyAgent);
         }
     }
 
@@ -34,14 +35,16 @@ public class WaitForDependenciesThenApply extends WhenReadyToExecute
     public final PartialDeps deps;
     public final Writes writes;
     public final Result result;
+    public final boolean notifyAgent;
 
-    WaitForDependenciesThenApply(TxnId txnId, PartialRoute<?> route, PartialDeps deps, Seekables<?, ?> partialTxnKeys, Writes writes, Result result)
+    WaitForDependenciesThenApply(TxnId txnId, PartialRoute<?> route, PartialDeps deps, Seekables<?, ?> partialTxnKeys, Writes writes, Result result, boolean notifyAgent)
     {
         super(txnId, partialTxnKeys, txnId.epoch(), txnId.epoch());
         this.route = route;
         this.deps = deps;
         this.writes = writes;
         this.result = result;
+        this.notifyAgent = notifyAgent;
     }
 
     @Override
@@ -49,7 +52,8 @@ public class WaitForDependenciesThenApply extends WhenReadyToExecute
     {
         logger.trace("{}: executing WaitForDependenciesThenApply", command.txnId());
         CommandStore unsafeStore = safeStore.commandStore();
-        node.agent().onLocalBarrier(scope, txnId);
+        if (notifyAgent)
+            node.agent().onLocalBarrier(scope, txnId);
         // Send a response immediately once deps have been applied
         onExecuteComplete(unsafeStore);
         // Apply after, we aren't waiting for the side effects of this txn since it is an inclusive sync
@@ -79,5 +83,13 @@ public class WaitForDependenciesThenApply extends WhenReadyToExecute
     protected void sendSuccessReply()
     {
         node.reply(replyTo, replyContext, new ExecuteOk(null));
+    }
+
+    @Override
+    public String toString()
+    {
+        return "WaitForDependenciesThenApply{" +
+                "txnId:" + txnId +
+                '}';
     }
 }

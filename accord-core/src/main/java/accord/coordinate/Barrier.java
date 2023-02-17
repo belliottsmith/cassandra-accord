@@ -1,26 +1,23 @@
 package accord.coordinate;
 
-import java.util.function.BiConsumer;
-import java.util.function.Predicate;
-
 import com.google.common.annotations.VisibleForTesting;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.BarrierType;
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.CommandListener;
 import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
-import accord.local.SafeCommandStore.CommandFunction;
 import accord.local.SafeCommandStore.TestDep;
 import accord.local.SafeCommandStore.TestKind;
 import accord.local.SafeCommandStore.TestTimestamp;
-import accord.local.SaveStatus;
 import accord.local.Status;
 import accord.primitives.Keys;
+import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Seekable;
 import accord.primitives.Seekables;
@@ -30,8 +27,6 @@ import accord.utils.MapReduceConsume;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
-import org.apache.cassandra.utils.concurrent.Future;
-import org.apache.cassandra.utils.concurrent.ImmediateFuture;
 
 import static accord.local.PreLoadContext.EMPTY_PRELOADCONTEXT;
 import static accord.local.PreLoadContext.contextFor;
@@ -49,49 +44,55 @@ public class Barrier extends AsyncFuture<Timestamp>
 
     private final Node node;
     private final Seekable keyOrRange;
+
+    private final Seekables<?, ?> seekables;
+
     private final long minEpoch;
-    private final boolean global;
+    private final BarrierType barrierType;
 
     @VisibleForTesting
     CoordinateSyncPoint coordinateSyncPoint;
     @VisibleForTesting
     ExistingTransactionCheck existingTransactionCheck;
 
-    Barrier(Node node, Seekable keyOrRange, long minEpoch, boolean global)
+    Barrier(Node node, Seekable keyOrRange, long minEpoch, BarrierType barrierType)
     {
-        checkArgument(keyOrRange.domain() == Domain.Key || global, "Ranges are only supported with global barriers");
+        checkArgument(keyOrRange.domain() == Domain.Key || barrierType.global, "Ranges are only supported with global barriers");
         this.node = node;
         this.minEpoch = minEpoch;
         this.keyOrRange = keyOrRange;
-        this.global = global;
+        this.seekables = keyOrRange.domain() == Domain.Key ? Keys.of(keyOrRange.asKey()) : Ranges.of(keyOrRange.asRange());
+        this.barrierType = barrierType;
     }
 
-    public static Barrier barrier(Node node, Seekable keyOrRange, long minEpoch, boolean global)
+    public static Barrier barrier(Node node, Seekable keyOrRange, long minEpoch, BarrierType barrierType)
     {
-        Barrier barrier = new Barrier(node, keyOrRange, minEpoch, global);
+        Barrier barrier = new Barrier(node, keyOrRange, minEpoch, barrierType);
         barrier.start();
         return barrier;
     }
 
     private void start()
     {
-        // It may be possible to use local state to determine that the barrier is already satisfied or has
-        // an existing transaction we can wait on
-        if (keyOrRange.domain().isKey() && !global)
+        // It may be possible to use local state to determine that the barrier is already satisfied or
+        // there is an existing transaction we can wait on
+        if (keyOrRange.domain().isKey() && !barrierType.global)
         {
             existingTransactionCheck = checkForExistingTransaction();
             existingTransactionCheck.addCallback((barrierTxn, existingTransactionCheckFailure) -> {
                 if (existingTransactionCheckFailure != null)
                 {
-                    tryFailure(existingTransactionCheckFailure);
+                    Barrier.this.tryFailure(existingTransactionCheckFailure);
                     return;
                 }
 
                 if (barrierTxn != null)
                 {
-                    if (barrierTxn.status.hasBeen(Status.Applied))
-                        trySuccess(barrierTxn.executeAt);
-                    // Otherwise a listener was added to the transaction already
+                    if (barrierTxn.status.equals(Status.Applied))
+                    {
+                        doBarrierSuccess(barrierTxn.executeAt);
+                    }
+                    // A listener was added to the transaction already
                 }
                 else
                 {
@@ -105,66 +106,84 @@ public class Barrier extends AsyncFuture<Timestamp>
         }
     }
 
+    private void doBarrierSuccess(Timestamp executeAt)
+    {
+        // The transaction we wait on might have more keys, but it's not
+        // guaranteed they were wanted and we don't want to force the agent to filter them
+        if (seekables != null)
+            node.agent().onLocalBarrier(seekables, executeAt);
+        Barrier.this.trySuccess(executeAt);
+    }
+
     private void createSyncPoint()
     {
-        coordinateSyncPoint = CoordinateSyncPoint.inclusive(node, Seekables.of(keyOrRange), global);
+        coordinateSyncPoint = CoordinateSyncPoint.inclusive(node, Seekables.of(keyOrRange), barrierType.async);
         coordinateSyncPoint.addCallback((syncPoint, syncPointFailure) -> {
             if (syncPointFailure != null)
             {
-                tryFailure(syncPointFailure);
+                Barrier.this.tryFailure(syncPointFailure);
                 return;
             }
 
             // Need to wait for the local transaction to finish since coordinate sync point won't wait on anything
-            // in the local case just fire and forget
-            if (!global)
+            // if async was requested or there were no deps found
+            if (syncPoint.finishedAsync)
             {
                 TxnId txnId = syncPoint.txnId;
                 long epoch = txnId.epoch();
                 RoutingKey homeKey = syncPoint.homeKey;
                 node.commandStores().ifLocal(PreLoadContext.contextFor(syncPoint.txnId), homeKey, epoch, epoch, safeStore -> {
-                    safeStore.command(txnId).addListener(appliedCommandListener());
+                    CommandListener listener = new BarrierCommandListener();
+                    Command command = safeStore.command(txnId);
+                    listener.onChange(safeStore, command);
+                    // TODO Command was already loaded so no need for addAndInvoke?
+                    if (!isDone())
+                        command.addListener(listener);
                 });
             }
             else
             {
-                trySuccess(syncPoint.txnId);
+                doBarrierSuccess(syncPoint.txnId);
             }
         });
     }
 
-    private CommandListener appliedCommandListener()
+    private class BarrierCommandListener implements CommandListener
     {
-        return new CommandListener()
+        @Override
+        public void onChange(SafeCommandStore safeStore, Command command)
         {
-            @Override
-            public void onChange(SafeCommandStore safeStore, Command command)
+            if (command.is(Status.Applied))
             {
-                if (command.is(Status.Applied))
-                    trySuccess(command.executeAt());
-                else if (command.is(Status.Invalidated))
-                    // TODO is this the right way to error out?
-                    tryFailure(new Timeout(command.txnId(), command.homeKey()));
-
+                Timestamp executeAt = command.executeAt();
+                // In all the cases where we add a listener (listening to existing command, async completion of CoordinateSyncPoint)
+                // we want to notify the agent
+                doBarrierSuccess(executeAt);
             }
+            else if (command.is(Status.Invalidated))
+                // TODO is this the right way to error out?
+                Barrier.this.tryFailure(new Timeout(command.txnId(), command.homeKey()));
 
-            @Override
-            public PreLoadContext listenerPreLoadContext(TxnId caller)
-            {
-                // TODO Surely the command passed to `onChange` is loaded?
-                return EMPTY_PRELOADCONTEXT;
-            }
+        }
 
-            @Override
-            public boolean isTransient()
-            {
-                return true;
-            }
-        };
+        @Override
+        public PreLoadContext listenerPreLoadContext(TxnId caller)
+        {
+            // TODO Surely the command passed to `onChange` is loaded?
+            return EMPTY_PRELOADCONTEXT;
+        }
+
+        @Override
+        public boolean isTransient()
+        {
+            return true;
+        }
     }
 
     private ExistingTransactionCheck checkForExistingTransaction()
     {
+        // TODO this could execute at several different command stores and register multiple command listeners
+        // Won't harm correctness, but maybe wasteful?
         ExistingTransactionCheck check = new ExistingTransactionCheck();
         node.commandStores().mapReduceConsume(
                 contextFor(keyOrRange.asKey()),
@@ -176,7 +195,7 @@ public class Barrier extends AsyncFuture<Timestamp>
     }
 
     // Hold result of looking for a transaction to act as a barrier for an Epoch
-    class BarrierTxn
+    static class BarrierTxn
     {
         @Nonnull
         public final TxnId txnId;
@@ -184,7 +203,7 @@ public class Barrier extends AsyncFuture<Timestamp>
         public final Timestamp executeAt;
         @Nonnull
         public final Status status;
-        public BarrierTxn(@Nonnull TxnId txnId, @Nullable Timestamp executeAt, @Nonnull Status status)
+        public BarrierTxn(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, @Nonnull Status status)
         {
             this.txnId = txnId;
             this.executeAt = executeAt;
@@ -208,14 +227,12 @@ public class Barrier extends AsyncFuture<Timestamp>
      */
     class ExistingTransactionCheck extends AsyncFuture<BarrierTxn> implements MapReduceConsume<SafeCommandStore, BarrierTxn>
     {
-        final Keys keys = Keys.of(keyOrRange.asKey());
-
         @Override
         public BarrierTxn apply(SafeCommandStore safeStore)
         {
             // TODO Is this going to find the correct command store to listen for transaction progress?
             BarrierTxn found = safeStore.mapReduceWithTerminate(
-                    keys,
+                    seekables,
                     safeStore.ranges().since(minEpoch),
                     // Can I use any transaction, optimally I could wait on a sync point just created as part of transaction initiation
                     // so we can overlap the accord sync point with sending the prepare/reads for Paxos
@@ -232,10 +249,9 @@ public class Barrier extends AsyncFuture<Timestamp>
                     // Take the first one we find, and call it good enough to wait on
                     barrierTxn -> true);
             // It's not applied so add a listener to find out when it is applied
-            if (found != null && !found.status.hasBeen(Status.Applied))
+            if (found != null && !found.status.equals(Status.Applied))
             {
-                logger.info("Adding listener to existing transaction " + found.txnId);
-                safeStore.addAndInvokeListener(found.txnId, appliedCommandListener());
+                safeStore.addAndInvokeListener(found.txnId, new BarrierCommandListener());
             }
             return found;
         }
@@ -251,19 +267,12 @@ public class Barrier extends AsyncFuture<Timestamp>
         {
             if (failure != null)
             {
-                tryFailure(failure);
+                ExistingTransactionCheck.this.tryFailure(failure);
                 return;
             }
 
-            if (result == null)
-            {
-                // Will need to create a transaction
-                trySuccess(null);
-            }
-            else
-            {
-                trySuccess(result);
-            }
+            // Will need to create a transaction
+            ExistingTransactionCheck.this.trySuccess(result);
         }
     }
 }

@@ -39,6 +39,8 @@ import static accord.local.Status.Known.*;
 import static accord.local.Status.Known.Done;
 import static accord.local.Status.Known.ExecuteAtOnly;
 import static accord.primitives.Route.isFullRoute;
+import static accord.utils.Invariants.checkArgument;
+import static accord.utils.Invariants.checkState;
 import static accord.utils.Utils.listOf;
 
 import javax.annotation.Nonnull;
@@ -155,7 +157,11 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
     protected abstract void setSaveStatus(SaveStatus status);
 
     public Status status() { return saveStatus().status; }
-    protected void setStatus(Status status) { setSaveStatus(SaveStatus.get(status, known())); }
+    public void setStatus(Status status)
+    {
+        checkArgument(!status.isTerminal(), "Use setTerminalStatus for terminal status");
+        setSaveStatus(SaveStatus.get(status, known()));
+    }
 
     public Known known() { return saveStatus().known; }
 
@@ -175,6 +181,9 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
 
     protected abstract void removeWaitingOn(TxnId txnId, Timestamp executeAt);
     protected abstract boolean isWaitingOnDependency();
+
+    // Safe to clean up things like transient listeners
+    protected abstract void reachedTerminalStatus();
 
     public boolean hasBeenWitnessed()
     {
@@ -233,7 +242,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
 
         if (known().definition.isKnown())
         {
-            Invariants.checkState(status() == Invalidated || executeAt() != null);
+            checkState(status() == Invalidated || executeAt() != null);
             logger.trace("{}: skipping preaccept - already known ({})", txnId(), status());
             // in case of Ballot.ZERO, we must either have a competing recovery coordinator or have late delivery of the
             // preaccept; in the former case we should abandon coordination, and in the latter we have already completed
@@ -241,7 +250,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         }
 
         Ranges coordinateRanges = coordinateRanges(safeStore);
-        Invariants.checkState(!coordinateRanges.isEmpty());
+        checkState(!coordinateRanges.isEmpty());
         ProgressShard shard = progressShard(safeStore, route, progressKey, coordinateRanges);
         if (!validate(Ranges.EMPTY, coordinateRanges, shard, route, Set, partialTxn, Set, null, Ignore))
             throw new IllegalStateException();
@@ -301,7 +310,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         TxnId txnId = txnId();
         Ranges coordinateRanges = coordinateRanges(safeStore);
         Ranges acceptRanges = txnId.epoch() == executeAt.epoch() ? coordinateRanges : safeStore.ranges().between(txnId.epoch(), executeAt.epoch());
-        Invariants.checkState(!acceptRanges.isEmpty());
+        checkState(!acceptRanges.isEmpty());
         ProgressShard shard = progressShard(safeStore, route, progressKey, coordinateRanges);
 
         if (!validate(coordinateRanges, Ranges.EMPTY, shard, route, Ignore, null, Ignore, partialDeps, Set))
@@ -468,10 +477,8 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         setExecuteAt(txnId());
         if (partialDeps() == null)
             setPartialDeps(PartialDeps.NONE);
-        setStatus(Invalidated);
         logger.trace("{}: committed invalidated", txnId());
-
-        notifyListeners(safeStore);
+        setTerminalStatus(Invalidated, safeStore);
     }
 
     public enum ApplyOutcome { Success, Redundant, Insufficient }
@@ -493,7 +500,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         if (untilEpoch < safeStore.time().epoch())
         {
             Ranges expectedRanges = safeStore.ranges().between(executeAt.epoch(), untilEpoch);
-            Invariants.checkState(expectedRanges.containsAll(executeRanges));
+            checkState(expectedRanges.containsAll(executeRanges));
         }
         ProgressShard shard = progressShard(safeStore, route, coordinateRanges);
 
@@ -552,8 +559,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
     protected void postApply(SafeCommandStore safeStore)
     {
         logger.trace("{} applied, setting status to Applied and notifying listeners", txnId());
-        setStatus(Applied);
-        notifyListeners(safeStore);
+        setTerminalStatus(Applied, safeStore);
     }
 
     private static Function<SafeCommandStore, Void> callPostApply(TxnId txnId)
@@ -626,8 +632,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
                     // TODO (desirable, performance): This could be performed immediately upon Committed
                     //      but: if we later support transitive dependency elision this could be dangerous
                     logger.trace("{}: applying no-op", txnId());
-                    setStatus(Applied);
-                    notifyListeners(safeStore);
+                    setTerminalStatus(Applied, safeStore);
                 }
         }
         return true;
@@ -639,7 +644,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
      */
     private boolean updatePredecessor(Command dependency)
     {
-        Invariants.checkState(dependency.hasBeen(PreCommitted));
+        checkState(dependency.hasBeen(PreCommitted));
         if (dependency.hasBeen(Invalidated))
         {
             logger.trace("{}: {} is invalidated. Stop listening and removing from waiting on commit set.", txnId(), dependency.txnId());
@@ -677,7 +682,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
 
     private void insertPredecessor(Command dependency)
     {
-        Invariants.checkState(dependency.hasBeen(PreCommitted));
+        checkState(dependency.hasBeen(PreCommitted));
         if (dependency.hasBeen(Invalidated))
         {
             logger.trace("{}: {} is invalidated. Do not insert.", txnId(), dependency.txnId());
@@ -747,7 +752,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
                 else if (cur.has(until))
                 {
                     // we're done; have already applied
-                    Invariants.checkState(depth == 0);
+                    checkState(depth == 0);
                     break;
                 }
 
@@ -773,7 +778,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
 
                     Unseekables<?, ?> someKeys = cur.maxUnseekables();
                     if (someKeys == null && prev != null) someKeys = prev.partialDeps().someUnseekables(cur.txnId());
-                    Invariants.checkState(someKeys != null);
+                    checkState(someKeys != null);
                     logger.trace("{} blocked on {} until {}", txnIds[0], cur.txnId(), until);
                     safeStore.progressLog().waiting(cur.txnId(), until, someKeys);
                     return;
@@ -961,7 +966,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         // invalid to Add deps to Accepted or AcceptedInvalidate statuses, as Committed deps are not equivalent
         // and we may erroneously believe we have covered a wider range than we have infact covered
         if (ensurePartialDeps == Add)
-            Invariants.checkState(status() != Accepted && status() != AcceptedInvalidate);
+            checkState(status() != Accepted && status() != AcceptedInvalidate);
 
         // validate new partial txn
         if (!validate(ensurePartialTxn, existingRanges, additionalRanges, covers(partialTxn()), covers(partialTxn), "txn", partialTxn))
@@ -984,7 +989,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
                      @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
                      @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
     {
-        Invariants.checkState(progressKey() != null);
+        checkState(progressKey() != null);
         Ranges allRanges = existingRanges.with(additionalRanges);
 
         if (shard.isProgress()) setRoute(Route.merge(route(), (Route)route));
@@ -1058,7 +1063,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
                 }
             case Set:
                 // failing any of these tests is always an illegal state
-                Invariants.checkState(adding != null);
+                checkState(adding != null);
                 if (!adding.containsAll(existingRanges))
                     throw new IllegalArgumentException("Incomplete " + kind + " (" + obj + ") provided; does not cover " + existingRanges);
 
@@ -1073,7 +1078,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
                     if (existing == null)
                         return false;
 
-                    Invariants.checkState(existing.containsAll(existingRanges));
+                    checkState(existing.containsAll(existingRanges));
                     if (existingRanges != additionalRanges && !existing.containsAll(additionalRanges))
                     {
                         if (action == Check)
@@ -1085,7 +1090,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
                 else if (existing != null)
                 {
                     Ranges covering = adding.with(existing);
-                    Invariants.checkState(covering.containsAll(existingRanges));
+                    checkState(covering.containsAll(existingRanges));
                     if (existingRanges != additionalRanges && !covering.containsAll(additionalRanges))
                     {
                         if (action == Check)
@@ -1111,6 +1116,14 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         }
 
         return true;
+    }
+
+    private void setTerminalStatus(Status status, SafeCommandStore safeStore)
+    {
+        checkState(status.isTerminal(), "Use setStatus for non-terminal status");
+        setSaveStatus(SaveStatus.get(status, known()));
+        notifyListeners(safeStore);
+        reachedTerminalStatus();
     }
 
     // TODO (low priority, progress): callers should try to consult the local progress shard (if any) to obtain the full set of keys owned locally

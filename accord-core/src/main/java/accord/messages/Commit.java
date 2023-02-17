@@ -148,11 +148,14 @@ public class Commit extends TxnRequest<ExecuteNack>
         Topology topology = topologies.get(0);
         for (Node.Id to : topology.nodes())
         {
+            // To simplify making sure the agent is notified once and is notified before the barrier coordination
+            // returns a result; we never notify the agent on the coordinator as part of WaitForDependenciesThenApply execution
+            boolean notifyAgent = to != node.id();
             Commit commit = new Commit(
                     Kind.Minimal, to, topology, topologies, txnId,
                     txn, route, txnId, deps,
                     // TODO is this slice to get the keys correct?
-                    (maybePartialTransaction, partialRoute, partialDeps) -> new WaitForDependenciesThenApply(txnId, partialRoute, partialDeps, maybePartialTransaction.keys().slice(partialDeps.covering), txn.execute(txnId, null), txn.result(txnId, txnId, null)));
+                    (maybePartialTransaction, partialRoute, partialDeps) -> new WaitForDependenciesThenApply(txnId, partialRoute, partialDeps, maybePartialTransaction.keys().slice(partialDeps.covering), txn.execute(txnId, null), txn.result(txnId, txnId, null), notifyAgent));
             node.send(to, commit, callback);
         }
     }
@@ -223,7 +226,7 @@ public class Commit extends TxnRequest<ExecuteNack>
         return "Commit{txnId: " + txnId +
                ", executeAt: " + executeAt +
                ", deps: " + partialDeps +
-               ", read: " + toExecute +
+               ", toExecute: " + toExecute +
                '}';
     }
 

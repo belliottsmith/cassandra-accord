@@ -18,6 +18,7 @@
 
 package accord.coordinate;
 
+import accord.api.BarrierType;
 import accord.api.RoutingKey;
 import accord.impl.InMemoryCommand;
 import accord.impl.IntKey;
@@ -156,7 +157,7 @@ public class CoordinateTest
             // This is checking for a local barrier so it should succeed even if we drop the completion messages from the other nodes
             cluster.networkFilter.addFilter(id -> ImmutableSet.of(cluster.get(2).id(), cluster.get(3).id()).contains(id), alwaysTrue(), message -> message instanceof ExecuteOk);
             // Should create a sync transaction since no pre-existing one can be used and return as soon as it is locally applied
-            Barrier localInitiatingBarrier = Barrier.barrier(node, IntKey.key(3), node.epoch(), false);
+            Barrier localInitiatingBarrier = Barrier.barrier(node, IntKey.key(3), node.epoch(), BarrierType.local);
             // Sync transaction won't be created until callbacks for existing transaction check runs
             Semaphore existingTransactionCheckCompleted = new Semaphore(0);
             localInitiatingBarrier.existingTransactionCheck.addCallback((ignored1, ignored2) -> existingTransactionCheckCompleted.release());
@@ -175,7 +176,7 @@ public class CoordinateTest
 
             // At least one other should have completed by the time it is locally applied, a down node should be fine since it is quorum
             cluster.networkFilter.isolate(cluster.get(2).id());
-            Barrier globalInitiatingBarrier = Barrier.barrier(node, IntKey.key(2), node.epoch(), true);
+            Barrier globalInitiatingBarrier = Barrier.barrier(node, IntKey.key(2), node.epoch(), BarrierType.global_sync);
             Timestamp globalBarrierTimestamp = globalInitiatingBarrier.get();
             int localBarrierCount = ((TestAgent)node.agent()).completedLocalBarriers.getOrDefault(globalBarrierTimestamp, new AtomicInteger(0)).get();
             assertNotNull(globalInitiatingBarrier.coordinateSyncPoint);
@@ -184,7 +185,7 @@ public class CoordinateTest
             cluster.networkFilter.clear();
 
             // The existing barrier should suffice here
-            Barrier nonInitiatingLocalBarrier = Barrier.barrier(node, IntKey.key(2), node.epoch(), false);
+            Barrier nonInitiatingLocalBarrier = Barrier.barrier(node, IntKey.key(2), node.epoch(), BarrierType.local);
             Timestamp previousBarrierTimestamp = nonInitiatingLocalBarrier.get();
             assertNull(nonInitiatingLocalBarrier.coordinateSyncPoint);
             assertEquals(previousBarrierTimestamp, nonInitiatingLocalBarrier.get());
@@ -192,7 +193,7 @@ public class CoordinateTest
 
             // Sync over nothing should work
             SyncPoint syncPoint = null;
-            syncPoint = CoordinateSyncPoint.inclusive(node, ranges(range(99, 100)), true).get();
+            syncPoint = CoordinateSyncPoint.inclusive(node, ranges(range(99, 100)), false).get();
             assertEquals(node.epoch(), syncPoint.txnId.epoch());
 
             Keys keys = keys(1);
@@ -211,14 +212,14 @@ public class CoordinateTest
 
 
             logger.info("Running inclusive sync");
-            Future<SyncPoint> globalInclusiveSyncFuture = CoordinateSyncPoint.inclusive(node, ranges, true);
+            Future<SyncPoint> syncInclusiveSyncFuture = CoordinateSyncPoint.inclusive(node, ranges, false);
             // Shouldn't complete because it is blocked waiting for the dependency just created to apply
             sleep(1000);
-            assertFalse(globalInclusiveSyncFuture.isDone());
+            assertFalse(syncInclusiveSyncFuture.isDone());
 
-            // Local sync should return a result immediately since we are going to wait on only the local transaction that was created
-            Future<SyncPoint> localInclusiveSyncFuture = CoordinateSyncPoint.inclusive(node, ranges, false);
-            SyncPoint localSyncPoint = localInclusiveSyncFuture.get();
+            // Async sync should return a result immediately since we are going to wait on only the local transaction that was created
+            Future<SyncPoint> asyncInclusiveSyncFuture = CoordinateSyncPoint.inclusive(node, ranges, true);
+            SyncPoint localSyncPoint = asyncInclusiveSyncFuture.get();
             Semaphore localSyncOccurred = new Semaphore(0);
             node.commandStores().ifLocal(PreLoadContext.contextFor(localSyncPoint.txnId), homeKey, epoch, epoch, safeStore ->
                 safeStore.command(txnId).addListener(
@@ -231,7 +232,7 @@ public class CoordinateTest
             for (Node n : cluster)
                 n.unsafeForKey(key).execute(context, store ->  ((InMemoryCommand)store.command(txnId)).setSaveStatus(SaveStatus.PreApplied)).get();
 
-            Barrier listeningLocalBarrier = Barrier.barrier(node, key, node.epoch(), false);
+            Barrier listeningLocalBarrier = Barrier.barrier(node, key, node.epoch(), BarrierType.local);
             Thread.sleep(100);
             assertNull(listeningLocalBarrier.coordinateSyncPoint);
             assertNotNull(listeningLocalBarrier.existingTransactionCheck);
@@ -246,7 +247,7 @@ public class CoordinateTest
                     return command.apply(store, txnId.epoch(), route, txnId, PartialDeps.builder(store.ranges().at(txnId.epoch())).build(), txn.execute(txnId, null), txn.query().compute(txnId, txnId, keys, null, null, null));
                 }).get());
             // Global sync should be unblocked
-            syncPoint = globalInclusiveSyncFuture.get();
+            syncPoint = syncInclusiveSyncFuture.get();
             assertEquals(node.epoch(), syncPoint.txnId.epoch());
             // Command listener for local sync transaction should get notified
             assertTrue(localSyncOccurred.tryAcquire(5, TimeUnit.SECONDS));

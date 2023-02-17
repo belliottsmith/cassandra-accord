@@ -370,17 +370,13 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
      * This is useful for ensuring that all externally visible side effects of transaction application for prior epochs
      * are visible at this node.
      *
-     * If global is true then the barrier will wait for visibility to occur a quorum of replicas, but not locally.
-     *
-     * If global is false then the barrier will wait for local visibility to occur, but doesn't guarantee global just best effort.
-     *
      * Ranges are only supported for global barriers.
      *
      * Returns the Timestamp the barrier actually ended up occurring at
      */
-    public Future<Timestamp> barrier(Seekable keyOrRange, long minEpoch, boolean global)
+    public Future<Timestamp> barrier(Seekable keyOrRange, long minEpoch, BarrierType barrierType)
     {
-        return Barrier.barrier(this, keyOrRange, minEpoch, global);
+        return Barrier.barrier(this, keyOrRange, minEpoch, barrierType);
     }
 
     public Future<Result> coordinate(Txn txn)

@@ -79,4 +79,12 @@ public class ReadData extends WhenReadyToExecute
     {
         node.reply(replyTo, replyContext, new ExecuteOk(data));
     }
+
+    @Override
+    public String toString()
+    {
+        return "ReadData{" +
+                "txnId:" + txnId +
+                '}';
+    }
 }

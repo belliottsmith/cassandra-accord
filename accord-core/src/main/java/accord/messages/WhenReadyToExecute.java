@@ -56,6 +56,7 @@ public abstract class WhenReadyToExecute extends AbstractEpochRequest<WhenReadyT
             this.val = (byte)val;
         }
 
+        @SuppressWarnings("unused")
         public static ExecuteType fromValue(byte val)
         {
             switch (val)
@@ -85,7 +86,7 @@ public abstract class WhenReadyToExecute extends AbstractEpochRequest<WhenReadyT
         this.executeAtEpoch = executeAt.epoch();
         int startIndex = latestRelevantEpochIndex(to, topologies, scope);
         // TODO computeScope could create the unseekables directly
-        this.scope = computeScope(to, topologies, (Seekables) scope, startIndex, Seekables::slice, Seekables::with);
+        this.scope = computeScope(to, topologies, (Seekables)scope, startIndex, Seekables::slice, Seekables::with);
         this.waitForEpoch = computeWaitForEpoch(to, topologies, startIndex);
     }
 
@@ -335,13 +336,5 @@ public abstract class WhenReadyToExecute extends AbstractEpochRequest<WhenReadyT
         {
             return true;
         }
-    }
-
-    @Override
-    public String toString()
-    {
-        return "ReadData{" +
-               "txnId:" + txnId +
-               '}';
     }
 }

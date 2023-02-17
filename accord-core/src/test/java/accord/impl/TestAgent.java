@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class TestAgent implements Agent
 {
-    public static final ConcurrentMap<TxnId, AtomicInteger> completedLocalBarriers = new ConcurrentHashMap<>();
+    public static final ConcurrentMap<Timestamp, AtomicInteger> completedLocalBarriers = new ConcurrentHashMap<>();
 
     @Override
     public void onRecover(Node node, Result success, Throwable fail)
@@ -72,7 +72,7 @@ public class TestAgent implements Agent
     }
 
     @Override
-    public void onLocalBarrier(@Nonnull Seekables<?, ?> keysOrRanges, @Nonnull TxnId executeAt) {
+    public void onLocalBarrier(@Nonnull Seekables<?, ?> keysOrRanges, @Nonnull Timestamp executeAt) {
         completedLocalBarriers.computeIfAbsent(executeAt, ignored -> new AtomicInteger()).incrementAndGet();
     }
 

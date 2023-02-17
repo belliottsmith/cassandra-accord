@@ -57,8 +57,9 @@ public interface Agent extends UncaughtExceptionListener
      * Useful for migrations to/from Accord where you want to know there are no in flight
      * transactions in Accord that might still execute, and that it is safe to read
      * outside of Accord.
+     *
      */
-    default void onLocalBarrier(@Nonnull Seekables<?, ?> keysOrRanges, @Nonnull TxnId executeAt) {}
+    default void onLocalBarrier(@Nonnull Seekables<?, ?> keysOrRanges, @Nonnull Timestamp executeAt) {}
 
     @Override
     void onUncaughtException(Throwable t);
