@@ -25,7 +25,6 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
 import static accord.local.PreLoadContext.EMPTY_PRELOADCONTEXT;
@@ -33,10 +32,12 @@ import static accord.local.PreLoadContext.contextFor;
 import static accord.utils.Invariants.checkArgument;
 
 /**
- * Local or global barriers that return a result once all transactions have their side effects visible
- * externally as of the specified epoch or later.
+ * Local or global barriers that return a result once all transactions have their side effects visible.
  *
- * Note that reads might still order after, but side effect bearing transactions should not
+ * For local barriers the epoch is the only guarantee, but for global barriers a new transaction is created so it will
+ * be as of the timestamp of the created transaction.
+ *
+ * Note that reads might still order after, but side effect bearing transactions should not.
  */
 public class Barrier extends AsyncFuture<Timestamp>
 {
@@ -110,6 +111,9 @@ public class Barrier extends AsyncFuture<Timestamp>
     {
         // The transaction we wait on might have more keys, but it's not
         // guaranteed they were wanted and we don't want to force the agent to filter them
+        // so provide the seekables we were given.
+        // We also don't notify the agent for range barriers since that makes sense as a local concept
+        // since ranges can easily span multiple nodes
         if (seekables != null)
             node.agent().onLocalBarrier(seekables, executeAt);
         Barrier.this.trySuccess(executeAt);
@@ -136,7 +140,6 @@ public class Barrier extends AsyncFuture<Timestamp>
                     CommandListener listener = new BarrierCommandListener();
                     Command command = safeStore.command(txnId);
                     listener.onChange(safeStore, command);
-                    // TODO Command was already loaded so no need for addAndInvoke?
                     if (!isDone())
                         command.addListener(listener);
                 });

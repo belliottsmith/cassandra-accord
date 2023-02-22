@@ -244,7 +244,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                     if (testTxnId != txnId)
                         in.add(keyOrRange, testTxnId);
                     return in;
-                }, builder, (Deps.AbstractBuilder<T>)null);
+                }, builder, null);
         return builder.build();
     }
 

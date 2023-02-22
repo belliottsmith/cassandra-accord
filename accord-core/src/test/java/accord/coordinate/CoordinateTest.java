@@ -41,7 +41,6 @@ import accord.primitives.*;
 import org.apache.cassandra.utils.concurrent.Future;
 
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.ExecutionException;
@@ -211,7 +210,6 @@ public class CoordinateTest
                     store.command(txnId).preaccept(store, txn.slice(store.ranges().at(txnId.epoch()), true), route, homeKey)).get());
 
 
-            logger.info("Running inclusive sync");
             Future<SyncPoint> syncInclusiveSyncFuture = CoordinateSyncPoint.inclusive(node, ranges, false);
             // Shouldn't complete because it is blocked waiting for the dependency just created to apply
             sleep(1000);
@@ -233,6 +231,7 @@ public class CoordinateTest
                 n.unsafeForKey(key).execute(context, store ->  ((InMemoryCommand)store.command(txnId)).setSaveStatus(SaveStatus.PreApplied)).get();
 
             Barrier listeningLocalBarrier = Barrier.barrier(node, key, node.epoch(), BarrierType.local);
+            // Wait and make sure the existing transaction check worked and there is no coordinate sync point created
             Thread.sleep(100);
             assertNull(listeningLocalBarrier.coordinateSyncPoint);
             assertNotNull(listeningLocalBarrier.existingTransactionCheck);
@@ -254,7 +253,9 @@ public class CoordinateTest
             // Listening local barrier should have succeeded in waiting on the local transaction that just applied
             assertEquals(listeningLocalBarrier.get(), listeningLocalBarrier.existingTransactionCheck.get().executeAt);
             assertEquals(txnId, listeningLocalBarrier.get());
-
+        }
+        finally
+        {
             SimpleProgressLog.PAUSE_FOR_TEST = false;
         }
     }

@@ -23,7 +23,6 @@ import accord.local.Status.Durability;
 import accord.local.Status.Known;
 import accord.primitives.*;
 import accord.primitives.Writes;
-import accord.utils.Invariants;
 import org.apache.cassandra.utils.concurrent.Future;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -157,10 +156,14 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
     protected abstract void setSaveStatus(SaveStatus status);
 
     public Status status() { return saveStatus().status; }
-    public void setStatus(Status status)
+    public void setStatus(Status status, SafeCommandStore safeStore)
     {
-        checkArgument(!status.isTerminal(), "Use setTerminalStatus for terminal status");
         setSaveStatus(SaveStatus.get(status, known()));
+        if (status.isTerminal())
+        {
+            notifyListeners(safeStore);
+            reachedTerminalStatus();
+        }
     }
 
     public Known known() { return saveStatus().known; }
@@ -267,7 +270,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
             else setExecuteAt(safeStore.time().uniqueNow(txnId));
 
             if (status() == NotWitnessed)
-                setStatus(PreAccepted);
+                setStatus(PreAccepted, safeStore);
             safeStore.progressLog().preaccepted(this, shard);
         }
         else
@@ -278,7 +281,6 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         set(safeStore, Ranges.EMPTY, coordinateRanges, shard, route, partialTxn, Set, null, Ignore);
 
         notifyListeners(safeStore);
-        logger.info("Preaccepting " + this);
         return AcceptOutcome.Success;
     }
 
@@ -329,7 +331,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         if (!known().isDefinitionKnown())
             safeStore.register(keys, acceptRanges, this);
 
-        setStatus(Accepted);
+        setStatus(Accepted, safeStore);
         safeStore.progressLog().accepted(this, shard);
         notifyListeners(safeStore);
 
@@ -352,7 +354,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
 
         setPromised(ballot);
         setAccepted(ballot);
-        setStatus(AcceptedInvalidate);
+        setStatus(AcceptedInvalidate, safeStore);
         setPartialDeps(null);
         logger.trace("{}: accepted invalidated", txnId());
 
@@ -386,7 +388,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         setExecuteAt(executeAt);
         set(safeStore, coordinateRanges, executeRanges, shard, route, partialTxn, Add, partialDeps, Set);
 
-        setStatus(Committed);
+        setStatus(Committed, safeStore);
         logger.trace("{}: committed with executeAt: {}, deps: {}", txnId(), executeAt, partialDeps);
         populateWaitingOn(safeStore);
 
@@ -410,7 +412,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         }
 
         setExecuteAt(executeAt);
-        setStatus(PreCommitted);
+        setStatus(PreCommitted, safeStore);
         notifyListeners(safeStore);
         logger.trace("{}: precommitted with executeAt: {}", txnId(), executeAt);
     }
@@ -478,7 +480,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         if (partialDeps() == null)
             setPartialDeps(PartialDeps.NONE);
         logger.trace("{}: committed invalidated", txnId());
-        setTerminalStatus(Invalidated, safeStore);
+        setStatus(Invalidated, safeStore);
     }
 
     public enum ApplyOutcome { Success, Redundant, Insufficient }
@@ -514,7 +516,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
 
         if (!hasBeen(Committed))
             populateWaitingOn(safeStore);
-        setStatus(PreApplied);
+        setStatus(PreApplied, safeStore);
         logger.trace("{}: apply, status set to Executed with executeAt: {}, deps: {}", txnId(), executeAt, partialDeps);
 
         safeStore.progressLog().executed(this, shard);
@@ -559,7 +561,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
     protected void postApply(SafeCommandStore safeStore)
     {
         logger.trace("{} applied, setting status to Applied and notifying listeners", txnId());
-        setTerminalStatus(Applied, safeStore);
+        setStatus(Applied, safeStore);
     }
 
     private static Function<SafeCommandStore, Void> callPostApply(TxnId txnId)
@@ -612,7 +614,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         {
             case Committed:
                 // TODO (desirable, efficiency): maintain distinct ReadyToRead and ReadyToWrite states
-                setStatus(ReadyToExecute);
+                setStatus(ReadyToExecute, safeStore);
                 logger.trace("{}: set to ReadyToExecute", txnId());
                 safeStore.progressLog().readyToExecute(this, shard);
                 notifyListeners(safeStore);
@@ -632,7 +634,7 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
                     // TODO (desirable, performance): This could be performed immediately upon Committed
                     //      but: if we later support transitive dependency elision this could be dangerous
                     logger.trace("{}: applying no-op", txnId());
-                    setTerminalStatus(Applied, safeStore);
+                    setStatus(Applied, safeStore);
                 }
         }
         return true;
@@ -1116,14 +1118,6 @@ public abstract class Command implements CommandListener, BiConsumer<SafeCommand
         }
 
         return true;
-    }
-
-    private void setTerminalStatus(Status status, SafeCommandStore safeStore)
-    {
-        checkState(status.isTerminal(), "Use setStatus for non-terminal status");
-        setSaveStatus(SaveStatus.get(status, known()));
-        notifyListeners(safeStore);
-        reachedTerminalStatus();
     }
 
     // TODO (low priority, progress): callers should try to consult the local progress shard (if any) to obtain the full set of keys owned locally

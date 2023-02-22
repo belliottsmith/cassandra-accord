@@ -23,38 +23,27 @@ import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.Data;
 import accord.api.Result;
-import accord.coordinate.ReadCoordinator.Action;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.messages.Accept;
-import accord.messages.Accept.AcceptReply;
 import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.messages.WhenReadyToExecute.ExecuteNack;
-import accord.messages.WhenReadyToExecute.ExecuteOk;
 import accord.messages.WhenReadyToExecute.ExecuteReply;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
-import accord.primitives.Seekables;
-import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.topology.Topology;
 
-import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.messages.Commit.Kind.Maximal;
 
 /**
- * Block on deps at quorum for a sync point transaction
- *
- * Not very aptly named because this will also bring the transaction to the applied state
- * as soon as the dependencies are applied
+ * Block on deps at quorum for a sync point transaction, and then move the transaction to the applied state
  */
 public class BlockOnDeps implements Callback<ExecuteReply>
 {
@@ -119,26 +108,27 @@ public class BlockOnDeps implements Callback<ExecuteReply>
             case Error:
                 onFailure(from, new RuntimeException("Unknown error"));
                 // TODO (expected): report content of error
-                return;
+                break;
             case Redundant:
                 // TODO is this the right way to handle redundant?
                 isDone = true;
                 callback.accept(null, new Preempted(txnId, route.homeKey()));
+                break;
             case NotCommitted:
                 // the replica may be missing the original commit, or the additional commit, so send everything
                 Topologies topology = node.topology().preciseEpochs(route, txnId.epoch(), txnId.epoch());
                 Topology coordinateTopology = topology.forEpoch(txnId.epoch());
                 node.send(from, new Commit(Maximal, from, coordinateTopology, topology, txnId, txn, route, txn.keys(), txnId, deps, false));
+                break;
             case Invalid:
                 onFailure(from, new IllegalStateException("Submitted a read command to a replica that did not own the range"));
-                return;
+                break;
         }
     }
 
     @Override
     public void onFailure(Id from, Throwable failure)
     {
-        logger.error("Failure in blockOnDeps", failure);
         if (tracker.recordFailure(from) == Failed)
         {
             isDone = true;

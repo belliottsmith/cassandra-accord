@@ -31,8 +31,13 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class TestAgent implements Agent
 {
+    private static final Logger logger = LoggerFactory.getLogger(TestAgent.class);
+
     public static final ConcurrentMap<Timestamp, AtomicInteger> completedLocalBarriers = new ConcurrentHashMap<>();
 
     @Override
@@ -52,6 +57,7 @@ public class TestAgent implements Agent
     @Override
     public void onUncaughtException(Throwable t)
     {
+        logger.error("Uncaught exception", t);
     }
 
     @Override

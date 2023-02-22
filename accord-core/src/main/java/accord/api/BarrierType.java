@@ -12,19 +12,9 @@ public enum BarrierType
     public final boolean global;
     public final boolean async;
 
-    private BarrierType(boolean global, boolean async)
+    BarrierType(boolean global, boolean async)
     {
         this.global = global;
         this.async = async;
-    }
-
-    public boolean isGlobal()
-    {
-        return global;
-    }
-
-    boolean isAsync()
-    {
-        return this.async;
     }
 }

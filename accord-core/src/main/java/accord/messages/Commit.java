@@ -20,8 +20,6 @@ package accord.messages;
 
 import java.util.Collections;
 import java.util.Set;
-import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 
 import accord.local.*;
 import accord.local.PreLoadContext;
@@ -36,7 +34,6 @@ import javax.annotation.Nullable;
 import accord.utils.Invariants;
 
 import accord.topology.Topology;
-import javax.annotation.meta.When;
 
 import static accord.local.Status.Committed;
 import static accord.local.Status.Known.DefinitionOnly;

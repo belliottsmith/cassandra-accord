@@ -23,9 +23,6 @@ import accord.messages.Apply;
 import accord.messages.PreAccept.PreAcceptOk;
 import accord.primitives.*;
 import accord.primitives.Txn.Kind;
-import accord.topology.Topologies;
-import accord.topology.Topology;
-import org.apache.cassandra.utils.concurrent.Future;
 
 import java.util.List;
 
@@ -54,13 +51,13 @@ public class CoordinateSyncPoint extends CoordinatePreAccept<SyncPoint>
     private CoordinateSyncPoint(Node node, TxnId txnId, Txn txn, FullRoute<?> route, boolean async)
     {
         super(node, txnId, txn, route);
-        checkArgument(txnId.rw() == Kind.SyncPoint || !async);
+        checkArgument(txnId.rw() == Kind.SyncPoint || async, "Exclusive sync points only support async application");
         this.async = async;
     }
 
     public static CoordinateSyncPoint exclusive(Node node, Seekables<?, ?> keysOrRanges)
     {
-        return coordinate(ExclusiveSyncPoint, node, keysOrRanges, false);
+        return coordinate(ExclusiveSyncPoint, node, keysOrRanges, true);
     }
 
     public static CoordinateSyncPoint inclusive(Node node, Seekables<?, ?> keysOrRanges, boolean async)
@@ -68,11 +65,11 @@ public class CoordinateSyncPoint extends CoordinatePreAccept<SyncPoint>
         return coordinate(Kind.SyncPoint, node, keysOrRanges, async);
     }
 
-    private static CoordinateSyncPoint coordinate(Kind kind, Node node, Seekables<?, ?> keysOrRanges, boolean global)
+    private static CoordinateSyncPoint coordinate(Kind kind, Node node, Seekables<?, ?> keysOrRanges, boolean async)
     {
         TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain());
         FullRoute<?> route = node.computeRoute(txnId, keysOrRanges);
-        CoordinateSyncPoint coordinate = new CoordinateSyncPoint(node, txnId, node.agent().emptyTxn(kind, keysOrRanges), route, global);
+        CoordinateSyncPoint coordinate = new CoordinateSyncPoint(node, txnId, node.agent().emptyTxn(kind, keysOrRanges), route, async);
         coordinate.start();
         return coordinate;
     }
@@ -109,7 +106,12 @@ public class CoordinateSyncPoint extends CoordinatePreAccept<SyncPoint>
                         BlockOnDeps.blockOnDeps(node, txnId, txn, route, deps, (result, throwable) -> {
                             // Don't want to process completion twice
                             if (processAsyncCompletion)
+                            {
+                                // Don't lose the error
+                                if (throwable != null)
+                                    node.agent().onUncaughtException(throwable);
                                 return;
+                            }
                             if (throwable != null)
                                 accept(null, throwable);
                             else

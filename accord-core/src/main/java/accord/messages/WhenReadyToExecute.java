@@ -41,6 +41,9 @@ import static accord.messages.WhenReadyToExecute.ExecuteNack.Redundant;
 import static accord.messages.TxnRequest.*;
 import static accord.utils.MapReduceConsume.forEach;
 
+/**
+ * Base class for a message that waits for all dependencies to apply before taking executiong action.
+ */
 // TODO (required, efficiency): dedup - can currently have infinite pending reads that will be executed independently
 public abstract class WhenReadyToExecute extends AbstractEpochRequest<WhenReadyToExecute.ExecuteNack> implements CommandListener
 {

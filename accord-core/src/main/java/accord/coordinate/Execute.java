@@ -64,13 +64,15 @@ class Execute extends ReadCoordinator<ExecuteReply>
 
     public static void execute(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
     {
+        // Recovery calls execute and we would like execute to run BlockOnDeps because that will notify the agent
+        // of the local barrier
+        // TODO we don't really need to run BlockOnDeps, executing the empty txn would also be fine
         if (txn.kind() == Kind.SyncPoint)
         {
             checkArgument(txnId.equals(executeAt));
             BlockOnDeps.blockOnDeps(node, txnId, txn, route, deps, callback);
-            return;
         }
-        if (txn.read().keys().isEmpty())
+        else if (txn.read().keys().isEmpty())
         {
             Topologies sendTo = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
             Topologies applyTo = node.topology().forEpoch(route, executeAt.epoch());

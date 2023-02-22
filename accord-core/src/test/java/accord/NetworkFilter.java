@@ -26,14 +26,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
-import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 import java.util.function.Predicate;
 
 public class NetworkFilter
@@ -61,11 +58,13 @@ public class NetworkFilter
         return delayedNodes.getOrDefault(id, 0L);
     }
 
+    // TODO didn't end up using this, should it be removed?
     public long delay(Id node, long delay, TimeUnit unit)
     {
         return delayedNodes.put(node,  unit.toNanos(delay));
     }
 
+    // TODO Also didn't end up using cork
     public void cork(Id node)
     {
         synchronized (corkedNodes)

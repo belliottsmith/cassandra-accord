@@ -37,7 +37,6 @@ public interface Query
      *
      * executeAt timestamp is provided so that the result of the transaction can be determined based
      * on configuration at that epoch. This will be deterministic even if the transaction is recovered.
-     * TODO should query accept a Txn or PartialTxn so we don't have to manually pass in so many things?
      */
     Result compute(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, @Nonnull Seekables<?, ?> keys, @Nullable Data data, @Nullable Read read, @Nullable Update update);
 }

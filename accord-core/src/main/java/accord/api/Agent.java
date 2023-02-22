@@ -51,13 +51,12 @@ public interface Agent extends UncaughtExceptionListener
     void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next);
 
     /**
-     * Invoked with the keys or ranges that have all dependent transactions in the applied
+     * Invoked with the keys (but not ranges) that have all dependent transactions in the applied
      * state at this node as of some TxnId. No guarantees are made about other nodes.
      *
      * Useful for migrations to/from Accord where you want to know there are no in flight
      * transactions in Accord that might still execute, and that it is safe to read
      * outside of Accord.
-     *
      */
     default void onLocalBarrier(@Nonnull Seekables<?, ?> keysOrRanges, @Nonnull Timestamp executeAt) {}
 

@@ -366,13 +366,19 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
     }
 
     /**
-     * Return a result when all the keys or ranges have applied a transaction in the specified epoch or later.
-     * This is useful for ensuring that all externally visible side effects of transaction application for prior epochs
-     * are visible at this node.
+     * Trigger one of several different kinds of barrier transactions on a key or range with different properties. Barriers ensure that all prior transactions
+     * have their side effects visible up to some point.
+     *
+     * Local barriers will look for a local transaction that was applied in minEpoch or later and returns when one exists or completes.
+     * It may, but it is not guaranteed to, trigger a global barrier transaction that effects the barrier at all replicas.
+     *
+     * A global barrier is guaranteed to create a distributed barrier transaction, and if it is synchronous will not return until the
+     * transaction has applied at a quorum globally (meaning all dependencies and their side effects are already visible). If it is asynchronous
+     * it will return once the barrier has been applied locally.
      *
      * Ranges are only supported for global barriers.
      *
-     * Returns the Timestamp the barrier actually ended up occurring at
+     * Returns the Timestamp the barrier actually ended up occurring at. Keep in mind for local barriers it doesn't mean a new transaction was created.
      */
     public Future<Timestamp> barrier(Seekable keyOrRange, long minEpoch, BarrierType barrierType)
     {

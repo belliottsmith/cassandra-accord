@@ -56,7 +56,7 @@ public class WaitForDependenciesThenApply extends WhenReadyToExecute
             node.agent().onLocalBarrier(scope, txnId);
         // Send a response immediately once deps have been applied
         onExecuteComplete(unsafeStore);
-        // Apply after, we aren't waiting for the side effects of this txn since it is an inclusive sync
+        // Apply after, we aren't waiting for the side effects of this txn since it is part of an inclusive sync
         ApplyOutcome outcome = command.apply(safeStore, txnId.epoch(), route, txnId, deps, writes, result);
         switch (outcome)
         {

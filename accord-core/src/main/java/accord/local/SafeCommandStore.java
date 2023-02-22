@@ -63,7 +63,6 @@ public interface SafeCommandStore
 
     interface CommandFunction<I, O>
     {
-        // TODO should this be Status instead?
         O apply(Seekable keyOrRange, TxnId txnId, Timestamp executeAt, Status status, I in);
     }
 
@@ -128,7 +127,6 @@ public interface SafeCommandStore
      * Visits keys first and then ranges, both in ascending order.
      * Within each key or range visits TxnId in ascending order of queried timestamp.
      */
-    // TODO these two signatures don't work well together
     <T> T mapReduceWithTerminate(Seekables<?, ?> keys, Ranges slice,
                        TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
                        TestDep testDep, @Nullable TxnId depId,

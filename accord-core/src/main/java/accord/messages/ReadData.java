@@ -11,7 +11,6 @@ import accord.local.SafeCommandStore;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 
 public class ReadData extends WhenReadyToExecute

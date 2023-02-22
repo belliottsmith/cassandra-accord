@@ -330,7 +330,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
                         if (executeAt.compareTo(startedBefore) > 0)
                             builder.add(keyOrRange, txnId);
                         return builder;
-                    }, builder, (Deps.Builder)null);
+                    }, builder, null);
             return builder.build();
         }
     }

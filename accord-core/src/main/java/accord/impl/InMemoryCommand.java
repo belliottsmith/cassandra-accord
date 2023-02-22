@@ -320,7 +320,7 @@ public class InMemoryCommand extends Command
     @Override
     protected void reachedTerminalStatus()
     {
-        // Nothing do to
+        // Nothing to do
     }
 
     @Override
