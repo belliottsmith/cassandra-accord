@@ -75,5 +75,11 @@ class Defer implements CommandListener
         Invariants.checkState(caller.equals(request.txnId));
         return request;
     }
+
+    @Override
+    public boolean isTransient()
+    {
+        return true;
+    }
 }
 

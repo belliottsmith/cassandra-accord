@@ -182,7 +182,10 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
     @Override
     public void accept(RecoverReply reply, Throwable failure)
     {
-        node.reply(replyTo, replyContext, reply);
+        if (failure != null)
+            node.agent().onUncaughtException(failure);
+        else
+            node.reply(replyTo, replyContext, reply);
     }
 
     @Override
