@@ -1,13 +1,19 @@
 package accord.primitives;
 
+import accord.api.RoutingKey;
+
 public class SyncPoint
 {
-    public final Timestamp at;
+    public final TxnId txnId;
+    public final RoutingKey homeKey;
     public final Deps waitFor;
+    public final boolean finishedAsync;
 
-    public SyncPoint(Timestamp at, Deps waitFor)
+    public SyncPoint(TxnId txnId, RoutingKey homeKey, Deps waitFor, boolean finishedAsync)
     {
-        this.at = at;
+        this.txnId = txnId;
+        this.homeKey = homeKey;
         this.waitFor = waitFor;
+        this.finishedAsync = finishedAsync;
     }
 }

@@ -29,7 +29,10 @@ import accord.api.Key;
 import accord.api.Query;
 import accord.api.Result;
 import accord.primitives.Keys;
+import accord.primitives.Seekables;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import org.jetbrains.annotations.NotNull;
 
 public class MaelstromQuery implements Query
 {
@@ -43,7 +46,7 @@ public class MaelstromQuery implements Query
     }
 
     @Override
-    public Result compute(TxnId txnId, Data data, Read untypedRead, Update update)
+    public Result compute(@NotNull TxnId txnId, @NotNull Timestamp executeAt, @NotNull Seekables<?, ?> keys, Data data, Read untypedRead, Update update)
     {
         MaelstromRead read = (MaelstromRead) untypedRead;
         Value[] values = new Value[read.readKeys.size()];

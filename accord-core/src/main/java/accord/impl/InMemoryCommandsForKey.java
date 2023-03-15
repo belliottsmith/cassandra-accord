@@ -31,6 +31,7 @@ import javax.annotation.Nullable;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 import static accord.local.SafeCommandStore.TestDep.*;
@@ -76,7 +77,7 @@ public class InMemoryCommandsForKey extends CommandsForKey
         public <T> T mapReduce(TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
                                TestDep testDep, @Nullable TxnId depId,
                                @Nullable Status minStatus, @Nullable Status maxStatus,
-                               CommandFunction<T, T> map, T initialValue, T terminalValue)
+                               CommandFunction<T, T> map, T initialValue, Predicate<T> terminate)
         {
 
             for (Command cmd : (testTimestamp == TestTimestamp.BEFORE ? commands.headMap(timestamp, false) : commands.tailMap(timestamp, false)).values())
@@ -90,8 +91,8 @@ public class InMemoryCommandsForKey extends CommandsForKey
                     continue;
                 if (maxStatus != null && maxStatus.compareTo(cmd.status()) < 0)
                     continue;
-                initialValue = map.apply(key, cmd.txnId(), cmd.executeAt(), initialValue);
-                if (initialValue.equals(terminalValue))
+                initialValue = map.apply(key, cmd.txnId(), cmd.executeAt(), cmd.status(), initialValue);
+                if (initialValue.equals(terminate))
                     break;
             }
             return initialValue;

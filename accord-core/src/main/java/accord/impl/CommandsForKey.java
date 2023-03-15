@@ -18,6 +18,8 @@
 
 package accord.impl;
 
+import java.util.function.Predicate;
+
 import accord.api.Key;
 import accord.local.*;
 import accord.local.SafeCommandStore.CommandFunction;
@@ -55,7 +57,7 @@ public abstract class CommandsForKey implements CommandListener
         <T> T mapReduce(TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
                         TestDep testDep, @Nullable TxnId depId,
                         @Nullable Status minStatus, @Nullable Status maxStatus,
-                        CommandFunction<T, T> map, T initialValue, T terminalValue);
+                        CommandFunction<T, T> map, T initialValue, Predicate<T> terminate);
     }
 
     public abstract Key key();

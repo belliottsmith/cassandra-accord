@@ -33,6 +33,7 @@ import java.util.function.BiConsumer;
 public interface Read
 {
     Seekables<?, ?> keys();
+
     Future<Data> read(Seekable key, Txn.Kind kind, SafeCommandStore commandStore, Timestamp executeAt, DataStore store);
 
     class ReadFuture extends AsyncPromise<Data> implements BiConsumer<Data, Throwable>

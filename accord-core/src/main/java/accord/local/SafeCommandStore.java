@@ -20,9 +20,11 @@ package accord.local;
 
 import accord.api.Agent;
 import accord.api.DataStore;
+import accord.api.Key;
 import accord.api.ProgressLog;
 import accord.primitives.*;
 import accord.primitives.Txn.Kind;
+import javax.annotation.Nonnull;
 import org.apache.cassandra.utils.concurrent.Future;
 
 import javax.annotation.Nullable;
@@ -61,7 +63,7 @@ public interface SafeCommandStore
 
     interface CommandFunction<I, O>
     {
-        O apply(Seekable keyOrRange, TxnId txnId, Timestamp executeAt, I in);
+        O apply(Seekable keyOrRange, TxnId txnId, Timestamp executeAt, Status status, I in);
     }
 
     enum TestTimestamp
@@ -125,6 +127,11 @@ public interface SafeCommandStore
      * Visits keys first and then ranges, both in ascending order.
      * Within each key or range visits TxnId in ascending order of queried timestamp.
      */
+    <T> T mapReduceWithTerminate(Seekables<?, ?> keys, Ranges slice,
+                       TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
+                       TestDep testDep, @Nullable TxnId depId,
+                       @Nullable Status minStatus, @Nullable Status maxStatus,
+                       CommandFunction<T, T> map, T accumulate, Predicate<T> terminate);
     <T> T mapReduce(Seekables<?, ?> keys, Ranges slice,
                        TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
                        TestDep testDep, @Nullable TxnId depId,

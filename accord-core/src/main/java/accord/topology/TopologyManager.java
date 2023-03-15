@@ -28,6 +28,7 @@ import accord.primitives.*;
 import accord.topology.Topologies.Single;
 import com.google.common.annotations.VisibleForTesting;
 import accord.utils.Invariants;
+import org.apache.cassandra.utils.Simulate;
 import org.apache.cassandra.utils.concurrent.AsyncPromise;
 import org.apache.cassandra.utils.concurrent.Future;
 import org.apache.cassandra.utils.concurrent.ImmediateFuture;
@@ -37,6 +38,7 @@ import java.util.*;
 import static accord.coordinate.tracking.RequestStatus.Success;
 
 import static accord.utils.Invariants.checkArgument;
+import static org.apache.cassandra.utils.Simulate.With.MONITORS;
 
 /**
  * Manages topology state changes and update bookkeeping
@@ -51,6 +53,7 @@ import static accord.utils.Invariants.checkArgument;
  * TODO (desired, efficiency/clarity): make TopologyManager a Topologies and copy-on-write update to it,
  *  so we can always just take a reference for transactions instead of copying every time (and index into it by the txnId.epoch)
  */
+@Simulate(with=MONITORS)
 public class TopologyManager implements ConfigurationService.Listener
 {
     private static final Future<Void> SUCCESS = ImmediateFuture.success(null);

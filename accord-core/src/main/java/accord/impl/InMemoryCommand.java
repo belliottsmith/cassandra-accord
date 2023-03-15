@@ -318,6 +318,12 @@ public class InMemoryCommand extends Command
     }
 
     @Override
+    protected void reachedTerminalStatus()
+    {
+        // Nothing to do
+    }
+
+    @Override
     public void removeWaitingOn(TxnId txnId, Timestamp executeAt)
     {
         if (waitingOnCommit != null)
