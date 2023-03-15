@@ -55,11 +55,14 @@ import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.topology.TopologyManager;
 import net.nicoulaj.compilecommand.annotations.Inline;
+import org.apache.cassandra.utils.Simulate;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
 import static accord.utils.Invariants.checkArgument;
+import static org.apache.cassandra.utils.Simulate.With.MONITORS;
 
+@Simulate(with=MONITORS)
 public class Node implements ConfigurationService.Listener, NodeTimeService
 {
     public static class Id implements Comparable<Id>
