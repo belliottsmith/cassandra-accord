@@ -246,6 +246,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
                 case Accepted:
                     // no need to preaccept the later round, as future operations always include every old epoch (until it is fully migrated)
+                    // TODO (required, correctness): we should maintain an additional ReproposalOf ballot, and we should only merge those deps whose ReproposalOf matches the highest Accepted; if this is insufficient then we never achieved consensus and can propose a brand-new one.
+                    //   it is *incorrect* to simply mergeDeps(), as we overwrite the original Accept's deps, permitting an earlier transaction that had not reached a majority to find its way into this register, and for recovery to witness its presence in this set and permit a fast path recovery (which may conflict with another node's commit)
                     propose(acceptOrCommit.executeAt, mergeDeps());
                     return;
 

@@ -49,6 +49,7 @@ import accord.messages.Reply;
 import accord.messages.Request;
 import accord.topology.TopologyRandomizer;
 import accord.topology.Topology;
+import accord.utils.DefaultRandom;
 import accord.utils.RandomSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -125,7 +126,7 @@ public class Cluster implements Scheduler
         return true;
     }
 
-    private void processNext(Object next)
+    void processNext(Object next)
     {
         if (next instanceof Packet)
         {
