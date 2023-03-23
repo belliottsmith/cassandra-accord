@@ -20,6 +20,7 @@ package accord.impl.mock;
 
 import accord.NetworkFilter;
 import accord.api.MessageSink;
+import accord.api.ProgressLog;
 import accord.coordinate.Timeout;
 import accord.impl.*;
 import accord.local.Node;
@@ -44,6 +45,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 
 import static accord.Utils.*;
@@ -99,7 +101,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         return nextMessageId++;
     }
 
-    private Node createNode(Id id, Topology topology)
+    private Node createNode(Id id, Topology topology, Function<Node, ProgressLog.Factory> progressLogFactory)
     {
         MockStore store = new MockStore();
         MessageSink messageSink = messageSinkFactory.apply(id, this);
@@ -114,8 +116,12 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                         random.fork(),
                         new ThreadPoolScheduler(),
                         SizeOfIntersectionSorter.SUPPLIER,
-                        SimpleProgressLog::new,
+                        progressLogFactory,
                         InMemoryCommandStores.SingleThread::new);
+    }
+    private Node createNode(Id id, Topology topology)
+    {
+        return createNode(id, topology, SimpleProgressLog::new);
     }
 
     private void init(Topology topology)
@@ -291,6 +297,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         private LongSupplier nowSupplier = System::currentTimeMillis;
         private BiFunction<Id, Network, MessageSink> messageSinkFactory = SimpleMessageSink::new;
         private EpochFunction<MockConfigurationService> onFetchTopology = EpochFunction.noop();
+        private Function<Node, ProgressLog.Factory> progressLogFactory = SimpleProgressLog::new;
 
         public Builder seed(long seed)
         {
@@ -337,6 +344,12 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         public Builder setOnFetchTopology(EpochFunction<MockConfigurationService> onFetchTopology)
         {
             this.onFetchTopology = onFetchTopology;
+            return this;
+        }
+
+        public Builder progressLogFactory(Function<Node, ProgressLog.Factory> progressLogFactory)
+        {
+            this.progressLogFactory = progressLogFactory;
             return this;
         }
 
