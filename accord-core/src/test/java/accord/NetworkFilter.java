@@ -32,7 +32,7 @@ public class NetworkFilter
 {
     private final Logger logger = LoggerFactory.getLogger(NetworkFilter.class);
 
-    private interface DiscardPredicate
+    public interface DiscardPredicate
     {
         boolean check(Id from, Id to, Message message);
     }
@@ -82,6 +82,11 @@ public class NetworkFilter
     public void addFilter(Predicate<Id> fromPredicate, Predicate<Id> toPredicate, Predicate<Message> messagePredicate)
     {
         discardPredicates.add((from, to, msg) -> fromPredicate.test(from) && toPredicate.test(to) && messagePredicate.test(msg));
+    }
+
+    public void addFilter(DiscardPredicate discardPredicate)
+    {
+        discardPredicates.add(discardPredicate);
     }
 
     public void clear()

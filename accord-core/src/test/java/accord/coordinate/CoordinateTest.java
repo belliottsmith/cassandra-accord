@@ -314,9 +314,10 @@ public class CoordinateTest
             }
             cluster.networkFilter.clear();
 
-            // recover
+            // recover gamma
             {
                 cluster.networkFilter.isolate(id(1));
+                cluster.networkFilter.isolate(id(5));
 //                cluster.networkFilter.isolate(id(2));
                 Node coordinator = cluster.get(2);
 //                awaitUninterruptibly(recover(coordinator, tauId, txn, route));
@@ -325,19 +326,39 @@ public class CoordinateTest
                 Thread.sleep(1000);
                 cluster.forEach(node -> {
                     InMemoryCommandStore commandStore = (InMemoryCommandStore) node.commandStores().unsafeForKey(key);
-//                    Command tauCmd = commandStore.ifPresent(tauId).value();
+                    if (idSet(2, 3, 4).contains(node.id()))
+                    {
+                        Command gammaCmd = commandStore.ifPresent(gammaId).value();
+                        Assertions.assertNotNull(gammaCmd);
+                        Assertions.assertTrue(gammaCmd.hasBeen(Status.Committed));
+                        Assertions.assertTrue(gammaCmd.executeAt().equals(gammaId));
+                    }
+                });
+            }
+            cluster.networkFilter.clear();
+
+            // recover tau
+            {
+                cluster.networkFilter.isolate(id(1));
+                cluster.networkFilter.isolate(id(2));
+                Node coordinator = cluster.get(4);
+                awaitUninterruptibly(recover(coordinator, tauId, txn, route));
+
+                Thread.sleep(1000);
+                Timestamp tauExecuteAt = ((InMemoryCommandStore)(cluster.get(id(2)).commandStores().unsafeForKey(key))).ifPresent(tauId).value().executeAt();
+                cluster.forEach(node -> {
+                    InMemoryCommandStore commandStore = (InMemoryCommandStore) node.commandStores().unsafeForKey(key);
                     Command gammaCmd = commandStore.ifPresent(gammaId).value();
-                    if (idSet(3, 4, 5).contains(node.id()))
+                    if (idSet(1, 2, 3, 4, 5).contains(node.id()))
                     {
                         Assertions.assertNotNull(gammaCmd);
                         Assertions.assertTrue(gammaCmd.hasBeen(Status.Committed));
                         Assertions.assertTrue(gammaCmd.executeAt().equals(gammaId));
-//                        Assertions.assertNotNull(tauCmd);
-//                        Assertions.assertTrue(tauCmd.hasBeen(Status.Committed));
-//                        Assertions.assertTrue(tauCmd.executeAt().compareTo(gammaId) >= 0);
+                        Assertions.assertFalse(tauExecuteAt.compareTo(gammaCmd.executeAt()) > 0 || gammaCmd.partialDeps().keyDeps.contains(tauId));
                     }
                 });
             }
+            cluster.networkFilter.clear();
 
         }
 
