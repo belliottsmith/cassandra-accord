@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -49,7 +50,6 @@ import accord.messages.Reply;
 import accord.messages.Request;
 import accord.topology.TopologyRandomizer;
 import accord.topology.Topology;
-import accord.utils.DefaultRandom;
 import accord.utils.RandomSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,15 +65,17 @@ public class Cluster implements Scheduler
     final List<Runnable> onDone = new ArrayList<>();
     final Consumer<Packet> responseSink;
     final Map<Id, NodeSink> sinks = new HashMap<>();
+    final BooleanSupplier shouldDrop;
     int clock;
     int recurring;
     Set<Id> partitionSet;
 
-    public Cluster(Supplier<PendingQueue> queueSupplier, Function<Id, Node> lookup, Consumer<Packet> responseSink)
+    public Cluster(Supplier<PendingQueue> queueSupplier, Function<Id, Node> lookup, Consumer<Packet> responseSink, BooleanSupplier shouldDrop)
     {
         this.pending = queueSupplier.get();
         this.lookup = lookup;
         this.responseSink = responseSink;
+        this.shouldDrop = shouldDrop;
         this.partitionSet = new HashSet<>();
     }
 
@@ -137,7 +139,8 @@ public class Cluster implements Scheduler
             // Drop the message if it goes across the partition
             boolean drop = ((Packet) next).src.id >= 0 &&
                            !(partitionSet.contains(deliver.src) && partitionSet.contains(deliver.dst)
-                             || !partitionSet.contains(deliver.src) && !partitionSet.contains(deliver.dst));
+                             || !partitionSet.contains(deliver.src) && !partitionSet.contains(deliver.dst))
+                           || shouldDrop.getAsBoolean();
             if (drop)
             {
                 if (trace.isTraceEnabled())
@@ -215,7 +218,9 @@ public class Cluster implements Scheduler
         TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, topology, topologyUpdates, lookup::get);
         try
         {
-            Cluster sinks = new Cluster(queueSupplier, lookup::get, responseSink);
+            RandomSource dropSource = randomSupplier.get();
+            float dropChance = dropSource.nextFloat() * 0.1f;
+            Cluster sinks = new Cluster(queueSupplier, lookup::get, responseSink, () -> dropSource.decide(dropChance));
             for (Id node : nodes)
             {
                 MessageSink messageSink = sinks.create(node, randomSupplier.get());

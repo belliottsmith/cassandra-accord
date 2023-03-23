@@ -41,7 +41,7 @@ public class SimpleCluster extends Cluster
 
     private SimpleCluster(Node.Id[] ids, Supplier<PendingQueue> queueSupplier, Function<Node.Id, Node> lookup, List<Packet> clientResponses)
     {
-        super(queueSupplier, lookup, clientResponses::add);
+        super(queueSupplier, lookup, clientResponses::add, () -> false);
         this.clientResponses = clientResponses;
         this.ids = ids;
     }

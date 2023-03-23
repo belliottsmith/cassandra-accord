@@ -336,12 +336,13 @@ public class BurnTest
         {
             List<Id> clients = generateIds(true, 1 + random.nextInt(4));
             List<Id> nodes = generateIds(false, 5 + random.nextInt(5));
-            burn(random, new TopologyFactory(nodes.size() == 5 ? 3 : (2 + random.nextInt(3)), IntHashKey.ranges(4 + random.nextInt(12))),
+            int keyCount = 1 + random.nextInt(19);
+            burn(random, new TopologyFactory(1 + random.nextInt(nodes.size() - 1), IntHashKey.ranges(4 + random.nextInt(12))),
                     clients,
                     nodes,
-                    5 + random.nextInt(15),
-                    200,
-                    10 + random.nextInt(30));
+                    keyCount,
+                    500,
+                    keyCount * (1 + random.nextInt(5)));
         }
         catch (Throwable t)
         {
