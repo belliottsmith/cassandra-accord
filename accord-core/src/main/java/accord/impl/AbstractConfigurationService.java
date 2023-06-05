@@ -82,12 +82,12 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
         protected abstract EpochState createEpochState(long epoch);
 
-        long minEpoch()
+        public long minEpoch()
         {
             return epochs.isEmpty() ? 0L : epochs.get(0).epoch;
         }
 
-        long maxEpoch()
+        public long maxEpoch()
         {
             int size = epochs.size();
             return size == 0 ? 0L : epochs.get(size - 1).epoch;
