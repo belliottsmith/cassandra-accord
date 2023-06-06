@@ -156,6 +156,21 @@ public abstract class CommandStore implements AgentExecutor
         this.safeToRead = newSafeToRead;
     }
 
+    public NavigableMap<TxnId, Ranges> bootstrapBeganAt()
+    {
+        return bootstrapBeganAt;
+    }
+
+    public NavigableMap<Timestamp, Ranges> safeToRead()
+    {
+        return safeToRead;
+    }
+
+    public long maxBootstrapEpoch()
+    {
+        return maxBootstrapEpoch;
+    }
+
     public void markExclusiveSyncPoint(TxnId txnId, Ranges ranges, SafeCommandStore safeStore)
     {
         Invariants.checkArgument(txnId.rw() == ExclusiveSyncPoint);
