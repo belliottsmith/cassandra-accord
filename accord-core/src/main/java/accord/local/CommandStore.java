@@ -128,6 +128,8 @@ public abstract class CommandStore implements AgentExecutor
 
     public abstract void shutdown();
 
+    public abstract AsyncChain<Timestamp> maxAppliedFor(Seekables<?, ?> keysOrRanges, Ranges slice);
+
     // implementations are expected to override this for persistence
     protected void setRejectBefore(ReducingRangeMap<Timestamp> newRejectBefore)
     {

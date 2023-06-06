@@ -234,17 +234,23 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         @Override
         protected void readComplete(CommandStore commandStore, Data result, Ranges unavailable)
         {
-            commandStore.execute(PreLoadContext.empty(), safeStore -> {
-                Ranges slice = safeStore.ranges().allAt(executeReadAt).difference(unavailable);
-                Timestamp newMaxApplied = ((InMemoryCommandStore.InMemorySafeStore)safeStore).maxApplied(readScope, slice);
-                synchronized (this)
+            Ranges slice = commandStore.rangesForEpochHolder().get().allAt(executeReadAt).difference(unavailable);
+            commandStore.maxAppliedFor(readScope, slice).begin((newMaxApplied, failure) -> {
+                if (failure != null)
                 {
-                    if (maxApplied == null) maxApplied = newMaxApplied;
-                    else maxApplied = Timestamp.max(maxApplied, newMaxApplied);
-                    Ranges reportUnavailable = unavailable.slice((Ranges)this.readScope, Minimal);
-                    super.readComplete(commandStore, result, reportUnavailable);
+                    commandStore.agent().onUncaughtException(failure);
                 }
-            }).begin(node.agent());
+                else
+                {
+                    synchronized (this)
+                    {
+                        if (maxApplied == null) maxApplied = newMaxApplied;
+                        else maxApplied = Timestamp.max(maxApplied, newMaxApplied);
+                        Ranges reportUnavailable = unavailable.slice((Ranges)this.readScope, Minimal);
+                        super.readComplete(commandStore, result, reportUnavailable);
+                    }
+                }
+            });
         }
 
         @Override

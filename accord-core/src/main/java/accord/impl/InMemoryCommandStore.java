@@ -461,6 +461,19 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
     }
 
+    public AsyncChain<Timestamp> maxAppliedFor(Seekables<?, ?> keysOrRanges, Ranges slice)
+    {
+        Seekables<?, ?> sliced = keysOrRanges.slice(slice, Minimal);
+        Timestamp timestamp = Timestamp.NONE;
+        for (GlobalCommand globalCommand : commands.values())
+        {
+            Command command = globalCommand.value();
+            if (command.hasBeen(Applied) && !command.hasBeen(Invalidated) && command.partialTxn().keys().intersects(sliced))
+                timestamp = Timestamp.max(timestamp, command.executeAt());
+        }
+        return AsyncChains.success(timestamp);
+    }
+
     class CFKLoader implements CommandLoader<TxnId>
     {
         private Command loadForCFK(TxnId data)
