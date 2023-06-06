@@ -29,7 +29,6 @@ import accord.api.DataStore;
 import accord.coordinate.FetchCoordinator;
 import accord.local.CommandStore;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.local.Status;
 import accord.messages.Callback;
 import accord.messages.MessageType;
@@ -50,6 +49,8 @@ import static accord.primitives.Routables.Slice.Minimal;
 
 public abstract class AbstractFetchCoordinator extends FetchCoordinator
 {
+    private static final Logger logger = LoggerFactory.getLogger(AbstractFetchCoordinator.class);
+
     static class FetchResult extends AsyncResults.SettableResult<Ranges> implements DataStore.FetchResult
     {
         final AbstractFetchCoordinator coordinator;
@@ -175,7 +176,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
             public void onCallbackFailure(Node.Id from, Throwable failure)
             {
                 // TODO (soon)
-                failure.printStackTrace();
+                logger.error("Fetch coordination failure from " + from, failure);
             }
         });
     }
