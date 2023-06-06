@@ -729,19 +729,6 @@ public abstract class InMemoryCommandStore extends CommandStore
             });
         }
 
-        public Timestamp maxApplied(Seekables<?, ?> keysOrRanges, Ranges slice)
-        {
-            Seekables<?, ?> sliced = keysOrRanges.slice(slice, Minimal);
-            Timestamp timestamp = Timestamp.NONE;
-            for (SafeCommand safeCommand : commands.values())
-            {
-                Command command = safeCommand.current();
-                if (command.hasBeen(Applied) && !command.hasBeen(Invalidated) && command.partialTxn().keys().intersects(sliced))
-                    timestamp = Timestamp.max(timestamp, command.executeAt());
-            }
-            return timestamp;
-        }
-
         @Override
         public NodeTimeService time()
         {
