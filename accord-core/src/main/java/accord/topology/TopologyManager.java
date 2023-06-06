@@ -69,9 +69,19 @@ public class TopologyManager
             this.local = global.forNode(node).trim();
             Invariants.checkArgument(!global().isSubset());
             // TODO: can we just track sync for local ranges here?
-            this.syncTracker = new QuorumTracker(new Single(sorter, global()));
-            this.syncComplete = syncComplete;
-            this.prevSynced = prevSynced;
+            if (global().size() > 0)
+            {
+                this.syncTracker = new QuorumTracker(new Single(sorter, global()));
+                this.syncComplete = syncComplete;
+                this.prevSynced = prevSynced;
+            }
+            else
+            {
+                // if topology is empty, there is nothing to sync
+                this.syncTracker = null;
+                this.syncComplete = true;
+                this.prevSynced = true;
+            }
         }
 
         void markPrevSynced()
@@ -124,7 +134,7 @@ public class TopologyManager
 
         boolean shardIsUnsynced(int idx)
         {
-            return !prevSynced || !syncTracker.get(idx).hasReachedQuorum();
+            return !prevSynced || (!syncComplete && !syncTracker.get(idx).hasReachedQuorum());
         }
     }
 

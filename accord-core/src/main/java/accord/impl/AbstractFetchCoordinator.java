@@ -205,7 +205,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     protected void onDone(Ranges success, Throwable failure)
     {
         if (success.isEmpty()) result.setFailure(failure);
-        else if (persisting.isEmpty()) result.setSuccess(null);
+        else if (persisting.isEmpty()) result.setSuccess(Ranges.EMPTY);
         else AsyncChains.reduce(persisting, (a, b)-> null)
                         .begin((s, f) -> {
                             if (f == null) result.setSuccess(ranges);
