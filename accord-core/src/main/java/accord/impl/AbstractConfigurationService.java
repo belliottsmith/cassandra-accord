@@ -30,6 +30,7 @@ import accord.api.ConfigurationService;
 import accord.local.Node;
 import accord.topology.Topology;
 import accord.utils.Invariants;
+import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
@@ -107,7 +108,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
         EpochState getOrCreate(long epoch)
         {
-            Invariants.checkArgument(epoch > 0);
+            Invariants.checkArgument(epoch > 0, "Epoch must be positive but given %d", epoch);
             if (epochs.isEmpty())
             {
                 EpochState state = createEpochState(epoch);
@@ -140,14 +141,12 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         public void receive(Topology topology)
         {
             long epoch = topology.epoch();
-            Invariants.checkState(lastReceived == epoch - 1 || epoch == 0 || lastReceived == 0);
+            Invariants.checkState(lastReceived == epoch - 1 || epoch == 0 || lastReceived == 0,
+                                  "Epoch %d != %d + 1", epoch, lastReceived);
             lastReceived = epoch;
             EpochState state = getOrCreate(epoch);
-            if (state != null)
-            {
-                state.topology = topology;
-                state.received.setSuccess(topology);
-            }
+            state.topology = topology;
+            state.received.setSuccess(topology);
         }
 
         AsyncResult<Topology> receiveFuture(long epoch)
@@ -163,9 +162,11 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         public void acknowledge(EpochReady ready)
         {
             long epoch = ready.epoch;
-            Invariants.checkState(lastAcknowledged == epoch - 1 || epoch == 0 || lastAcknowledged == 0);
+            Invariants.checkState(lastAcknowledged == epoch - 1 || epoch == 0 || lastAcknowledged == 0,
+                                  "Epoch %d != %d + 1", epoch, lastAcknowledged);
             lastAcknowledged = epoch;
             EpochState state = getOrCreate(epoch);
+            Invariants.checkState(state.reads == null, "Reads result was already set for epoch", epoch);
             state.reads = ready.reads;
             state.acknowledged.setSuccess(null);
         }
@@ -177,7 +178,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
         void truncateUntil(long epoch)
         {
-            Invariants.checkArgument(epoch <= maxEpoch());
+            Invariants.checkArgument(epoch <= maxEpoch(), "epoch %d > %d", epoch, maxEpoch());
             long minEpoch = minEpoch();
             int toTrim = Ints.checkedCast(epoch - minEpoch);
             if (toTrim <=0)
@@ -240,24 +241,24 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
     protected void topologyUpdatePreListenerNotify(Topology topology) {}
     protected void topologyUpdatePostListenerNotify(Topology topology) {}
 
-    public synchronized AsyncResult<Void> reportTopology(Topology topology, boolean startSync)
+    public synchronized void reportTopology(Topology topology, boolean startSync)
     {
         long lastReceived = epochs.lastReceived;
         if (topology.epoch() <= lastReceived)
-            return AsyncResults.success(null);
+            return;
 
         if (lastReceived > 0 && topology.epoch() > lastReceived + 1)
         {
             fetchTopologyForEpoch(lastReceived + 1);
             epochs.receiveFuture(lastReceived + 1).addCallback(() -> reportTopology(topology, startSync));
-            return AsyncResults.success(null);
+            return;
         }
 
         long lastAcked = epochs.lastAcknowledged;
         if (lastAcked > 0 && topology.epoch() > lastAcked + 1)
         {
             epochs.acknowledgeFuture(lastAcked + 1).addCallback(() -> reportTopology(topology, startSync));
-            return AsyncResults.success(null);
+            return;
         }
         logger.trace("Epoch {} received by {}", topology.epoch(), localId);
 
@@ -266,12 +267,11 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         for (Listener listener : listeners)
             listener.onTopologyUpdate(topology, startSync);
         topologyUpdatePostListenerNotify(topology);
-        return AsyncResults.success(null);
     }
 
-    public synchronized AsyncResult<Void> reportTopology(Topology topology)
+    public synchronized void reportTopology(Topology topology)
     {
-        return reportTopology(topology, true);
+        reportTopology(topology, true);
     }
 
     protected void remoteSyncCompletePreListenerNotify(Node.Id node, long epoch) {}
@@ -295,13 +295,13 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         epochs.truncateUntil(epoch);
     }
 
-    public synchronized AsyncResult<Void> epochReady(long epoch)
+    public synchronized AsyncChain<Void> epochReady(long epoch)
     {
         EpochState state = epochs.getOrCreate(epoch);
         if (state.reads != null)
             return state.reads;
 
-        return state.acknowledged.flatMap(r -> state.reads).beginAsResult();
+        return state.acknowledged.flatMap(r -> state.reads);
     }
 
     public abstract static class Minimal extends AbstractConfigurationService<Minimal.EpochState, Minimal.EpochHistory>

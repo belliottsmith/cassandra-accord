@@ -83,9 +83,9 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
 
         @Override
         public int hashCode()
-                         {
-                            return id.hashCode() + ranges.hashCode();
-                                                                     }
+        {
+            return id.hashCode() + ranges.hashCode();
+        }
 
         @Override
         public boolean equals(Object obj)
@@ -133,11 +133,11 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                     inflight.remove(key).cancel();
                     switch ((ReadData.ReadNack) reply)
                     {
-                        default: throw new AssertionError("Unhandled enum");
+                        default: throw new AssertionError("Unhandled enum: " + reply);
                         case Invalid:
                         case Redundant:
                         case NotCommitted:
-                            throw new AssertionError();
+                            throw new AssertionError(String.format("Unexpected reply: %s", reply));
                         case Error:
                             // TODO (required): ensure errors are propagated to coordinators and can be logged
                     }
@@ -206,7 +206,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     {
         if (success.isEmpty()) result.setFailure(failure);
         else if (persisting.isEmpty()) result.setSuccess(Ranges.EMPTY);
-        else AsyncChains.reduce(persisting, (a, b)-> null)
+        else AsyncChains.reduce(persisting, (a, b) -> null)
                         .begin((s, f) -> {
                             if (f == null) result.setSuccess(ranges);
                             else result.setFailure(f);
@@ -215,9 +215,9 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
 
     @Override
     public void start()
-                      {
-                         super.start();
-                                       }
+    {
+        super.start();
+    }
 
     void abort(Ranges abort)
     {

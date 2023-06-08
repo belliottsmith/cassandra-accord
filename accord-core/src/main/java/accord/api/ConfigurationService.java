@@ -18,6 +18,8 @@
 
 package accord.api;
 
+import javax.annotation.Nullable;
+
 import accord.local.Node;
 import accord.topology.Topology;
 import accord.utils.async.AsyncResult;
@@ -138,7 +140,10 @@ public interface ConfigurationService
         return currentTopology().epoch();
     }
 
-    Topology getTopologyForEpoch(long epoch);
+    /**
+     * Returns the topology for the given epoch if it's available, null otherwise
+     */
+    @Nullable Topology getTopologyForEpoch(long epoch);
 
     /**
      * Method for reporting epochs the configuration service may not be aware of. To be notified when the new epoch

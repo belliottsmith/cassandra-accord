@@ -149,7 +149,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         configService.registerListener(this);
     }
 
-    // FIXME: remove, only used byy Maelstrom
+    // TODO (cleanup, testing): remove, only used by Maelstrom
     public AsyncResult<Void> start()
     {
         return onTopologyUpdateInternal(configService.currentTopology(), false).metadata;

@@ -188,6 +188,8 @@ public class TopologyManager
 
         public long minEpoch()
         {
+            if (currentEpoch == 0)
+                return 0;
             return currentEpoch - epochs.length + 1;
         }
 
@@ -302,17 +304,16 @@ public class TopologyManager
     public synchronized void truncateTopologyUntil(long epoch)
     {
         Epochs current = epochs;
-        checkArgument(current.epoch() >= epoch);
+        checkArgument(current.epoch() >= epoch, "Unable to truncate; epoch %d is > current epoch %d", epoch , current.epoch());
 
         if (current.minEpoch() >= epoch)
             return;
 
         int newLen = current.epochs.length - (int) (epoch - current.minEpoch());
-        Invariants.checkState(current.epochs[newLen - 1].syncComplete());
+        Invariants.checkState(current.epochs[newLen - 1].syncComplete(), "Epoch %d's sync is not complete", current.epochs[newLen - 1].epoch());
 
-        EpochState[] nextEpochs = new EpochState[newLen];
-        System.arraycopy(current.epochs, 0, nextEpochs, 0, newLen);
-        epochs = new Epochs(nextEpochs, current.pendingSyncComplete, current.futureEpochFutures);
+        epochs = new Epochs(Arrays.copyOfRange(current.epochs, 0, newLen),
+                            current.pendingSyncComplete, current.futureEpochFutures);
     }
 
     public TopologySorter.Supplier sorter()
