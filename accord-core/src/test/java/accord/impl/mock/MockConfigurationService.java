@@ -35,6 +35,7 @@ public class MockConfigurationService implements TestableConfigurationService
 {
     private final MessageSink messageSink;
     private final List<Topology> epochs = new ArrayList<>();
+    private final Map<Long, EpochReady> acks = new HashMap<>();
     private final List<AsyncResult<Void>> syncs = new ArrayList<>();
     private final List<Listener> listeners = new ArrayList<>();
     private final EpochFunction<MockConfigurationService> fetchTopologyHandler;
@@ -81,15 +82,22 @@ public class MockConfigurationService implements TestableConfigurationService
     }
 
     @Override
-    public void acknowledgeEpoch(EpochReady epoch)
+    public synchronized void acknowledgeEpoch(EpochReady epoch)
     {
+        Assertions.assertFalse(acks.containsKey(epoch.epoch));
+        acks.put(epoch.epoch, epoch);
+    }
+
+    public synchronized EpochReady ackFor(long epoch)
+    {
+        return acks.get(epoch);
     }
 
     @Override
-    public synchronized AsyncResult<Void> reportTopology(Topology topology)
+    public synchronized void reportTopology(Topology topology)
     {
         if (topology.epoch() > epochs.size())
-            return syncs.get((int)topology.epoch() - 1);
+            return;
 
         Assertions.assertEquals(topology.epoch(), epochs.size());
         epochs.add(topology);
@@ -103,7 +111,6 @@ public class MockConfigurationService implements TestableConfigurationService
            : AsyncChains.reduce(futures, (a, b) -> null).beginAsResult();
 
         syncs.add(result);
-        return result;
     }
 
     public synchronized void reportSyncComplete(Node.Id node, long epoch)
