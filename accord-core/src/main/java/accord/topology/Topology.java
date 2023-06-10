@@ -193,12 +193,12 @@ public class Topology
         return Arrays.binarySearch(supersetIndexes, i);
     }
 
-    public Topology forSelection(Unseekables<?, ?> select)
+    public Topology forSelection(Unseekables<?> select)
     {
         return forSubset(subsetFor(select));
     }
 
-    public Topology forSelection(Unseekables<?, ?> select, Collection<Id> nodes)
+    public Topology forSelection(Unseekables<?> select, Collection<Id> nodes)
     {
         return forSubset(subsetFor(select), nodes);
     }
@@ -226,14 +226,14 @@ public class Topology
         return new Topology(epoch, shards, ranges, nodeLookup, rangeSubset, newSubset);
     }
 
-    private int[] subsetFor(Unseekables<?, ?> select)
+    private int[] subsetFor(Unseekables<?> select)
     {
         int count = 0;
         IntBuffers cachedInts = ArrayBuffers.cachedInts();
         int[] newSubset = cachedInts.getInts(Math.min(select.size(), subsetOfRanges.size()));
         try
         {
-            Routables<?, ?> as = select;
+            Routables<?> as = select;
             Ranges bs = subsetOfRanges;
             int ai = 0, bi = 0;
             // ailim tracks which ai have been included; since there may be multiple matches
@@ -291,7 +291,7 @@ public class Topology
         return cachedInts.completeAndDiscard(newSubset, count);
     }
 
-    public <P1> void visitNodeForKeysOnceOrMore(Unseekables<?, ?> select, Consumer<Id> nodes)
+    public <P1> void visitNodeForKeysOnceOrMore(Unseekables<?> select, Consumer<Id> nodes)
     {
         for (int shardIndex : subsetFor(select))
         {
@@ -301,9 +301,9 @@ public class Topology
         }
     }
 
-    public <T> T foldl(Unseekables<?, ?> select, IndexedBiFunction<Shard, T, T> function, T accumulator)
+    public <T> T foldl(Unseekables<?> select, IndexedBiFunction<Shard, T, T> function, T accumulator)
     {
-        Unseekables<?, ?> as = select;
+        Unseekables<?> as = select;
         Ranges bs = ranges;
         int ai = 0, bi = 0;
 

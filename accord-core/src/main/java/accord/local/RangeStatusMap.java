@@ -23,6 +23,7 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.primitives.EpochSupplier;
+import accord.primitives.Participants;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
@@ -56,8 +57,9 @@ public class RangeStatusMap extends ReducingRangeMap<RangeStatusMap.Entry>
             this.startEpoch = startEpoch;
             this.endEpoch = endEpoch;
             this.redundantBefore = redundantBefore;
-            this.truncatedBefore = truncatedBefore;
             this.isRedundantDurable = isRedundantDurable;
+            this.truncatedBefore = truncatedBefore;
+            Invariants.checkState(truncatedBefore.compareTo(redundantBefore) <= 0);
         }
 
         public static Entry reduce(Entry a, Entry b)
@@ -149,19 +151,15 @@ public class RangeStatusMap extends ReducingRangeMap<RangeStatusMap.Entry>
         }
     }
 
-//    final Ranges ranges;
-    public RangeStatusMap()
+    public static RangeStatusMap EMPTY = new RangeStatusMap();
+
+    private RangeStatusMap()
     {
-//        this.ranges = Ranges.EMPTY;
     }
 
     RangeStatusMap(boolean inclusiveEnds, RoutingKey[] starts, Entry[] values)
-//    RangeStatusMap(boolean inclusiveEnds, RoutingKey[] starts, Entry[] values, BiFunction<RoutingKey, RoutingKey, Range> rangeFactory)
     {
         super(inclusiveEnds, starts, values);
-//        Range[] ranges = new Range[starts.length - 1];
-//        for (int i = 0 ; i < ranges.length ; ++i)
-//            ranges[i] = rangeFactory.apply(starts[i], starts[i + 1]);
     }
 
     public static RangeStatusMap create(Ranges ranges, long startEpoch, long endEpoch, @Nullable TxnId redundantBefore, boolean isRedundantDurable, @Nullable TxnId truncatedBefore)
@@ -190,7 +188,7 @@ public class RangeStatusMap extends ReducingRangeMap<RangeStatusMap.Entry>
         return ReducingIntervalMap.merge(a, b, RangeStatusMap.Entry::reduce, Builder::new);
     }
 
-    public RangeStatus min(TxnId txnId, @Nullable EpochSupplier executeAt, Routables<?, ?> participants)
+    public RangeStatus min(TxnId txnId, @Nullable EpochSupplier executeAt, Routables<?> participants)
     {
         if (executeAt == null) executeAt = txnId;
         return notOwnedIfNull(foldl(participants, Entry::mergeMin, null, txnId, executeAt, test -> test == LIVE));
@@ -203,28 +201,13 @@ public class RangeStatusMap extends ReducingRangeMap<RangeStatusMap.Entry>
         return entry == null ? NOT_OWNED : notOwnedIfNull(Entry.mergeMax(entry,null, txnId, executeAt));
     }
 
-    public RangeStatus max(TxnId txnId, @Nullable EpochSupplier executeAt, Routables<?, ?> participants)
+    public RangeStatus max(TxnId txnId, @Nullable EpochSupplier executeAt, Participants<?> participants)
     {
         if (executeAt == null) executeAt = txnId;
         return notOwnedIfNull(foldl(participants, Entry::mergeMax, null, txnId, executeAt, test -> test == TRUNCATED));
     }
 
-    public boolean isTruncated(TxnId txnId, @Nullable EpochSupplier executeAt, Routables<?, ?> participants)
-    {
-        return min(txnId, executeAt, participants) == TRUNCATED;
-    }
-
-    public boolean isTruncated(TxnId txnId, @Nullable EpochSupplier executeAt, RoutingKey participant)
-    {
-        return get(txnId, executeAt, participant) == TRUNCATED;
-    }
-
-    public boolean isSomeShardDurable(TxnId txnId, Timestamp executeAt, Routables<?, ?> participants)
-    {
-        return max(txnId, executeAt, participants).compareTo(DURABLE) >= 0;
-    }
-
-    public boolean isRedundant(TxnId txnId, Timestamp executeAt, Routables<?, ?> participants)
+    public boolean isRedundant(TxnId txnId, Timestamp executeAt, Participants<?> participants)
     {
         return max(txnId, executeAt, participants).compareTo(REDUNDANT) >= 0;
     }

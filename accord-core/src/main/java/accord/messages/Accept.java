@@ -91,7 +91,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
             case Redundant:
                 return AcceptReply.REDUNDANT;
             case RejectedBallot:
-                return new AcceptReply(safeStore.get(txnId, null, scope).current().promised());
+                return new AcceptReply(safeStore.get(txnId, scope).current().promised());
             case Success:
                 // TODO (desirable, efficiency): we don't need to calculate deps if executeAt == txnId
                 return new AcceptReply(calculatePartialDeps(safeStore));
@@ -220,26 +220,26 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     public static class Invalidate extends AbstractEpochRequest<AcceptReply>
     {
         public final Ballot ballot;
-        // TODO (now): this should be a participant
-        public final RoutingKey someKey;
+        // should not be a non-participating home key
+        public final RoutingKey someParticipant;
 
-        public Invalidate(Ballot ballot, TxnId txnId, RoutingKey someKey)
+        public Invalidate(Ballot ballot, TxnId txnId, RoutingKey someParticipant)
         {
             super(txnId);
             this.ballot = ballot;
-            this.someKey = someKey;
+            this.someParticipant = someParticipant;
         }
 
         @Override
         public void process()
         {
-            node.mapReduceConsumeLocal(this, someKey, txnId.epoch(), this);
+            node.mapReduceConsumeLocal(this, someParticipant, txnId.epoch(), this);
         }
 
         @Override
         public AcceptReply apply(SafeCommandStore safeStore)
         {
-            SafeCommand safeCommand = safeStore.get(txnId, null, someKey);
+            SafeCommand safeCommand = safeStore.get(txnId, someParticipant);
             switch (Commands.acceptInvalidate(safeStore, safeCommand, ballot))
             {
                 default:
@@ -263,7 +263,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         @Override
         public String toString()
         {
-            return "AcceptInvalidate{ballot:" + ballot + ", txnId:" + txnId + ", key:" + someKey + '}';
+            return "AcceptInvalidate{ballot:" + ballot + ", txnId:" + txnId + ", key:" + someParticipant + '}';
         }
 
         @Override

@@ -1026,7 +1026,7 @@ public abstract class Command implements CommonAttributes
                 this(committed.waitingOn);
             }
 
-            public Update(Unseekables<?, ?> participants, Deps deps)
+            public Update(Unseekables<?> participants, Deps deps)
             {
                 this.deps = deps;
                 this.waitingOnCommit = new SimpleBitSet(deps.txnIdCount(), false);

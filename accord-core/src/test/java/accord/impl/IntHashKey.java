@@ -116,6 +116,14 @@ public abstract class IntHashKey implements RoutableKey
         {
             return new Range(new Hash(hash - 1), new Hash(hash));
         }
+
+        @Override
+        public Ranges asNotRanges()
+        {
+            return Ranges.of(new Range(new Hash(-1), new Hash(hash - 1)),
+                             new Range(new Hash(hash), new Hash(0x10000))
+            );
+        }
     }
 
     public static class Range extends accord.primitives.Range.EndInclusive

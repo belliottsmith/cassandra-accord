@@ -38,10 +38,7 @@ public enum RangeStatus
      * i.e. we only retain the fact that we have processed the command.
      *
      * At present, this state can only be adopted once a transaction's keys have been
-     * completely covered by TRUNCATED entries. These TRUNCATED entries
-     *
-     * TODO (desired): permit partial truncation
-     * TODO (desired): permit truncation without globally durable status
+     * completely covered by TRUNCATED entries.
      */
     TRUNCATED(1),
     ;

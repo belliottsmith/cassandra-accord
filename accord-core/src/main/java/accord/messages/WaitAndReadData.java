@@ -19,14 +19,14 @@
 package accord.messages;
 
 import accord.primitives.PartialTxn;
+import accord.primitives.Participants;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 
 public abstract class WaitAndReadData extends WaitUntilApplied
 {
     public final PartialTxn read;
 
-    protected WaitAndReadData(TxnId txnId, Unseekables<?, ?> readScope, long executeAtEpoch, long waitForEpoch, PartialTxn read)
+    protected WaitAndReadData(TxnId txnId, Participants<?> readScope, long executeAtEpoch, long waitForEpoch, PartialTxn read)
     {
         super(txnId, readScope, executeAtEpoch, waitForEpoch);
         this.read = read;

@@ -24,6 +24,7 @@ import java.util.Objects;
 
 import accord.api.RoutingKey;
 import accord.local.ShardDistributor;
+import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Keys;
 import accord.primitives.RoutingKeys;
@@ -116,6 +117,13 @@ public class IntKey implements RoutableKey
         {
             return new Range(new Routing(key - 1), new Routing(key));
         }
+
+        @Override
+        public Ranges asNotRanges()
+        {
+            return Ranges.of(new Range(new Routing(-1), new Routing(key - 1)),
+                             new Range(new Routing(key), new Routing(Integer.MAX_VALUE)));
+        }
     }
 
     public static class Range extends accord.primitives.Range.EndInclusive
@@ -167,7 +175,7 @@ public class IntKey implements RoutableKey
 
     public static RoutingKeys scope(int k0, int... kn)
     {
-        return keys(k0, kn).toUnseekables();
+        return keys(k0, kn).toParticipants();
     }
 
     public static Keys keys(int[] keyArray)

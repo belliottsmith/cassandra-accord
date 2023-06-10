@@ -19,6 +19,7 @@
 package accord.api;
 
 import accord.primitives.Range;
+import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Unseekable;
 
@@ -26,4 +27,5 @@ public interface RoutingKey extends Unseekable, RoutableKey
 {
     @Override default RoutingKey toUnseekable() { return this; }
     Range asRange();
+    Ranges asNotRanges();
 }
