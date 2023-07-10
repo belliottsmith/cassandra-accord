@@ -23,6 +23,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.BiConsumer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
@@ -52,6 +55,9 @@ import static accord.utils.Functions.foldl;
  */
 abstract class CoordinatePreAccept<T> extends SettableResult<T> implements Callback<PreAcceptReply>, BiConsumer<T, Throwable>
 {
+    @SuppressWarnings("unused")
+    private static final Logger logger = LoggerFactory.getLogger(CoordinatePreAccept.class);
+
     class ExtraPreAccept implements Callback<PreAcceptReply>
     {
         final QuorumTracker tracker;

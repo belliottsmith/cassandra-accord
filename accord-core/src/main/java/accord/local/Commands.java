@@ -21,6 +21,7 @@ package accord.local;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.function.Consumer;
+import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,8 +54,6 @@ import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
-import javax.annotation.Nullable;
-
 import static accord.api.ProgressLog.ProgressShard.Home;
 import static accord.api.ProgressLog.ProgressShard.Local;
 import static accord.api.ProgressLog.ProgressShard.No;
@@ -79,12 +78,10 @@ import static accord.local.Status.AcceptedInvalidate;
 import static accord.local.Status.Applied;
 import static accord.local.Status.Committed;
 import static accord.local.Status.Durability;
-import static accord.local.Status.Durability.DurableOrInvalidated;
 import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.Durability.Universal;
 import static accord.local.Status.Invalidated;
 import static accord.local.Status.Known;
-import static accord.local.Status.Known.ExecuteAtOnly;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.PreApplied;
 import static accord.local.Status.PreCommitted;
@@ -649,7 +646,7 @@ public class Commands
             case PreApplied:
                 Ranges executeRanges = executeRanges(safeStore, command.executeAt());
                 Command.Executed executed = command.asExecuted();
-                boolean intersects = executed.writes().keys.intersects(executeRanges);
+                boolean  intersects = executed.writes().keys.intersects(executeRanges);
 
                 if (intersects)
                 {
@@ -778,7 +775,7 @@ public class Commands
         }
     }
 
-    enum Truncate { NO, PARTIAL_TRUNCATE, TRUNCATE, ERASE }
+    public enum Truncate { NO, PARTIAL_TRUNCATE, TRUNCATE, ERASE }
 
     // TODO (now): document and justify all calls
     public static void setTruncatedApply(SafeCommandStore safeStore, SafeCommand safeCommand)

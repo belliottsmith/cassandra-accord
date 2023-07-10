@@ -24,12 +24,19 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
-import accord.messages.*;
+import accord.local.Node.Id;
+import accord.messages.Apply;
+import accord.messages.BeginRecovery;
+import accord.messages.CheckStatus;
+import accord.messages.InformOfTxnId;
+import accord.messages.ReadData;
+import accord.messages.Reply;
+import accord.messages.ReplyContext;
+import accord.messages.Request;
 import com.google.gson.JsonObject;
 import com.google.gson.TypeAdapter;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
-import accord.local.Node.Id;
 
 public class Packet implements ReplyContext
 {

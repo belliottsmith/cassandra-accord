@@ -162,4 +162,6 @@ public interface PreLoadContext
     {
         return contextFor(null, Collections.emptyList(), Keys.EMPTY);
     }
+
+    PreLoadContext EMPTY_PRELOADCONTEXT = empty();
 }

@@ -49,6 +49,7 @@ import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
+import accord.messages.ReadData.ReadNack;
 import accord.primitives.Ballot;
 import accord.primitives.FullRoute;
 import accord.primitives.Keys;
@@ -133,7 +134,7 @@ class ReadDataTest
 
             state.apply();
             state.readResult.setSuccess(Mockito.mock(Data.class));
-            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.ReadNack.Redundant));
+            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadNack.Redundant));
         });
     }
 
@@ -157,7 +158,7 @@ class ReadDataTest
             state.apply();
             state.readResult.setSuccess(Mockito.mock(Data.class));
 
-            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.ReadNack.Redundant));
+            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadNack.Redundant));
         });
     }
 
@@ -186,7 +187,7 @@ class ReadDataTest
 
             ReplyContext replyContext = state.process();
 
-            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.ReadNack.Redundant));
+            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadNack.Redundant));
         });
     }
 
@@ -201,7 +202,7 @@ class ReadDataTest
             })));
             ReplyContext replyContext = state.process();
 
-            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.ReadNack.Redundant));
+            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadNack.Redundant));
         });
     }
 

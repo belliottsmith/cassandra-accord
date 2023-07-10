@@ -18,17 +18,17 @@
 
 package accord.primitives;
 
-import accord.api.RoutingKey;
-
-import javax.annotation.Nonnull;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
+import javax.annotation.Nonnull;
 
 import com.google.common.collect.ImmutableMap;
+
+import accord.api.RoutingKey;
 
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_OVERLAPPING;
 import static accord.primitives.Routables.Slice.Overlapping;

@@ -18,22 +18,6 @@
 
 package accord.topology;
 
-import accord.burn.TopologyUpdates;
-import accord.coordinate.CoordinateGloballyDurable;
-import accord.coordinate.CoordinateShardDurable;
-import accord.coordinate.CoordinateSyncPoint;
-import accord.primitives.SyncPoint;
-import accord.utils.RandomSource;
-import accord.impl.IntHashKey;
-import accord.impl.IntHashKey.Hash;
-import accord.local.Node;
-import accord.primitives.Range;
-import accord.primitives.Ranges;
-import accord.utils.Invariants;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -46,6 +30,22 @@ import java.util.TreeSet;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import accord.burn.TopologyUpdates;
+import accord.coordinate.CoordinateGloballyDurable;
+import accord.coordinate.CoordinateShardDurable;
+import accord.coordinate.CoordinateSyncPoint;
+import accord.impl.IntHashKey;
+import accord.impl.IntHashKey.Hash;
+import accord.local.Node;
+import accord.primitives.Range;
+import accord.primitives.Ranges;
+import accord.primitives.SyncPoint;
+import accord.utils.Invariants;
+import accord.utils.RandomSource;
 import javax.annotation.Nullable;
 
 
@@ -303,10 +303,16 @@ public class TopologyRandomizer
         Node node = nodeLookup.apply(nodeId);
         Ranges ranges = selectRanges(current.forNode(nodeId).ranges);
         CoordinateSyncPoint.exclusive(node, ranges)
-                           .addCallback((success, fail) -> {
-                            if (success != null)
-                                coordinateDurable(node, success);
-        });
+                .addCallback((coordinateSyncPoint, createCoordinateSyncPointFail) -> {
+                    if (createCoordinateSyncPointFail != null)
+                        throw new RuntimeException(createCoordinateSyncPointFail);
+                    coordinateSyncPoint.addCallback((success, coordinateSyncPointFail) -> {
+                        if (coordinateSyncPointFail != null)
+                            throw new RuntimeException(coordinateSyncPointFail);
+                        if (success != null)
+                            coordinateDurable(node, success);
+                    });
+                });
     }
 
     private static void coordinateDurable(Node node, SyncPoint exclusiveSyncPoint)

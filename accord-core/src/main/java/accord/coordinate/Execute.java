@@ -24,19 +24,27 @@ import java.util.function.BiConsumer;
 import accord.api.Data;
 import accord.api.Result;
 import accord.local.Node;
-import accord.messages.ReadTxnData;
+import accord.local.Node.Id;
+import accord.messages.Commit;
 import accord.messages.ReadData.ReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
-import accord.primitives.*;
+import accord.messages.ReadTxnData;
+import accord.primitives.Deps;
+import accord.primitives.FullRoute;
+import accord.primitives.Participants;
+import accord.primitives.Ranges;
+import accord.primitives.Timestamp;
+import accord.primitives.Txn;
+import accord.primitives.Txn.Kind;
+import accord.primitives.TxnId;
 import accord.topology.Topologies;
-import accord.local.Node.Id;
-import accord.messages.Commit;
 import accord.topology.Topology;
 
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.messages.Commit.Kind.Maximal;
+import static accord.utils.Invariants.checkArgument;
 
 class Execute extends ReadCoordinator<ReadReply>
 {
@@ -63,7 +71,15 @@ class Execute extends ReadCoordinator<ReadReply>
 
     public static void execute(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
     {
-        if (txn.read().keys().isEmpty())
+        // Recovery calls execute and we would like execute to run BlockOnDeps because that will notify the agent
+        // of the local barrier
+        // TODO we don't really need to run BlockOnDeps, executing the empty txn would also be fine
+        if (txn.kind() == Kind.SyncPoint)
+        {
+            checkArgument(txnId.equals(executeAt));
+            BlockOnDeps.blockOnDeps(node, txnId, txn, route, deps, callback);
+        }
+        else if (txn.read().keys().isEmpty())
         {
             Result result = txn.result(txnId, executeAt, null);
             Persist.persist(node, txnId, route, txn, executeAt, deps, txn.execute(txnId, executeAt, null), result);
@@ -99,7 +115,7 @@ class Execute extends ReadCoordinator<ReadReply>
     {
         if (reply.isOk())
         {
-            ReadOk ok = (ReadOk) reply;
+            ReadOk ok = ((ReadOk) reply);
             Data next = ok.data;
             if (next != null)
                 data = data == null ? next : data.merge(next);

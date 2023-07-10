@@ -18,16 +18,22 @@
 
 package accord.utils.async;
 
-import accord.api.VisibleForImplementation;
-import accord.utils.Invariants;
-
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
+import com.google.common.base.Throwables;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import accord.api.VisibleForImplementation;
+import accord.utils.Invariants;
+
 public class AsyncResults
 {
+    private static final Logger logger = LoggerFactory.getLogger(AsyncResults.class);
+
     private AsyncResults() {}
 
     private static class Result<V>
@@ -42,7 +48,7 @@ public class AsyncResults
         }
     }
 
-    static class AbstractResult<V> implements AsyncResult<V>
+    public static class AbstractResult<V> implements AsyncResult<V>
     {
         private static final AtomicReferenceFieldUpdater<AbstractResult, Object> STATE = AtomicReferenceFieldUpdater.newUpdater(AbstractResult.class, Object.class, "state");
 
@@ -61,9 +67,28 @@ public class AsyncResults
 
         private void notify(Listener<V> listener, Result<V> result)
         {
+            Listener<V> reversed = null;
+            Listener<V> tmp;
             while (listener != null)
             {
-                listener.callback.accept(result.value, result.failure);
+                tmp = listener;
+                listener = listener.next;
+                tmp.next = reversed;
+                reversed = tmp;
+            }
+            listener = reversed;
+
+            while (listener != null)
+            {
+                try
+                {
+                    listener.callback.accept(result.value, result.failure);
+                }
+                catch (RuntimeException e)
+                {
+                    e.printStackTrace();
+                    logger.error("Error invoking callback {} with result {}, failure {}", listener.callback, result.value, Throwables.getStackTraceAsString(result.failure));
+                }
                 listener = listener.next;
             }
         }
@@ -84,9 +109,18 @@ public class AsyncResults
             }
         }
 
-        boolean trySetResult(V result, Throwable failure)
+        protected boolean trySetResult(V result, Throwable failure)
         {
             return trySetResult(new Result<>(result, failure));
+        }
+
+        protected boolean trySuccess(V value)
+        {
+            return trySetResult(value, null);
+        }
+        protected boolean tryFailure(Throwable throwable)
+        {
+            return trySetResult(null, throwable);
         }
 
         private  AsyncChain<V> newChain()
@@ -191,13 +225,13 @@ public class AsyncResults
         @Override
         public boolean trySuccess(V value)
         {
-            return trySetResult(value, null);
+            return super.trySuccess(value);
         }
 
         @Override
         public boolean tryFailure(Throwable throwable)
         {
-            return trySetResult(null, throwable);
+            return super.tryFailure(throwable);
         }
     }
 
