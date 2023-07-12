@@ -24,6 +24,11 @@ public interface NodeTimeService
 {
     Node.Id id();
     long epoch();
+
+    /**
+     * Current time in microseconds
+     * TODO review Shouldn't this have a name that better reflects the unit of time and the fact that it is wall time (unless simulated?)
+     */
     long now();
     Timestamp uniqueNow(Timestamp atLeast);
 }

@@ -83,7 +83,8 @@ public class TopologyManager
             if (global().size() > 0)
                 this.syncTracker = new QuorumTracker(new Single(sorter, global()));
             else
-                this.syncTracker = null;            this.newRanges = global.ranges.subtract(prevRanges);
+                this.syncTracker = null;
+            this.newRanges = global.ranges.subtract(prevRanges);
             this.prevSyncComplete = newRanges.with(prevSyncComplete);
             this.curSyncComplete = this.syncComplete = newRanges;
         }
@@ -100,7 +101,9 @@ public class TopologyManager
 
         public boolean recordSyncComplete(Id node)
         {
-            if (syncTracker.recordSuccess(node) == Success)
+            // TODO review NPEs now due to the null sync tracker for handling the empty epochs provided
+            // to Accord
+            if (syncTracker == null || syncTracker.recordSuccess(node) == Success)
             {
                 curSyncComplete = global.ranges;
                 syncComplete = prevSyncComplete;
