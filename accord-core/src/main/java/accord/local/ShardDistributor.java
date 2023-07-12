@@ -36,6 +36,8 @@ public interface ShardDistributor
     /**
      * Return a single subSpit from a range given the total number of splits the range should be divided into and
      * the index of the split to be returned.
+     *
+     * If the range is not sufficiently divisible then the range will be returned unmodified.
      */
     Range splitRange(Range range, int splitIndex, int totalSplits);
 
@@ -71,6 +73,9 @@ public interface ShardDistributor
             Splitter<T> splitter = this.splitter.apply(Ranges.single(range));
             T size = splitter.sizeOf(range);
             T splitSize = splitter.divide(size, totalSplits);
+            // Small ranges aren't divisible
+            if (splitter.compare(splitSize, splitter.zero()) <= 0)
+                return range;
             T splitBegin = splitter.multiply(splitSize, splitIndex);
             // For the last split use size as the end in case there is an issue with division and remainder
             T splitEnd = splitIndex == (totalSplits - 1) ? size : splitter.add(splitBegin, splitSize);

@@ -151,7 +151,6 @@ public class CoordinateDurabilityScheduling
                     }
                     else
                     {
-                        logger.info("Successfully coordinated shard durability");
                         // Schedule the next one with the next index to do the next set of ranges
                         scheduleCoordinateShardDurable(node, attemptIndex + 1);
                     }
@@ -160,7 +159,7 @@ public class CoordinateDurabilityScheduling
 
     private static void scheduleCoordinateGloballyDurable(Node node)
     {
-        node.scheduler().recurring(getNextCoordinateGloballyDurableRunnable(node), getNextCoordinateGloballyDurableWaitMicros(node), TimeUnit.MICROSECONDS);
+        node.scheduler().once(getNextCoordinateGloballyDurableRunnable(node), getNextCoordinateGloballyDurableWaitMicros(node), TimeUnit.MICROSECONDS);
     }
 
     private static Runnable getNextCoordinateGloballyDurableRunnable(Node node)
@@ -195,7 +194,6 @@ public class CoordinateDurabilityScheduling
                         success.addCallback((success2, failure2) -> {
                             if (failure2 != null)
                                 logger.error("Exception coordinating global durability", failure2);
-                            logger.info("Successfully coordinated global durability");
                             if (scheduledFollowup.compareAndSet(false, true))
                                 scheduleCoordinateGloballyDurable(node);
                         });
