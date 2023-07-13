@@ -18,9 +18,7 @@
 
 package accord.impl;
 
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -33,12 +31,12 @@ import accord.coordinate.CoordinateShardDurable;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.local.CommandStores;
 import accord.local.Node;
-import accord.local.Node.Id;
 import accord.local.ShardDistributor;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.topology.Topology;
+import accord.topology.TopologyManager.NodeIndexAndCountInCurrentEpoch;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 
@@ -239,18 +237,15 @@ public class CoordinateDurabilityScheduling
      */
     private static long getNextTurn(Node node, long targetGapMicros)
     {
-        // Calculate an ordinal using the current topology
-        // TODO cache this? Can it be stored in Topology?
-        List<Id> ids = new ArrayList<>(node.topology().current().nodes());
-        // If initialization isn't done check again in 1 second
-        if (ids.isEmpty())
+        NodeIndexAndCountInCurrentEpoch nodeIndexAndCountInCurrentEpoch = node.topology().nodeIndexAndNodeCountInCurrentEpoch();
+        // Empty epochs happen during node removal, startup, and tests so check again in 1 second
+        if (nodeIndexAndCountInCurrentEpoch == null)
             return TimeUnit.SECONDS.toMicros(1);
-        Collections.sort(ids);
-        int ourIndex = ids.indexOf(node.id());
 
+        int ourIndex = nodeIndexAndCountInCurrentEpoch.ourIndex;
         long nowMicros = node.unix(TimeUnit.MICROSECONDS);
         // How long it takes for all nodes to go once
-        long totalRoundDuration = ids.size() * targetGapMicros;
+        long totalRoundDuration = nodeIndexAndCountInCurrentEpoch.numNodesInEpoch * targetGapMicros;
         long startOfCurrentRound = (nowMicros / totalRoundDuration) * totalRoundDuration;
 
         // In a given round at what time in the round should this node take its turn
