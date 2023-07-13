@@ -23,12 +23,16 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
+import java.util.function.ToLongFunction;
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -76,8 +80,6 @@ import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
 public class Node implements ConfigurationService.Listener, NodeTimeService
@@ -137,6 +139,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
     private final CommandStores commandStores;
 
     private final LongSupplier nowSupplier;
+    private final ToLongFunction<TimeUnit> nowTimeUnit;
     private final AtomicReference<Timestamp> now;
     private final Agent agent;
     private final RandomSource random;
@@ -147,7 +150,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
     // TODO (expected, liveness): monitor the contents of this collection for stalled coordination, and excise them
     private final Map<TxnId, AsyncResult<? extends Outcome>> coordinating = new ConcurrentHashMap<>();
 
-    public Node(Id id, MessageSink messageSink, ConfigurationService configService, LongSupplier nowSupplier,
+    public Node(Id id, MessageSink messageSink, ConfigurationService configService, LongSupplier nowSupplier, ToLongFunction<TimeUnit> nowTimeUnit,
                 Supplier<DataStore> dataSupplier, ShardDistributor shardDistributor, Agent agent, RandomSource random, Scheduler scheduler, TopologySorter.Supplier topologySorter,
                 Function<Node, ProgressLog.Factory> progressLogFactory, CommandStores.Factory factory)
     {
@@ -156,6 +159,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         this.configService = configService;
         this.topology = new TopologyManager(topologySorter, id);
         this.nowSupplier = nowSupplier;
+        this.nowTimeUnit = nowTimeUnit;
         this.now = new AtomicReference<>(Timestamp.fromValues(topology.epoch(), nowSupplier.getAsLong(), id));
         this.agent = agent;
         this.random = random;
@@ -309,6 +313,12 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
             now.accumulateAndGet(atLeast, Node::nowAtLeast);
         }
         return uniqueNow();
+    }
+
+    @Override
+    public long unix(TimeUnit timeUnit)
+    {
+        return nowTimeUnit.applyAsLong(timeUnit);
     }
 
     private static Timestamp nowAtLeast(Timestamp current, Timestamp proposed)

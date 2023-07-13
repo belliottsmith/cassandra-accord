@@ -22,7 +22,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
 
 import com.google.common.primitives.Ints;
 import org.slf4j.Logger;
@@ -53,7 +53,7 @@ public class CoordinateDurabilityScheduling
     private static final Logger logger = LoggerFactory.getLogger(CoordinateDurabilityScheduling.class);
 
     /*
-     * Divide each range into N steps and then every interval coordinate shard durable for the range step subrange of each range
+     * Divide each range into N steps and then every interval coordinate local shard durable for the range step subrange of every range on the node
      */
     static final int RANGE_STEPS = 10;
 
@@ -64,15 +64,18 @@ public class CoordinateDurabilityScheduling
 
     /*
      * Every node will independently attempt to invoke CoordinateGloballyDurable
-     * with a target gap between invocations of COORDINATE_GLOBALLY_DURABLE_TARGET_GAP_MS.
+     * with a target gap between invocations of COORDINATE_GLOBALLY_DURABLE_TARGET_GAP_MICROS.
      *
      * This is done by nodes taking turns for each scheduled attempt that is due by calculating what # attempt is
-     * next for the current node ordinal in the cluster since the unix epoch and attempting to invoke then. If all goes
+     * next for the current node ordinal in the cluster and time since the unix epoch and attempting to invoke then. If all goes
      * well they end up doing it periodically in a timely fashion with the target gap achieved.
      *
      */
     static final long COORDINATE_GLOBALLY_DURABLE_TARGET_GAP_MICROS = TimeUnit.MILLISECONDS.toMicros(1000);
 
+    /**
+     * Schedule regular invocations of CoordinateShardDurable and CoordinateGloballyDurable
+     */
     public static void scheduleDurabilityPropagation(Node node)
     {
         scheduleCoordinateShardDurable(node, 0);
@@ -89,16 +92,20 @@ public class CoordinateDurabilityScheduling
         return () -> {
             try
             {
-                rangesDurable(node, attemptIndex);
+                coordinateExclusiveSyncPointForCoordinateShardDurable(node, attemptIndex);
             }
             catch (Exception e)
             {
-                logger.error("Exception coordinating local shard durability", e);
+                logger.error("Exception in initial range calculation and initiation of exclusive sync point for local shard durability", e);
             }
         };
     }
 
-    private static void rangesDurable(Node node, long attemptIndex)
+    /**
+     * The first step for coordinating shard durable is to run an exclusive sync point
+     * the result of which can then be used to run
+     */
+    private static void coordinateExclusiveSyncPointForCoordinateShardDurable(Node node, long attemptIndex)
     {
         Topology topology = node.topology().current();
         CommandStores commandStores = node.commandStores();
@@ -130,24 +137,29 @@ public class CoordinateDurabilityScheduling
                     if (fail != null)
                     {
                         logger.error("Exception coordinating exclusive sync point for local shard durability", fail);
-                        // On failure don't increment attempt index
+                        // On failure don't increment attemptIndex
+                        // TODO review is it better to increment the index so if there is a stuck portion we will move past it and at least
+                        // make some progress?
                         scheduleCoordinateShardDurable(node, attemptIndex);
                     }
                     else if (success != null)
                     {
-                        coordinateDurable(node, success, attemptIndex);
+                        coordinateShardDurableAfterExclusiveSyncPoint(node, success, attemptIndex);
                     }
                 });
     }
 
-    private static void coordinateDurable(Node node, SyncPoint exclusiveSyncPoint, long attemptIndex)
+    private static void coordinateShardDurableAfterExclusiveSyncPoint(Node node, SyncPoint exclusiveSyncPoint, long attemptIndex)
     {
         CoordinateShardDurable.coordinate(node, exclusiveSyncPoint, Collections.emptySet())
-                .addCallback((success0, fail0) -> {
-                    if (fail0 != null)
+                .addCallback((success, fail) -> {
+                    if (fail != null)
                     {
-                        logger.error("Exception coordinating local shard durability", fail0);
-                        coordinateDurable(node, exclusiveSyncPoint, attemptIndex);
+                        logger.error("Exception coordinating local shard durability", fail);
+                        // On failure don't increment attempt index
+                        // TODO review is it better to increment the index so if there is a stuck portion we will move past it and at least
+                        // make some progress?
+                        coordinateShardDurableAfterExclusiveSyncPoint(node, exclusiveSyncPoint, attemptIndex);
                     }
                     else
                     {
@@ -159,10 +171,10 @@ public class CoordinateDurabilityScheduling
 
     private static void scheduleCoordinateGloballyDurable(Node node)
     {
-        node.scheduler().once(getNextCoordinateGloballyDurableRunnable(node), getNextCoordinateGloballyDurableWaitMicros(node), TimeUnit.MICROSECONDS);
+        node.scheduler().once(getCoordinateGloballyDurableRunnable(node), getNextCoordinateGloballyDurableWaitMicros(node), TimeUnit.MICROSECONDS);
     }
 
-    private static Runnable getNextCoordinateGloballyDurableRunnable(Node node)
+    private static Runnable getCoordinateGloballyDurableRunnable(Node node)
     {
         return () -> {
             try
@@ -180,34 +192,52 @@ public class CoordinateDurabilityScheduling
                 long epoch = node.epoch();
                 // TODO review Wanted this to execute async and not block the scheduler
                 AsyncChain<AsyncResult<Void>> resultChain = node.withEpoch(epoch, () -> node.commandStores().any().submit(() -> CoordinateGloballyDurable.coordinate(node, epoch)));
-                // TODO This has the potential to schedule multiple if both callbacks run such as coordination starts, and something causees failure after
-                AtomicBoolean scheduledFollowup = new AtomicBoolean(false);
-                resultChain.begin((success, failure) -> {
-                    if (failure != null)
+                resultChain.begin((success, fail) -> {
+                    if (fail != null)
                     {
-                        logger.error("Exception coordinating global durability", failure);
-                        if (scheduledFollowup.compareAndSet(false, true))
-                            scheduleCoordinateGloballyDurable(node);
+                        logger.error("Exception initiating coordination in withEpoch for global durability", fail);
+                        scheduleCoordinateGloballyDurable(node);
                     }
                     else
                     {
-                        success.addCallback((success2, failure2) -> {
-                            if (failure2 != null)
-                                logger.error("Exception coordinating global durability", failure2);
-                            if (scheduledFollowup.compareAndSet(false, true))
-                                scheduleCoordinateGloballyDurable(node);
-                        });
+                        success.addCallback(coordinateGloballyDurableCallback(node));
                     }
                 });
             }
             catch (Exception e)
             {
-                logger.error("Exception coordinating global durability", e);
+                logger.error("Exception invoking withEpoch to start coordination for global durability", e);
             }
         };
     }
 
+    private static BiConsumer<Void, Throwable> coordinateGloballyDurableCallback(Node node)
+    {
+        return (success, fail) -> {
+            if (fail != null)
+                logger.error("Exception coordinating global durability", fail);
+            // Reschedule even on failure because we never stop need to propagate global durability
+            scheduleCoordinateGloballyDurable(node);
+        };
+    }
+
     private static long getNextCoordinateGloballyDurableWaitMicros(Node node)
+    {
+        return getNextTurn(node, COORDINATE_GLOBALLY_DURABLE_TARGET_GAP_MICROS);
+    }
+
+    /**
+     * Based on the current unix time (simulated or otherwise) calculate the wait time in microseconds until the next turn of this
+     * node for some activity with a target gap between nodes doing the activity.
+     *
+     * This is done by taking the index of the node in the current topology and the total number of nodes
+     * and then using the target gap between invocations to calculate a "round" duration and point of time each node
+     * should have its turn in each round based on its index and calculating the time to the next turn for that node will occur.
+     *
+     * It's assumed it is fine if nodes overlap or reorder or skip for whatever activity we are picking turns for as long as it is approximately
+     * the right pacing.
+     */
+    private static long getNextTurn(Node node, long targetGapMicros)
     {
         // Calculate an ordinal using the current topology
         // TODO cache this? Can it be stored in Topology?
@@ -218,13 +248,13 @@ public class CoordinateDurabilityScheduling
         Collections.sort(ids);
         int ourIndex = ids.indexOf(node.id());
 
-        long nowMicros = node.now();
+        long nowMicros = node.unix(TimeUnit.MICROSECONDS);
         // How long it takes for all nodes to go once
-        long totalRoundDuration = ids.size() * COORDINATE_GLOBALLY_DURABLE_TARGET_GAP_MICROS;
+        long totalRoundDuration = ids.size() * targetGapMicros;
         long startOfCurrentRound = (nowMicros / totalRoundDuration) * totalRoundDuration;
 
         // In a given round at what time in the round should this node take its turn
-        long ourOffsetInRound = ourIndex * COORDINATE_GLOBALLY_DURABLE_TARGET_GAP_MICROS;
+        long ourOffsetInRound = ourIndex * targetGapMicros;
 
         long targetTimeInCurrentRound = startOfCurrentRound + ourOffsetInRound;
         long targetTime = targetTimeInCurrentRound;
