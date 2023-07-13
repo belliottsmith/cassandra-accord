@@ -64,15 +64,15 @@ public class TopologyManager
 {
     private static final AsyncResult<Void> SUCCESS = AsyncResults.success(null);
 
-    public static class NodeIndexAndCountInCurrentEpoch
+    public static class NodeAndTopologyInfo
     {
+        public final Topology topology;
         public final int ourIndex;
-        public final int numNodesInEpoch;
 
-        public NodeIndexAndCountInCurrentEpoch(int ourIndex, int nodeCount)
+        public NodeAndTopologyInfo(Topology topology, int ourIndex)
         {
+            this.topology = topology;
             this.ourIndex = ourIndex;
-            this.numNodesInEpoch = nodeCount;
         }
     }
 
@@ -355,7 +355,7 @@ public class TopologyManager
     private final Id node;
     private volatile Epochs epochs;
 
-    private volatile NodeIndexAndCountInCurrentEpoch nodeIndexAndCountInCurrentEpoch = null;
+    private volatile NodeAndTopologyInfo currentNodeAndTopologyInfo = null;
 
     public TopologyManager(TopologySorter.Supplier sorter, Id node)
     {
@@ -391,7 +391,7 @@ public class TopologyManager
         List<AsyncResult.Settable<Void>> futureEpochFutures = new ArrayList<>(current.futureEpochFutures);
         AsyncResult.Settable<Void> toComplete = !futureEpochFutures.isEmpty() ? futureEpochFutures.remove(0) : null;
         epochs = new Epochs(nextEpochs, pending, futureEpochFutures);
-        computeNodeIndexAndCountInCurrentEpoch();
+        updateCurrentNodeAndTopologyInfo();
         if (toComplete != null)
             toComplete.trySuccess(null);
     }
@@ -402,23 +402,28 @@ public class TopologyManager
      *
      * Index is just the position in the sorted list of node ids.
      */
-    private void computeNodeIndexAndCountInCurrentEpoch()
+    private void updateCurrentNodeAndTopologyInfo()
     {
-        List<Id> ids = new ArrayList<>(current().nodes());
+        Topology current = current();
+        List<Id> ids = new ArrayList<>(current.nodes());
         // If initialization isn't done check again in 1 second
         if (ids.isEmpty())
         {
             // TODO review in a situation where we have nodes in older epochs and no nodes in the current epoch
             // it would cause this to assign null and maybe stop things that we actually still need to run?
-            nodeIndexAndCountInCurrentEpoch = null;
+            currentNodeAndTopologyInfo = null;
+            return;
         }
         Collections.sort(ids);
         int ourIndex = ids.indexOf(node);
         // This seems to be a supported case of removing nodes (see TopologyChangeTest)
         // which causes them to no longer be in the current epoch
         if (ourIndex == -1)
-            nodeIndexAndCountInCurrentEpoch = null;
-        nodeIndexAndCountInCurrentEpoch = new NodeIndexAndCountInCurrentEpoch(ourIndex, ids.size());
+        {
+            currentNodeAndTopologyInfo = null;
+            return;
+        }
+        currentNodeAndTopologyInfo = new NodeAndTopologyInfo(current, ourIndex);
     }
 
     public AsyncChain<Void> awaitEpoch(long epoch)
@@ -476,9 +481,9 @@ public class TopologyManager
     /**
      * Returns -1 if there are no nodes in the current topology
      */
-    public NodeIndexAndCountInCurrentEpoch nodeIndexAndNodeCountInCurrentEpoch()
+    public NodeAndTopologyInfo currentNodeAndTopologyInfo()
     {
-        return nodeIndexAndCountInCurrentEpoch;
+        return currentNodeAndTopologyInfo;
     }
 
     public long epoch()

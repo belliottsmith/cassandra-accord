@@ -18,7 +18,9 @@
 
 package accord.impl;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -36,12 +38,30 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.topology.Topology;
-import accord.topology.TopologyManager.NodeIndexAndCountInCurrentEpoch;
+import accord.topology.TopologyManager.NodeAndTopologyInfo;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 
 /**
- * Helper methods and classes to invoke coordination to propagate information about durability
+ * Helper methods and classes to invoke coordination to propagate information about durability.
+ *
+ * Both CoordinateShardDurable and CoordinateGloballyDurable use wall time to loosely coordinate between nodes
+ * so that they take non-overlapping (hopefully) turns doing the coordination.
+ *
+ * Both of these have a concept of rounds where rounds have a known duration in wall time, and the current round is known
+ * based on time since the epoch, and the point in time where a node should do something in a given round is known based
+ * on its index in the sorted list of nodes ids in the current epoch.
+ *
+ * Coordinate globally durable is simpler because they just need to take turns so nodes just calculate when it is their
+ * turn and invoke CoordinateGloballyDurable.
+ *
+ * CoordinateShardDurable needs nodes to not overlap on the ranges they operate on or the exlusive sync points overlap
+ * with each other and block progress. A target duration to process the entire ring is set, and then each node in the
+ * current round has a time in the round that it should start processing, and the time it starts and the subranges it is
+ * responsible for rotates backwards every round so that a down node doesn't prevent a subrange from being processed.
+ *
+ * The work for CoordinateShardDurable is further subdivided where each subrange a node operates on is divided a fixed
+ * number of times and then processed one at a time with a fixed wait between them.
  *
  * // TODO review will the scheduler shut down on its own or do the individual tasks need to be canceled manually?
  * Didn't go with recurring because it doesn't play well with async execution of these tasks
@@ -51,14 +71,22 @@ public class CoordinateDurabilityScheduling
     private static final Logger logger = LoggerFactory.getLogger(CoordinateDurabilityScheduling.class);
 
     /*
-     * Divide each range into N steps and then every interval coordinate local shard durable for the range step subrange of every range on the node
+     * Divide each sub-range a node handles in a given round into COORDINATE_SHARD_DURABLE_RANGE_STEPS steps and then every
+     * COORDINATE_SHARD_DURABLE_RANGE_STEP_GAP_MILLIS invoke CoordinateShardDurable for a sub-range of a sub-range.
      */
-    static final int RANGE_STEPS = 10;
+    static final int COORDINATE_SHARD_DURABLE_RANGE_STEPS = 10;
 
     /*
-     * How often this node will attempt to do a coordinate shard durable step
+     * In each round at each node wait this amount of time between CoordinateShardDurable invocations for each sub-range (of a sub-range) step
      */
-    static final int COORDINATE_SHARD_DURABLE_INTERVAL_MS = 100;
+    static final int COORDINATE_SHARD_DURABLE_RANGE_STEP_GAP_MILLIS = 100;
+
+    /*
+     * Target for how often the entire ring should be processed in microseconds. Every node will start at an offset in the current round that is based
+     * on this value / by (total # nodes * its index in the current round). The current round is determined by dividing time since the epoch by this
+     * duration.
+     */
+    static final long COORDINATE_SHARD_DURABLE_FULL_RING_TARGET_PROCESSING_MICROS = TimeUnit.SECONDS.toMicros(30);
 
     /*
      * Every node will independently attempt to invoke CoordinateGloballyDurable
@@ -76,21 +104,85 @@ public class CoordinateDurabilityScheduling
      */
     public static void scheduleDurabilityPropagation(Node node)
     {
-        scheduleCoordinateShardDurable(node, 0);
+        scheduleCoordinateShardDurable(node);
         scheduleCoordinateGloballyDurable(node);
     }
 
-    private static void scheduleCoordinateShardDurable(Node node, long attemptIndex)
+    /**
+     * Schedule the first CoordinateShardDurable execution for the current round. Sub-steps will be scheduled after
+     * each sub-step completes, and once all are completed scheduleCoordinateShardDurable is called again.
+     */
+    private static void scheduleCoordinateShardDurable(Node node)
     {
-        node.scheduler().once(getCoordinateShardDurableRunnable(node, attemptIndex), COORDINATE_SHARD_DURABLE_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        logger.trace("Scheduling once CoordinateShardDurable node {} at {}",  node.id(), node.unix(TimeUnit.MICROSECONDS));
+        NodeAndTopologyInfo nodeAndTopologyInfo = node.topology().currentNodeAndTopologyInfo();
+        // Empty epochs happen during node removal, startup, and tests so check again in 1 second
+        if (nodeAndTopologyInfo == null)
+        {
+            logger.trace("Empty topology, scheduling coordinate shard durable in 1 second at node {}", node.id());
+            node.scheduler().once(() -> scheduleCoordinateShardDurable(node), 1, TimeUnit.SECONDS);
+            return;
+        }
+
+        Topology topology = nodeAndTopologyInfo.topology;
+        int nodeCount = topology.nodes().size();
+        CommandStores commandStores = node.commandStores();
+        ShardDistributor distributor = commandStores.shardDistributor();
+        Ranges ranges = topology.ranges();
+
+        // During startup or when there is nothing to do just skip
+        // since it generates a lot of noisy errors if you move forward
+        // with no shards
+        if (ranges.isEmpty() || commandStores.count() == 0)
+        {
+            logger.trace("No ranges or no command stores, scheduling coordinate shard durable in 1 second at node {}", node.id());
+            node.scheduler().once(() -> scheduleCoordinateShardDurable(node), 1, TimeUnit.SECONDS);
+            return;
+        }
+
+        int ourIndex = nodeAndTopologyInfo.ourIndex;
+        long nowMicros = node.unix(TimeUnit.MICROSECONDS);
+        // Which round of iterating across the ring is currently occurring given the target processing time for the full ring
+        long currentRound = nowMicros / COORDINATE_SHARD_DURABLE_FULL_RING_TARGET_PROCESSING_MICROS;
+        // Wall time when the current round started
+        long startOfCurrentRound = currentRound * COORDINATE_SHARD_DURABLE_FULL_RING_TARGET_PROCESSING_MICROS;
+
+        // Every round rotate backwards which subranges this node is responsible for so if there is a down node
+        // another node will eventually come along and propagate durability
+        // Backwards so that a node doesn't start last in one round and then start first in the next round
+        // and likely miss scheduling when it is supposed to run.
+        int rotationForCurrentRound = Ints.checkedCast(currentRound % nodeCount);
+        ourIndex = (ourIndex - rotationForCurrentRound) % (nodeCount + 1);
+        if (ourIndex < 0)
+            ourIndex += nodeCount + 1;
+        long ourTargetStartTime = startOfCurrentRound + ((COORDINATE_SHARD_DURABLE_FULL_RING_TARGET_PROCESSING_MICROS / nodeCount) * ourIndex);
+        // TODO review this can have the behavior of all nodes syncing up if we don't force them to wait for their turn in the next round
+        long ourDelayUntilStarting = Math.max(0, ourTargetStartTime - nowMicros);
+
+        // In each step coordinate shard durability for a subset of every range
+        List<Range> slices = new ArrayList<>(ranges.size());
+        for (int i = 0; i < ranges.size(); i++)
+        {
+            Range r = ranges.get(i);
+            Range slice = distributor.splitRange(r, ourIndex, nodeCount);
+            if (slice == r && ourIndex != 0)
+                // Have node index 0 always be responsible for processing indivisible ranges
+                // so multiple nodes don't conflict coordinating for the same indivisible range
+                continue;
+            slices.add(slice);
+        }
+        Range[] slicesArray = new Range[slices.size()];
+        slicesArray = slices.toArray(slicesArray);
+
+        node.scheduler().once(getCoordinateShardDurableRunnable(node, Ranges.ofSortedAndDeoverlapped(slicesArray), 0), ourDelayUntilStarting, TimeUnit. MICROSECONDS);
     }
 
-    private static Runnable getCoordinateShardDurableRunnable(Node node, long attemptIndex)
+    private static Runnable getCoordinateShardDurableRunnable(Node node, Ranges ranges, int currentStep)
     {
         return () -> {
             try
             {
-                coordinateExclusiveSyncPointForCoordinateShardDurable(node, attemptIndex);
+                coordinateExclusiveSyncPointForCoordinateShardDurable(node, ranges, currentStep);
             }
             catch (Exception e)
             {
@@ -103,66 +195,53 @@ public class CoordinateDurabilityScheduling
      * The first step for coordinating shard durable is to run an exclusive sync point
      * the result of which can then be used to run
      */
-    private static void coordinateExclusiveSyncPointForCoordinateShardDurable(Node node, long attemptIndex)
+    private static void coordinateExclusiveSyncPointForCoordinateShardDurable(Node node, Ranges ranges, int currentStep)
     {
-        Topology topology = node.topology().current();
-        CommandStores commandStores = node.commandStores();
-        ShardDistributor distributor = commandStores.shardDistributor();
-        Ranges nodeRanges = topology.rangesForNode(node.id());
-
-        // During startup or when there is nothing to do just skip
-        // since it generates a lot of noisy errors if you move forward
-        // with no shards
-        if (nodeRanges.isEmpty() || commandStores.count() == 0)
+        ShardDistributor distributor = node.commandStores().shardDistributor();
+        // In each step coordinate shard durability for a subrange of each range
+        Range[] slices = new Range[ranges.size()];
+        for (int i = 0; i < ranges.size(); i++)
         {
-            scheduleCoordinateShardDurable(node, attemptIndex);
-            return;
+            Range r = ranges.get(i);
+            slices[i] = distributor.splitRange(r, currentStep, COORDINATE_SHARD_DURABLE_RANGE_STEPS);
         }
 
-        int currentStep = Ints.checkedCast(attemptIndex % RANGE_STEPS);
-
-        // In each step coordinate shard durability for a subset of every range on the node.
-        Range[] slices = new Range[nodeRanges.size()];
-        for (int i = 0; i < nodeRanges.size(); i++)
-        {
-            Range r = nodeRanges.get(i);
-            slices[i] = distributor.splitRange(r, currentStep, RANGE_STEPS);
-        }
-
-        // Sorted and deoverlapped property should be preserved after splitting
         CoordinateSyncPoint.exclusive(node, Ranges.ofSortedAndDeoverlapped(slices))
                 .addCallback((success, fail) -> {
                     if (fail != null)
                     {
                         logger.error("Exception coordinating exclusive sync point for local shard durability", fail);
-                        // On failure don't increment attemptIndex
-                        // TODO review is it better to increment the index so if there is a stuck portion we will move past it and at least
-                        // make some progress?
-                        scheduleCoordinateShardDurable(node, attemptIndex);
+                        scheduleCoordinateShardDurable(node);
                     }
-                    else if (success != null)
+                    else
                     {
-                        coordinateShardDurableAfterExclusiveSyncPoint(node, success, attemptIndex);
+                        coordinateShardDurableAfterExclusiveSyncPoint(node, ranges, success, currentStep);
                     }
                 });
     }
 
-    private static void coordinateShardDurableAfterExclusiveSyncPoint(Node node, SyncPoint exclusiveSyncPoint, long attemptIndex)
+    private static void coordinateShardDurableAfterExclusiveSyncPoint(Node node, Ranges ranges, SyncPoint exclusiveSyncPoint, int currentStep)
     {
         CoordinateShardDurable.coordinate(node, exclusiveSyncPoint, Collections.emptySet())
                 .addCallback((success, fail) -> {
                     if (fail != null)
                     {
-                        logger.error("Exception coordinating local shard durability", fail);
-                        // On failure don't increment attempt index
-                        // TODO review is it better to increment the index so if there is a stuck portion we will move past it and at least
+                        logger.error("Exception coordinating local shard durability, will retry immediately", fail);
+                        // On failure don't increment currentStep
+                        // TODO review is it better to increment the currentStep so if there is a stuck portion we will move past it and at least
                         // make some progress?
-                        coordinateShardDurableAfterExclusiveSyncPoint(node, exclusiveSyncPoint, attemptIndex);
+                        coordinateShardDurableAfterExclusiveSyncPoint(node, ranges, exclusiveSyncPoint, currentStep);
                     }
                     else
                     {
-                        // Schedule the next one with the next index to do the next set of ranges
-                        scheduleCoordinateShardDurable(node, attemptIndex + 1);
+                        int nextStep = currentStep + 1;
+                        if (nextStep >= COORDINATE_SHARD_DURABLE_RANGE_STEPS)
+                            // Schedule the next time to start the steps from the beginning on whatever ranges we target in the next round
+                            scheduleCoordinateShardDurable(node);
+                        else
+                            // Continue on to scheduling the next subrange step with a fixed delay
+                            // TODO review Should there be a fixed gap here or just keep going immediately?
+                            node.scheduler().once(() -> coordinateExclusiveSyncPointForCoordinateShardDurable(node, ranges, currentStep + 1), COORDINATE_SHARD_DURABLE_RANGE_STEP_GAP_MILLIS, TimeUnit.MILLISECONDS);
                     }
                 });
     }
@@ -237,15 +316,15 @@ public class CoordinateDurabilityScheduling
      */
     private static long getNextTurn(Node node, long targetGapMicros)
     {
-        NodeIndexAndCountInCurrentEpoch nodeIndexAndCountInCurrentEpoch = node.topology().nodeIndexAndNodeCountInCurrentEpoch();
+        NodeAndTopologyInfo nodeAndTopologyInfo = node.topology().currentNodeAndTopologyInfo();
         // Empty epochs happen during node removal, startup, and tests so check again in 1 second
-        if (nodeIndexAndCountInCurrentEpoch == null)
+        if (nodeAndTopologyInfo == null)
             return TimeUnit.SECONDS.toMicros(1);
 
-        int ourIndex = nodeIndexAndCountInCurrentEpoch.ourIndex;
+        int ourIndex = nodeAndTopologyInfo.ourIndex;
         long nowMicros = node.unix(TimeUnit.MICROSECONDS);
         // How long it takes for all nodes to go once
-        long totalRoundDuration = nodeIndexAndCountInCurrentEpoch.numNodesInEpoch * targetGapMicros;
+        long totalRoundDuration = nodeAndTopologyInfo.topology.nodes().size() * targetGapMicros;
         long startOfCurrentRound = (nowMicros / totalRoundDuration) * totalRoundDuration;
 
         // In a given round at what time in the round should this node take its turn
