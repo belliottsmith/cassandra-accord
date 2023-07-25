@@ -24,11 +24,11 @@ import java.util.TreeMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.local.SaveStatus.LocalExecution;
 import accord.api.ProgressLog;
 import accord.coordinate.FetchData;
 import accord.coordinate.Invalidate;
@@ -40,6 +40,7 @@ import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SaveStatus;
+import accord.local.SaveStatus.LocalExecution;
 import accord.local.Status;
 import accord.local.Status.Known;
 import accord.primitives.Participants;
@@ -53,7 +54,6 @@ import accord.utils.IntrusiveLinkedListNode;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
-import javax.annotation.Nullable;
 
 import static accord.api.ProgressLog.ProgressShard.Unsure;
 import static accord.coordinate.InformHomeOfTxn.inform;
