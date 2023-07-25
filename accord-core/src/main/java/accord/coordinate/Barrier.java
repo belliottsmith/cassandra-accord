@@ -19,6 +19,7 @@
 package accord.coordinate;
 
 import java.util.concurrent.ExecutionException;
+import javax.annotation.Nonnull;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -42,7 +43,6 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.AsyncResults;
-import javax.annotation.Nonnull;
 
 import static accord.local.PreLoadContext.contextFor;
 import static accord.utils.Invariants.checkArgument;
@@ -161,14 +161,9 @@ public class Barrier<S extends Seekables<?, ?>> extends AsyncResults.AbstractRes
                 TxnId txnId = syncPoint.syncId;
                 long epoch = txnId.epoch();
                 RoutingKey homeKey = syncPoint.homeKey;
-                node.commandStores().ifLocal(contextFor(txnId), homeKey, epoch, epoch, safeStore -> {
-                    Command.TransientListener listener = new BarrierCommandListener();
-                    // TODO handle null return?
-                    SafeCommand safeCommand = safeStore.get(txnId, homeKey);
-                    listener.onChange(safeStore, safeCommand);
-                    if (!isDone())
-                        safeCommand.addListener(listener);
-                }).begin(node.agent());
+                node.commandStores().ifLocal(contextFor(txnId), homeKey, epoch, epoch,
+                                             safeStore -> safeStore.get(txnId, homeKey).addAndInvokeListener(safeStore, new BarrierCommandListener()))
+                    .begin(node.agent());
             }
             else
             {
@@ -190,8 +185,8 @@ public class Barrier<S extends Seekables<?, ?>> extends AsyncResults.AbstractRes
                 // we want to notify the agent
                 doBarrierSuccess(executeAt);
             }
-            else if (command.is(Status.Invalidated))
-                // Surface the invalidation and the barrier can be retried by the caller
+            else if (command.hasBeen(Status.Truncated))
+                // Surface the invalidation/truncation and the barrier can be retried by the caller
                 Barrier.this.tryFailure(new Timeout(command.txnId(), command.homeKey()));
 
         }
@@ -280,8 +275,7 @@ public class Barrier<S extends Seekables<?, ?>> extends AsyncResults.AbstractRes
             if (found != null && !found.status.equals(Status.Applied))
             {
                 safeStore.commandStore().execute(contextFor(found.txnId), safeStoreWithTxn -> {
-                    // TODO handle null return from get due to truncation
-                    safeStoreWithTxn.get(found.txnId, found.key.toUnseekable()).addListener(new BarrierCommandListener());
+                    safeStoreWithTxn.get(found.txnId, found.key.toUnseekable()).addAndInvokeListener(safeStore, new BarrierCommandListener());
                 }).begin(node.agent());
             }
             return found;
