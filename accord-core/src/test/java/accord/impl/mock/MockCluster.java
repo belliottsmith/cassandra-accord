@@ -18,36 +18,47 @@
 
 package accord.impl.mock;
 
-import accord.NetworkFilter;
-import accord.api.MessageSink;
-import accord.impl.*;
-import accord.local.AgentExecutor;
-import accord.local.Node;
-import accord.local.Node.Id;
-import accord.local.ShardDistributor;
-import accord.messages.SafeCallback;
-import accord.primitives.Ranges;
-import accord.utils.DefaultRandom;
-import accord.utils.EpochFunction;
-import accord.utils.RandomSource;
-import accord.utils.ThreadPoolScheduler;
-import accord.primitives.TxnId;
-import accord.messages.Callback;
-import accord.messages.Reply;
-import accord.messages.Request;
-import accord.topology.Topology;
-import accord.utils.Invariants;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.LongSupplier;
 
-import static accord.Utils.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import accord.NetworkFilter;
+import accord.api.MessageSink;
+import accord.impl.InMemoryCommandStores;
+import accord.impl.IntKey;
+import accord.impl.SimpleProgressLog;
+import accord.impl.SizeOfIntersectionSorter;
+import accord.impl.TestAgent;
+import accord.impl.TopologyUtils;
+import accord.local.AgentExecutor;
+import accord.local.Node;
+import accord.local.Node.Id;
+import accord.local.ShardDistributor;
+import accord.messages.Callback;
+import accord.messages.Reply;
+import accord.messages.Request;
+import accord.messages.SafeCallback;
+import accord.primitives.Ranges;
+import accord.primitives.TxnId;
+import accord.topology.Topology;
+import accord.utils.DefaultRandom;
+import accord.utils.EpochFunction;
+import accord.utils.Invariants;
+import accord.utils.RandomSource;
+import accord.utils.ThreadPoolScheduler;
+
+import static accord.Utils.id;
+import static accord.Utils.idList;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.async.AsyncChains.awaitUninterruptibly;
@@ -163,8 +174,6 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
             return;
         }
 
-        long delayNanos = networkFilter.delayNanos(to);
-
         long messageId = nextMessageId();
         if (callback != null)
         {
@@ -176,14 +185,8 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                 }, 2L, TimeUnit.SECONDS);
         }
 
-        Runnable deliver = () -> {
-            logger.info("processing message[{}] from {} to {} with delay {}: {}", messageId, from, to, delayNanos, request);
-            node.receive(request, from, Network.replyCtxFor(messageId), delayNanos);
-        };
-        if (networkFilter.maybeCork(to, deliver))
-            logger.info("corking message[{}] from {} to {} with delay {}: {}", messageId, from, to, delayNanos, request);
-        else
-            deliver.run();
+        logger.info("processing message[{}] from {} to {}: {}", messageId, from, to, request);
+        node.receive(request, from, Network.replyCtxFor(messageId));
     }
 
     @Override
