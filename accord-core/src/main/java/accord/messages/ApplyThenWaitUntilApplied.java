@@ -27,7 +27,6 @@ import accord.api.RoutingKey;
 import accord.local.CommandStore;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
-import accord.messages.Apply.ApplyReply;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.Ranges;
@@ -80,21 +79,10 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     public ReadNack apply(SafeCommandStore safeStore)
     {
         RoutingKey progressKey = TxnRequest.progressKey(node, txnId.epoch(), txnId, route);
-        // TODO is it OK to use null for the partial txn here?
-        ApplyReply applyReply = Apply.apply(safeStore, null, txnId, txnId, deps, route, writes, txnResult, progressKey);
-        switch (applyReply)
-        {
-            default:
-                throw new IllegalStateException("Unexpected ApplyReply");
-            case Insufficient:
-                // TODO is this actually an error?
-                return ReadNack.Error;
-            case Redundant:
-            case Applied:
-                // In both cases it's fine to continue to process and return a response saying
-                // things were applied
-                break;
-        }
+        // Result of the apply is rechecked by WaitUntilApplied.applied and will send not committed
+        // if the Apply was unable to occur it will return the necessary NotCommitted so the coordinator
+        // knows to send a Maximal Apply
+        Apply.apply(safeStore, null, txnId, txnId, deps, route, writes, txnResult, progressKey);
         return super.apply(safeStore);
     }
 

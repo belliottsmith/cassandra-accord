@@ -28,6 +28,7 @@ import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.messages.Apply;
 import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.messages.ReadData.ReadNack;
@@ -36,11 +37,10 @@ import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Writes;
 import accord.topology.Topologies;
-import accord.topology.Topology;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
-import static accord.messages.Commit.Kind.Maximal;
 
 /**
  * Block on deps at quorum for a sync point transaction, and then move the transaction to the applied state
@@ -58,6 +58,8 @@ public class BlockOnDeps implements Callback<ReadReply>
     final Topologies blockOn;
     final QuorumTracker tracker;
     final BiConsumer<? super Result, Throwable> callback;
+    final Writes writes;
+    final Result result;
 
     private boolean isDone = false;
 
@@ -68,11 +70,11 @@ public class BlockOnDeps implements Callback<ReadReply>
         this.txn = txn;
         this.route = route;
         this.deps = deps;
-        // TODO Is this an acceptable topology? txnId and executeAt are always the same for these so there shouldn't be multiple topologies?
-        // Should this come from tracker topologies like it does for apply in CoordinateSyncPoint?
         this.blockOn = node.topology().forEpoch(route, txnId.epoch());
         this.tracker = new QuorumTracker(blockOn);
         this.callback = callback;
+        this.writes = txn.execute(txnId, txnId, null);
+        this.result = txn.result(txnId, txnId, null);
     }
 
     public static void blockOnDeps(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Deps deps, BiConsumer<? super Result, Throwable> callback)
@@ -83,7 +85,7 @@ public class BlockOnDeps implements Callback<ReadReply>
 
     void start()
     {
-        Commit.commitMinimalAndBlockOnDeps(node, blockOn, txnId, txn, route, deps, this);
+        Commit.commitMinimalAndBlockOnDeps(node, blockOn, txnId, txn, route, deps, writes, result, this);
     }
 
     @Override
@@ -108,18 +110,15 @@ public class BlockOnDeps implements Callback<ReadReply>
             default: throw new IllegalStateException();
             case Error:
                 onFailure(from, new RuntimeException("Unknown error"));
-                // TODO (expected): report content of error
+                // TODO (expected): report content of error (this is also a TODO in Execute)
                 break;
             case Redundant:
-                // TODO is this the right way to handle redundant?
                 isDone = true;
                 callback.accept(null, new Preempted(txnId, route.homeKey()));
                 break;
             case NotCommitted:
-                // the replica may be missing the original commit, or the additional commit, so send everything
-                Topologies topology = node.topology().preciseEpochs(route, txnId.epoch(), txnId.epoch());
-                Topology coordinateTopology = topology.forEpoch(txnId.epoch());
-                node.send(from, new Commit(Maximal, from, coordinateTopology, topology, txnId, txn, route, txn.keys().toParticipants(), txnId, deps, false));
+                // Since ApplyThenWaitUntilApplied wants Apply, send a maximal Apply instead of a Commit as is done in Execute
+                Apply.sendMaximal(node, from, txnId,  route, txn, txnId, deps, writes, result);
                 break;
             case Invalid:
                 onFailure(from, new IllegalStateException("Submitted a read command to a replica that did not own the range"));

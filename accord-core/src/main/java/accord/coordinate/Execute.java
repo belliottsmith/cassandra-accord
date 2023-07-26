@@ -72,8 +72,7 @@ class Execute extends ReadCoordinator<ReadReply>
     public static void execute(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
     {
         // Recovery calls execute and we would like execute to run BlockOnDeps because that will notify the agent
-        // of the local barrier
-        // TODO we don't really need to run BlockOnDeps, executing the empty txn would also be fine
+        // of the local barrier, and ensure anything listening to the transaction sees the correct blocking on deps behavior
         if (txn.kind() == Kind.SyncPoint)
         {
             checkArgument(txnId.equals(executeAt));

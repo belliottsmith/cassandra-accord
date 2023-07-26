@@ -23,6 +23,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Result;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -45,6 +46,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
+import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.topology.Topology;
 import accord.utils.Invariants;
@@ -156,7 +158,7 @@ public class Commit extends TxnRequest<ReadNack>
         }
     }
 
-    public static void commitMinimalAndBlockOnDeps(Node node, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Deps deps, Callback<ReadReply> callback)
+    public static void commitMinimalAndBlockOnDeps(Node node, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Deps deps, Writes writes, Result result, Callback<ReadReply> callback)
     {
         checkArgument(topologies.size() == 1);
         Topology topology = topologies.get(0);
@@ -169,7 +171,7 @@ public class Commit extends TxnRequest<ReadNack>
                     Kind.Minimal, to, topology, topologies, txnId,
                     txn, route, txnId, deps,
                     // TODO is this slice to get the keys correct?
-                    (maybePartialTransaction, partialRoute, partialDeps) -> new ApplyThenWaitUntilApplied(txnId, partialRoute, partialDeps, maybePartialTransaction.keys().slice(partialDeps.covering), txn.execute(txnId, txnId, null), txn.result(txnId, txnId, null), notifyAgent));
+                    (maybePartialTransaction, partialRoute, partialDeps) -> new ApplyThenWaitUntilApplied(txnId, partialRoute, partialDeps, maybePartialTransaction.keys().slice(partialDeps.covering), writes, result, notifyAgent));
             node.send(to, commit, callback);
         }
     }
