@@ -90,7 +90,6 @@ public class CoordinateSyncPoint<S extends Seekables<?, ?>> extends CoordinatePr
         checkState(kind == Kind.SyncPoint || kind == ExclusiveSyncPoint);
         node.nextTxnId(Kind.SyncPoint, keysOrRanges.domain());
         TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain());
-        System.out.println("Requesting sync point coordination creation");
         return node.withEpoch(txnId.epoch(), () ->
                 AsyncChains.success(coordinate(node, txnId, keysOrRanges, async))
         ).beginAsResult();
@@ -98,7 +97,6 @@ public class CoordinateSyncPoint<S extends Seekables<?, ?>> extends CoordinatePr
 
     private static <S extends Seekables<?, ?>> CoordinateSyncPoint<S> coordinate(Node node, TxnId txnId, S keysOrRanges, boolean async)
     {
-        System.out.println("Doing sync point coordination creation");
         checkState(txnId.rw() == Kind.SyncPoint || txnId.rw() == ExclusiveSyncPoint);
         FullRoute route = node.computeRoute(txnId, keysOrRanges);
         CoordinateSyncPoint<S> coordinate = new CoordinateSyncPoint(node, txnId, node.agent().emptyTxn(txnId.rw(), keysOrRanges), route, keysOrRanges, async);
