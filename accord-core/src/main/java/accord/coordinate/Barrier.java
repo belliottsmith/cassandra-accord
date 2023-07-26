@@ -19,7 +19,6 @@
 package accord.coordinate;
 
 import java.util.concurrent.ExecutionException;
-import javax.annotation.Nonnull;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -43,6 +42,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.AsyncResults;
+import javax.annotation.Nonnull;
 
 import static accord.local.PreLoadContext.contextFor;
 import static accord.utils.Invariants.checkArgument;
@@ -274,9 +274,10 @@ public class Barrier<S extends Seekables<?, ?>> extends AsyncResults.AbstractRes
             // It's not applied so add a listener to find out when it is applied
             if (found != null && !found.status.equals(Status.Applied))
             {
-                safeStore.commandStore().execute(contextFor(found.txnId), safeStoreWithTxn -> {
-                    safeStoreWithTxn.get(found.txnId, found.key.toUnseekable()).addAndInvokeListener(safeStore, new BarrierCommandListener());
-                }).begin(node.agent());
+                safeStore.commandStore().execute(
+                        contextFor(found.txnId),
+                        safeStoreWithTxn -> safeStoreWithTxn.get(found.txnId, found.key.toUnseekable()).addAndInvokeListener(safeStore, new BarrierCommandListener())
+                ).begin(node.agent());
             }
             return found;
         }
