@@ -170,7 +170,6 @@ public class Commit extends TxnRequest<ReadNack>
             Commit commit = new Commit(
                     Kind.Minimal, to, topology, topologies, txnId,
                     txn, route, txnId, deps,
-                    // TODO is this slice to get the keys correct?
                     (maybePartialTransaction, partialRoute, partialDeps) -> new ApplyThenWaitUntilApplied(txnId, partialRoute, partialDeps, maybePartialTransaction.keys().slice(partialDeps.covering), writes, result, notifyAgent));
             node.send(to, commit, callback);
         }
