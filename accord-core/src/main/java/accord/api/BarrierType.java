@@ -20,7 +20,8 @@ package accord.api;
 
 public enum BarrierType
 {
-    // Only wait until the barrier is achieved locally, and possibly don't trigger the barrier remotely
+    // Only wait until the barrier is achieved locally, and possibly don't trigger the barrier remotely.
+    // Local barriers are only on the `minEpoch` provided
     local(false, true),
     // Wait until the barrier has been achieved at a quorum globally
     global_sync(true, false),

@@ -260,8 +260,7 @@ public class Barrier<S extends Seekables<?, ?>> extends AsyncResults.AbstractRes
                     TxnId.minForEpoch(minEpoch),
                     TestDep.ANY_DEPS,
                     null,
-                    // TODO is PreApplied right? It's the first OutcomeKnown state, but why not Committed?
-                    Status.PreApplied,
+                    Status.Committed,
                     Status.Applied,
                     (keyOrRange, txnId, executeAt, status, barrierTxn) -> {
                         if (keyOrRange.domain() == Domain.Key)
