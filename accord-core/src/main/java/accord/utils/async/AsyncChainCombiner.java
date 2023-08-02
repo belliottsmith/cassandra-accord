@@ -96,6 +96,9 @@ abstract class AsyncChainCombiner<I, O> extends AsyncChains.Head<O>
             }
             catch (Throwable t)
             {
+                // TODO (correctness): an issue with callbacks vs AsyncResult is that processing the callback may throw.
+                // In this case it isn't known if the callback was already called, so have to call again; leading to
+                // multiple executions
                 callback.accept(null, t);
             }
         }

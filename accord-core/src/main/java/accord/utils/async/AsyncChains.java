@@ -198,7 +198,14 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         @Override
         public AsyncChain<O> apply(I i)
         {
-            return map.apply(i);
+            try
+            {
+                return map.apply(i);
+            }
+            catch (Throwable t)
+            {
+                return AsyncChains.failure(t);
+            }
         }
     }
 
