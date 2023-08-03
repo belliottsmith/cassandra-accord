@@ -160,7 +160,20 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         public void accept(I i, Throwable throwable)
         {
             if (throwable != null) next.accept(null, throwable);
-            else next.accept(apply(i), null);
+            else
+            {
+                O update;
+                try
+                {
+                    update = apply(i);
+                }
+                catch (Throwable t)
+                {
+                    next.accept(null, t);
+                    return;
+                }
+                next.accept(update, null);
+            }
         }
     }
 

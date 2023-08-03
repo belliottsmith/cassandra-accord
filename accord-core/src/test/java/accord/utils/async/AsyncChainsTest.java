@@ -20,15 +20,20 @@ package accord.utils.async;
 
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.MoreExecutors;
+import org.assertj.core.api.AbstractThrowableAssert;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 
 public class AsyncChainsTest
 {
@@ -254,5 +259,49 @@ public class AsyncChainsTest
                      .map(i -> i + 5);
 
         Assertions.assertEquals(15, AsyncChains.getBlocking(chain));
+    }
+
+    @Test
+    void exceptionHandling()
+    {
+        List<Supplier<? extends AsyncChain<Integer>>> topLevel = new ArrayList<>();
+        topLevel.add(() -> AsyncChains.success(42));
+        topLevel.add(() -> new AsyncChains.Head<Integer>()
+        {
+            @Override
+            protected void start(BiConsumer<? super Integer, Throwable> callback)
+            {
+                callback.accept(42, null);
+            }
+        });
+        topLevel.add(() -> {
+            AsyncResult.Settable<Integer> settable = AsyncResults.settable();
+            settable.setSuccess(42);
+            return settable;
+        });
+
+        for (Supplier<? extends AsyncChain<Integer>> start : topLevel)
+        {
+            assertWillSeeFailure(start.get().map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertWillSeeFailure(start.get().map(i -> i + 1).map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertWillSeeFailure(start.get().flatMap(i -> AsyncChains.success(i)).map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertWillSeeFailure(start.get().flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertWillSeeFailure(start.get().map(i -> i + 1).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertWillSeeFailure(start.get().flatMap(i -> AsyncChains.success(i)).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+        }
+    }
+
+    private static class UserFailure extends RuntimeException
+    {
+
+    }
+
+    private static <T> AbstractThrowableAssert<?, Throwable> assertWillSeeFailure(AsyncChain<T> chain)
+    {
+        BiConsumer<? super T, Throwable> mock = Mockito.mock(BiConsumer.class);
+        ArgumentCaptor<Throwable> captor = ArgumentCaptor.forClass(Throwable.class);
+        Mockito.doNothing().when(mock).accept(Mockito.isNull(), captor.capture());
+        chain.begin(mock);
+        return org.assertj.core.api.Assertions.assertThat(captor.getValue());
     }
 }
