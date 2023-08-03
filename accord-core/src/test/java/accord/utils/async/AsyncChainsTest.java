@@ -27,6 +27,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
@@ -264,7 +265,7 @@ public class AsyncChainsTest
     @Test
     void exceptionHandling()
     {
-        List<Supplier<? extends AsyncChain<Integer>>> topLevel = new ArrayList<>();
+        List<Supplier<? extends AsyncChain<? extends Object>>> topLevel = new ArrayList<>();
         topLevel.add(() -> AsyncChains.success(42));
         topLevel.add(() -> new AsyncChains.Head<Integer>()
         {
@@ -279,14 +280,15 @@ public class AsyncChainsTest
             settable.setSuccess(42);
             return settable;
         });
+        topLevel.add(() -> AsyncChains.allOf(Arrays.asList(AsyncChains.success(0), AsyncChains.success(0), AsyncChains.success(42))));
 
-        for (Supplier<? extends AsyncChain<Integer>> start : topLevel)
+        for (Supplier<? extends AsyncChain<? extends Object>> start : topLevel)
         {
             assertWillSeeFailure(start.get().map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
-            assertWillSeeFailure(start.get().map(i -> i + 1).map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertWillSeeFailure(start.get().map(i -> i.toString()).map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
             assertWillSeeFailure(start.get().flatMap(i -> AsyncChains.success(i)).map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
             assertWillSeeFailure(start.get().flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
-            assertWillSeeFailure(start.get().map(i -> i + 1).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertWillSeeFailure(start.get().map(i -> i.toString()).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
             assertWillSeeFailure(start.get().flatMap(i -> AsyncChains.success(i)).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
         }
     }
