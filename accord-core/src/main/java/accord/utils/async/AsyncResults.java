@@ -126,7 +126,8 @@ public class AsyncResults
             if (!trySetResult(result, failure))
             {
                 IllegalStateException f = new IllegalStateException("Result has already been set on " + this);
-                f.addSuppressed(failure);
+                if (failure != null)
+                    f.addSuppressed(failure);
                 throw f;
             }
         }
