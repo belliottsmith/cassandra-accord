@@ -29,7 +29,6 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 
 public class AsyncChainsTest
 {
@@ -135,50 +134,6 @@ public class AsyncChainsTest
         ResultCallback<Integer> callback = new ResultCallback<>();
         reduced.begin(callback);
         Assertions.assertEquals(6, callback.value());
-    }
-
-    private static void assertCombinerSize(int size, AsyncChain<?> chain)
-    {
-        Assertions.assertTrue(chain instanceof AsyncChainCombiner, () -> String.format("%s is not an instance of AsyncChainCombiner", chain));
-        AsyncChainCombiner<?, ?> combiner = (AsyncChainCombiner<?, ?>) chain;
-        Assertions.assertEquals(size, combiner.size());
-    }
-
-    @Test
-    void appendingReduceTest()
-    {
-        AsyncChain<Integer> chain1 = AsyncChains.success(1);
-        AsyncChain<Integer> chain2 = AsyncChains.success(2);
-        AsyncChain<Integer> chain3 = AsyncChains.success(3);
-        BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;
-        AsyncChain<Integer> reduction1 = AsyncChains.reduce(chain1, chain2, add);
-        assertCombinerSize(2, reduction1);
-        AsyncChain<Integer> reduction2 = AsyncChains.reduce(reduction1, chain3, add);
-        assertCombinerSize(3, reduction2);
-        Assertions.assertSame(reduction1, reduction2);
-
-        ResultCallback<Integer> callback = new ResultCallback<>();
-        reduction2.begin(callback);
-        Assertions.assertEquals(6, callback.value());
-    }
-
-    @Test
-    void uncombinableReduce()
-    {
-        AsyncChain<Integer> chain1 = AsyncChains.success(1);
-        AsyncChain<Integer> chain2 = AsyncChains.success(2);
-        AsyncChain<Integer> chain3 = AsyncChains.success(3);
-        BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;
-        BiFunction<Integer, Integer, Integer> mult = (a, b) -> a * b;
-        AsyncChain<Integer> reduction1 = AsyncChains.reduce(chain1, chain2, add);
-        assertCombinerSize(2, reduction1);
-        AsyncChain<Integer> reduction2 = AsyncChains.reduce(reduction1, chain3, mult);
-        assertCombinerSize(2, reduction2);
-        Assertions.assertNotSame(reduction1, reduction2);
-
-        ResultCallback<Integer> callback = new ResultCallback<>();
-        reduction2.begin(callback);
-        Assertions.assertEquals(9, callback.value());
     }
 
     @Test
