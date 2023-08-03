@@ -148,7 +148,7 @@ public class FetchData extends CheckShards<Route<?>>
         });
     }
 
-    public static Object fetch(Known fetch, Node node, TxnId txnId, FullRoute<?> route, @Nullable Timestamp executeAt, BiConsumer<Known, Throwable> callback)
+    public static Object fetch(Known fetch, Node node, TxnId txnId, FullRoute<?> route, @Nullable Timestamp executeAt, BiConsumer<? super Known, Throwable> callback)
     {
         AsyncChain<Object> chain = node.awaitEpoch(executeAt).map(ignore -> {
             Ranges ranges = node.topology().localRangesForEpochs(txnId.epoch(), fetch.fetchEpoch(txnId, executeAt));
