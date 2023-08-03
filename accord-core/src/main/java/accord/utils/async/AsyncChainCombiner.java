@@ -84,9 +84,10 @@ public class AsyncChainCombiner<I> extends AsyncChains.Head<I[]>
             return;
         }
 
-        results()[idx] = result;
+        I[] results = results();
+        results[idx] = result;
         if (REMAINING.decrementAndGet(this) == 0)
-            callback.accept(results(), null);
+            callback.accept(results, null);
     }
 
     private BiConsumer<I, Throwable> callbackFor(int idx)
