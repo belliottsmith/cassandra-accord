@@ -36,6 +36,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 public class AsyncChainsTest
 {
     private static class ResultCallback<V> implements BiConsumer<V, Throwable>
@@ -287,9 +289,14 @@ public class AsyncChainsTest
             assertWillSeeFailure(start.get().map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
             assertWillSeeFailure(start.get().map(i -> i.toString()).map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
             assertWillSeeFailure(start.get().flatMap(i -> AsyncChains.success(i)).map(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+
             assertWillSeeFailure(start.get().flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
             assertWillSeeFailure(start.get().map(i -> i.toString()).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
             assertWillSeeFailure(start.get().flatMap(i -> AsyncChains.success(i)).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+
+            assertThatThrownBy(() -> start.get().begin((s, f) -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertThatThrownBy(() -> start.get().map(i -> i.toString()).begin((s, f) -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertThatThrownBy(() -> start.get().flatMap(i -> AsyncChains.success(i)).begin((s, f) -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
         }
     }
 
