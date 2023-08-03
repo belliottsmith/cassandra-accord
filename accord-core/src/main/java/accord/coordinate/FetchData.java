@@ -36,7 +36,6 @@ import accord.messages.CheckStatus.WithQuorum;
 import accord.primitives.*;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
-import accord.utils.async.AsyncChain;
 
 import javax.annotation.Nullable;
 
@@ -150,12 +149,10 @@ public class FetchData extends CheckShards<Route<?>>
 
     public static Object fetch(Known fetch, Node node, TxnId txnId, FullRoute<?> route, @Nullable Timestamp executeAt, BiConsumer<? super Known, Throwable> callback)
     {
-        AsyncChain<Object> chain = node.awaitEpoch(executeAt).map(ignore -> {
+        return node.awaitEpoch(executeAt).map(ignore -> {
             Ranges ranges = node.topology().localRangesForEpochs(txnId.epoch(), fetch.fetchEpoch(txnId, executeAt));
             return fetchInternal(ranges, fetch, node, txnId, route.sliceStrict(ranges), executeAt, callback);
-        });
-        chain.begin(node.agent());
-        return chain;
+        }).beginAsResult();
     }
 
     private static Object fetchInternal(Ranges ranges, Known target, Node node, TxnId txnId, PartialRoute<?> route, @Nullable Timestamp executeAt, BiConsumer<? super Known, Throwable> callback)
