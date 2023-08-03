@@ -238,6 +238,21 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         topology.onEpochRedundant(ranges, epoch);
     }
 
+    public AsyncChain<?> awaitEpoch(long epoch)
+    {
+        if (topology.hasEpoch(epoch))
+            return AsyncResults.SUCCESS_VOID;
+        configService.fetchTopologyForEpoch(epoch);
+        return topology.awaitEpoch(epoch);
+    }
+
+    public AsyncChain<?> awaitEpoch(@Nullable EpochSupplier epochSupplier)
+    {
+        if (epochSupplier == null)
+            return AsyncResults.SUCCESS_VOID;
+        return awaitEpoch(epochSupplier.epoch());
+    }
+
     public void withEpoch(long epoch, Runnable runnable)
     {
         if (topology.hasEpoch(epoch))
@@ -246,11 +261,8 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         }
         else
         {
-            CommandStore executingOn = CommandStore.maybeCurrent();
             configService.fetchTopologyForEpoch(epoch);
-            AsyncChain<Void> chain = topology.awaitEpoch(epoch);
-            chain = (executingOn == null ? chain.addCallback(runnable) : chain.addCallback(runnable, executingOn));
-            chain.begin(agent());
+            topology.awaitEpoch(epoch).addCallback(runnable).begin(agent);
         }
     }
 
@@ -266,21 +278,6 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
             configService.fetchTopologyForEpoch(epoch);
             return topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get());
         }
-    }
-
-    public AsyncChain<?> awaitEpoch(long epoch)
-    {
-        if (topology.hasEpoch(epoch))
-            return AsyncResults.SUCCESS_VOID;
-        configService.fetchTopologyForEpoch(epoch);
-        return topology.awaitEpoch(epoch);
-    }
-
-    public AsyncChain<?> awaitEpoch(@Nullable EpochSupplier epochSupplier)
-    {
-        if (epochSupplier == null)
-            return AsyncResults.SUCCESS_VOID;
-        return awaitEpoch(epochSupplier.epoch());
     }
 
     @Inline
