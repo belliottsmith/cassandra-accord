@@ -272,12 +272,8 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
     {
         if (topology.hasEpoch(epoch))
             return AsyncResults.SUCCESS_VOID;
-        CommandStore executingOn = CommandStore.maybeCurrent();
         configService.fetchTopologyForEpoch(epoch);
-        AsyncChain<Void> chain = topology.awaitEpoch(epoch);
-        if (executingOn != null)
-            chain = chain.withExecutor(executingOn);
-        return chain;
+        return topology.awaitEpoch(epoch);
     }
 
     public AsyncChain<?> awaitEpoch(@Nullable EpochSupplier epochSupplier)
