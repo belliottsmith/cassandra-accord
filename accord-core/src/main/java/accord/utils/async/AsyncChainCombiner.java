@@ -20,7 +20,6 @@ package accord.utils.async;
 
 import accord.utils.Invariants;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.BiConsumer;
@@ -50,26 +49,6 @@ public class AsyncChainCombiner<I> extends AsyncChains.Head<I[]>
         Object current = state;
         Invariants.checkState(current instanceof Object[], "Expected state to be Object[] but was %s", (current == null ? null : current.getClass()));
         return (I[]) current;
-    }
-
-    void add(AsyncChain<? extends I> chain)
-    {
-        inputs().add(chain);
-    }
-
-    void addAll(Collection<? extends AsyncChain<? extends I>> chains)
-    {
-        inputs().addAll(chains);
-    }
-
-    int size()
-    {
-        Object current = state;
-        if (current instanceof List)
-            return ((List) current).size();
-        if (current instanceof Object[])
-            return ((Object[]) current).length;
-        throw new IllegalStateException("Unexpected type: " + (current == null ? "null" : current.getClass()));
     }
 
     private void callback(int idx, I result, Throwable throwable)
