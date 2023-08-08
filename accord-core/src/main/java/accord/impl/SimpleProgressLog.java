@@ -355,12 +355,7 @@ public class SimpleProgressLog implements ProgressLog.Factory
                                 return;
 
                             setProgress(Expected);
-                            if (fail == null && blockedUntil.isSatisfiedBy(success))
-                            {
-                                Command test = safeStore0.ifInitialised(txnId).current();
-                                Invariants.checkState(test.has(success), "Command %s was expected to have known %s, but had %s", test, success, test.known());
-                                record(success);
-                            }
+                            Invariants.checkState(fail != null || !blockedUntil.isSatisfiedBy(success.propagates()));
                         }).begin(commandStore.agent());
                     };
 
@@ -584,6 +579,14 @@ public class SimpleProgressLog implements ProgressLog.Factory
         }
 
         @Override
+        public void precommitted(Command command)
+        {
+            State state = stateMap.get(command.txnId());
+            if (state != null && state.blockingState != null)
+                state.blockingState.record(SaveStatus.PreCommitted.known);
+        }
+
+        @Override
         public void committed(Command command, ProgressShard shard)
         {
             ensureSafeOrAtLeast(command, shard, CoordinateStatus.Committed, NoneExpected);
@@ -646,6 +649,8 @@ public class SimpleProgressLog implements ProgressLog.Factory
 
             // ensure we have a record to work with later; otherwise may think has been truncated
             blockedBy.initialise();
+            if (blockedBy.current().has(blockedUntil.requires))
+                return;
 
             // TODO (consider): consider triggering a preemption of existing coordinator (if any) in some circumstances;
             //                  today, an LWT can pre-empt more efficiently (i.e. instantly) a failed operation whereas Accord will

@@ -40,7 +40,7 @@ import accord.primitives.Unseekables;
 import javax.annotation.Nullable;
 
 import static accord.local.Commands.Cleanup.NO;
-import static accord.local.RedundantStatus.PRE_BOOTSTRAP;
+import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
@@ -243,9 +243,9 @@ public abstract class SafeCommandStore
 
     // if we have to re-bootstrap (due to failed bootstrap or catching up on a range) then we may
     // have dangling redundant commands; these can safely be executed locally because we are a timestamp store
-    final boolean isFullyPreBootstrap(Command command, Participants<?> forKeys)
+    final boolean isFullyPreBootstrapOrStale(Command command, Participants<?> forKeys)
     {
-        return commandStore().redundantBefore().status(command.txnId(), command.executeAtOrTxnId(), forKeys) == PRE_BOOTSTRAP;
+        return commandStore().redundantBefore().preBootstrapOrStale(command.txnId(), command.executeAtOrTxnId(), forKeys) == FULLY;
     }
 
     public void notifyListeners(SafeCommand safeCommand)

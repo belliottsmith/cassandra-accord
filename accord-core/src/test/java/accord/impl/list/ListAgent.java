@@ -18,6 +18,7 @@
 
 package accord.impl.list;
 
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import accord.api.Agent;
@@ -75,6 +76,12 @@ public class ListAgent implements Agent
     public void onFailedBootstrap(String phase, Ranges ranges, Runnable retry, Throwable failure)
     {
         retryBootstrap.accept(retry);
+    }
+
+    @Override
+    public void onStaleRange(Ranges ranges, Runnable bootstrap)
+    {
+//        onStaleRange.accept(ranges, bootstrap);
     }
 
     @Override

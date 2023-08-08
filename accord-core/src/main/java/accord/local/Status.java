@@ -36,15 +36,18 @@ import static accord.local.Status.Definition.*;
 import static accord.local.Status.Known.*;
 import static accord.local.Status.KnownDeps.*;
 import static accord.local.Status.KnownExecuteAt.*;
+import static accord.local.Status.KnownRoute.Covering;
+import static accord.local.Status.KnownRoute.Full;
+import static accord.local.Status.KnownRoute.Maybe;
 import static accord.local.Status.Outcome.*;
 import static accord.local.Status.Phase.*;
 
 public enum Status
 {
     NotDefined        (None,      Nothing),
-    PreAccepted       (PreAccept, DefinitionOnly),
-    AcceptedInvalidate(Accept,    DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown), // may or may not have witnessed
-    Accepted          (Accept,    DefinitionUnknown, ExecuteAtProposed, DepsProposed, Unknown), // may or may not have witnessed
+    PreAccepted       (PreAccept, DefinitionAndRoute),
+    AcceptedInvalidate(Accept,    Maybe,          DefinitionUnknown, ExecuteAtUnknown,  DepsUnknown,  Unknown), // may or may not have witnessed
+    Accepted          (Accept,    Covering,       DefinitionUnknown, ExecuteAtProposed, DepsProposed, Unknown), // may or may not have witnessed
 
     /**
      * PreCommitted is a peculiar state, half-way between Accepted and Committed.
@@ -71,16 +74,16 @@ public enum Status
      * To solve this problem we simply permit the executeAt we discover for B to be propagated to A* without
      * its dependencies. Though this does complicate the state machine a little.
      */
-    PreCommitted      (Accept,  DefinitionUnknown, ExecuteAtKnown,   DepsUnknown, Unknown),
+    PreCommitted      (Accept,  Maybe, DefinitionUnknown, ExecuteAtKnown,   DepsUnknown, Unknown),
 
-    Committed         (Commit,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Unknown),
+    Committed         (Commit,  Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Unknown),
     // TODO (expected): do we need ReadyToExecute here, or can we keep it to SaveStatus only?
-    ReadyToExecute    (Commit,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Unknown),
+    ReadyToExecute    (Commit,  Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Unknown),
     // TODO (expected): do we need both PreApplied and Applied here, or can we keep them to SaveStatus only?
-    PreApplied        (Persist, DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Outcome.Apply),
-    Applied           (Persist, DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Outcome.Apply),
-    Truncated         (Cleanup, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown),
-    Invalidated       (Persist, NoOp,              NoExecuteAt,      NoDeps,      Outcome.Invalidated),
+    PreApplied        (Persist, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Outcome.Apply),
+    Applied           (Persist, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Outcome.Apply),
+    Truncated         (Cleanup, Nothing),
+    Invalidated       (Persist, Maybe, NoOp,              NoExecuteAt,      NoDeps,      Outcome.Invalidated),
     ;
 
     /**
@@ -104,20 +107,24 @@ public enum Status
      */
     public static class Known
     {
-        public static final Known Nothing           = new Known(DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown);
-        public static final Known DefinitionOnly    = new Known(DefinitionKnown,   ExecuteAtUnknown, DepsUnknown, Unknown);
-        public static final Known ExecuteAtOnly     = new Known(DefinitionUnknown, ExecuteAtKnown,   DepsUnknown, Unknown);
-        public static final Known Decision          = new Known(DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Unknown);
-        public static final Known Apply             = new Known(DefinitionUnknown, ExecuteAtKnown,   DepsKnown,   Outcome.Apply);
-        public static final Known Invalidated       = new Known(DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Outcome.Invalidated);
+        public static final Known Nothing            = new Known(Maybe, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown);
+        // TODO (now): deprecate DefinitionOnly
+        public static final Known DefinitionOnly     = new Known(Maybe, DefinitionKnown,   ExecuteAtUnknown, DepsUnknown, Unknown);
+        public static final Known DefinitionAndRoute = new Known(Full,  DefinitionKnown,   ExecuteAtUnknown, DepsUnknown, Unknown);
+        public static final Known ExecuteAtOnly      = new Known(Maybe, DefinitionUnknown, ExecuteAtKnown,   DepsUnknown, Unknown);
+        public static final Known Decision           = new Known(Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Unknown);
+        public static final Known Apply              = new Known(Full,  DefinitionUnknown, ExecuteAtKnown,   DepsKnown,   Outcome.Apply);
+        public static final Known Invalidated        = new Known(Maybe, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Outcome.Invalidated);
 
+        public final KnownRoute route;
         public final Definition definition;
         public final KnownExecuteAt executeAt;
         public final KnownDeps deps;
         public final Outcome outcome;
 
-        public Known(Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome)
+        public Known(KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome)
         {
+            this.route = route;
             this.definition = definition;
             this.executeAt = executeAt;
             this.deps = deps;
@@ -134,7 +141,7 @@ public enum Status
                 return this;
             if (maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
                 return with;
-            return new Known(maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+            return new Known(route, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
         }
 
         public boolean isSatisfiedBy(Known that)
@@ -172,17 +179,48 @@ public enum Status
         {
             if (outcome == newOutcome)
                 return this;
-            return new Known(definition, executeAt, deps, newOutcome);
+            return new Known(route, definition, executeAt, deps, newOutcome);
         }
 
         public Known with(KnownDeps newDeps)
         {
             if (deps == newDeps)
                 return this;
-            return new Known(definition, executeAt, newDeps, outcome);
+            return new Known(route, definition, executeAt, newDeps, outcome);
         }
 
-        public Status propagate()
+        // TODO (expected): merge propagates and propagatesStatus
+        public Known propagates()
+        {
+            if (outcome == Outcome.Invalidated)
+                return Invalidated;
+
+            if (definition == DefinitionUnknown)
+                return executeAt.isDecided() ? ExecuteAtOnly : Nothing;
+
+            KnownExecuteAt executeAt = this.executeAt;
+            if (!executeAt.isDecided())
+                return DefinitionOnly;
+
+            // cannot propagate proposed deps; and cannot propagate known deps without executeAt
+            KnownDeps deps = this.deps;
+            if (!deps.isDecided())
+                return SaveStatus.PreCommittedWithDefinition.known;
+
+            switch (outcome)
+            {
+                default: throw new AssertionError("Unhandled outcome: " + outcome);
+                case Unknown:
+                case WasApply:
+                case Erased:
+                    return Committed.minKnown;
+
+                case Apply:
+                    return PreApplied.minKnown;
+            }
+        }
+
+        public Status propagatesStatus()
         {
             switch (outcome)
             {
@@ -195,14 +233,14 @@ public enum Status
 
                 case Apply:
                 case WasApply:
-                    if (executeAt.hasDecidedExecuteAt() && definition.isKnown() && deps.hasDecidedDeps())
+                    if (executeAt.isDecided() && definition.isKnown() && deps.hasDecidedDeps())
                         return PreApplied;
 
                 case Unknown:
-                    if (executeAt.hasDecidedExecuteAt() && definition.isKnown() && deps.hasDecidedDeps())
+                    if (executeAt.isDecided() && definition.isKnown() && deps.hasDecidedDeps())
                         return Committed;
 
-                    if (executeAt.hasDecidedExecuteAt())
+                    if (executeAt.isDecided())
                         return PreCommitted;
 
                     if (definition.isKnown())
@@ -212,7 +250,7 @@ public enum Status
                         throw new IllegalStateException();
             }
 
-            return NotDefined;
+            return outcome == WasApply ? Truncated : NotDefined;
         }
 
         public boolean isDefinitionKnown()
@@ -233,20 +271,70 @@ public enum Status
             return deps.canProposeInvalidation() && executeAt.canProposeInvalidation() && outcome.canProposeInvalidation();
         }
 
+        public boolean isTruncated()
+        {
+            return outcome.isTruncated()
+                   || (outcome == Outcome.Apply &&
+                       (!deps.hasDecidedDeps() || !executeAt.hasDecidedExecuteAt() || !definition.isKnown()));
+        }
+
+        public Known subtract(Known subtract)
+        {
+            if (!subtract.isSatisfiedBy(this))
+                return Known.Nothing;
+
+            Definition newDefinition = subtract.definition.compareTo(definition) >= 0 ? DefinitionUnknown : definition;
+            KnownExecuteAt newExecuteAt = subtract.executeAt.compareTo(executeAt) >= 0 ? ExecuteAtUnknown : executeAt;
+            KnownDeps newDeps = subtract.deps.compareTo(deps) >= 0 ? DepsUnknown : deps;
+            Outcome newOutcome = subtract.outcome.compareTo(outcome) >= 0 ? Unknown : outcome;
+            return new Known(route, newDefinition, newExecuteAt, newDeps, newOutcome);
+        }
+
+
         public String toString()
         {
             return Stream.of(definition.isKnown() ? "Definition" : null,
-                             executeAt.hasDecidedExecuteAt() ? "ExecuteAt" : null,
+                             executeAt.isDecided() ? "ExecuteAt" : null,
                              deps.hasDecidedDeps() ? "Deps" : null,
                              outcome.isOrWasApply() ? "Outcome" : null
             ).filter(Objects::nonNull).collect(Collectors.joining(",", "[", "]"));
         }
     }
 
+    public enum KnownRoute
+    {
+        /**
+         * A route may or may not be known, but it may not cover (or even intersect) this shard.
+         * The route should be relied upon only if it is a FullRoute.
+         */
+        Maybe,
+
+        /**
+         * A route is known that covers the ranges this shard participates in.
+         * Note that if the status is less than Committed, this may not be the final set of owned ranges,
+         * and the route may not cover whatever this is decided as.
+         *
+         * This status primarily exists to communicate semantically to the reader.
+         */
+        Covering,
+
+        /**
+         * The full route is known. <i>Generally</i> this coincides with knowing the Definition.
+         */
+        Full
+        ;
+
+        public boolean hasFull()
+        {
+            return this == Full;
+        }
+    }
+
     public enum KnownExecuteAt
     {
         /**
-         * No decision is known to have been reached
+         * No decision is known to have been reached. If executeAt is not null, it represents either when
+         * the transaction was witnessed, or some earlier ExecuteAtProposed that was invalidated by AcceptedInvalidate
          */
         ExecuteAtUnknown,
 
@@ -266,19 +354,14 @@ public enum Status
         NoExecuteAt
         ;
 
-        public boolean hasDecidedExecuteAt()
+        public boolean isDecided()
         {
             return compareTo(ExecuteAtKnown) >= 0;
         }
 
-        public boolean hasDecidedNonZeroExecuteAt()
+        public boolean hasDecidedExecuteAt()
         {
             return this == ExecuteAtKnown;
-        }
-
-        public final Timestamp executeAtIfKnownElseTxnId(TxnId txnId, Timestamp executeAt)
-        {
-            return this == ExecuteAtKnown ? executeAt : txnId;
         }
 
         public boolean canProposeInvalidation()
@@ -457,16 +540,24 @@ public enum Status
      */
     public enum Durability
     {
-        NotDurable, Local, Majority, Universal, DurableOrInvalidated;
+        NotDurable, Local, MajorityOrInvalidated, Majority, UniversalOrInvalidated, Universal;
 
         public boolean isDurable()
         {
-            return compareTo(Majority) >= 0 && compareTo(DurableOrInvalidated) < 0;
+            return this == Majority || this == Universal;
         }
 
         public boolean isDurableOrInvalidated()
         {
-            return compareTo(Majority) >= 0;
+            return compareTo(MajorityOrInvalidated) >= 0;
+        }
+
+        public static Durability merge(Durability a, Durability b)
+        {
+            int c = a.compareTo(b);
+            if (c < 0) { Durability tmp = a; a = b; b = tmp; }
+            if (a == UniversalOrInvalidated && b == Majority) a = Universal;
+            return a;
         }
     }
 
@@ -479,10 +570,10 @@ public enum Status
         this.minKnown = minKnown;
     }
 
-    Status(Phase phase, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Status.Outcome outcome)
+    Status(Phase phase, KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Status.Outcome outcome)
     {
         this.phase = phase;
-        this.minKnown = new Known(definition, executeAt, deps, outcome);
+        this.minKnown = new Known(route, definition, executeAt, deps, outcome);
     }
 
     // TODO (desired, clarity): investigate all uses of hasBeen, and migrate as many as possible to testing

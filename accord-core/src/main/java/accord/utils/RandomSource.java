@@ -18,15 +18,18 @@
 
 package accord.utils;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.NavigableSet;
 import java.util.Random;
-import java.util.Set;
-import java.util.stream.DoubleStream;
-import java.util.stream.IntStream;
-import java.util.stream.LongStream;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
+
+import accord.utils.random.Picker;
+import accord.utils.random.Picker.IntPicker;
+import accord.utils.random.Picker.LongPicker;
+import accord.utils.random.Picker.ObjectPicker;
+
+import static accord.utils.random.Picker.Distribution.UNIFORM;
 
 public interface RandomSource
 {
@@ -38,14 +41,40 @@ public interface RandomSource
     void nextBytes(byte[] bytes);
 
     boolean nextBoolean();
-
-    int nextInt();
-
-    default int nextInt(int maxExclusive)
+    default BooleanSupplier uniformBools() { return this::nextBoolean; }
+    default BooleanSupplier biasedUniformBools(float chance) { return () -> decide(chance); }
+    default Supplier<BooleanSupplier> biasedUniformBoolsSupplier(float minChance)
     {
-        return nextInt(0, maxExclusive);
+        return () -> {
+            float chance = minChance + (1 - minChance)*nextFloat();
+            return () -> decide(chance);
+        };
     }
 
+    /**
+     * Returns true with a probability of {@code chance}. This is logically the same as
+     * <pre>{@code nextFloat() < chance}</pre>
+     *
+     * @param chance cumulative probability in range [0..1]
+     */
+    default boolean decide(float chance)
+    {
+        return nextFloat() < chance;
+    }
+
+    /**
+     * Returns true with a probability of {@code chance}. This is logically the same as
+     * <pre>{@code nextDouble() < chance}</pre>
+     *
+     * @param chance cumulative probability in range [0..1]
+     */
+    default boolean decide(double chance)
+    {
+        return nextDouble() < chance;
+    }
+
+    int nextInt();
+    default int nextInt(int maxExclusive) { return nextInt(0, maxExclusive); }
     default int nextInt(int minInclusive, int maxExclusive)
     {
         // this is diff behavior than ThreadLocalRandom, which returns nextInt
@@ -74,29 +103,49 @@ public interface RandomSource
         }
         return result;
     }
-
-    default IntStream ints()
+    default int nextBiasedInt(int minInclusive, int mean, int maxExclusive)
     {
-        return IntStream.generate(this::nextInt);
+        // this is diff behavior than ThreadLocalRandom, which returns nextInt
+        if (minInclusive >= maxExclusive)
+            throw new IllegalArgumentException(String.format("Min (%s) should be less than max (%d).", minInclusive, maxExclusive));
+
+        int range = Math.max(maxExclusive - mean, mean - minInclusive) * 2;
+        int next = nextInt(range) - range/2;
+        next += mean;
+        return next >= mean ? next <  maxExclusive ? next : nextInt(mean, maxExclusive)
+                            : next >= minInclusive ? next : nextInt(minInclusive, mean);
     }
 
-    default IntStream ints(int maxExclusive)
+    default IntSupplier uniformInts(int minInclusive, int maxExclusive) { return () -> nextInt(minInclusive, maxExclusive); }
+    default IntSupplier biasedUniformInts(int minInclusive, int median, int maxExclusive)
     {
-        return IntStream.generate(() -> nextInt(maxExclusive));
+        int range = maxExclusive - minInclusive;
+        return () -> {
+            int next = nextInt(median) - (range/2) + nextInt(range);
+            int overflow = next - maxExclusive;
+            if (overflow > 0) next = minInclusive + overflow;
+            return next;
+        };
     }
-
-    default IntStream ints(int minInclusive, int maxExclusive)
+    default Supplier<IntSupplier> biasedUniformIntsSupplier(int absoluteMinInclusive, int absoluteMaxExclusive, int minMedian, int maxMedian, int minRange, int maxRange)
     {
-        return IntStream.generate(() -> nextInt(minInclusive, maxExclusive));
+        return biasedUniformIntsSupplier(absoluteMinInclusive, absoluteMaxExclusive, minMedian, (minMedian+maxMedian)/2, maxRange, minRange, (minRange+maxRange)/2, maxRange);
+    }
+    default Supplier<IntSupplier> biasedUniformIntsSupplier(int absoluteMinInclusive, int absoluteMaxExclusive, int minMedian, int meanMedian, int maxMedian, int minRange, int meanRange, int maxRange)
+    {
+        return () -> {
+            int range = nextBiasedInt(minRange, meanMedian, maxRange);
+            int median = nextBiasedInt(Math.max(absoluteMinInclusive + range/2, minMedian),
+                                       meanRange,
+                                       Math.min(absoluteMaxExclusive - (range+1)/2, maxMedian));
+            int minInclusive = median - range/2;
+            int maxExclusive = median + ((range+1)/2);
+            return biasedUniformInts(minInclusive, median, maxExclusive);
+        };
     }
 
     long nextLong();
-
-    default long nextLong(long maxExclusive)
-    {
-        return nextLong(0, maxExclusive);
-    }
-
+    default long nextLong(long maxExclusive) { return nextLong(0, maxExclusive); }
     default long nextLong(long minInclusive, long maxExclusive)
     {
         // this is diff behavior than ThreadLocalRandom, which returns nextLong
@@ -125,31 +174,53 @@ public interface RandomSource
         }
         return result;
     }
-
-    default LongStream longs()
+    default long nextBiasedLong(long minInclusive, long mean, long maxExclusive)
     {
-        return LongStream.generate(this::nextLong);
+        // this is diff behavior than ThreadLocalRandom, which returns nextInt
+        if (minInclusive >= maxExclusive)
+            throw new IllegalArgumentException(String.format("Min (%s) should be less than max (%d).", minInclusive, maxExclusive));
+
+        long range = Math.max(maxExclusive - mean, mean - minInclusive) * 2;
+        long next = nextLong(range) - range/2;
+        next += mean;
+        return next >= mean ? next <  maxExclusive ? next : nextLong(mean, maxExclusive)
+                            : next >= minInclusive ? next : nextLong(minInclusive, mean);
     }
 
-    default LongStream longs(long maxExclusive)
+    default LongSupplier uniformLongs(long minInclusive, long maxExclusive) { return () -> nextLong(minInclusive, maxExclusive); }
+    default LongSupplier biasedUniformLongs(long minInclusive, long median, long maxExclusive)
     {
-        return LongStream.generate(() -> nextLong(maxExclusive));
+        long range = maxExclusive - minInclusive;
+        return () -> {
+            long next = nextLong(median) - (range/2) + nextLong(range);
+            long overflow = next - maxExclusive;
+            if (overflow > 0) next = minInclusive + overflow;
+            return next;
+        };
+    }
+    default Supplier<LongSupplier> biasedUniformLongsSupplier(long absoluteMinInclusive, long absoluteMaxExclusive, long minMedian, long maxMedian, long minRange, long maxRange)
+    {
+        return biasedUniformLongsSupplier(absoluteMinInclusive, absoluteMaxExclusive, minMedian, (minMedian+maxMedian)/2, maxRange, minRange, (minRange+maxRange)/2, maxRange);
+    }
+    default Supplier<LongSupplier> biasedUniformLongsSupplier(long absoluteMinInclusive, long absoluteMaxExclusive, long minMedian, long meanMedian, long maxMedian, long minRange, long meanRange, long maxRange)
+    {
+        return () -> {
+            long range = nextBiasedLong(minRange, meanRange, maxRange);
+            long impliedMinMedian = Math.max(absoluteMinInclusive + range/2, minMedian);
+            long impliedMaxMedian = Math.min(absoluteMaxExclusive - (range+1)/2, maxMedian);
+            long impliedMeanMedian = meanMedian < impliedMinMedian || meanMedian >= impliedMaxMedian ? (impliedMaxMedian - impliedMinMedian / 2) : meanMedian;
+            long median = nextBiasedLong(impliedMinMedian, impliedMeanMedian, impliedMaxMedian);
+            long minInclusive = median - range/2;
+            long maxExclusive = median + ((range+1)/2);
+            return biasedUniformLongs(minInclusive, median, maxExclusive);
+        };
     }
 
-    default LongStream longs(long minInclusive, long maxExclusive)
-    {
-        return LongStream.generate(() -> nextLong(minInclusive, maxExclusive));
-    }
 
     float nextFloat();
 
     double nextDouble();
-
-    default double nextDouble(double maxExclusive)
-    {
-        return nextDouble(0, maxExclusive);
-    }
-
+    default double nextDouble(double maxExclusive) { return nextDouble(0, maxExclusive); }
     default double nextDouble(double minInclusive, double maxExclusive)
     {
         if (minInclusive >= maxExclusive)
@@ -162,130 +233,18 @@ public interface RandomSource
         return result;
     }
 
-    default DoubleStream doubles()
-    {
-        return DoubleStream.generate(this::nextDouble);
-    }
-
-    default DoubleStream doubles(double maxExclusive)
-    {
-        return DoubleStream.generate(() -> nextDouble(maxExclusive));
-    }
-
-    default DoubleStream doubles(double minInclusive, double maxExclusive)
-    {
-        return DoubleStream.generate(() -> nextDouble(minInclusive, maxExclusive));
-    }
-
     double nextGaussian();
 
-    default int pickInt(int first, int second, int... rest)
-    {
-        int offset = nextInt(0, rest.length + 2);
-        switch (offset)
-        {
-            case 0:  return first;
-            case 1:  return second;
-            default: return rest[offset - 2];
-        }
-    }
-
-    default int pickInt(int[] array)
-    {
-        return pickInt(array, 0, array.length);
-    }
-
-    default int pickInt(int[] array, int offset, int length)
-    {
-        Invariants.checkIndexInBounds(array.length, offset, length);
-        if (length == 1)
-            return array[offset];
-        return array[nextInt(offset, offset + length)];
-    }
-
-    default long pickLong(long first, long second, long... rest)
-    {
-        int offset = nextInt(0, rest.length + 2);
-        switch (offset)
-        {
-            case 0:  return first;
-            case 1:  return second;
-            default: return rest[offset - 2];
-        }
-    }
-
-    default long pickLong(long[] array)
-    {
-        return pickLong(array, 0, array.length);
-    }
-
-    default long pickLong(long[] array, int offset, int length)
-    {
-        Invariants.checkIndexInBounds(array.length, offset, length);
-        if (length == 1)
-            return array[offset];
-        return array[nextInt(offset, offset + length)];
-    }
-
-    default <T extends Comparable<T>> T pick(Set<T> set)
-    {
-        List<T> values = new ArrayList<>(set);
-        // Non-ordered sets may have different iteration order on different environments, which would make a seed produce different histories!
-        // To avoid such a problem, make sure to apply a deterministic function (sort).
-        if (!(set instanceof NavigableSet))
-            values.sort(Comparator.naturalOrder());
-        return pick(values);
-    }
-
-    default <T> T pick(T first, T second, T... rest)
-    {
-        int offset = nextInt(0, rest.length + 2);
-        switch (offset)
-        {
-            case 0:  return first;
-            case 1:  return second;
-            default: return rest[offset - 2];
-        }
-    }
-
-    default <T> T pick(List<T> values)
-    {
-        return pick(values, 0, values.size());
-    }
-
-    default <T> T pick(List<T> values, int offset, int length)
-    {
-        Invariants.checkIndexInBounds(values.size(), offset, length);
-        if (length == 1)
-            return values.get(offset);
-        return values.get(nextInt(offset, offset + length));
-    }
+    default Picker picker() { return new Picker(this); }
+    default IntPicker picker(int[] ints) { return picker(ints, UNIFORM); }
+    default IntPicker picker(int[] ints, Picker.Distribution distribution) { return distribution.get(this, ints); }
+    default LongPicker picker(long[] longs) { return picker(longs, UNIFORM); }
+    default LongPicker picker(long[] longs, Picker.Distribution distribution) { return distribution.get(this, longs); }
+    default <T> ObjectPicker<T> picker(T[] objects) { return picker(objects, UNIFORM); }
+    default <T> ObjectPicker<T> picker(T[] objects, Picker.Distribution distribution) { return distribution.get(this, objects); }
 
     void setSeed(long seed);
-
     RandomSource fork();
-
-    /**
-     * Returns true with a probability of {@code chance}.  This logic is logically the same as
-     * <pre>{@code nextFloat() < chance}</pre>
-     *
-     * @param chance cumulative probability in range [0..1]
-     */
-    default boolean decide(float chance)
-    {
-        return nextFloat() < chance;
-    }
-
-    /**
-     * Returns true with a probability of {@code chance}.  This logic is logically the same as
-     * <pre>{@code nextDouble() < chance}</pre>
-     *
-     * @param chance cumulative probability in range [0..1]
-     */
-    default boolean decide(double chance)
-    {
-        return nextDouble() < chance;
-    }
 
     default long reset()
     {

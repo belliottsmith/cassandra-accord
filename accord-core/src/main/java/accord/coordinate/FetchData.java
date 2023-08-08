@@ -44,6 +44,7 @@ import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
 import static accord.local.Status.PreApplied;
+import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 import static accord.messages.CheckStatus.WithQuorum.NoQuorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.castToRoute;
@@ -132,6 +133,7 @@ public class FetchData extends CheckShards<Route<?>>
             case Erased:
             case WasApply:
             case Apply:
+                // TODO (required): we may now be stale
                 callback.accept(found, null);
         }
     }
@@ -243,12 +245,14 @@ public class FetchData extends CheckShards<Route<?>>
         final CheckStatusOkFull full;
         // this is a WHOLE NODE measure, so if commit epoch has more ranges we do not count as committed if we can only commit in coordination epoch
         final Known achieved;
+        final boolean isTruncated;
+        final WithQuorum withQuorum;
         final PartialTxn partialTxn;
         final PartialDeps partialDeps;
         final long toEpoch;
         final BiConsumer<Known, Throwable> callback;
 
-        OnDone(Node node, TxnId txnId, Route<?> route, RoutingKey progressKey, CheckStatusOkFull full, Known achieved, PartialTxn partialTxn, PartialDeps partialDeps, long toEpoch, BiConsumer<Known, Throwable> callback)
+        OnDone(Node node, TxnId txnId, Route<?> route, RoutingKey progressKey, CheckStatusOkFull full, Known achieved, boolean isTruncated, WithQuorum withQuorum, PartialTxn partialTxn, PartialDeps partialDeps, long toEpoch, BiConsumer<Known, Throwable> callback)
         {
             this.node = node;
             this.txnId = txnId;
@@ -256,6 +260,8 @@ public class FetchData extends CheckShards<Route<?>>
             this.progressKey = progressKey;
             this.full = full;
             this.achieved = achieved;
+            this.isTruncated = isTruncated;
+            this.withQuorum = withQuorum;
             this.partialTxn = partialTxn;
             this.partialDeps = partialDeps;
             this.toEpoch = toEpoch;
@@ -272,39 +278,36 @@ public class FetchData extends CheckShards<Route<?>>
             }
 
             Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()));
-            Route<?> maxRoute = Route.merge(route, full.route);
+
+            full = full.merge(route);
+            route = Invariants.nonNull(full.route);
 
             // TODO (required): permit individual shards that are behind to catch up by themselves
             long toEpoch = sourceEpoch;
             Ranges sliceRanges = node.topology().localRangesForEpochs(txnId.epoch(), toEpoch);
-            if (!maxRoute.covers(sliceRanges))
-            {
-                callback.accept(Known.Nothing, null);
-                return;
-            }
 
-            RoutingKey progressKey = node.trySelectProgressKey(txnId, maxRoute);
+            RoutingKey progressKey = node.trySelectProgressKey(txnId, route);
 
-            Ranges covering = maxRoute.sliceCovering(sliceRanges, Minimal);
-            Participants<?> participatingKeys = maxRoute.participants().slice(covering, Minimal);
+            Ranges covering = route.sliceCovering(sliceRanges, Minimal);
+            Participants<?> participatingKeys = route.participants().slice(covering, Minimal);
             Known achieved = full.sufficientFor(participatingKeys, withQuorum);
-            if (achieved.executeAt.hasDecidedExecuteAt() && full.executeAt.epoch() > toEpoch)
+            if (achieved.executeAt.isDecided() && full.executeAt.epoch() > toEpoch)
             {
                 Ranges acceptRanges;
                 if (!node.topology().hasEpoch(full.executeAt.epoch()) ||
-                    (!maxRoute.covers(acceptRanges = node.topology().localRangesForEpochs(txnId.epoch(), full.executeAt.epoch()))))
+                    (!route.covers(acceptRanges = node.topology().localRangesForEpochs(txnId.epoch(), full.executeAt.epoch()))))
                 {
                     // we don't know what the execution epoch requires, so we cannot be sure we can replicate it locally
                     // we *could* wait until we have the local epoch before running this
                     Status.Outcome outcome = achieved.outcome.propagatesBetweenShards() ? achieved.outcome : Status.Outcome.Unknown;
-                    achieved = new Known(achieved.definition, achieved.executeAt, Status.KnownDeps.DepsUnknown, outcome);
+                    achieved = new Known(achieved.route, achieved.definition, achieved.executeAt, Status.KnownDeps.DepsUnknown, outcome);
                 }
                 else
                 {
                     // TODO (expected): this should only be the two precise epochs, not the full range of epochs
                     sliceRanges = acceptRanges;
-                    covering = maxRoute.sliceCovering(sliceRanges, Minimal);
-                    participatingKeys = maxRoute.participants().slice(covering, Minimal);
+                    covering = route.sliceCovering(sliceRanges, Minimal);
+                    participatingKeys = route.participants().slice(covering, Minimal);
                     Known knownForExecution = full.sufficientFor(participatingKeys, withQuorum);
                     if ((target != null && target.isSatisfiedBy(knownForExecution)) || knownForExecution.isSatisfiedBy(achieved))
                     {
@@ -314,10 +317,12 @@ public class FetchData extends CheckShards<Route<?>>
                     else
                     {
                         Invariants.checkState(sourceEpoch == txnId.epoch(), "%d != %d", sourceEpoch, txnId.epoch());
-                        achieved = new Known(achieved.definition, achieved.executeAt, knownForExecution.deps, knownForExecution.outcome);
+                        achieved = new Known(achieved.route, achieved.definition, achieved.executeAt, knownForExecution.deps, knownForExecution.outcome);
                     }
                 }
             }
+
+            boolean isTruncated = withQuorum == HasQuorum && achieved.isTruncated();
 
             PartialTxn partialTxn = null;
             if (achieved.definition.isKnown())
@@ -327,7 +332,7 @@ public class FetchData extends CheckShards<Route<?>>
             if (achieved.deps.hasDecidedDeps())
                 partialDeps = full.committedDeps.slice(sliceRanges).reconstitutePartial(covering);
 
-            new OnDone(node, txnId, maxRoute, progressKey, full, achieved, partialTxn, partialDeps, toEpoch, callback).start();
+            new OnDone(node, txnId, route, progressKey, full, achieved, isTruncated, withQuorum, partialTxn, partialDeps, toEpoch, callback).start();
         }
 
         void start()
@@ -347,40 +352,39 @@ public class FetchData extends CheckShards<Route<?>>
         {
             SafeCommand safeCommand = safeStore.get(txnId, this, route);
             Command command = safeCommand.current();
-            if (command.saveStatus().phase.compareTo(Phase.Persist) >= 0)
-                return null;
+            switch (command.saveStatus().phase)
+            {
+                case Persist: return updateDurability(safeStore, safeCommand);
+                case Cleanup: return null;
+            }
 
-            Status propagate = achieved.propagate();
+            Known achieved = this.achieved;
+            if (isTruncated)
+            {
+                achieved = applyOrUpgradeTruncated(safeStore, safeCommand, command);
+                if (achieved == null)
+                    return null;
+            }
+
+            Status propagate = achieved.merge(command.known()).propagatesStatus();
             if (command.hasBeen(propagate))
             {
                 if (full.maxSaveStatus.phase == Cleanup && full.durability.isDurableOrInvalidated() && Infer.safeToCleanup(safeStore, command, route, full.executeAt))
                     Commands.setTruncatedApply(safeStore, safeCommand);
-                return null;
+
+                // TODO (expected): maybe stale?
+                return updateDurability(safeStore, safeCommand);
             }
 
             switch (propagate)
             {
                 default: throw new IllegalStateException("Unexpected status: " + propagate);
+                case Truncated: throw new IllegalStateException("Status expected to be handled elsewhere: " + propagate);
                 case Accepted:
                 case AcceptedInvalidate:
                     // we never "propagate" accepted statuses as these are essentially votes,
                     // and contribute nothing to our local state machine
-                    throw new IllegalStateException("Invalid states to propagate: " + achieved.propagate());
-
-                case Truncated:
-                    // if our peers have truncated this command, then either:
-                    // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
-                    if (command.hasBeen(PreApplied) || command.saveStatus().isUninitialised())
-                        break;
-
-                    if (Infer.safeToCleanup(safeStore, command, route, full.executeAt))
-                    {
-                        Commands.setErased(safeStore, safeCommand);
-                        break;
-                    }
-
-                    // TODO (required): check if we are stale
-                    // otherwise we are either stale, or the command didn't reach consensus
+                    throw new IllegalStateException("Invalid states to propagate: " + achieved.propagatesStatus());
 
                 case Invalidated:
                     Commands.commitInvalidate(safeStore, safeCommand, route);
@@ -415,6 +419,72 @@ public class FetchData extends CheckShards<Route<?>>
                     break;
             }
 
+            return updateDurability(safeStore, safeCommand);
+        }
+
+        // if can only propagate Truncated, we might be stale; try to upgrade the
+        private Known applyOrUpgradeTruncated(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
+        {
+            // if our peers have truncated this command, then either:
+            // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
+            if (command.saveStatus().isUninitialised())
+                return null; // TODO (expected): maybe stale?
+
+            if (command.hasBeen(PreApplied))
+            {
+                updateDurability(safeStore, safeCommand);
+                return null;
+            }
+
+            if (Infer.safeToCleanup(safeStore, command, route, full.executeAt))
+            {
+                Commands.setErased(safeStore, safeCommand);
+                return null;
+            }
+
+            // TODO (required): erasing implies that the whole command has been fully applied globally, when in fact it
+            //  might only be a single shard that has Truncated its state. The simplest thing for us here to ensure consistency
+            //  is to permit partial application where possible, instead of erasing the whole state; we could also consider
+            //  more clearly reifying the difference between Erased and Truncated(WithoutAnyKnowledge).
+            //  In practice this may not be important, because a coordinator cannot have relied on this replica's vote for durability
+            //  and so our Erased vote should not adversely impact any inferences from a quorum of responses. But for consistency
+            //  and ease of logic this is best to retain.
+            // we're now at least partially stale, but let's first see if we can progress this shard, or we can do so in part
+            Timestamp executeAt = command.executeAtIfKnown(full.executeAtIfKnown());
+            if (executeAt == null)
+            {
+                // we don't even know the execution time, so we cannot possibly proceed besides erasing the command state and marking ourselves stale
+                safeStore.commandStore().markShardStale(safeStore, txnId, route.participants().toRanges(), false);
+                Commands.setErased(safeStore, safeCommand);
+                return null;
+            }
+
+            Ranges executeRanges = safeStore.ranges().allBetween(txnId, executeAt);
+
+            Known required = PreApplied.minKnown;
+            Known requireExtra = required.subtract(command.known());
+            Ranges achieveRanges = full.sufficientFor(requireExtra).slice(executeRanges, Minimal);
+            Participants<?> participants = route.participants().slice(executeRanges, Minimal);
+
+            Ranges staleRanges = executeRanges.subtract(achieveRanges);
+            if (staleRanges.isEmpty())
+            {
+                Invariants.checkState(achieveRanges.containsAll(participants));
+                return required;
+            }
+
+            // TODO (expected): try to partially apply the transaction locally to limit the ranges we have to mark dead
+            safeStore.commandStore().markShardStale(safeStore, executeAt, staleRanges, true);
+            if (!staleRanges.containsAll(participants))
+                return required;
+
+            Commands.setErased(safeStore, safeCommand);
+            return null;
+        }
+
+        private Void updateDurability(SafeCommandStore safeStore, SafeCommand safeCommand)
+        {
+            // TODO (expected): Infer durability status from cleanup/truncation
             RoutingKey homeKey = full.homeKey;
             if (!full.durability.isDurable() || homeKey == null)
                 return null;
@@ -422,7 +492,7 @@ public class FetchData extends CheckShards<Route<?>>
             if (!safeStore.ranges().coordinates(txnId).contains(homeKey))
                 return null;
 
-            Timestamp executeAt = full.saveStatus.known.executeAt.hasDecidedExecuteAt() ? full.executeAt : null;
+            Timestamp executeAt = full.executeAtIfKnown();
             Commands.setDurability(safeStore, safeCommand, full.durability, route, executeAt);
             return null;
         }
@@ -436,7 +506,7 @@ public class FetchData extends CheckShards<Route<?>>
         @Override
         public void accept(Void result, Throwable failure)
         {
-            callback.accept(failure  == null ? achieved : null, failure);
+            callback.accept(failure  == null ? achieved.propagates() : null, failure);
         }
 
         @Override

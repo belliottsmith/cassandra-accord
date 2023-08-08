@@ -80,6 +80,12 @@ public class TestAgent implements Agent
     }
 
     @Override
+    public void onStaleRange(Ranges ranges, Runnable bootstrap)
+    {
+        bootstrap.run();
+    }
+
+    @Override
     public void onUncaughtException(Throwable t)
     {
     }

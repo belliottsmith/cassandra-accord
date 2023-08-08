@@ -79,7 +79,6 @@ import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.Status.Committed;
-import static accord.local.Status.Truncated;
 import static accord.primitives.Routables.Slice.Minimal;
 
 public abstract class InMemoryCommandStore extends CommandStore
@@ -277,11 +276,20 @@ public abstract class InMemoryCommandStore extends CommandStore
 
         // TODO (now): apply on retrieval
         historicalRangeCommands.entrySet().removeIf(next -> next.getKey().compareTo(syncId) < 0 && next.getValue().intersects(ranges));
-        rangeCommands.entrySet().removeIf(next -> {
-            if (!(next.getKey().compareTo(syncId) < 0 && next.getValue().ranges.intersects(ranges)))
+        rangeCommands.entrySet().removeIf(tx -> {
+            if (tx.getKey().compareTo(syncId) >= 0)
                 return false;
-            maxRedundant = Timestamp.nonNullOrMax(maxRedundant, next.getValue().command.value().executeAt());
-            return true;
+            Ranges newRanges = tx.getValue().ranges.subtract(ranges);
+            if (!newRanges.isEmpty())
+            {
+                tx.getValue().ranges = newRanges;
+                return false;
+            }
+            else
+            {
+                maxRedundant = Timestamp.nonNullOrMax(maxRedundant, tx.getValue().command.value().executeAt());
+                return true;
+            }
         });
         ranges.forEach(r -> {
             commandsForKey.subMap(r.start(), r.startInclusive(), r.end(), r.endInclusive()).values().forEach(forKey -> {
@@ -738,7 +746,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             commandStore.rangeCommands.forEach(((txnId, rangeCommand) -> {
                 Command command = rangeCommand.command.value();
                 // TODO (now): probably this isn't safe - want to ensure we take dependency on any relevant syncId
-                if (command.is(Truncated))
+                if (command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
                     return;
 
                 Invariants.nonNull(command);

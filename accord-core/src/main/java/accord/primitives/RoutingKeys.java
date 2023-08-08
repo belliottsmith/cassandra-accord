@@ -19,6 +19,7 @@
 package accord.primitives;
 
 import accord.api.RoutingKey;
+import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 
 import static accord.utils.ArrayBuffers.cachedRoutingKeys;

@@ -112,8 +112,6 @@ public class BurnTest
                 ListQuery query = new ListQuery(client, count);
                 ListRequest request = new ListRequest(new Txn.InMemory(ranges, read, query, null), listener);
                 packets.add(new Packet(client, node, count, request));
-
-
             }
             else
             {
@@ -208,7 +206,7 @@ public class BurnTest
                                                    .small(50, 5000, TimeUnit.MICROSECONDS)
                                                    .large(1, 10, TimeUnit.MILLISECONDS)
                                                    .build()
-                    .mapAsLong(j -> Math.max(0, queue.nowInMillis() + j))
+                                                   .mapAsLong(j -> Math.max(0, queue.nowInMillis() + j))
                     .asLongSupplier(forked);
         };
 

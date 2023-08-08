@@ -42,6 +42,7 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import javax.annotation.Nullable;
 
+import static accord.local.Status.Durability.MajorityOrInvalidated;
 import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
 import static accord.local.Status.Outcome.Apply;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
@@ -164,6 +165,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
             case Apply:
                 if (!known.isDefinitionKnown() || known.executeAt != ExecuteAtKnown || known.outcome != Apply)
                 {
+                    CheckStatusOkFull propagate;
                     if (!full.truncated.isEmpty() && known.executeAt == ExecuteAtKnown)
                     {
                         // we might have only part of the full transaction, and a shard may have truncated;
@@ -174,10 +176,20 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             Invariants.checkState(full.committedDeps.covering.containsAll(sendTo));
                             Invariants.checkState(full.partialTxn.covering().containsAll(sendTo));
                             Persist.persistPartialMaximal(node, txnId, sendTo, route, full.partialTxn, full.executeAt, full.committedDeps, full.writes, full.result);
+                            propagate = full;
+                        }
+                        else
+                        {
+                            // TODO (expected): tighten up / centralise this implication, perhaps in Infer
+                            propagate = full.merge(MajorityOrInvalidated);
                         }
                     }
+                    else
+                    {
+                        propagate = full;
+                    }
 
-                    OnDone.propagate(node, txnId, sourceEpoch, success.withQuorum, route, null, full, (s, f) -> callback.accept(f == null ? full.toProgressToken() : null, f));
+                    OnDone.propagate(node, txnId, sourceEpoch, success.withQuorum, route, null, propagate, (s, f) -> callback.accept(f == null ? propagate.toProgressToken() : null, f));
                     break;
                 }
 

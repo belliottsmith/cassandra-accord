@@ -38,7 +38,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
-import static accord.local.SaveStatus.LocalExecution.WaitingToExecute;
+import static accord.local.SaveStatus.LocalExecution.ReadyToExecute;
 import static accord.local.Status.Committed;
 import static accord.messages.ReadData.ReadNack.NotCommitted;
 import static accord.messages.ReadData.ReadNack.Redundant;
@@ -175,9 +175,12 @@ public class ReadTxnData extends ReadData implements Command.TransientListener, 
                 ++waitingOnCount;
                 safeCommand.addListener(this);
 
-                safeStore.progressLog().waiting(safeCommand, WaitingToExecute, null, readScope);
                 if (status == Committed) return null;
-                else return NotCommitted;
+                else
+                {
+                    safeStore.progressLog().waiting(safeCommand, ReadyToExecute, null, readScope);
+                    return NotCommitted;
+                }
 
             case PreApplied:
             case Applied:

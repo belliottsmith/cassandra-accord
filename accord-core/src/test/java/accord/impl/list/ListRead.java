@@ -25,6 +25,7 @@ import accord.local.SafeCommandStore;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
+import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.Timestamped;
 import org.slf4j.Logger;
@@ -73,6 +74,7 @@ public class ListRead implements Read
                 case Key:
                     Timestamped<int[]> data = s.get((Key)key);
                     logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
+//                    Invariants.checkState(data.timestamp.compareTo(executeAt) < 0);
                     result.put((Key)key, data);
                     break;
                 case Range:

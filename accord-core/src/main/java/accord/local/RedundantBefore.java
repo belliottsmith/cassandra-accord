@@ -18,6 +18,8 @@
 
 package accord.local;
 
+import java.util.Objects;
+import java.util.function.BiFunction;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -32,9 +34,12 @@ import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
 
+import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
+import static accord.local.RedundantBefore.PreBootstrapOrStale.POST_BOOTSTRAP;
+import static accord.local.RedundantBefore.PreBootstrapOrStale.PARTIALLY;
 import static accord.local.RedundantStatus.LIVE;
 import static accord.local.RedundantStatus.NOT_OWNED;
-import static accord.local.RedundantStatus.PRE_BOOTSTRAP;
+import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
 
 public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
@@ -47,19 +52,23 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         }
     }
 
+    public enum PreBootstrapOrStale { NOT_OWNED, FULLY, PARTIALLY, POST_BOOTSTRAP }
+
     public static class Entry
     {
         public final Range range;
         public final long startEpoch, endEpoch;
         public final @Nonnull TxnId redundantBefore, bootstrappedAt;
+        public final @Nullable Timestamp staleUntilAtLeast;
 
-        public Entry(Range range, long startEpoch, long endEpoch, @Nonnull TxnId redundantBefore, @Nonnull TxnId bootstrappedAt)
+        public Entry(Range range, long startEpoch, long endEpoch, @Nonnull TxnId redundantBefore, @Nonnull TxnId bootstrappedAt, @Nullable Timestamp staleUntilAtLeast)
         {
             this.range = range;
             this.startEpoch = startEpoch;
             this.endEpoch = endEpoch;
             this.redundantBefore = redundantBefore;
             this.bootstrappedAt = bootstrappedAt;
+            this.staleUntilAtLeast = staleUntilAtLeast;
         }
 
         public static Entry reduce(Entry a, Entry b)
@@ -69,18 +78,26 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
         private static Entry merge(Range range, Entry a, Entry b)
         {
+            if (a.startEpoch > b.endEpoch)
+                return a;
+
+            if (b.startEpoch > a.endEpoch)
+                return b;
+
             long startEpoch = Long.max(a.startEpoch, b.startEpoch);
             long endEpoch = Long.min(a.endEpoch, b.endEpoch);
             int cr = a.redundantBefore.compareTo(b.redundantBefore);
             int cb = a.bootstrappedAt.compareTo(b.bootstrappedAt);
+            int csu = compareStaleUntilAtLeast(a.staleUntilAtLeast, b.staleUntilAtLeast);
 
-            if (range.equals(a.range) && startEpoch == a.startEpoch && endEpoch == a.endEpoch && cr >= 0 && cb >= 0)
+            if (range.equals(a.range) && startEpoch == a.startEpoch && endEpoch == a.endEpoch && cr >= 0 && cb >= 0 && csu >= 0)
                 return a;
-            if (range.equals(b.range) && startEpoch == b.startEpoch && endEpoch == b.endEpoch && cr <= 0 && cb <= 0)
+            if (range.equals(b.range) && startEpoch == b.startEpoch && endEpoch == b.endEpoch && cr <= 0 && cb <= 0 && csu <= 0)
                 return b;
 
             TxnId redundantBefore = cr >= 0 ? a.redundantBefore : b.redundantBefore;
             TxnId bootstrappedAt = cb >= 0 ? a.bootstrappedAt : b.bootstrappedAt;
+            Timestamp staleUntilAtLeast = csu >= 0 ? a.staleUntilAtLeast : b.staleUntilAtLeast;
 
             // if our redundantBefore predates bootstrappedAt, we should clear it to avoid erroneously treating
             // transactions prior as locally redundant when they may simply have not applied yet, since we may
@@ -89,8 +106,10 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             // TODO (desired): revisit later as semantics here evolve
             if (bootstrappedAt.compareTo(redundantBefore) >= 0)
                 redundantBefore = TxnId.NONE;
+            if (staleUntilAtLeast != null && bootstrappedAt.compareTo(staleUntilAtLeast) >= 0)
+                staleUntilAtLeast = null;
 
-            return new Entry(range, startEpoch, endEpoch, redundantBefore, bootstrappedAt);
+            return new Entry(range, startEpoch, endEpoch, redundantBefore, bootstrappedAt, staleUntilAtLeast);
         }
 
         static @Nonnull RedundantStatus getAndMerge(Entry entry, @Nonnull RedundantStatus prev, TxnId txnId, EpochSupplier executeAt)
@@ -107,13 +126,30 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return entry.get(txnId);
         }
 
+        static PreBootstrapOrStale getAndMerge(Entry entry, @Nonnull PreBootstrapOrStale prev, TxnId txnId, EpochSupplier executeAt)
+        {
+            if (prev == PARTIALLY || entry == null || entry.outOfBounds(txnId, executeAt))
+                return prev;
+
+            boolean isPreBootstrapOrStale = entry.staleUntilAtLeast != null || entry.bootstrappedAt.compareTo(txnId) > 0;
+            return isPreBootstrapOrStale ? prev == POST_BOOTSTRAP ? PARTIALLY : FULLY
+                                         : prev == FULLY          ? PARTIALLY : POST_BOOTSTRAP;
+        }
+
         RedundantStatus get(TxnId txnId)
         {
             if (redundantBefore.compareTo(txnId) > 0)
                 return LOCALLY_REDUNDANT;
-            if (bootstrappedAt.compareTo(txnId) > 0)
-                return PRE_BOOTSTRAP;
+            if (staleUntilAtLeast != null || bootstrappedAt.compareTo(txnId) > 0)
+                return PRE_BOOTSTRAP_OR_STALE;
             return LIVE;
+        }
+
+        private static int compareStaleUntilAtLeast(@Nullable Timestamp a, @Nullable Timestamp b)
+        {
+            boolean aIsNull = a == null, bIsNull = b == null;
+            if (aIsNull != bIsNull) return aIsNull ? -1 : 1;
+            return aIsNull ? 0 : a.compareTo(b);
         }
 
         public final boolean isLocalRedundancyViaBootstrap()
@@ -136,7 +172,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
         Entry withRange(Range range)
         {
-            return new Entry(range, startEpoch, endEpoch, redundantBefore, bootstrappedAt);
+            return new Entry(range, startEpoch, endEpoch, redundantBefore, bootstrappedAt, staleUntilAtLeast);
         }
 
         public boolean equals(Object that)
@@ -153,7 +189,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         {
             return this.startEpoch == that.startEpoch
                    && this.endEpoch == that.endEpoch
-                   && this.redundantBefore.equals(that.redundantBefore);
+                   && this.redundantBefore.equals(that.redundantBefore)
+                   && Objects.equals(this.staleUntilAtLeast, that.staleUntilAtLeast);
         }
 
         @Override
@@ -168,21 +205,52 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
     public static RedundantBefore EMPTY = new RedundantBefore();
 
+    private final Ranges staleRanges;
+
     private RedundantBefore()
     {
+        staleRanges = Ranges.EMPTY;
     }
 
     RedundantBefore(boolean inclusiveEnds, RoutingKey[] starts, Entry[] values)
     {
         super(inclusiveEnds, starts, values);
+        staleRanges = extractStaleRanges(values);
+    }
+
+    private static Ranges extractStaleRanges(Entry[] values)
+    {
+        int countStaleRanges = 0;
+        for (Entry entry : values)
+        {
+            if (entry != null && entry.staleUntilAtLeast != null)
+                ++countStaleRanges;
+        }
+
+        if (countStaleRanges == 0)
+            return Ranges.EMPTY;
+
+        Range[] staleRanges = new Range[countStaleRanges];
+        countStaleRanges = 0;
+        for (Entry entry : values)
+        {
+            if (entry != null && entry.staleUntilAtLeast != null)
+                staleRanges[countStaleRanges++] = entry.range;
+        }
+        return Ranges.ofSortedAndDeoverlapped(staleRanges).mergeTouching();
     }
 
     public static RedundantBefore create(Ranges ranges, long startEpoch, long endEpoch, @Nonnull TxnId redundantBefore, @Nonnull TxnId bootstrappedAt)
     {
+        return create(ranges, startEpoch, endEpoch, redundantBefore, bootstrappedAt, null);
+    }
+
+    public static RedundantBefore create(Ranges ranges, long startEpoch, long endEpoch, @Nonnull TxnId redundantBefore, @Nonnull TxnId bootstrappedAt, @Nullable Timestamp staleUntilAtLeast)
+    {
         if (ranges.isEmpty())
             return new RedundantBefore();
 
-        Entry entry = new Entry(null, startEpoch, endEpoch, redundantBefore, bootstrappedAt);
+        Entry entry = new Entry(null, startEpoch, endEpoch, redundantBefore, bootstrappedAt, staleUntilAtLeast);
         Builder builder = new Builder(ranges.get(0).endInclusive(), ranges.size() * 2);
         for (int i = 0 ; i < ranges.size() ; ++i)
         {
@@ -211,6 +279,25 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         return foldl(participants, Entry::getAndMerge, NOT_OWNED, txnId, executeAt, ignore -> false);
     }
 
+    /**
+     * RedundantStatus.REDUNDANT overrides PRE_BOOTSTRAP; to avoid complicating that state machine,
+     * for cases where we care independently about the overall pre-bootstrap state we have a separate mechanism
+     */
+    public PreBootstrapOrStale preBootstrapOrStale(TxnId txnId, EpochSupplier executeAt, Participants<?> participants)
+    {
+        if (executeAt == null) executeAt = txnId;
+        return foldl(participants, Entry::getAndMerge, PreBootstrapOrStale.NOT_OWNED, txnId, executeAt, r -> r == PARTIALLY);
+    }
+
+    /**
+     * RedundantStatus.REDUNDANT overrides PRE_BOOTSTRAP; to avoid complicating that state machine,
+     * for cases where we care independently about the overall pre-bootstrap state we have a separate mechanism
+     */
+    public Ranges staleRanges()
+    {
+        return staleRanges;
+    }
+
     static class Builder extends ReducingIntervalMap.Builder<RoutingKey, Entry, RedundantBefore>
     {
         protected Builder(boolean inclusiveEnds, int capacity)
@@ -225,13 +312,27 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         }
 
         @Override
+        public void append(RoutingKey start, @Nullable Entry value, BiFunction<Entry, Entry, Entry> reduce)
+        {
+            if (value != null && value.range.start().compareTo(start) < 0)
+                value = value.withRange(value.range.newRange(start, value.range.end()));
+
+            int tailIdx = values.size() - 1;
+            super.append(start, value, reduce);
+
+            Entry tailValue; // TODO (desired): clean up maintenance of accurate range bounds
+            if (values.size() - 2 == tailIdx && tailIdx >= 0 && (tailValue = values.get(tailIdx)) != null && tailValue.range.end().compareTo(start) > 0)
+                values.set(tailIdx, tailValue.withRange(tailValue.range.newRange(tailValue.range.start(), start)));
+        }
+
+        @Override
         protected Entry mergeEqual(Entry a, Entry b)
         {
             Invariants.checkState(a.range.compareIntersecting(b.range) == 0 || a.range.end().equals(b.range.start()) || a.range.start().equals(b.range.end()));
             return new Entry(a.range.newRange(
                 a.range.start().compareTo(b.range.start()) <= 0 ? a.range.start() : b.range.start(),
                 a.range.end().compareTo(b.range.end()) >= 0 ? a.range.end() : b.range.end()
-            ), a.startEpoch, a.endEpoch, a.redundantBefore, a.bootstrappedAt);
+            ), a.startEpoch, a.endEpoch, a.redundantBefore, a.bootstrappedAt, a.staleUntilAtLeast);
         }
 
         @Override

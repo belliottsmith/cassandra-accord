@@ -123,7 +123,9 @@ public abstract class CommandStores
         }
     }
 
-    // TODO (now): split into deterministic and non-deterministic methods; ensure we only use deterministic methods during commands execution
+    // TODO (required): ensure all deterministic results across runs; updating RangesForEpoch should happen once per
+    //  execution batch and be logged
+    // TODO (expected): merge with RedundantBefore, and standardise executeRanges() to treat removing stale ranges the same as adding new epoch ranges
     public static class RangesForEpoch
     {
         final long[] epochs;
@@ -184,6 +186,32 @@ public abstract class CommandStores
             return ranges[i];
         }
 
+        /**
+         * Extend a previously computed set of Ranges that included {@code fromInclusive}
+         * to include {@code toInclusive}
+         */
+        public @Nonnull Ranges extend(Ranges extend, Timestamp fromInclusive, Timestamp toInclusive)
+        {
+            return extend(extend, fromInclusive.epoch(), toInclusive.epoch());
+        }
+
+        /**
+         * Extend a previously computed set of Ranges that included {@code fromInclusive}
+         * to include ranges up to {@code toInclusive}
+         */
+        public @Nonnull Ranges extend(Ranges extend, long fromInclusive, long toInclusive)
+        {
+            if (fromInclusive == toInclusive)
+                return extend;
+
+            int startIndex = 1 + floorIndex(fromInclusive);
+            int endIndex = 1 + floorIndex(toInclusive);
+            for (int i = startIndex ; i < endIndex; ++i)
+                extend = extend.with(ranges[i]); // want to always return extend for equal ranges, so same ranges are identity-equals
+
+            return extend;
+        }
+
         public @Nonnull Ranges allBetween(Timestamp fromInclusive, Timestamp toInclusive)
         {
             return allBetween(fromInclusive.epoch(), toInclusive.epoch());
@@ -218,6 +246,11 @@ public abstract class CommandStores
         public @Nonnull Ranges allUntil(long toInclusive)
         {
             return allInternal(0, 1 + floorIndex(toInclusive));
+        }
+
+        public @Nonnull Ranges allSince(long fromInclusive)
+        {
+            return allInternal(Math.max(0, floorIndex(fromInclusive)), epochs.length);
         }
 
         private int floorIndex(long epoch)

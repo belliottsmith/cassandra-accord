@@ -23,15 +23,17 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
@@ -44,6 +46,7 @@ import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.burn.BurnTestConfigurationService;
 import accord.burn.TopologyUpdates;
+import accord.burn.random.FrequentLargeRange;
 import accord.impl.CoordinateDurabilityScheduling;
 import accord.impl.IntHashKey;
 import accord.impl.SimpleProgressLog;
@@ -55,8 +58,8 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.NodeTimeService;
 import accord.local.ShardDistributor;
-import accord.messages.MessageType;
 import accord.messages.Message;
+import accord.messages.MessageType;
 import accord.messages.Reply;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
@@ -66,6 +69,15 @@ import accord.utils.RandomSource;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 
+import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
+import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
+import static accord.impl.basic.NodeSink.Action.DELIVER;
+import static accord.impl.basic.NodeSink.Action.DROP;
+import static accord.utils.random.Picker.Distribution.WEIGHTED;
+import static java.util.Collections.emptyMap;
+import static java.util.Collections.singletonMap;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toList;
 
@@ -81,9 +93,36 @@ public class Cluster implements Scheduler
         public String toString() { return Integer.toString(count); }
     }
 
-    EnumMap<MessageType, Stats> statsMap = new EnumMap<>(MessageType.class);
+    public static class LinkConfig
+    {
+        final Function<List<Id>, BiFunction<Id, Id, Link>> overrideLinks;
+        final BiFunction<Id, Id, Link> defaultLinks;
 
-    final RandomSource randomSource;
+        public LinkConfig(Function<List<Id>, BiFunction<Id, Id, Link>> overrideLinks, BiFunction<Id, Id, Link> defaultLinks)
+        {
+            this.overrideLinks = overrideLinks;
+            this.defaultLinks = defaultLinks;
+        }
+    }
+
+    static class Link
+    {
+        static final Link DOWN = new Link(() -> DROP, () -> { throw new IllegalStateException(); });
+
+        final Supplier<NodeSink.Action> action;
+        final LongSupplier latencyMicros;
+
+        Link(Supplier<NodeSink.Action> action, LongSupplier latencyMicros)
+        {
+            this.action = action;
+            this.latencyMicros = latencyMicros;
+        }
+    }
+
+    final EnumMap<MessageType, Stats> statsMap = new EnumMap<>(MessageType.class);
+
+    final RandomSource random;
+    final LinkConfig linkConfig;
     final Function<Id, Node> lookup;
     final PendingQueue pending;
     final Runnable checkFailures;
@@ -93,17 +132,18 @@ public class Cluster implements Scheduler
     final MessageListener messageListener;
     int clock;
     int recurring;
-    Set<Id> partitionSet;
+    BiFunction<Id, Id, Link> links;
 
-    public Cluster(RandomSource randomSource, MessageListener messageListener, Supplier<PendingQueue> queueSupplier, Runnable checkFailures, Function<Id, Node> lookup, Consumer<Packet> responseSink)
+    public Cluster(RandomSource random, MessageListener messageListener, Supplier<PendingQueue> queueSupplier, Runnable checkFailures, Function<Id, Node> lookup, IntSupplier rf, Consumer<Packet> responseSink)
     {
-        this.randomSource = randomSource;
+        this.random = random;
         this.messageListener = messageListener;
         this.pending = queueSupplier.get();
         this.checkFailures = checkFailures;
         this.lookup = lookup;
         this.responseSink = responseSink;
-        this.partitionSet = new HashSet<>();
+        this.linkConfig = defaultLinkConfig(random, rf);
+        this.links = linkConfig.defaultLinks;
     }
 
     NodeSink create(Id self, RandomSource random)
@@ -219,7 +259,8 @@ public class Cluster implements Scheduler
         Map<Id, Node> lookup = new LinkedHashMap<>();
         try
         {
-            Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, lookup::get, responseSink);
+            RandomSource random = randomSupplier.get();
+            Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, lookup::get, () -> topologyFactory.rf, responseSink);
             TopologyUpdates topologyUpdates = new TopologyUpdates(executor);
             TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, topology, topologyUpdates, lookup::get);
             List<CoordinateDurabilityScheduling> durabilityScheduling = new ArrayList<>();
@@ -234,12 +275,26 @@ public class Cluster implements Scheduler
                                      randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER,
                                      SimpleProgressLog::new, DelayedCommandStores.factory(sinks.pending));
                 lookup.put(id, node);
-                CoordinateDurabilityScheduling durability = new CoordinateDurabilityScheduling(node);
-                // TODO (desired): randomise
-                durability.setFrequency(60, SECONDS);
-                durability.setGlobalCycleTime(180, SECONDS);
-                durabilityScheduling.add(durability);
+                durabilityScheduling.add(new CoordinateDurabilityScheduling(node));
             }
+
+            Runnable updateDurabilityRate;
+            {
+                IntSupplier frequencySeconds       = random.biasedUniformIntsSupplier( 1, 120, 30,  60, 10,  60).get();
+                IntSupplier shardCycleTimeSeconds  = random.biasedUniformIntsSupplier(30, 240, 30, 120, 30, 120).get();
+                IntSupplier globalCycleTimeSeconds = random.biasedUniformIntsSupplier( 1,  90, 10,  30, 10,  60).get();
+                updateDurabilityRate = () -> {
+                    int f = frequencySeconds.getAsInt();
+                    int s = shardCycleTimeSeconds.getAsInt();
+                    int g = globalCycleTimeSeconds.getAsInt();
+                    durabilityScheduling.forEach(d -> {
+                        d.setFrequency(f, SECONDS);
+                        d.setShardCycleTime(s, SECONDS);
+                        d.setGlobalCycleTime(g, SECONDS);
+                    });
+                };
+            }
+            updateDurabilityRate.run();
 
             // startup
             AsyncResult<?> startup = AsyncChains.reduce(lookup.values().stream().map(Node::start).collect(toList()), (a, b) -> null).beginAsResult();
@@ -247,11 +302,10 @@ public class Cluster implements Scheduler
             Assertions.assertTrue(startup.isDone());
 
             List<Id> nodesList = new ArrayList<>(Arrays.asList(nodes));
-            RandomSource shuffleRandom = randomSupplier.get();
             Scheduled chaos = sinks.recurring(() -> {
-                Collections.shuffle(nodesList, shuffleRandom.asJdkRandom());
-                int partitionSize = shuffleRandom.nextInt((topologyFactory.rf+1)/2);
-                sinks.partitionSet = new LinkedHashSet<>(nodesList.subList(0, partitionSize));
+                sinks.links = sinks.linkConfig.overrideLinks.apply(nodesList);
+                if (random.decide(0.1f))
+                    updateDurabilityRate.run();
             }, 5L, SECONDS);
 
             Scheduled reconfigure = sinks.recurring(configRandomizer::maybeUpdateTopology, 1, SECONDS);
@@ -271,7 +325,7 @@ public class Cluster implements Scheduler
             chaos.cancel();
             reconfigure.cancel();
             durabilityScheduling.forEach(CoordinateDurabilityScheduling::stop);
-            sinks.partitionSet = Collections.emptySet();
+            sinks.links = sinks.linkConfig.defaultLinks;
 
             // give progress log et al a chance to finish
             // TODO (desired, testing): would be nice to make this more certain than an arbitrary number of additional rounds
@@ -296,4 +350,147 @@ public class Cluster implements Scheduler
             lookup.values().forEach(Node::shutdown);
         }
     }
+
+    private static BiFunction<Id, Id, Link> partition(List<Id> nodes, RandomSource random, int rf, BiFunction<Id, Id, Link> defaultLinks)
+    {
+        Collections.shuffle(nodes, random.asJdkRandom());
+        int partitionSize = random.nextInt((rf+1)/2);
+        Set<Id> partition = new LinkedHashSet<>(nodes.subList(0, partitionSize));
+        return (from, to) -> partition.contains(from) == partition.contains(to)
+                             ? defaultLinks.apply(from, to)
+                             : Link.DOWN;
+    }
+
+    /**
+     * pair every node with one other node in one direction with a network behaviour override
+     */
+    private static BiFunction<Id, Id, Link> pairedUnidirectionalOverrides(Function<Link, Link> linkOverride, List<Id> nodes, RandomSource random, BiFunction<Id, Id, Link> fallback)
+    {
+        Map<Id, Map<Id, Link>> map = new HashMap<>();
+        Collections.shuffle(nodes, random.asJdkRandom());
+        for (int i = 0 ; i + 1 < nodes.size() ; i += 2)
+        {
+            Id from = nodes.get(i);
+            Id to = nodes.get(i + 1);
+            Link link = linkOverride.apply(fallback.apply(from, to));
+            map.put(from, singletonMap(to, link));
+        }
+        return (from, to) -> nonNullOrGet(map.getOrDefault(from, emptyMap()).get(to), from, to, fallback);
+    }
+
+    private static BiFunction<Id, Id, Link> randomOverrides(boolean bidirectional, Function<Link, Link> linkOverride, int count, List<Id> nodes, RandomSource random, BiFunction<Id, Id, Link> fallback)
+    {
+        Map<Id, Map<Id, Link>> map = new HashMap<>();
+        while (count > 0)
+        {
+            Id from = nodes.get(random.nextInt(nodes.size()));
+            Id to = nodes.get(random.nextInt(nodes.size()));
+            Link fwd = linkOverride.apply(fallback.apply(from, to));
+            if (null == map.computeIfAbsent(from, ignore -> new HashMap<>()).putIfAbsent(to, fwd))
+            {
+                if (bidirectional)
+                {
+                    Link rev = linkOverride.apply(fallback.apply(to, from));
+                    map.computeIfAbsent(to, ignore -> new HashMap<>()).put(from, rev);
+                }
+
+                --count;
+            }
+        }
+        return (from, to) -> nonNullOrGet(map.getOrDefault(from, emptyMap()).get(to), from, to, fallback);
+    }
+
+    private static Link nonNullOrGet(Link ifNotNull, Id from, Id to, BiFunction<Id, Id, Link> function)
+    {
+        if (ifNotNull != null)
+            return ifNotNull;
+        return function.apply(from, to);
+    }
+
+    private static Link healthy(LongSupplier latency)
+    {
+        return new Link(() -> DELIVER, latency);
+    }
+
+    private LongSupplier defaultRandomWalkLatencyMicros(RandomSource random)
+    {
+        FrequentLargeRange range = FrequentLargeRange.builder(random)
+                                                     .ratio(1, 5)
+                                                     .small(500, TimeUnit.MICROSECONDS, 5, MILLISECONDS)
+                                                     .large(50, MILLISECONDS, 5, SECONDS)
+                                                     .build();
+
+        return () -> NANOSECONDS.toMicros(range.nextLong(random));
+    }
+
+    enum OverrideLinkKind { LATENCY, ACTION, BOTH }
+
+    private Supplier<Function<Link, Link>> linkOverrideSupplier(RandomSource random)
+    {
+        Supplier<OverrideLinkKind> nextKind = random.picker(OverrideLinkKind.values());
+        Supplier<LongSupplier> latencySupplier = random.biasedUniformLongsSupplier(
+            MILLISECONDS.toMicros(1L), SECONDS.toMicros(2L),
+            MILLISECONDS.toMicros(1L), MILLISECONDS.toMicros(300L), SECONDS.toMicros(1L),
+            MILLISECONDS.toMicros(1L), MILLISECONDS.toMicros(300L), SECONDS.toMicros(1L)
+        );
+        NodeSink.Action[] actions = NodeSink.Action.values();
+        Supplier<Supplier<NodeSink.Action>> actionSupplier = () -> random.picker(actions, WEIGHTED);
+        return () -> {
+            OverrideLinkKind kind = nextKind.get();
+            switch (kind)
+            {
+                default: throw new AssertionError("Unhandled: " + kind);
+                case BOTH: return ignore -> new Link(actionSupplier.get(), latencySupplier.get());
+                case ACTION: return override -> new Link(actionSupplier.get(), override.latencyMicros);
+                case LATENCY: return override -> new Link(override.action, latencySupplier.get());
+            }
+        };
+    }
+
+    enum OverrideLinksKind { NONE, PAIRED_UNIDIRECTIONAL, RANDOM_UNIDIRECTIONAL, RANDOM_BIDIRECTIONAL }
+
+    private Function<List<Id>, BiFunction<Id, Id, Link>> overrideLinks(RandomSource random, IntSupplier rf, BiFunction<Id, Id, Link> defaultLinks)
+    {
+        Supplier<Function<Link, Link>> linkOverrideSupplier = linkOverrideSupplier(random);
+        BooleanSupplier partitionChance = random.biasedUniformBools(random.nextFloat());
+        Supplier<OverrideLinksKind> nextKind = random.picker(OverrideLinksKind.values());
+        return nodesList -> {
+            BiFunction<Id, Id, Link> links = defaultLinks;
+            if (partitionChance.getAsBoolean()) // 50% chance of a whole network partition
+                links = partition(nodesList, random, rf.getAsInt(), links);
+
+            OverrideLinksKind kind = nextKind.get();
+            if (kind == NONE)
+                return links;
+
+            Function<Link, Link> linkOverride = linkOverrideSupplier.get();
+            switch (kind)
+            {
+                default: throw new AssertionError("Unhandled: " + kind);
+                case PAIRED_UNIDIRECTIONAL:
+                    return pairedUnidirectionalOverrides(linkOverride, nodesList, random, defaultLinks);
+                case RANDOM_BIDIRECTIONAL:
+                case RANDOM_UNIDIRECTIONAL:
+                    boolean bidirectional = kind == RANDOM_BIDIRECTIONAL;
+                    int count = random.nextInt(random.nextBoolean() ? nodesList.size() : (nodesList.size() * nodesList.size())/2);
+                    return randomOverrides(bidirectional, linkOverride, count, nodesList, random, defaultLinks);
+
+            }
+        };
+    }
+
+    private BiFunction<Id, Id, Link> defaultLinks(RandomSource random)
+    {
+        Map<Id, Map<Id, Link>> stash = new HashMap<>();
+        return (from, to) -> stash.computeIfAbsent(from, ignore -> new HashMap<>())
+                                  .computeIfAbsent(to, ignore -> healthy(defaultRandomWalkLatencyMicros(random)));
+    }
+
+    private LinkConfig defaultLinkConfig(RandomSource random, IntSupplier rf)
+    {
+        BiFunction<Id, Id, Link> defaultLinks = defaultLinks(random);
+        Function<List<Id>, BiFunction<Id, Id, Link>> overrideLinks = overrideLinks(random, rf, defaultLinks);
+        return new LinkConfig(overrideLinks, defaultLinks);
+    }
+
 }

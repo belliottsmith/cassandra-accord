@@ -67,14 +67,17 @@ import static accord.local.Commands.Cleanup.ERASE;
 import static accord.local.Commands.Cleanup.NO;
 import static accord.local.Commands.Cleanup.TRUNCATE;
 import static accord.local.Commands.EnsureAction.Add;
-import static accord.local.Commands.EnsureAction.Check;
+import static accord.local.Commands.EnsureAction.TryAdd;
 import static accord.local.Commands.EnsureAction.Ignore;
 import static accord.local.Commands.EnsureAction.Set;
 import static accord.local.Commands.EnsureAction.TrySet;
+import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.RedundantStatus.NOT_OWNED;
-import static accord.local.RedundantStatus.PRE_BOOTSTRAP;
+import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.SaveStatus.Applying;
 import static accord.local.SaveStatus.Erased;
+import static accord.local.SaveStatus.LocalExecution.ReadyToExclude;
+import static accord.local.SaveStatus.LocalExecution.WaitingToExecute;
 import static accord.local.SaveStatus.TruncatedApply;
 import static accord.local.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.local.SaveStatus.Uninitialised;
@@ -165,13 +168,13 @@ public class Commands
             return ballot.equals(Ballot.ZERO) ? AcceptOutcome.Redundant : AcceptOutcome.Success;
         }
 
-        Ranges coordinateRanges = coordinateRanges(safeStore, txnId, acceptEpoch);
-        Invariants.checkState(!coordinateRanges.isEmpty());
-        ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
-        Invariants.checkState(validate(command.status(), command, Ranges.EMPTY, coordinateRanges, shard, route, Set, partialTxn, Set, null, Ignore));
+        Ranges preacceptRanges = preacceptRanges(safeStore, txnId, acceptEpoch);
+        Invariants.checkState(!preacceptRanges.isEmpty());
+        ProgressShard shard = progressShard(route, progressKey, preacceptRanges);
+        Invariants.checkState(validate(command.status(), command, Ranges.EMPTY, preacceptRanges, shard, route, Set, partialTxn, Set, null, Ignore));
 
         // FIXME: this should go into a consumer method
-        CommonAttributes attrs = set(safeStore, command, command, Ranges.EMPTY, coordinateRanges, shard, route, partialTxn, Set, null, Ignore);
+        CommonAttributes attrs = set(safeStore, command, command, Ranges.EMPTY, preacceptRanges, shard, route, partialTxn, Set, null, Ignore);
         if (command.executeAt() == null)
         {
             // unlike in the Accord paper, we partition shards within a node, so that to ensure a total order we must either:
@@ -328,16 +331,14 @@ public class Commands
 
         Ranges coordinateRanges = coordinateRanges(safeStore, txnId);
         Ranges acceptRanges = acceptRanges(safeStore, txnId, executeAt, coordinateRanges);
-        // TODO (expected, consider): consider ranges between coordinateRanges and executeRanges? Perhaps don't need them
-        Ranges executeRanges = executeRanges(safeStore, executeAt);
 
         ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
 
-        if (!validate(command.status(), command, acceptRanges, executeRanges, shard, route, Check, partialTxn, Add, partialDeps, Set))
+        if (!validate(command.status(), command, coordinateRanges, acceptRanges, shard, route, Add, partialTxn, Add, partialDeps, Set))
             return CommitOutcome.Insufficient;
 
         // FIXME: split up set
-        CommonAttributes attrs = set(safeStore, command, command, acceptRanges, executeRanges, shard, route, partialTxn, Add, partialDeps, Set);
+        CommonAttributes attrs = set(safeStore, command, command, coordinateRanges, acceptRanges, shard, route, partialTxn, Add, partialDeps, Set);
 
         logger.trace("{}: committed with executeAt: {}, deps: {}", txnId, executeAt, partialDeps);
         WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, executeAt, attrs.partialDeps(), attrs.route());
@@ -379,6 +380,7 @@ public class Commands
         }
 
         safeCommand.precommit(attrs, executeAt);
+        safeStore.progressLog().precommitted(command);
         safeStore.notifyListeners(safeCommand);
         logger.trace("{}: precommitted with executeAt: {}", txnId, executeAt);
         return CommitOutcome.Success;
@@ -470,14 +472,13 @@ public class Commands
 
         Ranges coordinateRanges = coordinateRanges(safeStore, txnId);
         Ranges acceptRanges = acceptRanges(safeStore, txnId, executeAt, coordinateRanges);
-        Ranges executeRanges = executeRanges(safeStore, executeAt);
 
         ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
 
-        if (!validate(command.status(), command, acceptRanges, executeRanges, shard, route, Check, partialTxn, Add, partialDeps, command.hasBeen(Committed) ? Check : TrySet))
+        if (!validate(command.status(), command, coordinateRanges, acceptRanges, shard, route, TryAdd, partialTxn, Add, partialDeps, command.hasBeen(Committed) ? TryAdd : TrySet, safeStore))
             return ApplyOutcome.Insufficient; // TODO (expected, consider): this should probably be an assertion failure if !TrySet
 
-        CommonAttributes attrs = set(safeStore, command, command, acceptRanges, executeRanges, shard, route, partialTxn, Add, partialDeps, command.hasBeen(Committed) ? Check : TrySet);
+        CommonAttributes attrs = set(safeStore, command, command, coordinateRanges, acceptRanges, shard, route, partialTxn, Add, partialDeps, command.hasBeen(Committed) ? TryAdd : TrySet);
 
         WaitingOn waitingOn = !command.hasBeen(Committed) ? initialiseWaitingOn(safeStore, txnId, executeAt, attrs.partialDeps(), attrs.route()) : command.asCommitted().waitingOn();
         safeCommand.preapplied(attrs, executeAt, waitingOn, writes, result);
@@ -547,14 +548,14 @@ public class Commands
     /**
      * The ranges for which we participate in the consensus decision of when a transaction executes
      */
-    private static Ranges coordinateRanges(SafeCommandStore safeStore, TxnId txnId, long untilEpoch)
+    private static Ranges preacceptRanges(SafeCommandStore safeStore, TxnId txnId, long untilEpoch)
     {
         return safeStore.ranges().allBetween(txnId.epoch(), untilEpoch);
     }
 
     private static Ranges acceptRanges(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, Ranges coordinateRanges)
     {
-        return txnId.epoch() == executeAt.epoch() ? coordinateRanges : safeStore.ranges().allBetween(txnId, executeAt);
+        return safeStore.ranges().extend(coordinateRanges, txnId, executeAt);
     }
 
     private static Ranges executeRanges(SafeCommandStore safeStore, Timestamp executeAt)
@@ -749,7 +750,7 @@ public class Commands
         {
             return false;
         }
-        else if (safeStore.isFullyPreBootstrap(dependency, waitingOn.deps.participants(dependency.txnId())))
+        else if (safeStore.isFullyPreBootstrapOrStale(dependency, waitingOn.deps.participants(dependency.txnId())))
         {
             // TODO (expected): erase or otherwise prevent from executing
             return false;
@@ -802,15 +803,17 @@ public class Commands
     // TODO (now): document and justify all calls
     public static void setTruncatedApply(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        cleanup(safeStore, safeCommand, TRUNCATE, true);
+        cleanup(safeStore, safeCommand, null, TRUNCATE, true);
     }
 
     public static void setErased(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        cleanup(safeStore, safeCommand, ERASE, true);
+        Listeners.Immutable durableListeners = safeCommand.current().durableListeners();
+        Command command = cleanup(safeStore, safeCommand, null, ERASE, true);
+        safeStore.notifyListeners(safeCommand, command, durableListeners, safeCommand.transientListeners());
     }
 
-    public static Command cleanup(SafeCommandStore safeStore, SafeCommand safeCommand, Cleanup cleanup, boolean notifyListeners)
+    public static Command cleanup(SafeCommandStore safeStore, SafeCommand safeCommand, @Nullable Unseekables<?> maybeFullRoute, Cleanup cleanup, boolean notifyListeners)
     {
         Command command = safeCommand.current();
 
@@ -820,7 +823,7 @@ public class Commands
         // TODO (desired): consider if there are better invariants we can impose for undecided transactions, to verify they aren't later committed (should be detected already, but more is better)
         // note that our invariant here is imperfectly applied to keep the code cleaner: we don't verify that the caller was safe to invoke if we don't already have a route in the command and we're only PreCommitted
         Invariants.checkState(command.hasBeen(Applied) || !command.hasBeen(PreCommitted)
-                              || (command.route() == null || Infer.safeToCleanup(safeStore, command, command.route(), command.executeAt()) || safeStore.isFullyPreBootstrap(command, command.route().participants()))
+                              || (command.route() == null || Infer.safeToCleanup(safeStore, command, command.route(), command.executeAt()) || safeStore.isFullyPreBootstrapOrStale(command, command.route().participants()))
         , "Command %s could not be truncated", command);
 
         Command result;
@@ -838,7 +841,7 @@ public class Commands
 
             case TRUNCATE:
                 Invariants.checkState(command.saveStatus().compareTo(TruncatedApply) < 0);
-                if (command.hasBeen(PreCommitted)) result = truncatedApply(command);
+                if (command.hasBeen(PreCommitted)) result = truncatedApply(command, Route.tryCastToFullRoute(maybeFullRoute));
                 else result = erased(command); // TODO (expected): check if we are stale; if not, is erase anyway correct outcome?
                 break;
 
@@ -861,7 +864,7 @@ public class Commands
         if (command.saveStatus().compareTo(cleanup.appliesIfNot) >= 0)
             return false;
 
-        cleanup(safeStore, safeCommand, cleanup, true);
+        cleanup(safeStore, safeCommand, maybeFullRoute, cleanup, true);
         return true;
     }
 
@@ -873,7 +876,7 @@ public class Commands
         Route<?> route = command.route();
         if (!Route.isFullRoute(route))
         {
-            if (command.known().hasFullRoute()) throw new IllegalStateException(command.saveStatus() + " should include full route, but only found " + route);
+            if (command.known().hasFullRoute()) Invariants.illegalState(command.saveStatus() + " should include full route, but only found " + route);
             else if (Route.isFullRoute(maybeFullRoute)) route = Route.castToFullRoute(maybeFullRoute);
             else return Cleanup.NO;
         }
@@ -910,11 +913,11 @@ public class Commands
                 if (route.isParticipatingHomeKey() || redundantBefore.get(txnId, toEpoch, route.homeKey()) == NOT_OWNED)
                     throw new IllegalStateException("Command " + txnId + " that is being loaded is not owned by this shard on route " + route);
             case LIVE:
-            case PARTIALLY_PRE_BOOTSTRAP:
-            case PRE_BOOTSTRAP:
+            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
+            case PRE_BOOTSTRAP_OR_STALE:
                 return NO;
             case LOCALLY_REDUNDANT:
-                if (status.hasBeen(PreCommitted) && !status.hasBeen(Applied)) // TODO (required): may be stale
+                if (status.hasBeen(PreCommitted) && !status.hasBeen(Applied) && redundantBefore.preBootstrapOrStale(txnId, toEpoch, route.participants()) != FULLY) // TODO (required): may be stale
                     throw new IllegalStateException("Loading redundant command that has been PreCommitted but not Applied");
         }
 
@@ -923,17 +926,18 @@ public class Commands
         {
             default:
             case Local:
-            case DurableOrInvalidated:
                 throw new AssertionError("Unexpected durability: " + min);
+
             case NotDurable:
                 if (durability == Majority)
                     return Cleanup.TRUNCATE;
-
                 return Cleanup.TRUNCATE_WITH_OUTCOME;
 
+            case MajorityOrInvalidated:
             case Majority:
                 return Cleanup.TRUNCATE;
 
+            case UniversalOrInvalidated:
             case Universal:
                 return Cleanup.ERASE;
         }
@@ -1007,12 +1011,12 @@ public class Commands
                             default: throw new AssertionError("Unexpected redundant status: " + redundantStatus);
                             case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
                             case LOCALLY_REDUNDANT:
-                            case PRE_BOOTSTRAP:
-                                removeRedundantDependencies(safeStore, prevSafe, txnIds[depth], redundantStatus == PRE_BOOTSTRAP);
+                            case PRE_BOOTSTRAP_OR_STALE:
+                                removeRedundantDependencies(safeStore, prevSafe, txnIds[depth], redundantStatus == PRE_BOOTSTRAP_OR_STALE);
                                 prevSafe = get(safeStore, --depth - 1);
                                 break;
                             case LIVE:
-                            case PARTIALLY_PRE_BOOTSTRAP:
+                            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
                                 initialise(safeStore, depth);
                         }
                     }
@@ -1074,18 +1078,23 @@ public class Commands
                 }
                 else if ((directlyBlockedOnCommit = waitingOn.nextWaitingOnCommit()) != null)
                 {
-                    push(directlyBlockedOnCommit, LocalExecution.ReadyToExclude);
+                    push(directlyBlockedOnCommit, WaitingToExecute);
                     prevSafe = curSafe;
                 }
                 else
                 {
-                    if (cur.hasBeen(Committed) && !cur.is(ReadyToExecute) && cur.saveStatus() != Applying && !cur.asCommitted().isWaitingOnDependency())
+                    if (cur.hasBeen(Committed))
                     {
-                        if (!maybeExecute(safeStore, curSafe, false, false))
-                            throw new AssertionError("Is able to Apply, but has not done so");
-                        // loop and re-test the command's status; we may still want to notify blocking, esp. if not homeShard
-                        continue;
+                        if (!cur.is(ReadyToExecute) && cur.saveStatus() != Applying && !cur.asCommitted().isWaitingOnDependency())
+                        {
+                            if (!maybeExecute(safeStore, curSafe, false, false))
+                                throw new AssertionError("Is able to Apply, but has not done so");
+                            // loop and re-test the command's status; we may still want to notify blocking, esp. if not homeShard
+                            continue;
+                        }
                     }
+                    else if (!cur.hasBeen(PreCommitted))
+                        until = ReadyToExclude;
 
                     Timestamp executeAt = prev == null ? cur.executeAt() : prev.executeAt();
                     Participants<?> participants = prev != null // TODO (desired): slightly costly to invert a large partialDeps collection
@@ -1098,14 +1107,14 @@ public class Commands
                         default: throw new AssertionError("Unknown redundant status: " + redundantStatus);
                         case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
                         case LIVE:
-                        case PARTIALLY_PRE_BOOTSTRAP:
+                        case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
                             logger.trace("{} blocked on {} until {}", txnIds[0], cur.txnId(), until);
                             safeStore.progressLog().waiting(curSafe, until, null, participants);
                             break loop;
 
-                        case PRE_BOOTSTRAP:
+                        case PRE_BOOTSTRAP_OR_STALE:
                         case LOCALLY_REDUNDANT:
-                            Invariants.checkState(cur.hasBeen(Applied) || !cur.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP);
+                            Invariants.checkState(cur.hasBeen(Applied) || !cur.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP_OR_STALE);
                             if (prev == null)
                                 return;
 
@@ -1113,7 +1122,7 @@ public class Commands
 
                             // we've been applied, invalidated, or are no longer relevant
                             if (cur.hasBeen(Applied)) removeInvalidatedAppliedOrTruncatedDependency(prevSafe, cur.txnId());
-                            else removeRedundantDependencies(safeStore, prevSafe, cur.txnId(), redundantStatus == PRE_BOOTSTRAP);
+                            else removeRedundantDependencies(safeStore, prevSafe, cur.txnId(), redundantStatus == PRE_BOOTSTRAP_OR_STALE);
 
                             --depth;
                             prevSafe = get(safeStore, depth - 1);
@@ -1238,7 +1247,20 @@ public class Commands
         return progressKey.equals(route.homeKey()) ? Home : Local;
     }
 
-    enum EnsureAction { Ignore, Check, Add, TrySet, Set }
+    enum EnsureAction
+    {
+        /** Don't check */
+        Ignore,
+        /** Add, but return false if insufficient for any reason */
+        TryAdd,
+        /** Supplement existing information, asserting that the existing and additional information are independently sufficient,
+         * returning false only if the existing information is absent AND the new information is insufficient. */
+        Add,
+        /** Set, but only return false if insufficient */
+        TrySet,
+        /** Overwrite existing information if sufficient; fail otherwise */
+        Set
+    }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static CommonAttributes set(SafeCommandStore safeStore, Command command, CommonAttributes attrs,
@@ -1309,10 +1331,21 @@ public class Commands
      * Validate we have sufficient information for the route, partialTxn and partialDeps fields, and if so update them;
      * otherwise return false (or throw an exception if an illegal state is encountered)
      */
-    private static boolean validate(Status status, CommonAttributes attrs, Ranges existingRanges, Ranges additionalRanges, ProgressShard shard,
+    private static boolean validate(Status status, CommonAttributes attrs,
+                                    Ranges existingRanges, Ranges additionalRanges, ProgressShard shard,
                                     Route<?> route, EnsureAction ensureRoute,
                                     @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
                                     @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
+    {
+        return validate(status, attrs, existingRanges, additionalRanges, shard, route, ensureRoute, partialTxn, ensurePartialTxn, partialDeps, ensurePartialDeps, null);
+    }
+
+    private static boolean validate(Status status, CommonAttributes attrs,
+                                    Ranges existingRanges, Ranges additionalRanges, ProgressShard shard,
+                                    Route<?> route, EnsureAction ensureRoute,
+                                    @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
+                                    @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps,
+                                    @Nullable SafeCommandStore permitStaleMissing)
     {
         if (shard == Unsure)
             return false;
@@ -1321,12 +1354,12 @@ public class Commands
         switch (ensureRoute)
         {
             default: throw new AssertionError("Unexpected action: " + ensureRoute);
-            case Check:
+            case TryAdd:
+            case Add:
                 if (!isFullRoute(attrs.route()) && !isFullRoute(route))
                     return false;
             case Ignore:
                 break;
-            case Add:
             case Set:
                 if (!isFullRoute(route))
                     throw new IllegalArgumentException("Incomplete route (" + route + ") sent to home shard");
@@ -1342,90 +1375,80 @@ public class Commands
             Invariants.checkState(status != Accepted && status != AcceptedInvalidate);
 
         // validate new partial txn
-        if (!validate(ensurePartialTxn, existingRanges, additionalRanges, covers(attrs.partialTxn()), covers(partialTxn), "txn", partialTxn))
+        if (!validate(ensurePartialTxn, existingRanges, additionalRanges, covers(attrs.partialTxn()), covers(partialTxn), permitStaleMissing, "txn", partialTxn))
             return false;
 
         Invariants.checkState(partialTxn == null || attrs.txnId().rw() == null || attrs.txnId().rw().equals(partialTxn.kind()), "Transaction has different kind to its TxnId");
         Invariants.checkState(!shard.isHome() || ensurePartialTxn == Ignore || hasQuery(attrs.partialTxn()) || hasQuery(partialTxn), "Home transaction should include query");
 
-        return validate(ensurePartialDeps, existingRanges, additionalRanges, covers(attrs.partialDeps()), covers(partialDeps), "deps", partialDeps);
+        return validate(ensurePartialDeps, existingRanges, additionalRanges, covers(attrs.partialDeps()), covers(partialDeps), permitStaleMissing, "deps", partialDeps);
     }
 
     // FIXME (immutable-state): has this been removed?
-    private static boolean validate(EnsureAction action, Ranges existingRanges, Ranges additionalRanges,
-                                    Ranges existing, Ranges adding, String kind, Object obj)
+    private static boolean validate(EnsureAction action, Ranges existingRanges, Ranges requiredRanges,
+                                    Ranges existing, Ranges adding, @Nullable SafeCommandStore permitStaleMissing,
+                                    String kind, Object obj)
     {
         switch (action)
         {
             default: throw new IllegalStateException("Unexpected action: " + action);
             case Ignore:
-                break;
+                return true;
 
             case TrySet:
-                if (adding != null)
-                {
-                    if (!adding.containsAll(existingRanges))
-                        return false;
-
-                    if (additionalRanges != existingRanges && !adding.containsAll(additionalRanges))
-                        return false;
-
-                    break;
-                }
             case Set:
-                // failing any of these tests is always an illegal state
-                Invariants.checkState(adding != null);
-                if (!adding.containsAll(existingRanges))
-                    throw new IllegalArgumentException("Incomplete " + kind + " (" + obj + ") provided; does not cover " + existingRanges);
+                if (containsAll(adding, requiredRanges, permitStaleMissing))
+                    return true;
 
-                if (additionalRanges != existingRanges && !adding.containsAll(additionalRanges))
-                    throw new IllegalArgumentException("Incomplete " + kind + " (" + obj + ") provided; does not cover " + additionalRanges);
-                break;
+                if (action == Set)
+                    Invariants.illegalState("Incomplete " + kind + " (" + obj + ") provided; does not cover " + requiredRanges.subtract(adding));
 
-            case Check:
+                return false;
+
+            case TryAdd:
             case Add:
-                if (adding == null)
+                if (existing == null)
                 {
-                    if (existing == null)
+                    if (adding == null)
                         return false;
 
-                    Invariants.checkState(existing.containsAll(existingRanges));
-                    if (existingRanges != additionalRanges && !existing.containsAll(additionalRanges))
-                    {
-                        if (action == Check)
-                            return false;
-
-                        throw new IllegalArgumentException("Missing additional " + kind + "; existing does not cover " + additionalRanges.subtract(existingRanges));
-                    }
-                }
-                else if (existing != null)
-                {
-                    Ranges covering = adding.with(existing);
-                    Invariants.checkState(covering.containsAll(existingRanges));
-                    if (existingRanges != additionalRanges && !covering.containsAll(additionalRanges))
-                    {
-                        if (action == Check)
-                            return false;
-
-                        throw new IllegalArgumentException("Incomplete additional " + kind + " (" + obj + ") provided; does not cover " + additionalRanges.subtract(existingRanges));
-                    }
-                }
-                else
-                {
                     if (!adding.containsAll(existingRanges))
                         return false;
 
-                    if (existingRanges != additionalRanges && !adding.containsAll(additionalRanges))
-                    {
-                        if (action == Check)
-                            return false;
-
-                        throw new IllegalArgumentException("Incomplete additional " + kind + " (" + obj + ") provided; does not cover " + additionalRanges.subtract(existingRanges));
-                    }
+                    return validate(action == TryAdd ? TrySet : Set, existingRanges, requiredRanges, existing, adding, permitStaleMissing, kind, obj);
                 }
-                break;
+
+                Invariants.checkState(existing.containsAll(existingRanges), "Existing ranges insufficient");
+                if (requiredRanges == existingRanges)
+                    return true;
+
+                if (adding == null)
+                    return false;
+
+                requiredRanges = requiredRanges.subtract(existing);
+                if (containsAll(adding, requiredRanges, permitStaleMissing))
+                    return true;
+
+                if (action == Add)
+                    Invariants.illegalState("Incomplete " + kind + " (" + obj + ") provided; does not cover " + requiredRanges.subtract(adding));
+
+                return false;
+        }
+    }
+
+    private static boolean containsAll(Ranges adding, Ranges requiredRanges, @Nullable SafeCommandStore permitStaleMissing)
+    {
+        if (adding.containsAll(requiredRanges))
+            return true;
+
+        if (permitStaleMissing != null)
+        {
+            Ranges staleRanges = permitStaleMissing.commandStore().redundantBefore().staleRanges();
+            requiredRanges = requiredRanges.subtract(staleRanges);
+            if (adding.containsAll(requiredRanges))
+                return true;
         }
 
-        return true;
+        return false;
     }
 }

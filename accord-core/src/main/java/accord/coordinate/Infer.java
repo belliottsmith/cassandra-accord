@@ -179,7 +179,7 @@ public class Infer
         // should not be possible to reach a quorum without finding the definition unless cleanup is in progress
         Invariants.checkState(saveStatus != SaveStatus.Accepted || maxSaveStatus.phase == Status.Phase.Cleanup);
 
-        if (saveStatus.status.compareTo(invalidIfNotAtLeast) < 0)
+        if (maxSaveStatus.status.compareTo(invalidIfNotAtLeast) < 0)
             return true;
 
         return invalidIfNotAtLeast.compareTo(PreAccepted) >= 0 && saveStatus == SaveStatus.AcceptedInvalidate;
