@@ -79,7 +79,6 @@ import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.Status.Committed;
-import static accord.local.Status.Truncated;
 import static accord.primitives.Routables.Slice.Minimal;
 
 public abstract class InMemoryCommandStore extends CommandStore
@@ -168,8 +167,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                 });
                 return mutable;
             case Range:
+                // TODO (required): confirm we slice to owned ranges on C*
                 rangeCommands.computeIfAbsent(command.txnId(), ignore -> new RangeCommand(commands.get(command.txnId())))
-                        .update((Ranges)keysOrRanges);
+                        .update(((Ranges)keysOrRanges).slice(slice, Minimal));
         }
         return attrs;
     }
@@ -188,8 +188,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                 });
                 return mutable;
             case Range:
+                // TODO (required): confirm we slice to owned ranges on C*
                 rangeCommands.computeIfAbsent(command.txnId(), ignore -> new RangeCommand(commands.get(command.txnId())))
-                        .update(Ranges.of((Range)keyOrRange));
+                        .update(Ranges.of((Range)keyOrRange).slice(slice, Minimal));
         }
         return attrs;
     }
@@ -277,11 +278,20 @@ public abstract class InMemoryCommandStore extends CommandStore
 
         // TODO (now): apply on retrieval
         historicalRangeCommands.entrySet().removeIf(next -> next.getKey().compareTo(syncId) < 0 && next.getValue().intersects(ranges));
-        rangeCommands.entrySet().removeIf(next -> {
-            if (!(next.getKey().compareTo(syncId) < 0 && next.getValue().ranges.intersects(ranges)))
+        rangeCommands.entrySet().removeIf(tx -> {
+            if (tx.getKey().compareTo(syncId) >= 0)
                 return false;
-            maxRedundant = Timestamp.nonNullOrMax(maxRedundant, next.getValue().command.value().executeAt());
-            return true;
+            Ranges newRanges = tx.getValue().ranges.subtract(ranges);
+            if (!newRanges.isEmpty())
+            {
+                tx.getValue().ranges = newRanges;
+                return false;
+            }
+            else
+            {
+                maxRedundant = Timestamp.nonNullOrMax(maxRedundant, tx.getValue().command.value().executeAt());
+                return true;
+            }
         });
         ranges.forEach(r -> {
             commandsForKey.subMap(r.start(), r.startInclusive(), r.end(), r.endInclusive()).values().forEach(forKey -> {
@@ -677,7 +687,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             });
             TreeMap<TxnId, RangeCommand> rangeCommands = commandStore.rangeCommands();
             TreeMap<TxnId, Ranges> historicalRangeCommands = commandStore.historicalRangeCommands();
-            deps.rangeDeps.forEachUniqueTxnId(allRanges, txnId -> {
+            deps.rangeDeps.forEachUniqueTxnId(allRanges, null, (ignore, txnId) -> {
 
                 if (rangeCommands.containsKey(txnId))
                     return;
@@ -699,7 +709,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public <T> T mapReduce(Seekables<?, ?> keysOrRanges, Ranges slice, TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp, TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus, CommandFunction<T, T> map, T accumulate, T terminalValue)
+        public <P1, T> T mapReduce(Seekables<?, ?> keysOrRanges, Ranges slice, TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp, TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus, CommandFunction<P1, T, T> map, P1 p1, T accumulate, T terminalValue)
         {
             accumulate = commandStore.mapReduceForKey(this, keysOrRanges, slice, (forKey, prev) -> {
                 CommandTimeseries<?> timeseries;
@@ -726,7 +736,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     case MAY_EXECUTE_BEFORE:
                         remapTestTimestamp = CommandTimeseries.TestTimestamp.BEFORE;
                 }
-                return timeseries.mapReduce(testKind, remapTestTimestamp, timestamp, testDep, depId, minStatus, maxStatus, map, prev, terminalValue);
+                return timeseries.mapReduce(testKind, remapTestTimestamp, timestamp, testDep, depId, minStatus, maxStatus, map, p1, prev, terminalValue);
             }, accumulate, terminalValue);
 
             if (accumulate.equals(terminalValue))
@@ -738,7 +748,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             commandStore.rangeCommands.forEach(((txnId, rangeCommand) -> {
                 Command command = rangeCommand.command.value();
                 // TODO (now): probably this isn't safe - want to ensure we take dependency on any relevant syncId
-                if (command.is(Truncated))
+                if (command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
                     return;
 
                 Invariants.nonNull(command);
@@ -774,7 +784,8 @@ public abstract class InMemoryCommandStore extends CommandStore
                     if (!command.known().deps.hasProposedOrDecidedDeps())
                         return;
 
-                    if ((testDep == WITH) == !command.partialDeps().contains(depId))
+                    // TODO (required): ensure C* matches this behaviour
+                    if ((testDep == WITH) == !command.partialDeps().intersects(depId, rangeCommand.ranges))
                         return;
                 }
 
@@ -827,7 +838,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                 for (Map.Entry<TxnId, Timestamp> command : e.getValue())
                 {
                     T initial = accumulate;
-                    accumulate = map.apply(e.getKey(), command.getKey(), command.getValue(), initial);
+                    accumulate = map.apply(p1, e.getKey(), command.getKey(), command.getValue(), initial);
+                    if (accumulate.equals(terminalValue))
+                        return accumulate;
                 }
             }
 

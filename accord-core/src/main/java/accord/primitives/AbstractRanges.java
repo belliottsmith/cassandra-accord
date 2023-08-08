@@ -157,6 +157,16 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return indexOf(that) >= 0;
     }
 
+    public boolean intersects(Routable key)
+    {
+        switch (key.domain())
+        {
+            default: throw new AssertionError();
+            case Range: return intersects((Range)key);
+            case Key: return contains((RoutableKey) key);
+        }
+    }
+
     // returns ri in low 32 bits, ki in top, or -1 if no match found
     @Override
     public final long findNextIntersection(int ri, AbstractKeys<?> keys, int ki)

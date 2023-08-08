@@ -160,11 +160,6 @@ public class ListRequest implements Request
         }
 
         private void checkOnResult(@Nullable RoutingKey homeKey, TxnId txnId, int attempt, Throwable t) {
-            if (attempt == 3)
-            {
-                node.agent().onUncaughtException(t);
-                return;
-            }
             if (homeKey == null)
                 homeKey = node.selectRandomHomeKey(txnId);
             RoutingKey finalHomeKey = homeKey;

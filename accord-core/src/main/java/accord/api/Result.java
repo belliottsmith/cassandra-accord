@@ -26,8 +26,7 @@ import accord.primitives.ProgressToken;
  */
 public interface Result extends Outcome
 {
-    Result APPLIED = new Result() { };
-    
+    // TODO (expected): why do we have this?
     Result INVALIDATED = new Result()
     {
         @Override

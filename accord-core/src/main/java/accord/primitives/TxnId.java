@@ -18,12 +18,16 @@
 
 package accord.primitives;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import accord.local.Node.Id;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Txn.Kind;
 
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.utils.Invariants.illegalArgument;
 
 public class TxnId extends Timestamp
 {
@@ -154,5 +158,14 @@ public class TxnId extends Timestamp
     public static TxnId minForEpoch(long epoch)
     {
         return new TxnId(epochMsb(epoch), 0, Id.NONE);
+    }
+
+    private static final Pattern PARSE = Pattern.compile("\\[(?<epoch>[0-9]+),(?<hlc>[0-9]+),(?<flags>[0-9]+),(?<node>[0-9]+)]");
+    public static TxnId parse(String txnIdString)
+    {
+        Matcher m = PARSE.matcher(txnIdString);
+        if (!m.matches())
+            throw illegalArgument("Invalid TxnId string: " + txnIdString);
+        return fromValues(Long.parseLong(m.group("epoch")), Long.parseLong(m.group("hlc")), Integer.parseInt(m.group("flags")), new Id(Integer.parseInt(m.group("node"))));
     }
 }

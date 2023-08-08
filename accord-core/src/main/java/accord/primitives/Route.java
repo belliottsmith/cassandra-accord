@@ -87,7 +87,30 @@ public interface Route<K extends Unseekable> extends Unseekables<K>
 
         switch (unseekables.domain())
         {
-            default: throw new AssertionError();
+            default: throw new ClassCastException(unseekables + " is not a FullRoute");
+            case Key: return (FullKeyRoute) unseekables;
+            case Range: return (FullRangeRoute) unseekables;
+        }
+    }
+
+    // this method exists solely to circumvent JDK bug with testing and casting interfaces
+    static FullRoute<?> castToNonNullFullRoute(@Nullable Unseekables<?> unseekables)
+    {
+        FullRoute<?> route = tryCastToFullRoute(unseekables);
+        if (route == null)
+            throw new ClassCastException(unseekables + " is not a FullRoute");
+        return route;
+    }
+
+    // this method exists solely to circumvent JDK bug with testing and casting interfaces
+    static FullRoute<?> tryCastToFullRoute(@Nullable Unseekables<?> unseekables)
+    {
+        if (unseekables == null)
+            return null;
+
+        switch (unseekables.domain())
+        {
+            default: return null;
             case Key: return (FullKeyRoute) unseekables;
             case Range: return (FullRangeRoute) unseekables;
         }

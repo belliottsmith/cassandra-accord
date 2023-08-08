@@ -38,6 +38,7 @@ import accord.api.Key;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.local.CommandStore.EpochUpdateHolder;
+import accord.primitives.EpochSupplier;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
@@ -45,6 +46,7 @@ import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.MapReduce;
@@ -53,11 +55,14 @@ import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.ConfigurationService.EpochReady.done;
 import static accord.local.PreLoadContext.empty;
+import static accord.primitives.EpochSupplier.constant;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.checkArgument;
 import static java.util.stream.Collectors.toList;
@@ -123,7 +128,9 @@ public abstract class CommandStores
         }
     }
 
-    // TODO (now): split into deterministic and non-deterministic methods; ensure we only use deterministic methods during commands execution
+    // TODO (required): ensure all deterministic results across runs; updating RangesForEpoch should happen once per
+    //  execution batch and be logged
+    // TODO (expected): merge with RedundantBefore, and standardise executeRanges() to treat removing stale ranges the same as adding new epoch ranges
     public static class RangesForEpoch
     {
         final long[] epochs;
@@ -161,11 +168,6 @@ public abstract class CommandStores
             return allAt(txnId);
         }
 
-        public @Nonnull Ranges safeToReadAt(Timestamp at)
-        {
-            return allAt(at).slice(store.safeToReadAt(at), Minimal);
-        }
-
         public @Nonnull Ranges unsafeToReadAt(Timestamp at)
         {
             return allAt(at).subtract(store.safeToReadAt(at));
@@ -178,10 +180,35 @@ public abstract class CommandStores
 
         public @Nonnull Ranges allAt(long epoch)
         {
-            int i = Arrays.binarySearch(epochs, epoch);
-            if (i < 0) i = -2 -i;
+            int i = floorIndex(epoch);
             if (i < 0) return Ranges.EMPTY;
             return ranges[i];
+        }
+
+        /**
+         * Extend a previously computed set of Ranges that included {@code fromInclusive}
+         * to include {@code toInclusive}
+         */
+        public @Nonnull Ranges extend(Ranges extend, Timestamp fromInclusive, Timestamp toInclusive)
+        {
+            return extend(extend, fromInclusive.epoch(), toInclusive.epoch());
+        }
+
+        /**
+         * Extend a previously computed set of Ranges that included {@code fromInclusive}
+         * to include ranges up to {@code toInclusive}
+         */
+        public @Nonnull Ranges extend(Ranges extend, long fromInclusive, long toInclusive)
+        {
+            if (fromInclusive == toInclusive)
+                return extend;
+
+            int startIndex = 1 + floorIndex(fromInclusive);
+            int endIndex = 1 + floorIndex(toInclusive);
+            for (int i = startIndex ; i < endIndex; ++i)
+                extend = extend.with(ranges[i]); // want to always return extend for equal ranges, so same ranges are identity-equals
+
+            return extend;
         }
 
         public @Nonnull Ranges allBetween(Timestamp fromInclusive, Timestamp toInclusive)
@@ -218,6 +245,11 @@ public abstract class CommandStores
         public @Nonnull Ranges allUntil(long toInclusive)
         {
             return allInternal(0, 1 + floorIndex(toInclusive));
+        }
+
+        public @Nonnull Ranges allSince(long fromInclusive)
+        {
+            return allInternal(Math.max(0, floorIndex(fromInclusive)), epochs.length);
         }
 
         private int floorIndex(long epoch)
@@ -259,6 +291,21 @@ public abstract class CommandStores
         {
             return IntStream.range(0, ranges.length).mapToObj(i -> epochs[i] + ": " + ranges[i])
                             .collect(Collectors.joining(", "));
+        }
+
+        public @Nullable EpochSupplier latestEpochWithNewParticipants(long sinceEpoch, Unseekables<?> keysOrRanges)
+        {
+            int i = floorIndex(sinceEpoch);
+            long latest = -1;
+            Ranges existing = i < 0 ? Ranges.EMPTY : ranges[i];
+            while (++i < ranges.length)
+            {
+                if (ranges[i].subtract(existing).intersects(keysOrRanges))
+                    latest = epochs[i];
+                existing = existing.with(ranges[i]);
+            }
+
+            return latest == -1 ? null : constant(latest);
         }
     }
 

@@ -38,9 +38,17 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     }
 
     @Override
-    public Unseekables<RoutingKey> subtract(Ranges ranges)
+    public Participants<RoutingKey> subtract(Ranges ranges)
     {
         RoutingKey[] output = subtract(ranges, RoutingKey[]::new);
         return output == keys ? this : new RoutingKeys(output);
+    }
+
+    public Ranges toRanges()
+    {
+        Range[] ranges = new Range[keys.length];
+        for (int i = 0 ; i < keys.length ; ++i)
+            ranges[i] = keys[i].asRange();
+        return Ranges.ofSortedAndDeoverlapped(ranges);
     }
 }

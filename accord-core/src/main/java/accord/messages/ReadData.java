@@ -146,8 +146,8 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.ReadNack>
     {
         CommandStore unsafeStore = safeStore.commandStore();
         Ranges unavailable = safeStore.ranges().unsafeToReadAt(executeAt);
-
-        txn.read(safeStore, executeAt).begin((next, throwable) -> {
+        // TODO (required): do we need to check unavailable again on completion, or throughout execution?
+        txn.read(safeStore, executeAt, unavailable).begin((next, throwable) -> {
             if (throwable != null)
             {
                 // TODO (expected, exceptions): should send exception to client, and consistency handle/propagate locally
