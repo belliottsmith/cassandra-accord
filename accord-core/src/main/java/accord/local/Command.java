@@ -920,7 +920,7 @@ public abstract class Command implements CommonAttributes
             super(common, status, promised, executeAt, accepted);
             this.waitingOn = waitingOn;
             Invariants.checkState(common.route().kind().isFullRoute(), "Expected a full route but given %s", common.route().kind());
-            Invariants.checkState(waitingOn.deps.equals(common.partialDeps()), "Deps do not match; expected %s == %s", waitingOn.deps, common.partialDeps());
+            Invariants.checkState(waitingOn == WaitingOn.EMPTY || waitingOn.deps.equals(common.partialDeps()), "Deps do not match; expected %s == %s", waitingOn.deps, common.partialDeps());
         }
 
         @Override

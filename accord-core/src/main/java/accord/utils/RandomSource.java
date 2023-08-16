@@ -50,6 +50,54 @@ public interface RandomSource
             return () -> decide(chance);
         };
     }
+    default BooleanSupplier biasedRepeatedRunsBools(float ratio)
+    {
+        return biasedRepeatedRunsBools(ratio, ratio * 0.8f, ratio * 1.2f);
+    }
+    default BooleanSupplier biasedRepeatedRunsBools(float ratio, float minRatio, float maxRatio)
+    {
+        Invariants.checkArgument(ratio > 0 && ratio <= 1, "Expected %d to be larger than 0 and <= 1", ratio);
+        int steps = (int) (1 / ratio);
+        return new BooleanSupplier()
+        {
+            // run represents how many consecutaive true values should be returned; -1 implies no active "run" exists
+            private int run = -1;
+            private long falseCount = 0, trueCount = 0;
+
+            @Override
+            public boolean getAsBoolean()
+            {
+                if (run != -1)
+                {
+                    run--;
+                    trueCount++;
+                    return true;
+                }
+                double currentRatio = trueCount / (double) (falseCount + trueCount);
+                if (currentRatio < minRatio)
+                {
+                    // not enough true
+                    trueCount++;
+                    return true;
+                }
+                if (currentRatio > maxRatio)
+                {
+                    // not enough false
+                    falseCount++;
+                    return false;
+                }
+                if (decide(ratio))
+                {
+                    run = nextInt(steps);
+                    run--;
+                    trueCount++;
+                    return true;
+                }
+                falseCount++;
+                return false;
+            }
+        };
+    }
 
     /**
      * Returns true with a probability of {@code chance}. This is logically the same as

@@ -29,7 +29,6 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.Status;
 import accord.local.Status.Known;
-import accord.local.Status.Phase;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.WithQuorum;

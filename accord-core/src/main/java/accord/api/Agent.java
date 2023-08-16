@@ -52,8 +52,6 @@ public interface Agent extends UncaughtExceptionListener
 
     void onFailedBootstrap(String phase, Ranges ranges, Runnable retry, Throwable failure);
 
-    void onStaleRange(Ranges ranges, Runnable bootstrap);
-
     @Override
     void onUncaughtException(Throwable t);
 

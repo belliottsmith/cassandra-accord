@@ -65,24 +65,23 @@ public class ListRead implements Read
     @Override
     public AsyncChain<Data> read(Seekable key, Txn.Kind kind, SafeCommandStore commandStore, Timestamp executeAt, DataStore store)
     {
+        // read synchronously, logically taking a snapshot, so we can impose our invariant of not reading the future
         ListStore s = (ListStore)store;
-        return executor.apply(commandStore.commandStore()).submit(() -> {
-            ListData result = new ListData();
-            switch (key.domain())
-            {
-                default: throw new AssertionError();
-                case Key:
-                    Timestamped<int[]> data = s.get((Key)key);
-                    logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
-//                    Invariants.checkState(data.timestamp.compareTo(executeAt) < 0);
-                    result.put((Key)key, data);
-                    break;
-                case Range:
-                    for (Map.Entry<Key, Timestamped<int[]>> e : s.get((Range)key))
-                        result.put(e.getKey(), e.getValue());
-            }
-            return result;
-        });
+        ListData result = new ListData();
+        switch (key.domain())
+        {
+            default: throw new AssertionError();
+            case Key:
+                Timestamped<int[]> data = s.get((Key)key);
+                logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
+                Invariants.checkState(data.timestamp.compareTo(executeAt) < 0);
+                result.put((Key)key, data);
+                break;
+            case Range:
+                for (Map.Entry<Key, Timestamped<int[]>> e : s.get((Range)key))
+                    result.put(e.getKey(), e.getValue());
+        }
+        return executor.apply(commandStore.commandStore()).submit(() -> result);
     }
 
     @Override

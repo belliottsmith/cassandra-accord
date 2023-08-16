@@ -19,7 +19,6 @@
 package accord.primitives;
 
 import accord.api.RoutingKey;
-import accord.utils.Invariants;
 
 import javax.annotation.Nullable;
 

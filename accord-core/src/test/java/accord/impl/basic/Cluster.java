@@ -414,13 +414,13 @@ public class Cluster implements Scheduler
 
     private LongSupplier defaultRandomWalkLatencyMicros(RandomSource random)
     {
-        FrequentLargeRange range = FrequentLargeRange.builder(random)
-                                                     .ratio(1, 5)
-                                                     .small(500, TimeUnit.MICROSECONDS, 5, MILLISECONDS)
-                                                     .large(50, MILLISECONDS, 5, SECONDS)
-                                                     .build();
+        LongSupplier range = FrequentLargeRange.builder(random)
+                                               .ratio(1, 5)
+                                               .small(500, TimeUnit.MICROSECONDS, 5, MILLISECONDS)
+                                               .large(50, MILLISECONDS, 5, SECONDS)
+                                               .build().asLongSupplier(random);
 
-        return () -> NANOSECONDS.toMicros(range.nextLong(random));
+        return () -> NANOSECONDS.toMicros(range.getAsLong());
     }
 
     enum OverrideLinkKind { LATENCY, ACTION, BOTH }
