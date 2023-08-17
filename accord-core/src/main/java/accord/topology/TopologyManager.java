@@ -34,8 +34,10 @@ import accord.api.TopologySorter;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.CommandStore;
 import accord.local.Node.Id;
+import accord.primitives.EpochSupplier;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
+import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies.Single;
 import accord.utils.Invariants;
@@ -179,6 +181,14 @@ public class TopologyManager
         boolean syncCompleteFor(Unseekables<?> intersect)
         {
             return syncComplete.containsAll(intersect);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "EpochState{" +
+                   "epoch=" + global.epoch() +
+                   '}';
         }
     }
 
@@ -498,7 +508,7 @@ public class TopologyManager
         return withSufficientEpochs(select, minEpoch, maxEpoch, epochState -> epochState.syncComplete);
     }
 
-    public Topologies withOpenEpochs(Unseekables<?> select, Timestamp min, Timestamp max)
+    public Topologies withOpenEpochs(Unseekables<?> select, EpochSupplier min, EpochSupplier max)
     {
         return withSufficientEpochs(select, min.epoch(), max.epoch(), epochState -> epochState.closed);
     }
@@ -520,30 +530,44 @@ public class TopologyManager
         Topologies.Builder topologies = new Topologies.Builder(maxi - i);
 
         Unseekables<?> remaining = select;
+        Unseekables<?> unknown = null;
         while (i < maxi)
         {
             EpochState epochState = snapshot.epochs[i++];
-            topologies.add(epochState.global.forSelection(select));
+            Ranges ranges = epochState.global().ranges();
+            topologies.add(epochState.global.forSelection(remaining.slice(ranges)));
             remaining = remaining.subtract(epochState.addedRanges);
+            unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(ranges));
+            unknown = unknown.subtract(epochState.removedRanges);
         }
 
-        if (i == snapshot.epochs.length)
+        if (unknown != null && !unknown.isEmpty())
+            throw new IllegalArgumentException(String.format("Unable to find %s in epoch range [%d, %d]", unknown, minEpoch, maxEpoch));
+        if (remaining.isEmpty())
             return topologies.build(sorter);
 
+        if (i == snapshot.epochs.length)
+        {
+            if (!remaining.isEmpty())
+                throw new IllegalArgumentException("Ranges " + remaining + " could not be found");
+            return topologies.build(sorter);
+        }
+
         // include any additional epochs to reach sufficiency
-        EpochState prev = snapshot.epochs[maxi - 1];
+        remaining = remaining.subtract(isSufficientFor.apply(snapshot.epochs[maxi - 1]));
+        if (remaining.isEmpty())
+            return topologies.build(sorter);
         do
         {
-            Ranges sufficient = isSufficientFor.apply(prev);
-            remaining = remaining.subtract(sufficient);
-            remaining = remaining.subtract(prev.addedRanges);
+            EpochState next = snapshot.epochs[i++];
+            topologies.add(next.global.forSelection(remaining.slice(next.global().ranges())));
+            remaining = remaining.subtract(isSufficientFor.apply(next));
+            remaining = remaining.subtract(next.addedRanges);
             if (remaining.isEmpty())
                 return topologies.build(sorter);
-
-            EpochState next = snapshot.epochs[i++];
-            topologies.add(next.global.forSelection(remaining));
-            prev = next;
         } while (i < snapshot.epochs.length);
+
+        if (!remaining.isEmpty()) throw new IllegalArgumentException("Ranges " + remaining + " could not be found");
 
         return topologies.build(sorter);
     }
@@ -557,12 +581,19 @@ public class TopologyManager
 
         int count = (int)(1 + maxEpoch - minEpoch);
         Topologies.Builder topologies = new Topologies.Builder(count);
+        Unseekables<?> remaining = select;
+        Unseekables<?> unknown = null;
         for (int i = count - 1 ; i >= 0 ; --i)
         {
             EpochState epochState = snapshot.get(minEpoch + i);
-            topologies.add(epochState.global.forSelection(select));
-            select = select.subtract(epochState.addedRanges);
+            Ranges ranges = epochState.global().ranges();
+            topologies.add(epochState.global.forSelection(remaining.slice(ranges)));
+            remaining = remaining.subtract(epochState.addedRanges);
+            unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(ranges));
+            unknown = unknown.subtract(epochState.removedRanges);
         }
+        if (unknown != null && !unknown.isEmpty())
+            throw new IllegalArgumentException(String.format("Unable to find %s in epoch range [%d, %d]", unknown, minEpoch, maxEpoch));
 
         Invariants.checkState(!topologies.isEmpty(), "Unable to find an epoch that contained %s", select);
 

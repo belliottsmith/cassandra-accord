@@ -250,6 +250,16 @@ abstract class CoordinatePreAccept<T> extends SettableResult<T> implements Callb
         // TODO (desired, efficiency): check if we have already have a valid quorum for the future epoch
         //  (noting that nodes may have adopted new ranges, in which case they should be discounted, and quorums may have changed shape)
         node.withEpoch(executeAt.epoch(), () -> {
+            TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(executeAt.epoch()), txnId, route.homeKey(), txn.keys());
+            if (mismatch != null)
+            {
+                Invalidate.invalidate(node, txnId, route, (outcome, failure) -> {
+                    if (failure != null)
+                        mismatch.addSuppressed(failure);
+                   accept(null, mismatch);
+                });
+                return;
+            }
             topologies = node.topology().withUnsyncedEpochs(route, txnId.epoch(), executeAt.epoch());
             boolean equivalent = topologies.oldestEpoch() <= prevTopologies.currentEpoch();
             for (long epoch = topologies.currentEpoch() ; equivalent && epoch > prevTopologies.currentEpoch() ; --epoch)

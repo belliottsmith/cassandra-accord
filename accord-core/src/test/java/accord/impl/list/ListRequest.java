@@ -18,6 +18,9 @@
 
 package accord.impl.list;
 
+import java.util.function.BiConsumer;
+import java.util.function.Function;
+
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.coordinate.CheckShards;
@@ -45,7 +48,6 @@ import accord.primitives.TxnId;
 import javax.annotation.Nullable;
 
 import static accord.local.Status.Phase.Cleanup;
-import java.util.function.BiConsumer;
 
 import static accord.local.Status.PreApplied;
 import static accord.local.Status.PreCommitted;
@@ -200,13 +202,16 @@ public class ListRequest implements Request
         }
     }
 
-    public final Txn txn;
+    private final String description;
+    private final Function<Node, Txn> gen;
     private final MessageListener listener;
-    private TxnId id;
+    private transient Txn txn;
+    private transient TxnId id;
 
-    public ListRequest(Txn txn, MessageListener listener)
+    public ListRequest(String description, Function<Node, Txn> gen, MessageListener listener)
     {
-        this.txn = txn;
+        this.description = description;
+        this.gen = gen;
         this.listener = listener;
     }
 
@@ -215,6 +220,7 @@ public class ListRequest implements Request
     {
         if (id != null)
             throw new IllegalStateException("Called process multiple times");
+        txn = gen.apply(node);
         id = node.nextTxnId(txn.kind(), txn.keys().domain());
         listener.onClientAction(MessageListener.ClientAction.SUBMIT, node.id(), id, txn);
         node.coordinate(id, txn).addCallback(new ResultCallback(node, client, replyContext, listener, id, txn));
@@ -229,7 +235,10 @@ public class ListRequest implements Request
     @Override
     public String toString()
     {
-        return id == null ? txn.toString() : id + " -> " + txn;
+        return "ListRequest{" +
+               "description='" + description + '\'' +
+               ", id=" + id +
+               ", txn=" + txn +
+               '}';
     }
-
 }
