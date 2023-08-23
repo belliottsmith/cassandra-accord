@@ -25,11 +25,6 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import accord.utils.random.Picker;
-import accord.utils.random.Picker.IntPicker;
-import accord.utils.random.Picker.LongPicker;
-import accord.utils.random.Picker.ObjectPicker;
-
-import static accord.utils.random.Picker.Distribution.UNIFORM;
 
 public interface RandomSource
 {
@@ -48,54 +43,6 @@ public interface RandomSource
         return () -> {
             float chance = minChance + (1 - minChance)*nextFloat();
             return () -> decide(chance);
-        };
-    }
-    default BooleanSupplier biasedRepeatedRunsBools(float ratio)
-    {
-        return biasedRepeatedRunsBools(ratio, ratio * 0.8f, ratio * 1.2f);
-    }
-    default BooleanSupplier biasedRepeatedRunsBools(float ratio, float minRatio, float maxRatio)
-    {
-        Invariants.checkArgument(ratio > 0 && ratio <= 1, "Expected %d to be larger than 0 and <= 1", ratio);
-        int steps = (int) (1 / ratio);
-        return new BooleanSupplier()
-        {
-            // run represents how many consecutaive true values should be returned; -1 implies no active "run" exists
-            private int run = -1;
-            private long falseCount = 0, trueCount = 0;
-
-            @Override
-            public boolean getAsBoolean()
-            {
-                if (run != -1)
-                {
-                    run--;
-                    trueCount++;
-                    return true;
-                }
-                double currentRatio = trueCount / (double) (falseCount + trueCount);
-                if (currentRatio < minRatio)
-                {
-                    // not enough true
-                    trueCount++;
-                    return true;
-                }
-                if (currentRatio > maxRatio)
-                {
-                    // not enough false
-                    falseCount++;
-                    return false;
-                }
-                if (decide(ratio))
-                {
-                    run = nextInt(steps);
-                    run--;
-                    trueCount++;
-                    return true;
-                }
-                falseCount++;
-                return false;
-            }
         };
     }
 
@@ -151,29 +98,25 @@ public interface RandomSource
         }
         return result;
     }
-    default int nextBiasedInt(int minInclusive, int mean, int maxExclusive)
+    default int nextBiasedInt(int minInclusive, int median, int maxExclusive)
     {
         // this is diff behavior than ThreadLocalRandom, which returns nextInt
-        if (minInclusive >= maxExclusive)
-            throw new IllegalArgumentException(String.format("Min (%s) should be less than max (%d).", minInclusive, maxExclusive));
+        if (minInclusive > median)
+            throw new IllegalArgumentException(String.format("Min (%s) should be equal to or less than median (%d).", minInclusive, median));
+        if (median >= maxExclusive)
+            throw new IllegalArgumentException(String.format("Median (%s) should be less than max (%d).", median, maxExclusive));
 
-        int range = Math.max(maxExclusive - mean, mean - minInclusive) * 2;
+        int range = Math.max(maxExclusive - median, median - minInclusive) * 2;
         int next = nextInt(range) - range/2;
-        next += mean;
-        return next >= mean ? next <  maxExclusive ? next : nextInt(mean, maxExclusive)
-                            : next >= minInclusive ? next : nextInt(minInclusive, mean);
+        next += median;
+        return next >= median ? next <  maxExclusive ? next : nextInt(median, maxExclusive)
+                              : next >= minInclusive ? next : nextInt(minInclusive, median);
     }
 
     default IntSupplier uniformInts(int minInclusive, int maxExclusive) { return () -> nextInt(minInclusive, maxExclusive); }
     default IntSupplier biasedUniformInts(int minInclusive, int median, int maxExclusive)
     {
-        int range = maxExclusive - minInclusive;
-        return () -> {
-            int next = nextInt(median) - (range/2) + nextInt(range);
-            int overflow = next - maxExclusive;
-            if (overflow > 0) next = minInclusive + overflow;
-            return next;
-        };
+        return () -> nextBiasedInt(minInclusive, median, maxExclusive);
     }
     default Supplier<IntSupplier> biasedUniformIntsSupplier(int absoluteMinInclusive, int absoluteMaxExclusive, int minMedian, int maxMedian, int minRange, int maxRange)
     {
@@ -222,29 +165,25 @@ public interface RandomSource
         }
         return result;
     }
-    default long nextBiasedLong(long minInclusive, long mean, long maxExclusive)
+    default long nextBiasedLong(long minInclusive, long median, long maxExclusive)
     {
         // this is diff behavior than ThreadLocalRandom, which returns nextInt
-        if (minInclusive >= maxExclusive)
-            throw new IllegalArgumentException(String.format("Min (%s) should be less than max (%d).", minInclusive, maxExclusive));
+        if (minInclusive > median)
+            throw new IllegalArgumentException(String.format("Min (%s) should be equal to or less than median (%d).", minInclusive, median));
+        if (median >= maxExclusive)
+            throw new IllegalArgumentException(String.format("Median (%s) should be less than max (%d).", median, maxExclusive));
 
-        long range = Math.max(maxExclusive - mean, mean - minInclusive) * 2;
+        long range = Math.max(maxExclusive - median, median - minInclusive) * 2;
         long next = nextLong(range) - range/2;
-        next += mean;
-        return next >= mean ? next <  maxExclusive ? next : nextLong(mean, maxExclusive)
-                            : next >= minInclusive ? next : nextLong(minInclusive, mean);
+        next += median;
+        return next >= median ? next <  maxExclusive ? next : nextLong(median, maxExclusive)
+                              : next >= minInclusive ? next : nextLong(minInclusive, median);
     }
 
     default LongSupplier uniformLongs(long minInclusive, long maxExclusive) { return () -> nextLong(minInclusive, maxExclusive); }
     default LongSupplier biasedUniformLongs(long minInclusive, long median, long maxExclusive)
     {
-        long range = maxExclusive - minInclusive;
-        return () -> {
-            long next = nextLong(median) - (range/2) + nextLong(range);
-            long overflow = next - maxExclusive;
-            if (overflow > 0) next = minInclusive + overflow;
-            return next;
-        };
+        return () -> nextBiasedLong(minInclusive, median, maxExclusive);
     }
     default Supplier<LongSupplier> biasedUniformLongsSupplier(long absoluteMinInclusive, long absoluteMaxExclusive, long minMedian, long maxMedian, long minRange, long maxRange)
     {
@@ -264,7 +203,6 @@ public interface RandomSource
         };
     }
 
-
     float nextFloat();
 
     double nextDouble();
@@ -283,13 +221,9 @@ public interface RandomSource
 
     double nextGaussian();
 
-    default Picker picker() { return new Picker(this); }
-    default IntPicker picker(int[] ints) { return picker(ints, UNIFORM); }
-    default IntPicker picker(int[] ints, Picker.Distribution distribution) { return distribution.get(this, ints); }
-    default LongPicker picker(long[] longs) { return picker(longs, UNIFORM); }
-    default LongPicker picker(long[] longs, Picker.Distribution distribution) { return distribution.get(this, longs); }
-    default <T> ObjectPicker<T> picker(T[] objects) { return picker(objects, UNIFORM); }
-    default <T> ObjectPicker<T> picker(T[] objects, Picker.Distribution distribution) { return distribution.get(this, objects); }
+    default <T> Supplier<T> randomWeightedPicker(T[] objects) { return Picker.WeightedObjectPicker.randomWeighted(this, objects); }
+    default <T> Supplier<T> randomWeightedPicker(T[] objects, float[] bias) { return Picker.WeightedObjectPicker.randomWeighted(this, objects, bias); }
+    default <T> Supplier<T> weightedPicker(T[] objects, float[] proportionalWeights) { return Picker.WeightedObjectPicker.weighted(this, objects, proportionalWeights); }
 
     void setSeed(long seed);
     RandomSource fork();

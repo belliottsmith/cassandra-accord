@@ -73,7 +73,6 @@ import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
 import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
 import static accord.impl.basic.NodeSink.Action.DELIVER;
 import static accord.impl.basic.NodeSink.Action.DROP;
-import static accord.utils.random.Picker.Distribution.WEIGHTED;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonMap;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -107,8 +106,6 @@ public class Cluster implements Scheduler
 
     static class Link
     {
-        static final Link DOWN = new Link(() -> DROP, () -> { throw new IllegalStateException(); });
-
         final Supplier<NodeSink.Action> action;
         final LongSupplier latencyMicros;
 
@@ -351,14 +348,13 @@ public class Cluster implements Scheduler
         }
     }
 
-    private static BiFunction<Id, Id, Link> partition(List<Id> nodes, RandomSource random, int rf, BiFunction<Id, Id, Link> defaultLinks)
+    private static BiFunction<Id, Id, Link> partition(List<Id> nodes, RandomSource random, int rf, BiFunction<Id, Id, Link> up)
     {
         Collections.shuffle(nodes, random.asJdkRandom());
         int partitionSize = random.nextInt((rf+1)/2);
         Set<Id> partition = new LinkedHashSet<>(nodes.subList(0, partitionSize));
-        return (from, to) -> partition.contains(from) == partition.contains(to)
-                             ? defaultLinks.apply(from, to)
-                             : Link.DOWN;
+        BiFunction<Id, Id, Link> down = (from, to) -> new Link(() -> DROP, up.apply(from, to).latencyMicros);
+        return (from, to) -> (partition.contains(from) == partition.contains(to) ? up : down).apply(from, to);
     }
 
     /**
@@ -393,7 +389,6 @@ public class Cluster implements Scheduler
                     Link rev = linkOverride.apply(fallback.apply(to, from));
                     map.computeIfAbsent(to, ignore -> new HashMap<>()).put(from, rev);
                 }
-
                 --count;
             }
         }
@@ -412,6 +407,11 @@ public class Cluster implements Scheduler
         return new Link(() -> DELIVER, latency);
     }
 
+    private static Link down(LongSupplier latency)
+    {
+        return new Link(() -> DROP, latency);
+    }
+
     private LongSupplier defaultRandomWalkLatencyMicros(RandomSource random)
     {
         LongSupplier range = FrequentLargeRange.builder(random)
@@ -427,14 +427,14 @@ public class Cluster implements Scheduler
 
     private Supplier<Function<Link, Link>> linkOverrideSupplier(RandomSource random)
     {
-        Supplier<OverrideLinkKind> nextKind = random.picker(OverrideLinkKind.values());
+        Supplier<OverrideLinkKind> nextKind = random.randomWeightedPicker(OverrideLinkKind.values());
         Supplier<LongSupplier> latencySupplier = random.biasedUniformLongsSupplier(
             MILLISECONDS.toMicros(1L), SECONDS.toMicros(2L),
             MILLISECONDS.toMicros(1L), MILLISECONDS.toMicros(300L), SECONDS.toMicros(1L),
             MILLISECONDS.toMicros(1L), MILLISECONDS.toMicros(300L), SECONDS.toMicros(1L)
         );
         NodeSink.Action[] actions = NodeSink.Action.values();
-        Supplier<Supplier<NodeSink.Action>> actionSupplier = () -> random.picker(actions, WEIGHTED);
+        Supplier<Supplier<NodeSink.Action>> actionSupplier = () -> random.randomWeightedPicker(actions);
         return () -> {
             OverrideLinkKind kind = nextKind.get();
             switch (kind)
@@ -453,7 +453,7 @@ public class Cluster implements Scheduler
     {
         Supplier<Function<Link, Link>> linkOverrideSupplier = linkOverrideSupplier(random);
         BooleanSupplier partitionChance = random.biasedUniformBools(random.nextFloat());
-        Supplier<OverrideLinksKind> nextKind = random.picker(OverrideLinksKind.values());
+        Supplier<OverrideLinksKind> nextKind = random.randomWeightedPicker(OverrideLinksKind.values());
         return nodesList -> {
             BiFunction<Id, Id, Link> links = defaultLinks;
             if (partitionChance.getAsBoolean()) // 50% chance of a whole network partition
@@ -472,18 +472,22 @@ public class Cluster implements Scheduler
                 case RANDOM_BIDIRECTIONAL:
                 case RANDOM_UNIDIRECTIONAL:
                     boolean bidirectional = kind == RANDOM_BIDIRECTIONAL;
-                    int count = random.nextInt(random.nextBoolean() ? nodesList.size() : (nodesList.size() * nodesList.size())/2);
+                    int count = random.nextInt(bidirectional || random.nextBoolean() ? nodesList.size() : (nodesList.size() * nodesList.size())/2);
                     return randomOverrides(bidirectional, linkOverride, count, nodesList, random, defaultLinks);
-
             }
         };
     }
 
     private BiFunction<Id, Id, Link> defaultLinks(RandomSource random)
     {
+        return caching((from, to) -> healthy(defaultRandomWalkLatencyMicros(random)));
+    }
+
+    private BiFunction<Id, Id, Link> caching(BiFunction<Id, Id, Link> uncached)
+    {
         Map<Id, Map<Id, Link>> stash = new HashMap<>();
         return (from, to) -> stash.computeIfAbsent(from, ignore -> new HashMap<>())
-                                  .computeIfAbsent(to, ignore -> healthy(defaultRandomWalkLatencyMicros(random)));
+                                  .computeIfAbsent(to, ignore -> uncached.apply(from, to));
     }
 
     private LinkConfig defaultLinkConfig(RandomSource random, IntSupplier rf)
