@@ -122,15 +122,12 @@ public interface RandomSource
     {
         return biasedUniformIntsSupplier(absoluteMinInclusive, absoluteMaxExclusive, minMedian, (minMedian+maxMedian)/2, maxRange, minRange, (minRange+maxRange)/2, maxRange);
     }
-    default Supplier<IntSupplier> biasedUniformIntsSupplier(int absoluteMinInclusive, int absoluteMaxExclusive, int minMedian, int meanMedian, int maxMedian, int minRange, int meanRange, int maxRange)
+    default Supplier<IntSupplier> biasedUniformIntsSupplier(int absoluteMinInclusive, int absoluteMaxExclusive, int minMedian, int medianMedian, int maxMedian, int minRange, int medianRange, int maxRange)
     {
         return () -> {
-            int range = nextBiasedInt(minRange, meanMedian, maxRange);
-            int median = nextBiasedInt(Math.max(absoluteMinInclusive + range/2, minMedian),
-                                       meanRange,
-                                       Math.min(absoluteMaxExclusive - (range+1)/2, maxMedian));
-            int minInclusive = median - range/2;
-            int maxExclusive = median + ((range+1)/2);
+            int median = nextBiasedInt(minMedian, medianMedian, maxMedian);
+            int minInclusive = Math.max(absoluteMinInclusive, median - nextBiasedInt(minRange, medianRange, maxRange)/2);
+            int maxExclusive = Math.min(absoluteMaxExclusive, median + nextBiasedInt(minRange, medianRange, maxRange)/2);
             return biasedUniformInts(minInclusive, median, maxExclusive);
         };
     }
@@ -189,16 +186,12 @@ public interface RandomSource
     {
         return biasedUniformLongsSupplier(absoluteMinInclusive, absoluteMaxExclusive, minMedian, (minMedian+maxMedian)/2, maxRange, minRange, (minRange+maxRange)/2, maxRange);
     }
-    default Supplier<LongSupplier> biasedUniformLongsSupplier(long absoluteMinInclusive, long absoluteMaxExclusive, long minMedian, long meanMedian, long maxMedian, long minRange, long meanRange, long maxRange)
+    default Supplier<LongSupplier> biasedUniformLongsSupplier(long absoluteMinInclusive, long absoluteMaxExclusive, long minMedian, long medianMedian, long maxMedian, long minRange, long medianRange, long maxRange)
     {
         return () -> {
-            long range = nextBiasedLong(minRange, meanRange, maxRange);
-            long impliedMinMedian = Math.max(absoluteMinInclusive + range/2, minMedian);
-            long impliedMaxMedian = Math.min(absoluteMaxExclusive - (range+1)/2, maxMedian);
-            long impliedMeanMedian = meanMedian < impliedMinMedian || meanMedian >= impliedMaxMedian ? (impliedMaxMedian - impliedMinMedian / 2) : meanMedian;
-            long median = nextBiasedLong(impliedMinMedian, impliedMeanMedian, impliedMaxMedian);
-            long minInclusive = median - range/2;
-            long maxExclusive = median + ((range+1)/2);
+            long median = nextBiasedLong(minMedian, medianMedian, maxMedian);
+            long minInclusive = Math.max(absoluteMinInclusive, median - nextBiasedLong(minRange, medianRange, maxRange)/2);
+            long maxExclusive = Math.min(absoluteMaxExclusive, median + nextBiasedLong(minRange, medianRange, maxRange)/2);
             return biasedUniformLongs(minInclusive, median, maxExclusive);
         };
     }
