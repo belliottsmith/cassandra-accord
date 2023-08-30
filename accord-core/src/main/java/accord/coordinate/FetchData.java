@@ -27,6 +27,7 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.local.SaveStatus;
 import accord.local.Status;
 import accord.local.Status.Known;
 import accord.messages.CheckStatus;
@@ -276,7 +277,7 @@ public class FetchData extends CheckShards<Route<?>>
                 return;
             }
 
-            Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()));
+            Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.saveStatus == SaveStatus.Erased);
 
             full = full.merge(route);
             route = Invariants.nonNull(full.route);
@@ -351,6 +352,8 @@ public class FetchData extends CheckShards<Route<?>>
         {
             SafeCommand safeCommand = safeStore.get(txnId, this, route);
             Command command = safeCommand.current();
+            PartialTxn partialTxn = this.partialTxn;
+            PartialDeps partialDeps = this.partialDeps;
             switch (command.saveStatus().phase)
             {
                 case Persist: return updateDurability(safeStore, safeCommand);
@@ -363,6 +366,26 @@ public class FetchData extends CheckShards<Route<?>>
                 achieved = applyOrUpgradeTruncated(safeStore, safeCommand, command);
                 if (achieved == null)
                     return null;
+
+                if (achieved.executeAt.isDecided())
+                {
+                    Timestamp executeAt = command.executeAtIfKnown(full.executeAt);
+                    if (partialTxn == null && achieved.definition.isKnown())
+                    {
+                        Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
+                        PartialTxn existing = command.partialTxn();
+                        if (existing != null)
+                            needed = needed.subtract(existing.covering());
+                        partialTxn = full.partialTxn.slice(needed, true).reconstitutePartial(needed);
+                    }
+
+                    if (partialDeps == null && achieved.deps.hasDecidedDeps() && !safeCommand.current().known().deps.hasDecidedDeps())
+                    {
+                        Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
+                        // we don't subtract existing partialDeps, as they cannot be committed deps; we only permit committing deps covering all participating ranges
+                        partialDeps = full.committedDeps.slice(needed).reconstitutePartial(needed);
+                    }
+                }
             }
 
             Status propagate = achieved.merge(command.known()).propagatesStatus();

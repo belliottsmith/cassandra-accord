@@ -95,6 +95,7 @@ import static accord.local.Status.PreApplied;
 import static accord.local.Status.PreCommitted;
 import static accord.local.Status.ReadyToExecute;
 import static accord.local.Status.Truncated;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.isFullRoute;
 
 public class Commands
@@ -148,7 +149,7 @@ public class Commands
         if (command.hasBeen(Truncated))
         {
             logger.trace("{}: skipping preaccept - command is truncated", txnId);
-            return command.is(Invalidated) ? AcceptOutcome.Redundant : AcceptOutcome.Truncated;
+            return command.is(Invalidated) ? AcceptOutcome.RejectedBallot : AcceptOutcome.Truncated;
         }
 
         int compareBallots = command.promised().compareTo(ballot);
@@ -227,7 +228,7 @@ public class Commands
             if (command.is(Invalidated))
             {
                 logger.trace("{}: skipping accept - command is invalidated", txnId);
-                return AcceptOutcome.Redundant;
+                return AcceptOutcome.RejectedBallot;
             }
 
             if (command.is(Truncated))
@@ -288,7 +289,7 @@ public class Commands
             }
 
             logger.trace("{}: skipping accept invalidated - already committed ({})", command.txnId(), command.status());
-            return AcceptOutcome.Redundant;
+            return AcceptOutcome.RejectedBallot;
         }
 
         if (command.promised().compareTo(ballot) > 0)
@@ -672,11 +673,19 @@ public class Commands
         }
     }
 
-    protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp executeWaitingAt, PartialDeps partialDeps, Route<?> route)
+    protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp executeWaitingAt, PartialDeps deps, Route<?> route)
     {
         Ranges ranges = safeStore.ranges().allAt(executeWaitingAt);
-        Unseekables<?> executionParticipants = route.participants().slice(ranges);
-        WaitingOn.Update update = new WaitingOn.Update(ranges, executionParticipants, partialDeps);
+        Unseekables<?> executionParticipants = route.participants().slice(ranges, Minimal);
+        WaitingOn.Update update = new WaitingOn.Update(deps);
+        deps.keyDeps.forEach(ranges, 0, deps.keyDeps.txnIdCount(), update, null, (u, v, i) -> {
+            u.initialiseWaitingOnCommit(i);
+        });
+        // we select range deps on actual participants rather than covered ranges,
+        // since we may otherwise adopt false dependencies for range txns
+        deps.rangeDeps.forEach(executionParticipants, update, (u, i) -> {
+            u.initialiseWaitingOnCommit(u.deps.keyDeps.txnIdCount() + i);
+        });
         return updateWaitingOn(safeStore, waitingId, executeWaitingAt, update, route.participants()).build();
     }
 
@@ -1410,7 +1419,7 @@ public class Commands
                 if (existing == null)
                 {
                     if (adding == null)
-                        return false;
+                        return permitStaleMissing != null && containsAll(Ranges.EMPTY, requiredRanges, permitStaleMissing);
 
                     if (!adding.containsAll(existingRanges))
                         return false;
@@ -1423,7 +1432,7 @@ public class Commands
                     return true;
 
                 if (adding == null)
-                    return false;
+                    return permitStaleMissing != null && containsAll(Ranges.EMPTY, requiredRanges.subtract(existing), permitStaleMissing);
 
                 requiredRanges = requiredRanges.subtract(existing);
                 if (containsAll(adding, requiredRanges, permitStaleMissing))

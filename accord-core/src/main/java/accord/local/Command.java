@@ -1222,18 +1222,10 @@ public abstract class Command implements CommonAttributes
                 this(committed.waitingOn);
             }
 
-            public Update(Ranges ranges, Unseekables<?> participants, Deps deps)
+            public Update(Deps deps)
             {
                 this.deps = deps;
                 this.waitingOnCommit = new SimpleBitSet(deps.txnIdCount(), false);
-                deps.keyDeps.forEach(ranges, 0, deps.keyDeps.txnIdCount(), this, null, (u, v, i) -> {
-                    u.waitingOnCommit.set(i);
-                });
-                // we select range deps on actual participants rather than covered ranges,
-                // since we may otherwise adopt false dependencies for range txns
-                deps.rangeDeps.forEach(participants, this, (u, i) -> {
-                    u.waitingOnCommit.set(u.deps.keyDeps.txnIdCount() + i);
-                });
                 this.waitingOnApply = new SimpleBitSet(deps.txnIdCount(), false);
                 this.appliedOrInvalidated = new SimpleBitSet(deps.txnIdCount(), false);
             }
@@ -1277,6 +1269,11 @@ public abstract class Command implements CommonAttributes
                 waitingOnApply = ensureMutable(waitingOnApply);
                 waitingOnApply.set(index);
                 return true;
+            }
+
+            void initialiseWaitingOnCommit(int index)
+            {
+                waitingOnCommit.set(index);
             }
 
             public boolean removeWaitingOnApply(TxnId txnId)

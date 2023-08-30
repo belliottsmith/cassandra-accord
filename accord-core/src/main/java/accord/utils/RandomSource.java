@@ -100,34 +100,39 @@ public interface RandomSource
     }
     default int nextBiasedInt(int minInclusive, int median, int maxExclusive)
     {
-        // this is diff behavior than ThreadLocalRandom, which returns nextInt
-        if (minInclusive > median)
-            throw new IllegalArgumentException(String.format("Min (%s) should be equal to or less than median (%d).", minInclusive, median));
-        if (median >= maxExclusive)
-            throw new IllegalArgumentException(String.format("Median (%s) should be less than max (%d).", median, maxExclusive));
+        checkBiasedUniform(minInclusive, median, maxExclusive);
 
         int range = Math.max(maxExclusive - median, median - minInclusive) * 2;
         int next = nextInt(range) - range/2;
         next += median;
         return next >= median ? next <  maxExclusive ? next : nextInt(median, maxExclusive)
-                              : next >= minInclusive ? next : nextInt(minInclusive, median);
+                              : next >= minInclusive ? next : minInclusive == median ? median : nextInt(minInclusive, median);
     }
 
     default IntSupplier uniformInts(int minInclusive, int maxExclusive) { return () -> nextInt(minInclusive, maxExclusive); }
     default IntSupplier biasedUniformInts(int minInclusive, int median, int maxExclusive)
     {
+        checkBiasedUniform(minInclusive, median, maxExclusive);
         return () -> nextBiasedInt(minInclusive, median, maxExclusive);
     }
     default Supplier<IntSupplier> biasedUniformIntsSupplier(int absoluteMinInclusive, int absoluteMaxExclusive, int minMedian, int maxMedian, int minRange, int maxRange)
     {
-        return biasedUniformIntsSupplier(absoluteMinInclusive, absoluteMaxExclusive, minMedian, (minMedian+maxMedian)/2, maxRange, minRange, (minRange+maxRange)/2, maxRange);
+        return biasedUniformIntsSupplier(absoluteMinInclusive, absoluteMaxExclusive, minMedian, (minMedian+maxMedian)/2, maxMedian, minRange, (minRange+maxRange)/2, maxRange);
     }
     default Supplier<IntSupplier> biasedUniformIntsSupplier(int absoluteMinInclusive, int absoluteMaxExclusive, int minMedian, int medianMedian, int maxMedian, int minRange, int medianRange, int maxRange)
     {
+        checkBiasedUniform(minMedian, medianMedian, maxMedian);
+        checkBiasedUniform(minRange, medianRange, maxRange);
+        if (minMedian < absoluteMinInclusive)
+            throw new IllegalArgumentException(String.format("absoluteMin (%s) should be less than or equal to minMedian (%s)", absoluteMinInclusive, minMedian));
+        if (maxMedian > absoluteMaxExclusive)
+            throw new IllegalArgumentException(String.format("absoluteMax (%s) should be greater than or equal to maxMedian (%s)", absoluteMaxExclusive, maxMedian));
+        if (minRange < 1)
+            throw new IllegalArgumentException(String.format("minRange (%s) should be greater than or equal to 1", minRange));
         return () -> {
             int median = nextBiasedInt(minMedian, medianMedian, maxMedian);
             int minInclusive = Math.max(absoluteMinInclusive, median - nextBiasedInt(minRange, medianRange, maxRange)/2);
-            int maxExclusive = Math.min(absoluteMaxExclusive, median + nextBiasedInt(minRange, medianRange, maxRange)/2);
+            int maxExclusive = Math.min(absoluteMaxExclusive, median + (nextBiasedInt(minRange, medianRange, maxRange)+1)/2);
             return biasedUniformInts(minInclusive, median, maxExclusive);
         };
     }
@@ -164,22 +169,19 @@ public interface RandomSource
     }
     default long nextBiasedLong(long minInclusive, long median, long maxExclusive)
     {
-        // this is diff behavior than ThreadLocalRandom, which returns nextInt
-        if (minInclusive > median)
-            throw new IllegalArgumentException(String.format("Min (%s) should be equal to or less than median (%d).", minInclusive, median));
-        if (median >= maxExclusive)
-            throw new IllegalArgumentException(String.format("Median (%s) should be less than max (%d).", median, maxExclusive));
+        checkBiasedUniform(minInclusive, median, maxExclusive);
 
         long range = Math.max(maxExclusive - median, median - minInclusive) * 2;
         long next = nextLong(range) - range/2;
         next += median;
         return next >= median ? next <  maxExclusive ? next : nextLong(median, maxExclusive)
-                              : next >= minInclusive ? next : nextLong(minInclusive, median);
+                              : next >= minInclusive ? next : minInclusive == median ? median : nextLong(minInclusive, median);
     }
 
     default LongSupplier uniformLongs(long minInclusive, long maxExclusive) { return () -> nextLong(minInclusive, maxExclusive); }
     default LongSupplier biasedUniformLongs(long minInclusive, long median, long maxExclusive)
     {
+        checkBiasedUniform(minInclusive, median, maxExclusive);
         return () -> nextBiasedLong(minInclusive, median, maxExclusive);
     }
     default Supplier<LongSupplier> biasedUniformLongsSupplier(long absoluteMinInclusive, long absoluteMaxExclusive, long minMedian, long maxMedian, long minRange, long maxRange)
@@ -188,12 +190,28 @@ public interface RandomSource
     }
     default Supplier<LongSupplier> biasedUniformLongsSupplier(long absoluteMinInclusive, long absoluteMaxExclusive, long minMedian, long medianMedian, long maxMedian, long minRange, long medianRange, long maxRange)
     {
+        checkBiasedUniform(minMedian, medianMedian, maxMedian);
+        checkBiasedUniform(minRange, medianRange, maxRange);
+        if (minMedian < absoluteMinInclusive)
+            throw new IllegalArgumentException(String.format("absoluteMin (%s) should be less than or equal to minMedian (%s)", absoluteMinInclusive, minMedian));
+        if (maxMedian > absoluteMaxExclusive)
+            throw new IllegalArgumentException(String.format("absoluteMax (%s) should be greater than or equal to maxMedian (%s)", absoluteMaxExclusive, maxMedian));
+        if (minRange < 1)
+            throw new IllegalArgumentException(String.format("minRange (%s) should be greater than or equal to 1", minRange));
         return () -> {
             long median = nextBiasedLong(minMedian, medianMedian, maxMedian);
             long minInclusive = Math.max(absoluteMinInclusive, median - nextBiasedLong(minRange, medianRange, maxRange)/2);
-            long maxExclusive = Math.min(absoluteMaxExclusive, median + nextBiasedLong(minRange, medianRange, maxRange)/2);
+            long maxExclusive = Math.min(absoluteMaxExclusive, median + (1+nextBiasedLong(minRange, medianRange, maxRange))/2);
             return biasedUniformLongs(minInclusive, median, maxExclusive);
         };
+    }
+
+    static void checkBiasedUniform(long minInclusive, long median, long maxExclusive)
+    {
+        if (minInclusive > median)
+            throw new IllegalArgumentException(String.format("Min (%s) should be equal to or less than median (%d).", minInclusive, median));
+        if (median >= maxExclusive)
+            throw new IllegalArgumentException(String.format("Median (%s) should be less than max (%d).", median, maxExclusive));
     }
 
     float nextFloat();

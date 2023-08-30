@@ -277,8 +277,8 @@ public class Cluster implements Scheduler
 
             Runnable updateDurabilityRate;
             {
-                IntSupplier frequencySeconds       = random.biasedUniformIntsSupplier( 1, 120, 30,  60, 10,  60).get();
-                IntSupplier shardCycleTimeSeconds  = random.biasedUniformIntsSupplier(30, 240, 30, 120, 30, 120).get();
+                IntSupplier frequencySeconds       = random.biasedUniformIntsSupplier( 1, 120, 10,  30, 10,  60).get();
+                IntSupplier shardCycleTimeSeconds  = random.biasedUniformIntsSupplier(5, 60, 10, 30, 1, 30).get();
                 IntSupplier globalCycleTimeSeconds = random.biasedUniformIntsSupplier( 1,  90, 10,  30, 10,  60).get();
                 updateDurabilityRate = () -> {
                     int f = frequencySeconds.getAsInt();
