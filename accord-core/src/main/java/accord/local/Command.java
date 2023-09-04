@@ -966,11 +966,6 @@ public abstract class Command implements CommonAttributes
             return validate(new Committed(common, status, executeAt, promised, accepted, waitingOn));
         }
 
-        public AsyncChain<Data> read(SafeCommandStore safeStore)
-        {
-            return partialTxn().read(safeStore, executeAt());
-        }
-
         public WaitingOn waitingOn()
         {
             return waitingOn;

@@ -265,9 +265,9 @@ public interface Txn
         return new Writes(txnId, executeAt, update.keys(), update.apply(executeAt, data));
     }
 
-    default AsyncChain<Data> read(SafeCommandStore safeStore, Timestamp executeAt)
+    default AsyncChain<Data> read(SafeCommandStore safeStore, Timestamp executeAt, Ranges unavailable)
     {
-        Ranges ranges = safeStore.ranges().safeToReadAt(executeAt);
+        Ranges ranges = safeStore.ranges().safeToReadAt(executeAt).subtract(unavailable);
         List<AsyncChain<Data>> chains = Routables.foldlMinimal(keys(), ranges, (key, accumulate, index) -> {
             AsyncChain<Data> result = read().read(key, kind(), safeStore, executeAt, safeStore.dataStore());
             accumulate.add(result);

@@ -190,6 +190,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return this.startEpoch == that.startEpoch
                    && this.endEpoch == that.endEpoch
                    && this.redundantBefore.equals(that.redundantBefore)
+                   && this.bootstrappedAt.equals(that.bootstrappedAt)
                    && Objects.equals(this.staleUntilAtLeast, that.staleUntilAtLeast);
         }
 
