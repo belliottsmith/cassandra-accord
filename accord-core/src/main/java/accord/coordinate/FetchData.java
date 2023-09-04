@@ -370,7 +370,7 @@ public class FetchData extends CheckShards<Route<?>>
                 if (achieved.executeAt.isDecided())
                 {
                     Timestamp executeAt = command.executeAtIfKnown(full.executeAt);
-                    if (partialTxn == null && achieved.definition.isKnown())
+                    if (partialTxn == null && this.full.saveStatus.known.definition.isKnown())
                     {
                         Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
                         PartialTxn existing = command.partialTxn();
@@ -379,7 +379,7 @@ public class FetchData extends CheckShards<Route<?>>
                         partialTxn = full.partialTxn.slice(needed, true).reconstitutePartial(needed);
                     }
 
-                    if (partialDeps == null && achieved.deps.hasDecidedDeps() && !safeCommand.current().known().deps.hasDecidedDeps())
+                    if (partialDeps == null && !safeCommand.current().known().deps.hasDecidedDeps())
                     {
                         Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
                         // we don't subtract existing partialDeps, as they cannot be committed deps; we only permit committing deps covering all participating ranges
@@ -496,6 +496,7 @@ public class FetchData extends CheckShards<Route<?>>
             }
 
             // TODO (expected): try to partially apply the transaction locally to limit the ranges we have to mark dead
+            // TODO (required): validate we don't markShardStale when we don't expect a node to be stale
             safeStore.commandStore().markShardStale(safeStore, executeAt, staleRanges, true);
             if (!staleRanges.containsAll(participants))
                 return required;
