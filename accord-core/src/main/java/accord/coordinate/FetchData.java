@@ -485,7 +485,7 @@ public class FetchData extends CheckShards<Route<?>>
 
             Known required = PreApplied.minKnown;
             Known requireExtra = required.subtract(command.known());
-            Ranges achieveRanges = full.sufficientFor(requireExtra).slice(executeRanges, Minimal);
+            Ranges achieveRanges = full.sufficientFor(requireExtra, executeRanges);
             Participants<?> participants = route.participants().slice(executeRanges, Minimal);
 
             Ranges staleRanges = executeRanges.subtract(achieveRanges);

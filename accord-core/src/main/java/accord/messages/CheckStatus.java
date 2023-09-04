@@ -450,19 +450,19 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         // it is assumed that we are invoking this for a transaction that will execute;
         // the result may be erroneous if the transaction is invalidated, as logically this can apply to all ranges
-        public Ranges sufficientFor(Known required)
+        public Ranges sufficientFor(Known required, Ranges expect)
         {
             Invariants.checkState(saveStatus != SaveStatus.Invalidated);
             Known have = saveStatus.known;
-            if (!have.isSatisfiedBy(required))
+            if (!required.isSatisfiedBy(have))
                 return Ranges.EMPTY;
 
-            Ranges result = null;
+            Ranges result = expect;
             if (required.deps.hasDecidedDeps())
-                result = committedDeps.covering;
+                result = result.slice(committedDeps.covering, Minimal);
 
             if (required.definition.isKnown())
-                result = result == null ? partialTxn.covering() : result.slice(partialTxn.covering(), Minimal);
+                result = result.slice(partialTxn.covering(), Minimal);
 
             return result;
         }

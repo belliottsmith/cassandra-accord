@@ -224,7 +224,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
                 if (tracker.unavailable() != null) unavailable = unavailable.with(tracker.unavailable());
                 else exhausted = exhausted.with(Ranges.of(tracker.shard.range));
             }
-            failure = new Exhausted(txnId, null, (unavailable != null ? "unavailable: " + unavailable + (exhausted != null ? "; " : "") : "") + (exhausted != null ? "no response: " + exhausted : ""));
+            failure = new Exhausted(txnId, null, (unavailable.isEmpty() ? "" : "unavailable: " + unavailable + (exhausted.isEmpty() ? "" : "; ")) + (exhausted.isEmpty() ? "" : "no response: " + exhausted));
         }
         finishOnFailure();
     }
