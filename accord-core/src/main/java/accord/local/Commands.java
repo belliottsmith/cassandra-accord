@@ -97,6 +97,7 @@ import static accord.local.Status.ReadyToExecute;
 import static accord.local.Status.Truncated;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.isFullRoute;
+import static accord.utils.Invariants.illegalState;
 
 public class Commands
 {
@@ -885,7 +886,7 @@ public class Commands
         Route<?> route = command.route();
         if (!Route.isFullRoute(route))
         {
-            if (command.known().hasFullRoute()) Invariants.illegalState(command.saveStatus() + " should include full route, but only found " + route);
+            if (command.known().hasFullRoute()) illegalState(command.saveStatus() + " should include full route, but only found " + route);
             else if (Route.isFullRoute(maybeFullRoute)) route = Route.castToFullRoute(maybeFullRoute);
             else return Cleanup.NO;
         }
@@ -903,7 +904,7 @@ public class Commands
         if (durableBefore.min(txnId) == Universal)
         {
             if (status.hasBeen(PreCommitted) && !status.hasBeen(Applied)) // TODO (expected): may be stale
-                throw new IllegalStateException("Loading universally-durable command that has been PreCommitted but not Applied");
+                illegalState("Loading universally-durable command that has been PreCommitted but not Applied");
             return Cleanup.ERASE;
         }
 
@@ -920,14 +921,14 @@ public class Commands
                 // TODO (expected): we can impose additional validations here IF we receive an epoch upper bound
                 // TODO (expected): we should be more robust to the presence/absence of executeAt
                 if (route.isParticipatingHomeKey() || redundantBefore.get(txnId, toEpoch, route.homeKey()) == NOT_OWNED)
-                    throw new IllegalStateException("Command " + txnId + " that is being loaded is not owned by this shard on route " + route);
+                    illegalState("Command " + txnId + " that is being loaded is not owned by this shard on route " + route);
             case LIVE:
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
             case PRE_BOOTSTRAP_OR_STALE:
                 return NO;
             case LOCALLY_REDUNDANT:
                 if (status.hasBeen(PreCommitted) && !status.hasBeen(Applied) && redundantBefore.preBootstrapOrStale(txnId, toEpoch, route.participants()) != FULLY) // TODO (required): may be stale
-                    throw new IllegalStateException("Loading redundant command that has been PreCommitted but not Applied");
+                    illegalState("Loading redundant command that has been PreCommitted but not Applied");
         }
 
         Durability min = durableBefore.min(txnId, route);
@@ -1387,8 +1388,8 @@ public class Commands
         if (!validate(ensurePartialTxn, existingRanges, additionalRanges, covers(attrs.partialTxn()), covers(partialTxn), permitStaleMissing, "txn", partialTxn))
             return false;
 
-        Invariants.checkState(partialTxn == null || attrs.txnId().rw() == null || attrs.txnId().rw().equals(partialTxn.kind()), "Transaction has different kind to its TxnId");
-        Invariants.checkState(!shard.isHome() || ensurePartialTxn == Ignore || hasQuery(attrs.partialTxn()) || hasQuery(partialTxn), "Home transaction should include query");
+        Invariants.checkState(partialTxn == null || attrs.txnId().rw().equals(partialTxn.kind()), "Transaction has different kind to its TxnId");
+        Invariants.checkState(partialTxn == null || !shard.isHome() || ensurePartialTxn == Ignore || hasQuery(attrs.partialTxn()) || hasQuery(partialTxn), "Home transaction should include query");
 
         return validate(ensurePartialDeps, existingRanges, additionalRanges, covers(attrs.partialDeps()), covers(partialDeps), permitStaleMissing, "deps", partialDeps);
     }
@@ -1410,7 +1411,7 @@ public class Commands
                     return true;
 
                 if (action == Set)
-                    Invariants.illegalState("Incomplete " + kind + " (" + obj + ") provided; does not cover " + requiredRanges.subtract(adding));
+                    illegalState("Incomplete " + kind + " (" + obj + ") provided; does not cover " + requiredRanges.subtract(adding));
 
                 return false;
 
@@ -1419,7 +1420,7 @@ public class Commands
                 if (existing == null)
                 {
                     if (adding == null)
-                        return permitStaleMissing != null && containsAll(Ranges.EMPTY, requiredRanges, permitStaleMissing);
+                        return false; // we don't want to permit a null value for txn/deps, even if we are stale for all participating ranges, as it breaks assumptions elsewhere
 
                     if (!adding.containsAll(existingRanges))
                         return false;
@@ -1439,7 +1440,7 @@ public class Commands
                     return true;
 
                 if (action == Add)
-                    Invariants.illegalState("Incomplete " + kind + " (" + obj + ") provided; does not cover " + requiredRanges.subtract(adding));
+                    illegalState("Incomplete " + kind + " (" + obj + ") provided; does not cover " + requiredRanges.subtract(adding));
 
                 return false;
         }
