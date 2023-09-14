@@ -167,8 +167,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                 });
                 return mutable;
             case Range:
+                // TODO (required): confirm we slice to owned ranges on C*
                 rangeCommands.computeIfAbsent(command.txnId(), ignore -> new RangeCommand(commands.get(command.txnId())))
-                        .update((Ranges)keysOrRanges);
+                        .update(((Ranges)keysOrRanges).slice(slice, Minimal));
         }
         return attrs;
     }
@@ -187,8 +188,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                 });
                 return mutable;
             case Range:
+                // TODO (required): confirm we slice to owned ranges on C*
                 rangeCommands.computeIfAbsent(command.txnId(), ignore -> new RangeCommand(commands.get(command.txnId())))
-                        .update(Ranges.of((Range)keyOrRange));
+                        .update(Ranges.of((Range)keyOrRange).slice(slice, Minimal));
         }
         return attrs;
     }
@@ -836,6 +838,8 @@ public abstract class InMemoryCommandStore extends CommandStore
                 {
                     T initial = accumulate;
                     accumulate = map.apply(e.getKey(), command.getKey(), command.getValue(), initial);
+                    if (accumulate.equals(terminalValue))
+                        return accumulate;
                 }
             }
 
