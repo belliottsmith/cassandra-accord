@@ -201,12 +201,13 @@ public class BurnTest
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
+            // TODO (now): meta-randomise scale of clock drift
             return FrequentLargeRange.builder(forked)
                                                    .ratio(1, 5)
                                                    .small(50, 5000, TimeUnit.MICROSECONDS)
                                                    .large(1, 10, TimeUnit.MILLISECONDS)
                                                    .build()
-                                                   .mapAsLong(j -> Math.max(0, queue.nowInMillis() + j))
+                                                   .mapAsLong(j -> Math.max(0, queue.nowInMillis() + TimeUnit.NANOSECONDS.toMillis(j)))
                     .asLongSupplier(forked);
         };
 

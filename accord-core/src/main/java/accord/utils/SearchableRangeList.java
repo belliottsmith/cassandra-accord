@@ -175,7 +175,8 @@ public class SearchableRangeList
                 ++start;
         }
 
-        return forEach(start, end, floor, startKey, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, minIndex);
+        // Since endInclusive() != startInclusive(), so no need to adjust start/end comparisons
+        return forEach(start, end, floor, startKey, 0, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, minIndex);
     }
 
     @Inline
@@ -184,11 +185,11 @@ public class SearchableRangeList
         if (ranges.length == 0 || minIndex == ranges.length)
             return minIndex;
 
-        int end = SortedArrays.binarySearch(ranges, minIndex, ranges.length, key, (a, b) -> a.compareTo(b.start()), FLOOR);
+        int end = SortedArrays.binarySearch(ranges, minIndex, ranges.length, key, (a, b) -> -b.compareStartTo(a), FLOOR);
         if (end < 0) end = -1 - end;
         if (end <= minIndex) return minIndex;
 
-        int floor = SortedArrays.binarySearch(ranges, minIndex, ranges.length, key, (a, b) -> a.compareTo(b.start()), CEIL);
+        int floor = SortedArrays.binarySearch(ranges, minIndex, ranges.length, key, (a, b) -> -b.compareStartTo(a), CEIL);
         int start = floor;
         if (floor < 0)
         {
@@ -200,16 +201,16 @@ public class SearchableRangeList
             start = floor = -2 - floor;
             if (start < 0)
                 start = floor = 0;
-            else if (ranges[start].end().compareTo(key) <= 0)
+            else if (ranges[start].compareEndTo(key) < 0)
                 ++start;
         }
 
-        // Key cannot equal RoutingKey, so can ignore inclusivity/exclusivity of end bound
-        return forEach(start, end, floor, key, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, minIndex);
+        int bound = ranges[0].endInclusive() ? -1 : 0;
+        return forEach(start, end, floor, key, bound, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, minIndex);
     }
 
     @Inline
-    private <P1, P2, P3> int forEach(int start, int end, int floor, RoutableKey startBound,
+    private <P1, P2, P3> int forEach(int start, int end, int floor, RoutableKey startBound, int cmpStartBoundWithEnd,
                                      IndexedTriConsumer<P1, P2, P3> forEachScanOrCheckpoint, IndexedRangeTriConsumer<P1, P2, P3> forEachRange,
                                      P1 p1, P2 p2, P3 p3, int minIndex)
     {
@@ -267,7 +268,7 @@ public class SearchableRangeList
                     if (ri < 0)
                         continue;
 
-                    if (ranges[ri].end().compareTo(startBound) <= 0)
+                    if (ranges[ri].end().compareTo(startBound) <= cmpStartBoundWithEnd)
                         break;
 
                     if (ri >= minIndex && ri < minScanIndex)
@@ -279,7 +280,7 @@ public class SearchableRangeList
                 // if startBound is key, we cannot be equal to it;
                 // if startBound is a Range start, we also cannot be equal to it due to the requirement that
                 // endInclusive() != startInclusive(), so equality really means inequality
-                if (ranges[ri].end().compareTo(startBound) <= 0)
+                if (ranges[ri].end().compareTo(startBound) <= cmpStartBoundWithEnd)
                     break;
 
                 if (ri >= minIndex && ri < minScanIndex)
@@ -289,7 +290,7 @@ public class SearchableRangeList
 
         for (int i = minScanIndex; i < floor ; ++i)
         {
-            if (ranges[i].end().compareTo(startBound) > 0)
+            if (ranges[i].end().compareTo(startBound) > cmpStartBoundWithEnd)
                 forEachScanOrCheckpoint.accept(p1, p2, p3, i);
         }
 
