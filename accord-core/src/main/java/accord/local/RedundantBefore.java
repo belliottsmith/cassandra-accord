@@ -136,6 +136,17 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                                          : prev == FULLY          ? PARTIALLY : POST_BOOTSTRAP;
         }
 
+        static Ranges validateSafeToRead(Entry entry, @Nonnull Ranges safeToRead, Timestamp bootstrapAt, Object ignore)
+        {
+            if (entry == null)
+                return safeToRead;
+
+            if (bootstrapAt.compareTo(entry.bootstrappedAt) < 0 || (entry.staleUntilAtLeast != null && bootstrapAt.compareTo(entry.staleUntilAtLeast) < 0))
+                return safeToRead.subtract(Ranges.of(entry.range));
+
+            return safeToRead;
+        }
+
         RedundantStatus get(TxnId txnId)
         {
             if (redundantBefore.compareTo(txnId) > 0)
@@ -288,6 +299,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     {
         if (executeAt == null) executeAt = txnId;
         return foldl(participants, Entry::getAndMerge, PreBootstrapOrStale.NOT_OWNED, txnId, executeAt, r -> r == PARTIALLY);
+    }
+
+    /**
+     * RedundantStatus.REDUNDANT overrides PRE_BOOTSTRAP; to avoid complicating that state machine,
+     * for cases where we care independently about the overall pre-bootstrap state we have a separate mechanism
+     */
+    public Ranges validateSafeToRead(Timestamp forBootstrapAt, Ranges ranges)
+    {
+        return foldl(ranges, Entry::validateSafeToRead, ranges, forBootstrapAt, null, r -> false);
     }
 
     /**

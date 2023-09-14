@@ -163,11 +163,6 @@ public abstract class CommandStores
             return allAt(txnId);
         }
 
-        public @Nonnull Ranges safeToReadAt(Timestamp at)
-        {
-            return allAt(at).slice(store.safeToReadAt(at), Minimal);
-        }
-
         public @Nonnull Ranges unsafeToReadAt(Timestamp at)
         {
             return allAt(at).subtract(store.safeToReadAt(at));

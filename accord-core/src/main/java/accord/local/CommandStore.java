@@ -266,16 +266,6 @@ public abstract class CommandStore implements AgentExecutor
         this.safeToRead = newSafeToRead;
     }
 
-    public NavigableMap<TxnId, Ranges> bootstrapBeganAt()
-    {
-        return bootstrapBeganAt;
-    }
-
-    public NavigableMap<Timestamp, Ranges> safeToRead()
-    {
-        return safeToRead;
-    }
-
     public final void markExclusiveSyncPoint(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
     {
         // TODO (desired): narrow ranges to those that are owned
@@ -592,9 +582,10 @@ public abstract class CommandStore implements AgentExecutor
             setSafeToRead(purgeHistory(safeToRead, ranges));
     }
 
-    final synchronized void markSafeToRead(Timestamp at, Ranges ranges)
+    final synchronized void markSafeToRead(Timestamp forBootstrapAt, Timestamp at, Ranges ranges)
     {
-        setSafeToRead(purgeAndInsert(safeToRead, at, ranges));
+        Ranges validatedSafeToRead = redundantBefore.validateSafeToRead(forBootstrapAt, ranges);
+        setSafeToRead(purgeAndInsert(safeToRead, at, validatedSafeToRead));
     }
 
     private static <T extends Timestamp> ImmutableSortedMap<T, Ranges> bootstrap(T at, Ranges ranges, NavigableMap<T, Ranges> bootstrappedAt)

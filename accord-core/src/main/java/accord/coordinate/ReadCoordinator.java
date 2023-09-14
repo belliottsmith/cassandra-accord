@@ -173,11 +173,9 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
     @Override
     public void onCallbackFailure(Id from, Throwable failure)
     {
+        node.agent().onUncaughtException(failure);
         if (isDone)
-        {
-            node.agent().onUncaughtException(failure);
             return;
-        }
 
         if (this.failure != null)
             failure.addSuppressed(this.failure);

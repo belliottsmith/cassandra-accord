@@ -363,7 +363,7 @@ class Bootstrap
                 }
             }
 
-            store.markSafeToRead(state.safeToReadAt, newDone);
+            store.markSafeToRead(globalSyncId, state.safeToReadAt, newDone);
             fetchedAndSafeToRead = fetchedAndSafeToRead.with(newDone);
             maybeComplete();
         }
