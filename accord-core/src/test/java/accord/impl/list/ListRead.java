@@ -63,7 +63,7 @@ public class ListRead implements Read
     }
 
     @Override
-    public AsyncChain<Data> read(Seekable key, Txn.Kind kind, SafeCommandStore commandStore, Timestamp executeAt, DataStore store)
+    public AsyncChain<Data> read(Seekable key, Txn.Kind kind, SafeCommandStore safeStore, Timestamp executeAt, DataStore store)
     {
         // read synchronously, logically taking a snapshot, so we can impose our invariant of not reading the future
         ListStore s = (ListStore)store;
@@ -81,7 +81,7 @@ public class ListRead implements Read
                 for (Map.Entry<Key, Timestamped<int[]>> e : s.get((Range)key))
                     result.put(e.getKey(), e.getValue());
         }
-        return executor.apply(commandStore.commandStore()).submit(() -> result);
+        return executor.apply(safeStore.commandStore()).submit(() -> result);
     }
 
     @Override

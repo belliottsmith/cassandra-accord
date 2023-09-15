@@ -506,7 +506,7 @@ public abstract class CommandStore implements AgentExecutor
         return () -> new EpochReady(epoch, DONE, DONE, DONE, DONE);
     }
 
-    final Ranges safeToReadAt(Timestamp at)
+    public final Ranges safeToReadAt(Timestamp at)
     {
         return safeToRead.floorEntry(at).getValue();
     }

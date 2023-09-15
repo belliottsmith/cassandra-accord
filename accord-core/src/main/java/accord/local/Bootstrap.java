@@ -400,6 +400,9 @@ class Bootstrap
                 if (!fetchedAndSafeToRead.containsAll(fetchCompleted ? fetched : valid))
                     return;
 
+                // normalise fetched and fetchedAndSafeToRead against remaining valid ranges before completion
+                fetched = fetched.slice(valid, Minimal);
+                fetchedAndSafeToRead = fetchedAndSafeToRead.slice(valid, Minimal);
                 retry = valid.subtract(fetchedAndSafeToRead);
                 completed = true;
             }
