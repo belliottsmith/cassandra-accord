@@ -322,7 +322,8 @@ public class FetchData extends CheckShards<Route<?>>
                 }
             }
 
-            boolean isTruncated = withQuorum == HasQuorum && achieved.isTruncated();
+            // TODO (now): move to Infer
+            boolean isTruncated = withQuorum == HasQuorum && (achieved.outcome.isTruncated() || (achieved.outcome == Status.Outcome.Apply && full.truncated.intersects(covering)));
 
             PartialTxn partialTxn = null;
             if (achieved.definition.isKnown())
@@ -489,6 +490,9 @@ public class FetchData extends CheckShards<Route<?>>
             Participants<?> participants = route.participants().slice(executeRanges, Minimal);
 
             Ranges staleRanges = executeRanges.subtract(achieveRanges);
+            Participants<?> staleParticipants = participants.slice(staleRanges, Minimal);
+            staleRanges = staleParticipants.toRanges();
+
             if (staleRanges.isEmpty())
             {
                 Invariants.checkState(achieveRanges.containsAll(participants));

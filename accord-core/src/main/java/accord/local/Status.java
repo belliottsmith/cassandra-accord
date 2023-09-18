@@ -19,6 +19,7 @@
 package accord.local;
 
 import accord.messages.BeginRecovery;
+import accord.messages.CheckStatus;
 import accord.primitives.Ballot;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -41,6 +42,7 @@ import static accord.local.Status.KnownRoute.Full;
 import static accord.local.Status.KnownRoute.Maybe;
 import static accord.local.Status.Outcome.*;
 import static accord.local.Status.Phase.*;
+import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 
 public enum Status
 {
@@ -269,13 +271,6 @@ public enum Status
         public boolean canProposeInvalidation()
         {
             return deps.canProposeInvalidation() && executeAt.canProposeInvalidation() && outcome.canProposeInvalidation();
-        }
-
-        public boolean isTruncated()
-        {
-            return outcome.isTruncated()
-                   || (outcome == Outcome.Apply &&
-                       (!deps.hasDecidedDeps() || !executeAt.hasDecidedExecuteAt() || !definition.isKnown()));
         }
 
         public Known subtract(Known subtract)

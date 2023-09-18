@@ -34,6 +34,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -69,6 +70,7 @@ import accord.messages.MessageType;
 import accord.primitives.Keys;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
+import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.utils.DefaultRandom;
 import accord.utils.RandomSource;
@@ -194,10 +196,10 @@ public class BurnTest
         RandomDelayQueue delayQueue = new Factory(random).get();
         PropagatingPendingQueue queue = new PropagatingPendingQueue(failures, delayQueue);
         RandomSource retryRandom = random.fork();
-        ListAgent agent = new ListAgent(1000L, failures::add, retry -> {
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(1000L, failures::add, retry -> {
             long delay = retryRandom.nextInt(1, 15);
             queue.add((PendingRunnable)retry::run, delay, TimeUnit.SECONDS);
-        });
+        }, onStale);
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
@@ -212,7 +214,7 @@ public class BurnTest
         };
 
         StrictSerializabilityVerifier strictSerializable = new StrictSerializabilityVerifier(keyCount);
-        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, agent);
+        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, null);
         Function<CommandStore, AsyncExecutor> executor = ignore -> globalExecutor;
 
         MessageListener listener = MessageListener.get();
@@ -312,9 +314,10 @@ public class BurnTest
         EnumMap<MessageType, Cluster.Stats> messageStatsMap;
         try
         {
-            messageStatsMap = Cluster.run(toArray(nodes, Id[]::new), listener, () -> queue, queue::checkFailures,
-                                          responseSink, globalExecutor,
-                                          random::fork, nowSupplier,
+            messageStatsMap = Cluster.run(toArray(nodes, Id[]::new), listener, () -> queue,
+                                          (id, onStale) -> globalExecutor.withAgent(agentSupplier.apply(onStale)),
+                                          queue::checkFailures,
+                                          responseSink, random::fork, nowSupplier,
                                           topologyFactory, initialRequests::poll,
                                           onSubmitted::set
             );

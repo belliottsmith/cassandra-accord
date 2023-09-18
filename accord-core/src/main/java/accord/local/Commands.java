@@ -927,7 +927,7 @@ public class Commands
             case PRE_BOOTSTRAP_OR_STALE:
                 return NO;
             case LOCALLY_REDUNDANT:
-                if (status.hasBeen(PreCommitted) && !status.hasBeen(Applied) && redundantBefore.preBootstrapOrStale(txnId, toEpoch, route.participants()) != FULLY) // TODO (required): may be stale
+                if (status.hasBeen(PreCommitted) && !status.hasBeen(Applied) && redundantBefore.preBootstrapOrStale(txnId, toEpoch, route.participants()) != FULLY)
                     illegalState("Loading redundant command that has been PreCommitted but not Applied");
         }
 

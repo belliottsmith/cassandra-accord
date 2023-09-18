@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -63,6 +64,8 @@ import accord.messages.MessageType;
 import accord.messages.Reply;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
+import accord.primitives.Ranges;
+import accord.primitives.Timestamp;
 import accord.topology.Topology;
 import accord.topology.TopologyRandomizer;
 import accord.utils.RandomSource;
@@ -250,28 +253,36 @@ public class Cluster implements Scheduler
         run.run();
     }
 
-    public static EnumMap<MessageType, Stats> run(Id[] nodes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier, Runnable checkFailures, Consumer<Packet> responseSink, AgentExecutor executor, Supplier<RandomSource> randomSupplier, Supplier<LongSupplier> nowSupplierSupplier, TopologyFactory topologyFactory, Supplier<Packet> in, Consumer<Runnable> noMoreWorkSignal)
+    public static EnumMap<MessageType, Stats> run(Id[] nodes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
+                                                  BiFunction<Id, BiConsumer<Timestamp, Ranges>, AgentExecutor> nodeExecutorSupplier,
+                                                  Runnable checkFailures, Consumer<Packet> responseSink,
+                                                  Supplier<RandomSource> randomSupplier, Supplier<LongSupplier> nowSupplierSupplier,
+                                                  TopologyFactory topologyFactory, Supplier<Packet> in, Consumer<Runnable> noMoreWorkSignal)
     {
         Topology topology = topologyFactory.toTopology(nodes);
-        Map<Id, Node> lookup = new LinkedHashMap<>();
+        Map<Id, Node> nodeMap = new LinkedHashMap<>();
+        Map<Id, AgentExecutor> executorMap = new LinkedHashMap<>();
         try
         {
             RandomSource random = randomSupplier.get();
-            Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, lookup::get, () -> topologyFactory.rf, responseSink);
-            TopologyUpdates topologyUpdates = new TopologyUpdates(executor);
-            TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, topology, topologyUpdates, lookup::get);
+            Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, nodeMap::get, () -> topologyFactory.rf, responseSink);
+            TopologyUpdates topologyUpdates = new TopologyUpdates(executorMap::get);
+            TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, topology, topologyUpdates, nodeMap::get);
             List<CoordinateDurabilityScheduling> durabilityScheduling = new ArrayList<>();
             for (Id id : nodes)
             {
                 MessageSink messageSink = sinks.create(id, randomSupplier.get());
                 LongSupplier nowSupplier = nowSupplierSupplier.get();
-                BurnTestConfigurationService configService = new BurnTestConfigurationService(id, executor, randomSupplier, topology, lookup::get, topologyUpdates);
+                BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
+                AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale);
+                executorMap.put(id, nodeExecutor);
+                BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
                 Node node = new Node(id, messageSink, configService, nowSupplier, NodeTimeService.unixWrapper(TimeUnit.MILLISECONDS, nowSupplier),
                                      () -> new ListStore(id), new ShardDistributor.EvenSplit<>(8, ignore -> new IntHashKey.Splitter()),
-                                     executor.agent(),
+                                     nodeExecutor.agent(),
                                      randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER,
                                      SimpleProgressLog::new, DelayedCommandStores.factory(sinks.pending));
-                lookup.put(id, node);
+                nodeMap.put(id, node);
                 durabilityScheduling.add(new CoordinateDurabilityScheduling(node));
             }
 
@@ -294,7 +305,7 @@ public class Cluster implements Scheduler
             updateDurabilityRate.run();
 
             // startup
-            AsyncResult<?> startup = AsyncChains.reduce(lookup.values().stream().map(Node::start).collect(toList()), (a, b) -> null).beginAsResult();
+            AsyncResult<?> startup = AsyncChains.reduce(nodeMap.values().stream().map(Node::start).collect(toList()), (a, b) -> null).beginAsResult();
             while (sinks.processPending());
             Assertions.assertTrue(startup.isDone());
 
@@ -344,7 +355,7 @@ public class Cluster implements Scheduler
         }
         finally
         {
-            lookup.values().forEach(Node::shutdown);
+            nodeMap.values().forEach(Node::shutdown);
         }
     }
 

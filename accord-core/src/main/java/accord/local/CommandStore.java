@@ -476,6 +476,8 @@ public abstract class CommandStore implements AgentExecutor
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
     public void markShardStale(SafeCommandStore safeStore, Timestamp staleSince, Ranges ranges, boolean isSincePrecise)
     {
+        agent.onStale(staleSince, ranges);
+
         Timestamp staleUntilAtLeast = staleSince;
         if (isSincePrecise)
         {
@@ -492,7 +494,6 @@ public abstract class CommandStore implements AgentExecutor
         setRedundantBefore(RedundantBefore.merge(redundantBefore, addRedundantBefore));
         // find which ranges need to bootstrap, subtracting those already in progress that cover the id
 
-//        agent.onStaleRange(ranges, );
         markUnsafeToRead(ranges);
     }
 

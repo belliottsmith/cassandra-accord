@@ -80,6 +80,12 @@ public class TestAgent implements Agent
     }
 
     @Override
+    public void onStale(Timestamp staleSince, Ranges ranges)
+    {
+
+    }
+
+    @Override
     public void onUncaughtException(Throwable t)
     {
     }
