@@ -500,7 +500,6 @@ public class FetchData extends CheckShards<Route<?>>
             }
 
             // TODO (expected): try to partially apply the transaction locally to limit the ranges we have to mark dead
-            // TODO (required): validate we don't markShardStale when we don't expect a node to be stale
             safeStore.commandStore().markShardStale(safeStore, executeAt, staleRanges, true);
             if (!staleRanges.containsAll(participants))
                 return required;

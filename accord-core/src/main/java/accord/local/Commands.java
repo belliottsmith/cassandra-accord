@@ -690,14 +690,14 @@ public class Commands
         return updateWaitingOn(safeStore, waitingId, executeWaitingAt, update, route.participants()).build();
     }
 
-    protected static WaitingOn.Update updateWaitingOn(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, WaitingOn.Update update, Participants<?> participants)
+    protected static WaitingOn.Update updateWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp executeAt, WaitingOn.Update update, Participants<?> participants)
     {
         CommandStore commandStore = safeStore.commandStore();
         TxnId minWaitingOnTxnId = update.minWaitingOnTxnId();
         if (minWaitingOnTxnId != null && commandStore.hasLocallyRedundantDependencies(update.minWaitingOnTxnId(), executeAt, participants))
             safeStore.commandStore().removeRedundantDependencies(participants, update);
 
-        update.forEachWaitingOnCommit(safeStore, update, txnId, executeAt, (safeStore0, upd, id, exec, i) -> {
+        update.forEachWaitingOnCommit(safeStore, update, waitingId, executeAt, (safeStore0, upd, id, exec, i) -> {
             // TODO (expected): load read-only to reduce overhead; upgrade only if we need to remove listener
             SafeCommand dep = safeStore0.ifLoadedAndInitialised(upd.deps.txnId(i));
             if (dep == null || !dep.current().hasBeen(PreCommitted))
@@ -705,7 +705,7 @@ public class Commands
             updateWaitingOn(safeStore0, id, exec, upd, dep);
         });
 
-        update.forEachWaitingOnApply(safeStore, update, txnId, executeAt, (store, upd, id, exec, i) -> {
+        update.forEachWaitingOnApply(safeStore, update, waitingId, executeAt, (store, upd, id, exec, i) -> {
             SafeCommand dep = store.ifLoadedAndInitialised(upd.deps.txnId(i));
             if (dep == null || !dep.current().hasBeen(PreCommitted))
                 return;
@@ -925,6 +925,7 @@ public class Commands
             case LIVE:
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
             case PRE_BOOTSTRAP_OR_STALE:
+            case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                 return NO;
             case LOCALLY_REDUNDANT:
                 if (status.hasBeen(PreCommitted) && !status.hasBeen(Applied) && redundantBefore.preBootstrapOrStale(txnId, toEpoch, route.participants()) != FULLY)
@@ -1021,6 +1022,7 @@ public class Commands
                             default: throw new AssertionError("Unexpected redundant status: " + redundantStatus);
                             case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
                             case LOCALLY_REDUNDANT:
+                            case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                             case PRE_BOOTSTRAP_OR_STALE:
                                 removeRedundantDependencies(safeStore, prevSafe, txnIds[depth], redundantStatus == PRE_BOOTSTRAP_OR_STALE);
                                 prevSafe = get(safeStore, --depth - 1);
@@ -1122,6 +1124,7 @@ public class Commands
                             safeStore.progressLog().waiting(curSafe, until, null, participants);
                             break loop;
 
+                        case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                         case PRE_BOOTSTRAP_OR_STALE:
                         case LOCALLY_REDUNDANT:
                             Invariants.checkState(cur.hasBeen(Applied) || !cur.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP_OR_STALE);
