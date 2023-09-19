@@ -687,7 +687,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             });
             TreeMap<TxnId, RangeCommand> rangeCommands = commandStore.rangeCommands();
             TreeMap<TxnId, Ranges> historicalRangeCommands = commandStore.historicalRangeCommands();
-            deps.rangeDeps.forEachUniqueTxnId(allRanges, txnId -> {
+            deps.rangeDeps.forEachUniqueTxnId(allRanges, null, (ignore, txnId) -> {
 
                 if (rangeCommands.containsKey(txnId))
                     return;

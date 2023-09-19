@@ -1327,6 +1327,17 @@ public abstract class Command implements CommonAttributes
                 return WaitingOn.minWaitingOnTxnId(deps, waitingOnCommit, waitingOnApply);
             }
 
+            public boolean isWaitingOn(int txnIdx)
+            {
+                return waitingOnApply.get(txnIdx) || waitingOnCommit.get(txnIdx);
+            }
+
+            public boolean isWaitingOnRange(int txnIdx)
+            {
+                txnIdx += deps.keyDeps.txnIdCount();
+                return waitingOnApply.get(txnIdx) || waitingOnCommit.get(txnIdx);
+            }
+
             boolean setAppliedOrInvalidatedRangeIdx(int i)
             {
                 return setAppliedOrInvalidated(i + deps.keyDeps.txnIdCount());

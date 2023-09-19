@@ -27,6 +27,7 @@ import javax.annotation.Nullable;
 import accord.api.Agent;
 
 import accord.local.CommandStores.RangesForEpoch;
+import accord.primitives.Range;
 import accord.utils.RelationMultiMap.SortedRelationList;
 import accord.utils.async.AsyncChain;
 
@@ -38,6 +39,7 @@ import accord.utils.async.AsyncResult;
 
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Objects;
@@ -551,22 +553,69 @@ public abstract class CommandStore implements AgentExecutor
             }
             return b;
         }, builder, keyDeps, null, ignore -> false);
-        RangeDeps rangeDeps = builder.deps.rangeDeps;
-        // TODO (now): slice to only those ranges we own, maybe don't even construct rangeDeps.covering()
-        redundantBefore().foldl(participants, (e, b, d, rs, pi, pj) -> {
-            // TODO (now): foldlInt so we can track the lower rangeidx bound and not revisit unnecessarily
-            boolean useBootstrap = e.isLocalRedundancyViaBootstrap();
+
+        class RangeState
+        {
+            final WaitingOn.Update builder;
             int txnIdx;
+            Range range;
+            Map<Integer, Ranges> partiallyBootstrapping;
+
+            RangeState(WaitingOn.Update builder)
             {
-                int tmp = d.txnIds().find(useBootstrap ? e.bootstrappedAt : e.redundantBefore);
-                txnIdx = tmp < 0 ? -1 - tmp : tmp;
+                this.builder = builder;
             }
-            rangeDeps.forEach(participants, e.range, pi, pj, d, (d0, txnIdx0) -> {
-                if (txnIdx0 < txnIdx)
-                    b.setAppliedOrInvalidatedRangeIdx(txnIdx0);
+
+            boolean isFullyBootstrapping(int rangeTxnIdx)
+            {
+                if (partiallyBootstrapping == null)
+                    partiallyBootstrapping = new HashMap<>();
+                Ranges prev = partiallyBootstrapping.get(rangeTxnIdx);
+                Ranges remaining = prev;
+                if (remaining == null) remaining = builder.deps.rangeDeps.ranges(rangeTxnIdx);
+                else Invariants.checkState(!remaining.isEmpty());
+                remaining = remaining.subtract(Ranges.of(range));
+                if (prev == null) Invariants.checkState(!remaining.isEmpty());
+                partiallyBootstrapping.put(txnIdx, remaining);
+                return remaining.isEmpty();
+            }
+        }
+        RangeDeps rangeDeps = builder.deps.rangeDeps;
+        // TODO (required, consider): slice to only those ranges we own, maybe don't even construct rangeDeps.covering()
+        redundantBefore().foldl(participants, (e, s, d, ps, pi, pj) -> {
+            // TODO (desired, efficiency): foldlInt so we can track the lower rangeidx bound and not revisit unnecessarily
+            WaitingOn.Update b = s.builder;
+            {
+                int tmp = d.txnIds().find(e.redundantBefore);
+                s.txnIdx = tmp < 0 ? -1 - tmp : tmp;
+            }
+            d.forEach(ps, e.range, pi, pj, b, s, (b0, s0, txnIdx) -> {
+                if (txnIdx < s0.txnIdx)
+                    b0.setAppliedOrInvalidatedRangeIdx(txnIdx);
             });
-            return b;
-        }, builder, rangeDeps, participants, ignore -> false);
+            if (e.bootstrappedAt.compareTo(e.redundantBefore) > 0)
+            {
+                {
+                    int tmp = d.txnIds().find(e.bootstrappedAt);
+                    s.txnIdx = tmp < 0 ? -1 - tmp : tmp;
+                }
+                s.range = e.range;
+                d.forEach(ps, e.range, pi, pj, b, s, (b0, s0, txnIdx) -> {
+                    if (txnIdx < s0.txnIdx && b0.isWaitingOnRange(txnIdx))
+                    {
+                        if (b0.deps.rangeDeps.foldEachRange(txnIdx, s0.range, true, (r1, r2, p) -> p && r1.contains(r2)))
+                        {
+                            b0.setAppliedOrInvalidatedRangeIdx(txnIdx);
+                        }
+                        else if (s0.isFullyBootstrapping(txnIdx))
+                        {
+                            b0.setAppliedOrInvalidatedRangeIdx(txnIdx);
+                        }
+                    }
+                });
+            }
+            return s;
+        }, new RangeState(builder), rangeDeps, participants, ignore -> false);
     }
 
     public final boolean hasLocallyRedundantDependencies(TxnId minimumDependencyId, Timestamp executeAt, Participants<?> participantsOfWaitingTxn)

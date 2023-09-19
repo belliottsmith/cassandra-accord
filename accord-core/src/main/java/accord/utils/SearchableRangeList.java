@@ -145,12 +145,12 @@ public class SearchableRangeList
     }
 
     @Inline
-    public <P1, P2, P3> int forEach(Range range, IndexedTriConsumer<P1, P2, P3> forEachScanOrCheckpoint, IndexedRangeTriConsumer<P1, P2, P3> forEachRange, P1 p1, P2 p2, P3 p3, int minIndex)
+    public <P1, P2, P3, P4> int forEach(Range range, IndexedQuadConsumer<P1, P2, P3, P4> forEachScanOrCheckpoint, IndexedRangeQuadConsumer<P1, P2, P3, P4> forEachRange, P1 p1, P2 p2, P3 p3, P4 p4, int minIndex)
     {
-        return forEach(range.start(), range.end(), forEachScanOrCheckpoint, forEachRange, p1, p2, p3, minIndex);
+        return forEach(range.start(), range.end(), forEachScanOrCheckpoint, forEachRange, p1, p2, p3, p4, minIndex);
     }
 
-    public <P1, P2, P3> int forEach(RoutingKey startKey, RoutingKey endKey, IndexedTriConsumer<P1, P2, P3> forEachScanOrCheckpoint, IndexedRangeTriConsumer<P1, P2, P3> forEachRange, P1 p1, P2 p2, P3 p3, int minIndex)
+    public <P1, P2, P3, P4> int forEach(RoutingKey startKey, RoutingKey endKey, IndexedQuadConsumer<P1, P2, P3, P4> forEachScanOrCheckpoint, IndexedRangeQuadConsumer<P1, P2, P3, P4> forEachRange, P1 p1, P2 p2, P3 p3, P4 p4, int minIndex)
     {
         if (ranges.length == 0 || minIndex == ranges.length)
             return minIndex;
@@ -176,11 +176,11 @@ public class SearchableRangeList
         }
 
         // Since endInclusive() != startInclusive(), so no need to adjust start/end comparisons
-        return forEach(start, end, floor, startKey, 0, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, minIndex);
+        return forEach(start, end, floor, startKey, 0, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, p4, minIndex);
     }
 
     @Inline
-    public <P1, P2, P3> int forEach(RoutableKey key, IndexedTriConsumer<P1, P2, P3> forEachScanOrCheckpoint, IndexedRangeTriConsumer<P1, P2, P3> forEachRange, P1 p1, P2 p2, P3 p3, int minIndex)
+    public <P1, P2, P3, P4> int forEach(RoutableKey key, IndexedQuadConsumer<P1, P2, P3, P4> forEachScanOrCheckpoint, IndexedRangeQuadConsumer<P1, P2, P3, P4> forEachRange, P1 p1, P2 p2, P3 p3, P4 p4, int minIndex)
     {
         if (ranges.length == 0 || minIndex == ranges.length)
             return minIndex;
@@ -206,13 +206,13 @@ public class SearchableRangeList
         }
 
         int bound = ranges[0].endInclusive() ? -1 : 0;
-        return forEach(start, end, floor, key, bound, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, minIndex);
+        return forEach(start, end, floor, key, bound, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, p4, minIndex);
     }
 
     @Inline
-    private <P1, P2, P3> int forEach(int start, int end, int floor, RoutableKey startBound, int cmpStartBoundWithEnd,
-                                     IndexedTriConsumer<P1, P2, P3> forEachScanOrCheckpoint, IndexedRangeTriConsumer<P1, P2, P3> forEachRange,
-                                     P1 p1, P2 p2, P3 p3, int minIndex)
+    private <P1, P2, P3, P4> int forEach(int start, int end, int floor, RoutableKey startBound, int cmpStartBoundWithEnd,
+                                     IndexedQuadConsumer<P1, P2, P3, P4> forEachScanOrCheckpoint, IndexedRangeQuadConsumer<P1, P2, P3, P4> forEachRange,
+                                     P1 p1, P2 p2, P3 p3, P4 p4, int minIndex)
     {
         if (start < minIndex) start = minIndex;
 
@@ -272,7 +272,7 @@ public class SearchableRangeList
                         break;
 
                     if (ri >= minIndex && ri < minScanIndex)
-                        forEachScanOrCheckpoint.accept(p1, p2, p3, ri);
+                        forEachScanOrCheckpoint.accept(p1, p2, p3, p4, ri);
                 }
             }
             else
@@ -284,17 +284,17 @@ public class SearchableRangeList
                     break;
 
                 if (ri >= minIndex && ri < minScanIndex)
-                    forEachScanOrCheckpoint.accept(p1, p2, p3, ri);
+                    forEachScanOrCheckpoint.accept(p1, p2, p3, p4, ri);
             }
         }
 
         for (int i = minScanIndex; i < floor ; ++i)
         {
             if (ranges[i].end().compareTo(startBound) > cmpStartBoundWithEnd)
-                forEachScanOrCheckpoint.accept(p1, p2, p3, i);
+                forEachScanOrCheckpoint.accept(p1, p2, p3, p4, i);
         }
 
-        forEachRange.accept(p1, p2, p3, start, end);
+        forEachRange.accept(p1, p2, p3, p4, start, end);
         return end;
     }
 
