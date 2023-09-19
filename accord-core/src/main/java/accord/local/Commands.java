@@ -1209,7 +1209,8 @@ public class Commands
         if (minWaitingOnTxnId != null && commandStore.hasLocallyRedundantDependencies(update.minWaitingOnTxnId(), current.executeAt(), current.route().participants()))
             safeStore.commandStore().removeRedundantDependencies(current.route().participants(), update);
 
-        if (isPreBootstrap) update.removeWaitingOn(redundant); // above operation not guaranteed to remove all redundant dependencies; transaction may
+        // if we are a range transaction, being redundant for this transaction does not imply we are redundant for all transactions
+        if (isPreBootstrap || redundant.domain().isRange()) update.removeWaitingOn(redundant);
         else update.removeInvalidatedAppliedOrTruncated(redundant);
         return safeCommand.updateWaitingOn(update);
     }

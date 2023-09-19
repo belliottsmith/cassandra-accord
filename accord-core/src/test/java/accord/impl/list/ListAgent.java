@@ -83,7 +83,7 @@ public class ListAgent implements Agent
     @Override
     public void onStale(Timestamp staleSince, Ranges ranges)
     {
-
+        onStale.accept(staleSince, ranges);
     }
 
     @Override
