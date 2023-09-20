@@ -709,7 +709,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public <T> T mapReduce(Seekables<?, ?> keysOrRanges, Ranges slice, TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp, TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus, CommandFunction<T, T> map, T accumulate, T terminalValue)
+        public <P1, T> T mapReduce(Seekables<?, ?> keysOrRanges, Ranges slice, TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp, TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus, CommandFunction<P1, T, T> map, P1 p1, T accumulate, T terminalValue)
         {
             accumulate = commandStore.mapReduceForKey(this, keysOrRanges, slice, (forKey, prev) -> {
                 CommandTimeseries<?> timeseries;
@@ -736,7 +736,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     case MAY_EXECUTE_BEFORE:
                         remapTestTimestamp = CommandTimeseries.TestTimestamp.BEFORE;
                 }
-                return timeseries.mapReduce(testKind, remapTestTimestamp, timestamp, testDep, depId, minStatus, maxStatus, map, prev, terminalValue);
+                return timeseries.mapReduce(testKind, remapTestTimestamp, timestamp, testDep, depId, minStatus, maxStatus, map, p1, prev, terminalValue);
             }, accumulate, terminalValue);
 
             if (accumulate.equals(terminalValue))
@@ -784,7 +784,8 @@ public abstract class InMemoryCommandStore extends CommandStore
                     if (!command.known().deps.hasProposedOrDecidedDeps())
                         return;
 
-                    if ((testDep == WITH) == !command.partialDeps().contains(depId))
+                    // TODO (required): ensure C* matches this behaviour
+                    if ((testDep == WITH) == !command.partialDeps().intersects(depId, rangeCommand.ranges))
                         return;
                 }
 
@@ -837,7 +838,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 for (Map.Entry<TxnId, Timestamp> command : e.getValue())
                 {
                     T initial = accumulate;
-                    accumulate = map.apply(e.getKey(), command.getKey(), command.getValue(), initial);
+                    accumulate = map.apply(p1, e.getKey(), command.getKey(), command.getValue(), initial);
                     if (accumulate.equals(terminalValue))
                         return accumulate;
                 }

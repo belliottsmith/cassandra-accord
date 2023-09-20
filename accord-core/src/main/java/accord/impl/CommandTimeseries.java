@@ -116,10 +116,10 @@ public class CommandTimeseries<D>
      * <p>
      * TODO (expected, efficiency): TestDep should be asynchronous; data should not be kept memory-resident as only used for recovery
      */
-    public <T> T mapReduce(SafeCommandStore.TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
+    public <P1, T> T mapReduce(SafeCommandStore.TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
                            SafeCommandStore.TestDep testDep, @Nullable TxnId depId,
                            @Nullable Status minStatus, @Nullable Status maxStatus,
-                           SafeCommandStore.CommandFunction<T, T> map, T initialValue, T terminalValue)
+                           SafeCommandStore.CommandFunction<P1, T, T> map, P1 p1, T initialValue, T terminalValue)
     {
 
         for (D data : (testTimestamp == TestTimestamp.BEFORE ? commands.headMap(timestamp, false) : commands.tailMap(timestamp, false)).values())
@@ -136,7 +136,7 @@ public class CommandTimeseries<D>
             if (testDep != ANY_DEPS && (!status.known.deps.hasProposedOrDecidedDeps() || (deps.contains(depId) != (testDep == WITH))))
                 continue;
             Timestamp executeAt = loader.executeAt(data);
-            initialValue = map.apply(keyOrRange, txnId, executeAt, initialValue);
+            initialValue = map.apply(p1, keyOrRange, txnId, executeAt, initialValue);
             if (initialValue.equals(terminalValue))
                 break;
         }

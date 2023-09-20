@@ -927,7 +927,7 @@ public class Commands
             case PRE_BOOTSTRAP_OR_STALE:
             case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                 return NO;
-            case LOCALLY_REDUNDANT:
+            case SHARD_REDUNDANT:
                 if (status.hasBeen(PreCommitted) && !status.hasBeen(Applied) && redundantBefore.preBootstrapOrStale(txnId, toEpoch, route.participants()) != FULLY)
                     illegalState("Loading redundant command that has been PreCommitted but not Applied");
         }
@@ -1021,7 +1021,7 @@ public class Commands
                         {
                             default: throw new AssertionError("Unexpected redundant status: " + redundantStatus);
                             case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
-                            case LOCALLY_REDUNDANT:
+                            case SHARD_REDUNDANT:
                             case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                             case PRE_BOOTSTRAP_OR_STALE:
                                 removeRedundantDependencies(safeStore, prevSafe, txnIds[depth], redundantStatus == PRE_BOOTSTRAP_OR_STALE);
@@ -1126,7 +1126,7 @@ public class Commands
 
                         case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                         case PRE_BOOTSTRAP_OR_STALE:
-                        case LOCALLY_REDUNDANT:
+                        case SHARD_REDUNDANT:
                             Invariants.checkState(cur.hasBeen(Applied) || !cur.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP_OR_STALE);
                             if (prev == null)
                                 return;

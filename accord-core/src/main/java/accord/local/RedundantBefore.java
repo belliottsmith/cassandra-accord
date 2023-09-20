@@ -40,7 +40,7 @@ import static accord.local.RedundantBefore.PreBootstrapOrStale.PARTIALLY;
 import static accord.local.RedundantStatus.LIVE;
 import static accord.local.RedundantStatus.NOT_OWNED;
 import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
-import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.SHARD_REDUNDANT;
 
 public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 {
@@ -149,10 +149,10 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
         RedundantStatus get(TxnId txnId)
         {
-            if (redundantBefore.compareTo(txnId) > 0)
-                return LOCALLY_REDUNDANT;
             if (staleUntilAtLeast != null || bootstrappedAt.compareTo(txnId) > 0)
                 return PRE_BOOTSTRAP_OR_STALE;
+            if (redundantBefore.compareTo(txnId) > 0)
+                return SHARD_REDUNDANT;
             return LIVE;
         }
 

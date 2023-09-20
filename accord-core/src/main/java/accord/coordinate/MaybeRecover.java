@@ -93,6 +93,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                         Invalidate.invalidate(node, txnId, someRoute, callback);
                         break;
                     }
+                    // fall through otherwise to recovery
 
                 case Apply:
                     // we have included the home key, and one that witnessed the definition has responded, so it should also know the full route
@@ -102,8 +103,8 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     }
                     else
                     {
-                        Invariants.checkState(Route.isFullRoute(merged.route), "Require a full route but given %s", merged.route);
-                        node.recover(txnId, Route.castToFullRoute(merged.route)).addCallback(callback);
+                        Invariants.checkState(Route.isFullRoute(someRoute), "Require a full route but given %s", merged.route);
+                        node.recover(txnId, Route.castToFullRoute(someRoute)).addCallback(callback);
                     }
                     break;
 

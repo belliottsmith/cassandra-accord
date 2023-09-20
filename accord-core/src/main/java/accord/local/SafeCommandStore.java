@@ -53,9 +53,9 @@ import static accord.primitives.Txn.Kind.Write;
  */
 public abstract class SafeCommandStore
 {
-    public interface CommandFunction<I, O>
+    public interface CommandFunction<P1, I, O>
     {
-        O apply(Seekable keyOrRange, TxnId txnId, Timestamp executeAt, I in);
+        O apply(P1 p1, Seekable keyOrRange, TxnId txnId, Timestamp executeAt, I in);
     }
 
     public enum TestTimestamp
@@ -213,10 +213,10 @@ public abstract class SafeCommandStore
      * Visits keys first and then ranges, both in ascending order.
      * Within each key or range visits TxnId in ascending order of queried timestamp.
      */
-    public abstract <T> T mapReduce(Seekables<?, ?> keys, Ranges slice,
+    public abstract <P1, T> T mapReduce(Seekables<?, ?> keys, Ranges slice,
                     TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
                     TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus,
-                    CommandFunction<T, T> map, T initialValue, T terminalValue);
+                    CommandFunction<P1, T, T> map, P1 p1, T initialValue, T terminalValue);
 
     protected abstract void register(Seekables<?, ?> keysOrRanges, Ranges slice, Command command);
     protected abstract void register(Seekable keyOrRange, Ranges slice, Command command);

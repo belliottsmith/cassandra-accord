@@ -211,8 +211,8 @@ public abstract class CommandStore implements AgentExecutor
                                    SafeCommandStore.TestTimestamp.STARTED_AFTER, Timestamp.NONE,
                                    SafeCommandStore.TestDep.ANY_DEPS, null,
                                    Status.PreApplied, Status.Truncated,
-                                   (key, txnId, executeAt, max) -> Timestamp.max(max, executeAt),
-                                   Timestamp.NONE, Timestamp.MAX);
+                                   (p1, key, txnId, executeAt, max) -> Timestamp.max(max, executeAt),
+                                   null, Timestamp.NONE, Timestamp.MAX);
     }
 
     public AsyncChain<Timestamp> maxAppliedFor(Seekables<?, ?> keysOrRanges, Ranges slice)

@@ -29,7 +29,6 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.*;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -37,6 +36,7 @@ import java.util.function.Predicate;
 import static accord.utils.ArrayBuffers.*;
 import static accord.utils.RelationMultiMap.*;
 import static accord.utils.SortedArrays.Search.CEIL;
+import static accord.utils.SortedArrays.Search.FAST;
 
 /**
  * <p>Maintains a lazily-constructed, bidirectional map between Range and TxnId.
@@ -428,6 +428,59 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         // by txnId, or else have some post-filter, which probably isn't worth the effort.
         // This occurs when a range transaction or sync point is sliced differently on different replicas
         return Ranges.ofSorted(result);
+    }
+
+    public boolean intersects(TxnId txnId, Ranges ranges)
+    {
+        int txnIdx = Arrays.binarySearch(txnIds, txnId);
+        if (txnIdx < 0)
+            return false;
+
+        return intersects(txnIdx, ranges);
+    }
+
+    public boolean intersects(int txnIdx, Ranges intersects)
+    {
+        ensureTxnIdToRange();
+
+        int start = txnIdx == 0 ? txnIds.length : txnIdsToRanges[txnIdx - 1];
+        int end = txnIdsToRanges[txnIdx];
+        if (start == end)
+            return false;
+
+        int li = start, ri = 0;
+        while (li < end && ri < intersects.size())
+        {
+            ri = intersects.findNext(ri, ranges[txnIdsToRanges[li]], FAST);
+            if (ri >= 0) return true;
+            ri = -1 - ri;
+            ++li;
+        }
+        return false;
+    }
+
+    public boolean intersects(TxnId txnId, RoutableKey key)
+    {
+        int txnIdx = Arrays.binarySearch(txnIds, txnId);
+        if (txnIdx < 0)
+            throw new IllegalArgumentException("Key not found");
+
+        return intersects(txnIdx, key);
+    }
+
+    public boolean intersects(int txnIdx, RoutableKey key)
+    {
+        ensureTxnIdToRange();
+
+        int start = txnIdx == 0 ? txnIds.length : txnIdsToRanges[txnIdx - 1];
+        int end = txnIdsToRanges[txnIdx];
+        for (int i = start ; i < end ; ++i)
+        {
+            int c = ranges[i].compareTo(key);
+            if (c == 0) return true;
+            if (c > 0) return false;
+        }
+        return false;
     }
 
     public <P1, V> V foldEachRange(int txnIdx, P1 p1, V accumulate, TriFunction<P1, Range, V, V> fold)

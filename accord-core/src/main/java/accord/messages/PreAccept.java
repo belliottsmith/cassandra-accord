@@ -259,12 +259,11 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
         //       This is necessary for reporting to a bootstrapping replica which TxnId it must not prune from dependencies
         //       i.e. the source replica reports to the target replica those TxnId that STARTED_BEFORE and EXECUTES_AFTER.
         commandStore.mapReduce(keys, ranges, testKind, STARTED_BEFORE, executeAt, ANY_DEPS, null, null, null,
-                (keyOrRange, testTxnId, testExecuteAt, in) -> {
-                    // TODO (easy, efficiency): either pass txnId as parameter or encode this behaviour in a specialised builder to avoid extra allocations
-                    if (!testTxnId.equals(txnId))
+                (txnId0, keyOrRange, testTxnId, testExecuteAt, in) -> {
+                    if (!testTxnId.equals(txnId0))
                         in.add(keyOrRange, testTxnId);
                     return in;
-                }, builder, null);
+                }, txnId, builder, null);
         return builder.build();
     }
 

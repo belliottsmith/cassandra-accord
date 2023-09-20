@@ -36,6 +36,8 @@ import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Ranges;
+import accord.primitives.Routable;
+import accord.primitives.Seekable;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -341,11 +343,11 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
         {
             // any transaction that started
             safeStore.mapReduce(keys, ranges, shouldHaveWitnessed(startedBefore.rw()), STARTED_BEFORE, startedBefore, WITHOUT, startedBefore, Accepted, PreCommitted,
-                    (keyOrRange, txnId, executeAt, prev) -> {
-                        if (executeAt.compareTo(startedBefore) > 0)
+                    (startedBefore0, keyOrRange, txnId, executeAt, prev) -> {
+                        if (executeAt.compareTo(startedBefore0) > 0)
                             prev.add(keyOrRange, txnId);
                         return prev;
-                    }, builder, null);
+                    }, startedBefore, builder, null);
             return builder.build();
         }
     }
@@ -355,7 +357,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
         try (Deps.Builder builder = Deps.builder())
         {
             safeStore.mapReduce(keys, ranges, shouldHaveWitnessed(startedBefore.rw()), STARTED_BEFORE, startedBefore, WITH, startedBefore, Committed, null,
-                    (keyOrRange, txnId, executeAt, prev) -> prev.add(keyOrRange, txnId), (Deps.AbstractBuilder<Deps>)builder, null);
+                    (p1, keyOrRange, txnId, executeAt, prev) -> prev.add(keyOrRange, txnId), null, (Deps.AbstractBuilder<Deps>)builder, null);
             return builder.build();
         }
     }
@@ -372,7 +374,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
          * TODO (required): consider carefully how _adding_ ranges to a CommandStore affects this
          */
         return safeStore.mapReduce(keys, ranges, shouldHaveWitnessed(startedAfter.rw()), STARTED_AFTER, startedAfter, WITHOUT, startedAfter, Accepted, PreCommitted,
-                (keyOrRange, txnId, executeAt, prev) -> true, false, true);
+                (p1, keyOrRange, txnId, executeAt, prev) -> true, null, false, true);
     }
 
     private static boolean hasCommittedExecutesAfterWithoutWitnessing(SafeCommandStore safeStore, TxnId startedAfter, Ranges ranges, Seekables<?, ?> keys)
@@ -385,6 +387,6 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
          * has not witnessed us we can safely invalidate it.
          */
         return safeStore.mapReduce(keys, ranges, shouldHaveWitnessed(startedAfter.rw()), EXECUTES_AFTER, startedAfter, WITHOUT, startedAfter, Committed, null,
-                (keyOrRange, txnId, executeAt, prev) -> true, false, true);
+                (p1, keyOrRange, txnId, executeAt, prev) -> true, null, false, true);
     }
 }
