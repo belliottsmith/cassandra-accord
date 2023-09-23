@@ -813,7 +813,12 @@ public class Commands
     // TODO (now): document and justify all calls
     public static void setTruncatedApply(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        cleanup(safeStore, safeCommand, null, TRUNCATE, true);
+        setTruncatedApply(safeStore, safeCommand, null);
+    }
+
+    public static void setTruncatedApply(SafeCommandStore safeStore, SafeCommand safeCommand, Route<?> maybeFullRoute)
+    {
+        cleanup(safeStore, safeCommand, maybeFullRoute, TRUNCATE, true);
     }
 
     public static void setErased(SafeCommandStore safeStore, SafeCommand safeCommand)

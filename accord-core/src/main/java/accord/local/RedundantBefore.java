@@ -147,6 +147,17 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return safeToRead;
         }
 
+        static Ranges expectToExecute(Entry entry, @Nonnull Ranges executeRanges, TxnId txnId, Timestamp executeAt)
+        {
+            if (entry == null || entry.outOfBounds(txnId, executeAt))
+                return executeRanges;
+
+            if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
+                return executeRanges.subtract(Ranges.of(entry.range));
+
+            return executeRanges;
+        }
+
         RedundantStatus get(TxnId txnId)
         {
             if (staleUntilAtLeast != null || bootstrappedAt.compareTo(txnId) > 0)
@@ -295,19 +306,23 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
      * RedundantStatus.REDUNDANT overrides PRE_BOOTSTRAP; to avoid complicating that state machine,
      * for cases where we care independently about the overall pre-bootstrap state we have a separate mechanism
      */
-    public PreBootstrapOrStale preBootstrapOrStale(TxnId txnId, EpochSupplier executeAt, Participants<?> participants)
+    public PreBootstrapOrStale preBootstrapOrStale(TxnId txnId, @Nullable EpochSupplier executeAt, Participants<?> participants)
     {
         if (executeAt == null) executeAt = txnId;
         return foldl(participants, Entry::getAndMerge, PreBootstrapOrStale.NOT_OWNED, txnId, executeAt, r -> r == PARTIALLY);
     }
 
-    /**
-     * RedundantStatus.REDUNDANT overrides PRE_BOOTSTRAP; to avoid complicating that state machine,
-     * for cases where we care independently about the overall pre-bootstrap state we have a separate mechanism
-     */
     public Ranges validateSafeToRead(Timestamp forBootstrapAt, Ranges ranges)
     {
         return foldl(ranges, Entry::validateSafeToRead, ranges, forBootstrapAt, null, r -> false);
+    }
+
+    /**
+     * Subtract any ranges we consider stale or pre-bootstrap
+     */
+    public Ranges expectToExecute(TxnId txnId, Timestamp executeAt, Ranges ranges)
+    {
+        return foldl(ranges, Entry::expectToExecute, ranges, txnId, executeAt, r -> false);
     }
 
     /**

@@ -593,7 +593,8 @@ public enum Status
             Ballot accepted = getAccepted.apply(item);
             boolean update = max == null
                           || maxStatus.phase.compareTo(status.phase) < 0
-                          || (status.phase.equals(Phase.Accept) && maxAccepted.compareTo(accepted) < 0);
+                          || (status.phase == Accept && maxAccepted.compareTo(accepted) < 0)
+                          || status.phase != Accept && maxStatus.phase == status.phase && maxStatus.compareTo(status) > 0;
 
             if (!update)
                 continue;

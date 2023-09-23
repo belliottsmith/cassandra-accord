@@ -70,16 +70,21 @@ public enum SaveStatus
     ReadyToExecute                  (Status.ReadyToExecute,                                                                                        LocalExecution.ReadyToExecute),
     PreApplied                      (Status.PreApplied,                                                                                            LocalExecution.WaitingToApply),
     Applying                        (Status.PreApplied,                                                                                            LocalExecution.Applying),
+    // similar to Truncated, but doesn't imply we have any global knowledge about application
     Applied                         (Status.Applied,                                                                                               LocalExecution.Applied),
     // TruncatedApplyWithDeps is a state never adopted within a single replica; it is however a useful state we may enter by combining state from multiple replicas
     // TODO (desired): if we migrate away from SaveStatus in CheckStatusOk towards Known we can remove this TruncatedApplyWithDeps
     TruncatedApplyWithDeps          (Status.Truncated,             Full,    DefinitionUnknown, ExecuteAtKnown,    DepsKnown,    Outcome.Apply,    CleaningUp),
     TruncatedApplyWithOutcome       (Status.Truncated,             Full,    DefinitionUnknown, ExecuteAtKnown,    DepsUnknown,  Outcome.Apply,    CleaningUp),
     TruncatedApply                  (Status.Truncated,             Full,    DefinitionUnknown, ExecuteAtKnown,    DepsUnknown,  Outcome.WasApply, CleaningUp),
+    // Expunged means the command is either entirely pre-bootstrap or stale and we don't have enough information to move it through the normal redundant->truncation path (i.e. it might be truncated, it might be applied)
     Erased                          (Status.Truncated,             Maybe,   DefinitionUnknown, ExecuteAtUnknown,  DepsUnknown,  Outcome.Erased,   CleaningUp),
     Invalidated                     (Status.Invalidated,                                                                                          CleaningUp),
     ;
 
+    /**
+     * Note that this is a LOCAL concept ONLY, and should not be used to infer anything remotely.
+     */
     public enum LocalExecution
     {
         NotReady(Nothing),

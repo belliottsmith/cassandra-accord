@@ -25,6 +25,7 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SaveStatus;
@@ -41,6 +42,7 @@ import javax.annotation.Nullable;
 
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.local.PreLoadContext.contextFor;
+import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
 import static accord.local.Status.PreApplied;
@@ -353,6 +355,7 @@ public class FetchData extends CheckShards<Route<?>>
         {
             SafeCommand safeCommand = safeStore.get(txnId, this, route);
             Command command = safeCommand.current();
+
             PartialTxn partialTxn = this.partialTxn;
             PartialDeps partialDeps = this.partialDeps;
             switch (command.saveStatus().phase)
@@ -398,6 +401,7 @@ public class FetchData extends CheckShards<Route<?>>
                 // TODO (expected): maybe stale?
                 return updateDurability(safeStore, safeCommand);
             }
+            Timestamp executeAt = command.executeAtIfKnown(full.executeAt);
 
             switch (propagate)
             {
@@ -415,20 +419,20 @@ public class FetchData extends CheckShards<Route<?>>
 
                 case Applied:
                 case PreApplied:
-                    Invariants.checkState(full.executeAt != null);
-                    if (toEpoch >= full.executeAt.epoch())
+                    Invariants.checkState(executeAt != null);
+                    if (toEpoch >= executeAt.epoch())
                     {
-                        confirm(Commands.apply(safeStore, safeCommand, txnId, route, progressKey, full.executeAt, partialDeps, partialTxn, full.writes, full.result));
+                        confirm(Commands.apply(safeStore, safeCommand, txnId, route, progressKey, executeAt, partialDeps, partialTxn, full.writes, full.result));
                         break;
                     }
 
                 case Committed:
                 case ReadyToExecute:
-                    confirm(Commands.commit(safeStore, safeCommand, txnId, route, progressKey, partialTxn, full.executeAt, partialDeps));
+                    confirm(Commands.commit(safeStore, safeCommand, txnId, route, progressKey, partialTxn, executeAt, partialDeps));
                     break;
 
                 case PreCommitted:
-                    Commands.precommit(safeStore, safeCommand, txnId, full.executeAt, route);
+                    Commands.precommit(safeStore, safeCommand, txnId, executeAt, route);
                     if (!achieved.definition.isKnown())
                         break;
 
@@ -465,29 +469,38 @@ public class FetchData extends CheckShards<Route<?>>
                 return null;
             }
 
-            // TODO (required): erasing implies that the whole command has been fully applied globally, when in fact it
-            //  might only be a single shard that has Truncated its state. The simplest thing for us here to ensure consistency
-            //  is to permit partial application where possible, instead of erasing the whole state; we could also consider
-            //  more clearly reifying the difference between Erased and Truncated(WithoutAnyKnowledge).
-            //  In practice this may not be important, because a coordinator cannot have relied on this replica's vote for durability
-            //  and so our Erased vote should not adversely impact any inferences from a quorum of responses. But for consistency
-            //  and ease of logic this is best to retain.
             // we're now at least partially stale, but let's first see if we can progress this shard, or we can do so in part
             Timestamp executeAt = command.executeAtIfKnown(full.executeAtIfKnown());
             if (executeAt == null)
             {
                 // we don't even know the execution time, so we cannot possibly proceed besides erasing the command state and marking ourselves stale
+                // TODO (required): we could in principle be stale for future epochs we haven't witnessed yet. Ensure up to date epochs before finalising this application.
                 safeStore.commandStore().markShardStale(safeStore, txnId, route.participants().toRanges(), false);
                 Commands.setErased(safeStore, safeCommand);
                 return null;
             }
 
             Ranges executeRanges = safeStore.ranges().allBetween(txnId, executeAt);
+            executeRanges = safeStore.commandStore().redundantBefore().expectToExecute(txnId, executeAt, executeRanges);
+
+            if (executeRanges.isEmpty())
+            {
+                // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
+                Commands.setTruncatedApply(safeStore, safeCommand, route);
+                return null;
+            }
 
             Known required = PreApplied.minKnown;
             Known requireExtra = required.subtract(command.known());
             Ranges achieveRanges = full.sufficientFor(requireExtra, executeRanges);
             Participants<?> participants = route.participants().slice(executeRanges, Minimal);
+
+            if (participants.isEmpty())
+            {
+                // we only coordinate this transaction, so being unable to retrieve its state does not imply any staleness
+                Commands.setTruncatedApply(safeStore, safeCommand, route);
+                return null;
+            }
 
             Ranges staleRanges = executeRanges.subtract(achieveRanges);
             Participants<?> staleParticipants = participants.slice(staleRanges, Minimal);
@@ -499,12 +512,12 @@ public class FetchData extends CheckShards<Route<?>>
                 return required;
             }
 
-            // TODO (expected): try to partially apply the transaction locally to limit the ranges we have to mark dead
             safeStore.commandStore().markShardStale(safeStore, executeAt, staleRanges, true);
             if (!staleRanges.containsAll(participants))
                 return required;
 
-            Commands.setErased(safeStore, safeCommand);
+            // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
+            Commands.setTruncatedApply(safeStore, safeCommand, route);
             return null;
         }
 
