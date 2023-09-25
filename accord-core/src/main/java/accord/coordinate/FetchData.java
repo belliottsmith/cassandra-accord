@@ -25,7 +25,6 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.PreLoadContext;
-import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SaveStatus;
@@ -42,7 +41,6 @@ import javax.annotation.Nullable;
 
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.local.PreLoadContext.contextFor;
-import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
 import static accord.local.Status.PreApplied;
@@ -270,10 +268,10 @@ public class FetchData extends CheckShards<Route<?>>
             this.callback = callback;
         }
 
-        @SuppressWarnings({"rawtypes", "unchecked"})
+        @SuppressWarnings({"rawtypes"})
         public static void propagate(Node node, TxnId txnId, long sourceEpoch, WithQuorum withQuorum, Route route, @Nullable Known target, CheckStatusOkFull full, BiConsumer<Known, Throwable> callback)
         {
-            if (full.saveStatus.status == NotDefined && full.invalidIfNotAtLeast == NotDefined)
+            if (full.saveStatus.status == NotDefined && full.maxInvalidIfNotAtLeast == NotDefined)
             {
                 callback.accept(Known.Nothing, null);
                 return;

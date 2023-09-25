@@ -617,6 +617,11 @@ public enum Status
         return b;
     }
 
+    public static Status simpleMin(Status a, Status b)
+    {
+        return a.compareTo(b) <= 0 ? a : b;
+    }
+
     public static Status simpleMax(Status a, Status b)
     {
         return a.compareTo(b) >= 0 ? a : b;

@@ -31,6 +31,7 @@ import accord.local.SafeCommandStore;
 import accord.local.SaveStatus;
 import accord.local.Status;
 import accord.messages.CheckStatus;
+import accord.primitives.Ballot;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
@@ -42,6 +43,7 @@ import accord.utils.MapReduceConsume;
 
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.Durability.Majority;
+import static accord.local.Status.NotDefined;
 import static accord.local.Status.PreAccepted;
 import static accord.local.Status.PreApplied;
 import static accord.local.Status.PreCommitted;
@@ -168,7 +170,7 @@ public class Infer
         return Status.NotDefined;
     }
 
-    public static boolean inferInvalidated(CheckStatus.WithQuorum withQuorum, Status invalidIfNotAtLeast, SaveStatus saveStatus, SaveStatus maxSaveStatus)
+    public static boolean inferInvalidated(CheckStatus.WithQuorum withQuorum, Status minInvalidIfNotAtLeast, Status maxInvalidIfNotAtLeast, SaveStatus saveStatus, SaveStatus maxSaveStatus, Ballot minPromised)
     {
         if (saveStatus == SaveStatus.Invalidated)
             return true;
@@ -176,9 +178,15 @@ public class Infer
         if (withQuorum != HasQuorum)
             return false;
 
-        // should not be possible to reach a quorum without finding the definition unless cleanup is in progress
-        Invariants.checkState(saveStatus != SaveStatus.Accepted || maxSaveStatus.phase == Status.Phase.Cleanup);
+        // if everyone has witnessed a recovery, or everyone had invalidIfNotAtLeast, then we can rely on any inference;
+        // otherwise we might have raced with the original coordinator, and only witnessed part of their effects
+        Status invalidIfNotAtLeast = minPromised.compareTo(Ballot.ZERO) > 0 ? maxInvalidIfNotAtLeast : minInvalidIfNotAtLeast;
+        if (invalidIfNotAtLeast == NotDefined)
+            return false;
 
+        // we could reach a quorum without finding the definition without having to have entered the cleanup phase if
+        // we began our query before the pre-accepts arrived, however the above condition should exit in this case
+        Invariants.checkState(saveStatus != SaveStatus.Accepted || maxSaveStatus.phase == Status.Phase.Cleanup);
         if (maxSaveStatus.status.compareTo(invalidIfNotAtLeast) < 0)
             return true;
 

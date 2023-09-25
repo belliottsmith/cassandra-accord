@@ -82,12 +82,15 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         {
             return new CheckStatusOk(truncated, invalidIfNotAtLeast, status, maxStatus, promised, accepted, executeAt, isCoordinating, durability, route, homeKey);
         }
-        public static CheckStatusOk createOk(Ranges truncated, Status invalidIfNotAtLeast, SaveStatus status, SaveStatus maxStatus, Ballot promised, Ballot accepted, @Nullable Timestamp executeAt,
+        public static CheckStatusOk createOk(Ranges truncated, Status minInvalidIfNotAtLeast, Status maxInvalidIfNotAtLeast,
+                                             SaveStatus status, SaveStatus maxStatus,
+                                             Ballot minPromised, Ballot maxPromised, Ballot accepted,
+                                             @Nullable Timestamp executeAt,
                                              boolean isCoordinating, Durability durability,
                                              @Nullable Route<?> route, @Nullable RoutingKey homeKey,
                                              PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, Result result)
         {
-            return new CheckStatusOkFull(truncated, invalidIfNotAtLeast, status, maxStatus, promised, accepted, executeAt, isCoordinating, durability, route, homeKey,
+            return new CheckStatusOkFull(truncated, minInvalidIfNotAtLeast, maxInvalidIfNotAtLeast, status, maxStatus, minPromised, maxPromised, accepted, executeAt, isCoordinating, durability, route, homeKey,
                                          partialTxn, committedDeps, writes, result);
         }
     }
@@ -207,12 +210,12 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
     {
         // TODO (required): tighten up constraints here to ensure we only report truncated when the range is Durable
         public final Ranges truncated;
-        public final Status invalidIfNotAtLeast;
+        public final Status minInvalidIfNotAtLeast, maxInvalidIfNotAtLeast;
         // TODO (expected): stop using saveStatus and maxSaveStatus - move to only Known
         //   care needed when merging Accepted and AcceptedInvalidate; might be easier to retain saveStatus only for merging these cases
         public final SaveStatus saveStatus; // the maximum non-truncated status; or truncated if all responses are truncated
         public final SaveStatus maxSaveStatus;
-        public final Ballot promised;
+        public final Ballot minPromised, maxPromised;
         public final Ballot accepted;
         public final @Nullable Timestamp executeAt; // not set if invalidating or invalidated
         public final boolean isCoordinating;
@@ -236,11 +239,22 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
                               boolean isCoordinating, Durability durability,
                               @Nullable Route<?> route, @Nullable RoutingKey homeKey)
         {
+            this(truncated, invalidIfNotAtLeast, invalidIfNotAtLeast, saveStatus, maxSaveStatus, promised, promised, accepted, executeAt, isCoordinating, durability, route, homeKey);
+        }
+
+        private CheckStatusOk(Ranges truncated, Status minInvalidIfNotAtLeast, Status maxInvalidIfNotAtLeast,
+                              SaveStatus saveStatus, SaveStatus maxSaveStatus,
+                              Ballot minPromised, Ballot maxPromised, Ballot accepted,
+                              @Nullable Timestamp executeAt, boolean isCoordinating, Durability durability,
+                              @Nullable Route<?> route, @Nullable RoutingKey homeKey)
+        {
             this.truncated = truncated;
-            this.invalidIfNotAtLeast = invalidIfNotAtLeast;
+            this.minInvalidIfNotAtLeast = minInvalidIfNotAtLeast;
+            this.maxInvalidIfNotAtLeast = maxInvalidIfNotAtLeast;
             this.saveStatus = saveStatus;
             this.maxSaveStatus = maxSaveStatus;
-            this.promised = promised;
+            this.minPromised = minPromised;
+            this.maxPromised = maxPromised;
             this.accepted = accepted;
             this.executeAt = executeAt;
             this.isCoordinating = isCoordinating;
@@ -252,7 +266,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         public ProgressToken toProgressToken()
         {
             Status status = maxSaveStatus.status;
-            return new ProgressToken(durability, status, promised, accepted);
+            return new ProgressToken(durability, status, maxPromised, accepted);
         }
 
         public Timestamp executeAtIfKnown()
@@ -269,7 +283,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public boolean inferInvalidated(WithQuorum withQuorum)
         {
-            return Infer.inferInvalidated(withQuorum, invalidIfNotAtLeast, saveStatus, maxSaveStatus);
+            return Infer.inferInvalidated(withQuorum, minInvalidIfNotAtLeast, maxInvalidIfNotAtLeast, saveStatus, maxSaveStatus, minPromised);
         }
 
         public Known inferredOrKnown(WithQuorum withQuorum)
@@ -291,7 +305,11 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         {
             return "CheckStatusOk{" +
                    "status:" + saveStatus +
-                   ", promised:" + promised +
+                   "maxSaveStatus:" + maxSaveStatus +
+                   ", minInvalidIfNotAtLeast:" + minInvalidIfNotAtLeast +
+                   ", maxInvalidIfNotAtLeast:" + maxInvalidIfNotAtLeast +
+                   ", minPromised:" + minPromised +
+                   ", maxPromised:" + maxPromised +
                    ", accepted:" + accepted +
                    ", executeAt:" + executeAt +
                    ", durability:" + durability +
@@ -325,19 +343,24 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             CheckStatusOk maxStatus = SaveStatus.max(prefer, prefer.saveStatus, prefer.accepted, defer, defer.saveStatus, defer.accepted, true);
             SaveStatus mergeStatus = SaveStatus.merge(prefer.saveStatus, prefer.accepted, defer.saveStatus, defer.accepted, true);
             SaveStatus mergeMaxStatus = SaveStatus.merge(prefer.saveStatus, prefer.accepted, defer.saveStatus, defer.accepted, false);
-            CheckStatusOk maxPromised = prefer.promised.compareTo(defer.promised) >= 0 ? prefer : defer;
+            CheckStatusOk maxPromised = prefer.maxPromised.compareTo(defer.maxPromised) >= 0 ? prefer : defer;
+            CheckStatusOk minPromised = prefer.minPromised.compareTo(defer.minPromised) <= 0 ? prefer : defer;
             CheckStatusOk maxAccepted = prefer.accepted.compareTo(defer.accepted) >= 0 ? prefer : defer;
             CheckStatusOk maxHomeKey = prefer.homeKey != null || defer.homeKey == null ? prefer : defer;
             CheckStatusOk maxExecuteAt = prefer.saveStatus.known.executeAt.compareTo(defer.saveStatus.known.executeAt) >= 0 ? prefer : defer;
             Route<?> mergedRoute = Route.merge(prefer.route, (Route)defer.route);
             Ranges mergedTruncated = prefer.truncated.with(defer.truncated);
-            Status mergedInvalidIfNotAtLeast = Status.simpleMax(prefer.invalidIfNotAtLeast, defer.invalidIfNotAtLeast);
+            Status minInvalidIfNotAtLeast = Status.simpleMin(prefer.minInvalidIfNotAtLeast, defer.minInvalidIfNotAtLeast);
+            Status maxInvalidIfNotAtLeast = Status.simpleMax(prefer.maxInvalidIfNotAtLeast, defer.maxInvalidIfNotAtLeast);
             Durability mergedDurability = Durability.merge(prefer.durability, defer.durability);
 
             // if the maximum (or preferred equal) is the same on all dimensions, return it
-            if (mergeStatus == maxStatus.saveStatus && maxStatus == maxPromised && maxStatus == maxAccepted
+            if (mergeStatus == maxStatus.saveStatus
+                && maxStatus == maxPromised && maxStatus == minPromised && maxStatus == maxAccepted
                 && maxStatus == maxHomeKey && maxStatus == maxExecuteAt && maxStatus.route == mergedRoute
-                && maxStatus.truncated.equals(mergedTruncated) && maxStatus.invalidIfNotAtLeast == mergedInvalidIfNotAtLeast
+                && maxStatus.truncated.equals(mergedTruncated)
+                && maxStatus.minInvalidIfNotAtLeast == minInvalidIfNotAtLeast
+                && maxStatus.maxInvalidIfNotAtLeast == maxInvalidIfNotAtLeast
                 && maxStatus.durability == mergedDurability)
             {
                 return maxStatus;
@@ -345,8 +368,8 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
             // otherwise assemble the maximum of each, and propagate isCoordinating from the origin we selected the promise from
             boolean isCoordinating = maxPromised == prefer ? prefer.isCoordinating : defer.isCoordinating;
-            return new CheckStatusOk(mergedTruncated, mergedInvalidIfNotAtLeast, mergeStatus, mergeMaxStatus,
-                                     maxPromised.promised, maxAccepted.accepted, maxExecuteAt.executeAt,
+            return new CheckStatusOk(mergedTruncated, minInvalidIfNotAtLeast, maxInvalidIfNotAtLeast, mergeStatus, mergeMaxStatus,
+                                     minPromised.minPromised, maxPromised.maxPromised, maxAccepted.accepted, maxExecuteAt.executeAt,
                                      isCoordinating, mergedDurability, mergedRoute, maxHomeKey.homeKey);
         }
 
@@ -373,11 +396,11 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             this.result = command.result();
         }
 
-        protected CheckStatusOkFull(Ranges truncated, Status invalidIfNotCommitted, SaveStatus status, SaveStatus maxStatus, Ballot promised, Ballot accepted, Timestamp executeAt,
+        protected CheckStatusOkFull(Ranges truncated, Status minInvalidIfNotAtLeast, Status maxInvalidIfNotAtLeast, SaveStatus status, SaveStatus maxStatus, Ballot minPromised, Ballot maxPromised, Ballot accepted, Timestamp executeAt,
                                   boolean isCoordinating, Durability durability, Route<?> route,
                                   RoutingKey homeKey, PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, Result result)
         {
-            super(truncated, invalidIfNotCommitted, status, maxStatus, promised, accepted, executeAt, isCoordinating, durability, route, homeKey);
+            super(truncated, minInvalidIfNotAtLeast, maxInvalidIfNotAtLeast, status, maxStatus, minPromised, maxPromised, accepted, executeAt, isCoordinating, durability, route, homeKey);
             this.partialTxn = partialTxn;
             this.committedDeps = committedDeps;
             this.writes = writes;
@@ -406,7 +429,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             CheckStatusOk minSrc = maxSrc == this ? that : this;
             if (!(minSrc instanceof CheckStatusOkFull))
             {
-                return new CheckStatusOkFull(max.truncated, max.invalidIfNotAtLeast, max.saveStatus, max.maxSaveStatus, max.promised, max.accepted, fullMax.executeAt, max.isCoordinating, max.durability, max.route,
+                return new CheckStatusOkFull(max.truncated, max.minInvalidIfNotAtLeast, max.maxInvalidIfNotAtLeast, max.saveStatus, max.maxSaveStatus, max.minPromised, max.maxPromised, max.accepted, fullMax.executeAt, max.isCoordinating, max.durability, max.route,
                                              max.homeKey, fullMax.partialTxn, fullMax.committedDeps, fullMax.writes, fullMax.result);
             }
 
@@ -420,7 +443,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             Writes writes = (fullMax.writes != null ? fullMax : fullMin).writes;
             Result result = (fullMax.result != null ? fullMax : fullMin).result;
 
-            return new CheckStatusOkFull(max.truncated, max.invalidIfNotAtLeast, max.saveStatus, max.maxSaveStatus, max.promised, max.accepted, max.executeAt, max.isCoordinating, max.durability, max.route,
+            return new CheckStatusOkFull(max.truncated, max.minInvalidIfNotAtLeast, max.maxInvalidIfNotAtLeast, max.saveStatus, max.maxSaveStatus, max.minPromised, max.maxPromised, max.accepted, max.executeAt, max.isCoordinating, max.durability, max.route,
                                          max.homeKey, partialTxn, committedDeps, writes, result);
         }
 
@@ -429,14 +452,14 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             Route<?> mergedRoute = Route.merge((Route)this.route, route);
             if (mergedRoute == this.route)
                 return this;
-            return new CheckStatusOkFull(truncated, invalidIfNotAtLeast, saveStatus, maxSaveStatus, promised, accepted, executeAt,
+            return new CheckStatusOkFull(truncated, minInvalidIfNotAtLeast, maxInvalidIfNotAtLeast, saveStatus, maxSaveStatus, minPromised, maxPromised, accepted, executeAt,
                                          isCoordinating, durability, mergedRoute, homeKey, partialTxn, committedDeps, writes, result);
         }
 
         public CheckStatusOkFull merge(@Nonnull Durability durability)
         {
             durability = Durability.merge(durability, this.durability);
-            return new CheckStatusOkFull(truncated, invalidIfNotAtLeast, saveStatus, maxSaveStatus, promised, accepted, executeAt,
+            return new CheckStatusOkFull(truncated, minInvalidIfNotAtLeast, maxInvalidIfNotAtLeast, saveStatus, maxSaveStatus, minPromised, maxPromised, accepted, executeAt,
                                          isCoordinating, durability, route, homeKey, partialTxn, committedDeps, writes, result);
         }
 
@@ -536,7 +559,11 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         {
             return "CheckStatusOk{" +
                    "status:" + saveStatus +
-                   ", promised:" + promised +
+                   ", maxStatus:" + maxSaveStatus +
+                   ", minInvalidIfNotAtLeast:" + minInvalidIfNotAtLeast +
+                   ", maxInvalidIfNotAtLeast:" + maxInvalidIfNotAtLeast +
+                   ", minPromised:" + minPromised +
+                   ", maxPromised:" + maxPromised +
                    ", accepted:" + accepted +
                    ", executeAt:" + executeAt +
                    ", durability:" + durability +
