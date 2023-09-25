@@ -31,6 +31,7 @@ public interface Participants<K extends Unseekable> extends Unseekables<K>
     @Override
     Participants<K> slice(Ranges ranges, Slice slice);
     Participants<K> with(Participants<K> with);
+    Participants<K> subtract(Ranges ranges);
 
     Ranges toRanges();
 

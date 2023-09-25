@@ -33,6 +33,7 @@ import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialRoute;
+import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Txn;
@@ -43,6 +44,7 @@ import accord.utils.Invariants;
 import javax.annotation.Nullable;
 
 import static accord.local.Status.Durability.MajorityOrInvalidated;
+import static accord.local.Status.KnownDeps.DepsKnown;
 import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
 import static accord.local.Status.Outcome.Apply;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
@@ -163,19 +165,23 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 
             case WasApply:
             case Apply:
-                if (!known.isDefinitionKnown() || known.executeAt != ExecuteAtKnown || known.outcome != Apply)
+                if (!known.isDefinitionKnown())
                 {
                     CheckStatusOkFull propagate;
-                    if (!full.truncated.isEmpty() && known.executeAt == ExecuteAtKnown)
+                    if (!full.truncated.isEmpty())
                     {
                         // we might have only part of the full transaction, and a shard may have truncated;
                         // in this case we want to skip straight to apply, but only for the shards that haven't truncated
-                        Unseekables<?> sendTo = route.subtract(full.truncated);
+                        Participants<?> sendTo = route.participants().subtract(full.truncated);
                         if (!sendTo.isEmpty())
                         {
-                            Invariants.checkState(full.committedDeps.covering.containsAll(sendTo));
-                            Invariants.checkState(full.partialTxn.covering().containsAll(sendTo));
-                            Persist.persistPartialMaximal(node, txnId, sendTo, route, full.partialTxn, full.executeAt, full.committedDeps, full.writes, full.result);
+                            known = full.sufficientFor(sendTo, success.withQuorum);
+                            if (known.executeAt == ExecuteAtKnown && known.deps == DepsKnown)
+                            {
+                                Invariants.checkState(full.committedDeps.covering.containsAll(sendTo));
+                                Invariants.checkState(full.partialTxn.covering().containsAll(sendTo));
+                                Persist.persistPartialMaximal(node, txnId, sendTo, route, full.partialTxn, full.executeAt, full.committedDeps, full.writes, full.result);
+                            }
                             propagate = full;
                         }
                         else
@@ -195,7 +201,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 
                 // TODO (required): might not be able to fully recover transaction - may only have enough for local shard
                 Txn txn = full.partialTxn.reconstitute(route);
-                if (known.deps.hasDecidedDeps())
+                if (known.executeAt.hasDecidedExecuteAt() && known.deps.hasDecidedDeps() && known.outcome == Apply)
                 {
                     Deps deps = full.committedDeps.reconstitute(route());
                     node.withEpoch(full.executeAt.epoch(), () -> {

@@ -38,7 +38,7 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     }
 
     @Override
-    public Unseekables<RoutingKey> subtract(Ranges ranges)
+    public Participants<RoutingKey> subtract(Ranges ranges)
     {
         RoutingKey[] output = subtract(ranges, RoutingKey[]::new);
         return output == keys ? this : new RoutingKeys(output);
