@@ -280,6 +280,8 @@ public class FetchData extends CheckShards<Route<?>>
             Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.saveStatus == SaveStatus.Erased);
 
             full = full.merge(route);
+            if (withQuorum == HasQuorum)
+                full = full.withQuorum();
             route = Invariants.nonNull(full.route);
 
             // TODO (required): permit individual shards that are behind to catch up by themselves

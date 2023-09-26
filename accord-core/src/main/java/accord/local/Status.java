@@ -529,13 +529,19 @@ public enum Status
      * Represents the durability of a transaction's Persist phase.
      * NotDurable: the outcome has not been durably recorded
      * Local:      the outcome has been durably recorded at least locally
+     * ShardUniversalOrInvalidated: the outcome has been durably recorded at all healthy replicas of the shard, or is invalidated
+     * ShardUniversal:      the outcome has been durably recorded at all healthy replicas of the shard
+     * MajorityOrInvalidated:   the outcome has been durably recorded to a majority of each participating shard
      * Majority:   the outcome has been durably recorded to a majority of each participating shard
-     * Universal:  the outcome has been durably recorded to every participating replica
-     * DurableOrInvalidated:  the outcome was either invalidated, or has been durably recorded to every replica
+     * Universal:  the outcome has been durably recorded to every healthy replica
+     * DurableOrInvalidated:  the outcome was either invalidated, or has been durably recorded to every healthy replica
      */
     public enum Durability
     {
-        NotDurable, Local, MajorityOrInvalidated, Majority, UniversalOrInvalidated, Universal;
+        NotDurable, Local,
+        ShardUniversalOrInvalidated, ShardUniversal,
+        MajorityOrInvalidated, Majority,
+        UniversalOrInvalidated, Universal;
 
         public boolean isDurable()
         {
@@ -551,7 +557,17 @@ public enum Status
         {
             int c = a.compareTo(b);
             if (c < 0) { Durability tmp = a; a = b; b = tmp; }
-            if (a == UniversalOrInvalidated && b == Majority) a = Universal;
+            if (a == UniversalOrInvalidated && (b == Majority || b == ShardUniversal || b == Local)) a = Universal;
+            if ((a == ShardUniversal || a == ShardUniversalOrInvalidated) && (b == Local || b == NotDurable)) a = a == ShardUniversal ? Local : b;
+            if (b == NotDurable && a.compareTo(MajorityOrInvalidated) < 0) a = NotDurable;
+            return a;
+        }
+
+        public static Durability mergeAtLeast(Durability a, Durability b)
+        {
+            int c = a.compareTo(b);
+            if (c < 0) { Durability tmp = a; a = b; b = tmp; }
+            if (a == UniversalOrInvalidated && (b == Majority || b == ShardUniversal || b == Local)) a = Universal;
             return a;
         }
     }

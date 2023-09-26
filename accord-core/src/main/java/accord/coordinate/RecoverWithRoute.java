@@ -143,8 +143,8 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
             return;
         }
 
-        CheckStatusOkFull full = (CheckStatusOkFull) this.merged;
-        Known known = full.sufficientFor(route.participants(), success == Success.Quorum ? HasQuorum : NoQuorum);
+        CheckStatusOkFull full = ((CheckStatusOkFull) this.merged).withQuorum(success.withQuorum);
+        Known known = full.sufficientFor(route.participants(), success.withQuorum);
 
         switch (known.outcome)
         {
@@ -167,6 +167,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
             case Apply:
                 if (!known.isDefinitionKnown())
                 {
+                    // TODO (expected): if we determine new durability, propagate it
                     CheckStatusOkFull propagate;
                     if (!full.truncated.isEmpty())
                     {

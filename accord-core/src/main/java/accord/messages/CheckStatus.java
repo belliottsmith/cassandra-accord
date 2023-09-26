@@ -54,6 +54,10 @@ import javax.annotation.Nonnull;
 import static accord.local.Status.Committed;
 import static accord.local.Status.Definition;
 import static accord.local.Status.Durability;
+import static accord.local.Status.Durability.Local;
+import static accord.local.Status.Durability.Majority;
+import static accord.local.Status.Durability.ShardUniversal;
+import static accord.local.Status.Durability.Universal;
 import static accord.local.Status.Known;
 import static accord.local.Status.KnownDeps;
 import static accord.local.Status.KnownExecuteAt;
@@ -64,6 +68,7 @@ import static accord.local.Status.NotDefined;
 import static accord.local.Status.Outcome;
 import static accord.local.Status.Phase;
 import static accord.local.Status.Truncated;
+import static accord.messages.CheckStatus.WithQuorum.NoQuorum;
 import static accord.messages.TxnRequest.computeScope;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.castToRoute;
@@ -157,7 +162,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         Durability durability = command.durability();
         Route<?> route = command.route();
         if (Route.isFullRoute(route))
-            durability = Durability.merge(durability, safeStore.commandStore().durableBefore().min(txnId, route));
+            durability = Durability.mergeAtLeast(durability, safeStore.commandStore().durableBefore().min(txnId, route));
 
         switch (includeInfo)
         {
@@ -459,8 +464,23 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         public CheckStatusOkFull merge(@Nonnull Durability durability)
         {
             durability = Durability.merge(durability, this.durability);
+            if (durability == this.durability)
+                return this;
             return new CheckStatusOkFull(truncated, minInvalidIfNotAtLeast, maxInvalidIfNotAtLeast, saveStatus, maxSaveStatus, minPromised, maxPromised, accepted, executeAt,
                                          isCoordinating, durability, route, homeKey, partialTxn, committedDeps, writes, result);
+        }
+
+        public CheckStatusOkFull withQuorum()
+        {
+            Durability durability = this.durability;
+            if (durability == Local) durability = Majority;
+            else if (durability == ShardUniversal) durability = Universal;
+            return merge(durability);
+        }
+
+        public CheckStatusOkFull withQuorum(WithQuorum withQuorum)
+        {
+            return withQuorum == NoQuorum ? this : withQuorum();
         }
 
         public Known sufficientFor(Participants<?> participants, WithQuorum withQuorum)

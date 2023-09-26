@@ -26,6 +26,7 @@ import accord.api.Data;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
+import accord.local.Status.Durability;
 import accord.local.Status.Known;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -52,6 +53,10 @@ import static accord.local.SaveStatus.Uninitialised;
 import static accord.local.Status.Durability.Local;
 import static accord.local.Status.Durability.MajorityOrInvalidated;
 import static accord.local.Status.Durability.NotDurable;
+import static accord.local.Status.Durability.ShardUniversal;
+import static accord.local.Status.Durability.Universal;
+import static accord.local.Status.Durability.UniversalOrInvalidated;
+import static accord.local.Status.Invalidated;
 import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
 import static accord.utils.SortedArrays.forEachIntersection;
 import static accord.utils.Utils.ensureImmutable;
@@ -132,9 +137,9 @@ public abstract class Command implements CommonAttributes
         return command instanceof PreLoadContext ? (PreLoadContext) command : PreLoadContext.contextFor(command.txnId(), command.partialTxn().keys());
     }
 
-    private static Status.Durability durability(Status.Durability durability, SaveStatus status)
+    private static Durability durability(Durability durability, SaveStatus status)
     {
-        if (status.compareTo(SaveStatus.PreApplied) >= 0 && durability == NotDurable)
+        if (status.compareTo(SaveStatus.PreApplied) >= 0 && !status.hasBeen(Invalidated) && durability == NotDurable)
             return Local; // not necessary anywhere, but helps for logical consistency
         return durability;
     }
@@ -218,12 +223,12 @@ public abstract class Command implements CommonAttributes
     {
         private final TxnId txnId;
         private final SaveStatus status;
-        private final Status.Durability durability;
+        private final Durability durability;
         private final Route<?> route;
         private final Ballot promised;
         private final Listeners.Immutable listeners;
 
-        private AbstractCommand(TxnId txnId, SaveStatus status, Status.Durability durability, Route<?> route, Ballot promised, Listeners.Immutable listeners)
+        private AbstractCommand(TxnId txnId, SaveStatus status, Durability durability, Route<?> route, Ballot promised, Listeners.Immutable listeners)
         {
             this.txnId = txnId;
             this.status = validateCommandClass(status, getClass());
@@ -282,7 +287,7 @@ public abstract class Command implements CommonAttributes
         }
 
         @Override
-        public Status.Durability durability()
+        public Durability durability()
         {
             return Command.durability(durability, saveStatus());
         }
@@ -422,7 +427,7 @@ public abstract class Command implements CommonAttributes
     public abstract TxnId txnId();
     public abstract Ballot promised();
     @Override
-    public abstract Status.Durability durability();
+    public abstract Durability durability();
     @Override
     public abstract Listeners.Immutable durableListeners();
     public abstract SaveStatus saveStatus();
@@ -610,7 +615,7 @@ public abstract class Command implements CommonAttributes
 
     public static final class NotDefined extends AbstractCommand
     {
-        NotDefined(TxnId txnId, SaveStatus status, Status.Durability durability, Route<?> route, Ballot promised, Listeners.Immutable listeners)
+        NotDefined(TxnId txnId, SaveStatus status, Durability durability, Route<?> route, Ballot promised, Listeners.Immutable listeners)
         {
             super(txnId, status, durability, route, promised, listeners);
         }
@@ -686,7 +691,7 @@ public abstract class Command implements CommonAttributes
             this.result = result;
         }
 
-        public Truncated(TxnId txnId, SaveStatus saveStatus, Status.Durability durability, Route<?> route, @Nullable Timestamp executeAt, Listeners.Immutable listeners, @Nullable Writes writes, @Nullable Result result)
+        public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, Route<?> route, @Nullable Timestamp executeAt, Listeners.Immutable listeners, @Nullable Writes writes, @Nullable Result result)
         {
             super(txnId, saveStatus, durability, route, Ballot.MAX, listeners);
             this.executeAt = executeAt;
@@ -696,7 +701,8 @@ public abstract class Command implements CommonAttributes
 
         public static Truncated erased(Command command)
         {
-            return validate(new Truncated(command.txnId(), SaveStatus.Erased, command.durability(), command.route(), null, EMPTY, null, null));
+            Durability durability = Durability.mergeAtLeast(command.durability(), Universal);
+            return validate(new Truncated(command.txnId(), SaveStatus.Erased, durability, command.route(), null, EMPTY, null, null));
         }
 
         public static Truncated truncatedApply(Command command)
@@ -708,12 +714,14 @@ public abstract class Command implements CommonAttributes
         {
             Invariants.checkArgument(command.known().executeAt.isDecided());
             if (route == null) route = Route.castToNonNullFullRoute(command.route());
-            return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApply, command.durability(), route, command.executeAt(), EMPTY, null, null));
+            Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
+            return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApply, durability, route, command.executeAt(), EMPTY, null, null));
         }
 
         public static Truncated truncatedApplyWithOutcome(Executed command)
         {
-            return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApplyWithOutcome, command.durability(), command.route(), command.executeAt(), EMPTY, command.writes, command.result));
+            Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
+            return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApplyWithOutcome, durability, command.route(), command.executeAt(), EMPTY, command.writes, command.result));
         }
 
         public static Truncated truncatedApply(CommonAttributes common, SaveStatus saveStatus, Timestamp executeAt, Writes writes, Result result)
@@ -722,7 +730,8 @@ public abstract class Command implements CommonAttributes
             Invariants.checkArgument(executeAt != null);
             Invariants.checkArgument(saveStatus == SaveStatus.TruncatedApply || saveStatus == SaveStatus.TruncatedApplyWithDeps || saveStatus == SaveStatus.TruncatedApplyWithOutcome);
             // TODO review Is this correctly handling all three versions of truncatedApplyStatus? Should writes be null some of the time?
-            return validate(new Truncated(common.txnId(), saveStatus, common.durability(), common.route(), executeAt, EMPTY, writes, result));
+            Durability durability = Durability.mergeAtLeast(common.durability(), ShardUniversal);
+            return validate(new Truncated(common.txnId(), saveStatus, durability, common.route(), executeAt, EMPTY, writes, result));
         }
 
         public static Truncated invalidated(Command command)
@@ -735,7 +744,7 @@ public abstract class Command implements CommonAttributes
         public static Truncated invalidated(TxnId txnId, Listeners.Immutable durableListeners)
         {
             // TODO (expected): migrate to using null for executeAt when invalidated
-            return validate(new Truncated(txnId, SaveStatus.Invalidated, MajorityOrInvalidated, null, Timestamp.NONE, durableListeners, null, null));
+            return validate(new Truncated(txnId, SaveStatus.Invalidated, UniversalOrInvalidated, null, Timestamp.NONE, durableListeners, null, null));
         }
 
         @Override
