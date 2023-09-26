@@ -38,6 +38,7 @@ import accord.api.Key;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.local.CommandStore.EpochUpdateHolder;
+import accord.primitives.EpochSupplier;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
@@ -45,6 +46,7 @@ import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.MapReduce;
@@ -53,11 +55,14 @@ import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.ConfigurationService.EpochReady.done;
 import static accord.local.PreLoadContext.empty;
+import static accord.primitives.EpochSupplier.constant;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.checkArgument;
 import static java.util.stream.Collectors.toList;
@@ -175,8 +180,7 @@ public abstract class CommandStores
 
         public @Nonnull Ranges allAt(long epoch)
         {
-            int i = Arrays.binarySearch(epochs, epoch);
-            if (i < 0) i = -2 -i;
+            int i = floorIndex(epoch);
             if (i < 0) return Ranges.EMPTY;
             return ranges[i];
         }
@@ -287,6 +291,21 @@ public abstract class CommandStores
         {
             return IntStream.range(0, ranges.length).mapToObj(i -> epochs[i] + ": " + ranges[i])
                             .collect(Collectors.joining(", "));
+        }
+
+        public @Nullable EpochSupplier latestEpochWithNewParticipants(long sinceEpoch, Unseekables<?> keysOrRanges)
+        {
+            int i = floorIndex(sinceEpoch);
+            long latest = -1;
+            Ranges existing = i < 0 ? Ranges.EMPTY : ranges[i];
+            while (++i < ranges.length)
+            {
+                if (ranges[i].subtract(existing).intersects(keysOrRanges))
+                    latest = epochs[i];
+                existing = existing.with(ranges[i]);
+            }
+
+            return latest == -1 ? null : constant(latest);
         }
     }
 

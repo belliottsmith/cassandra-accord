@@ -39,6 +39,7 @@ import accord.local.SaveStatus;
 import accord.local.SaveStatus.LocalExecution;
 import accord.local.Status;
 import accord.local.Status.Known;
+import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.ProgressToken;
 import accord.primitives.Route;
@@ -252,8 +253,9 @@ public class SimpleProgressLog implements ProgressLog.Factory
                                 Timestamp executeAt = command.executeAtIfKnown();
                                 long epoch = executeAt == null ? txnId.epoch() : executeAt.epoch();
                                 Route<?> route = command.route();
+                                EpochSupplier forLocalEpoch = safeStore.ranges().latestEpochWithNewParticipants(txnId.epoch(), route);
 
-                                node.withEpoch(epoch, () -> debugInvestigating = FetchData.fetch(PreApplied.minKnown, node, txnId, route, executeAt, (success, fail) -> {
+                                node.withEpoch(epoch, () -> debugInvestigating = FetchData.fetch(PreApplied.minKnown, node, txnId, route, forLocalEpoch, executeAt, (success, fail) -> {
                                     commandStore.execute(empty(), ignore -> {
                                         // should have found enough information to apply the result, but in case we did not reset progress
                                         if (progress() == Investigating)
@@ -343,10 +345,10 @@ public class SimpleProgressLog implements ProgressLog.Factory
                     setProgress(Investigating);
                     // first make sure we have enough information to obtain the command locally
                     Timestamp executeAt = command.executeAtIfKnown();
-                    Participants<?> maxParticipants = maxParticipants(command);
                     // we want to fetch a route if we have it, so that we can go to our neighbouring shards for info
                     // (rather than the home shard, which may have GC'd its state if the result is durable)
                     Unseekables<?> fetchKeys = maxContact(command);
+                    EpochSupplier forLocalEpoch = safeStore.ranges().latestEpochWithNewParticipants(txnId.epoch(), fetchKeys);
 
                     BiConsumer<Known, Throwable> callback = (success, fail) -> {
                         // TODO (expected): this should be invoked on this commandStore; also do not need to load txn unless in DEBUG mode
@@ -360,7 +362,7 @@ public class SimpleProgressLog implements ProgressLog.Factory
                     };
 
                     node.withEpoch(blockedUntil.fetchEpoch(txnId, executeAt), () -> {
-                        debugInvestigating = FetchData.fetch(blockedUntil.requires, node, txnId, fetchKeys, executeAt, callback);
+                        debugInvestigating = FetchData.fetch(blockedUntil.requires, node, txnId, fetchKeys, forLocalEpoch, executeAt, callback);
                     });
                 }
 
