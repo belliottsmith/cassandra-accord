@@ -252,11 +252,11 @@ public class FetchData extends CheckShards<Route<?>>
         final boolean isTruncated;
         final WithQuorum withQuorum;
         final PartialTxn partialTxn;
-        final PartialDeps partialDeps;
+        final PartialDeps committedDeps;
         final long toEpoch;
         final BiConsumer<Known, Throwable> callback;
 
-        OnDone(Node node, TxnId txnId, Route<?> route, RoutingKey progressKey, CheckStatusOkFull full, Known achieved, boolean isTruncated, WithQuorum withQuorum, PartialTxn partialTxn, PartialDeps partialDeps, long toEpoch, BiConsumer<Known, Throwable> callback)
+        OnDone(Node node, TxnId txnId, Route<?> route, RoutingKey progressKey, CheckStatusOkFull full, Known achieved, boolean isTruncated, WithQuorum withQuorum, PartialTxn partialTxn, PartialDeps committedDeps, long toEpoch, BiConsumer<Known, Throwable> callback)
         {
             this.node = node;
             this.txnId = txnId;
@@ -267,7 +267,7 @@ public class FetchData extends CheckShards<Route<?>>
             this.isTruncated = isTruncated;
             this.withQuorum = withQuorum;
             this.partialTxn = partialTxn;
-            this.partialDeps = partialDeps;
+            this.committedDeps = committedDeps;
             this.toEpoch = toEpoch;
             this.callback = callback;
         }
@@ -344,8 +344,8 @@ public class FetchData extends CheckShards<Route<?>>
             Seekables<?, ?> keys = Keys.EMPTY;
             if (achieved.definition.isKnown())
                 keys = partialTxn.keys();
-            else if (achieved.deps.hasProposedOrDecidedDeps())
-                keys = partialDeps.keyDeps.keys();
+            else if (achieved.deps.hasDecidedDeps())
+                keys = committedDeps.keyDeps.keys();
 
             PreLoadContext loadContext = contextFor(txnId, keys);
             node.mapReduceConsumeLocal(loadContext, route, txnId.epoch(), toEpoch, this);
@@ -358,7 +358,7 @@ public class FetchData extends CheckShards<Route<?>>
             Command command = safeCommand.current();
 
             PartialTxn partialTxn = this.partialTxn;
-            PartialDeps partialDeps = this.partialDeps;
+            PartialDeps partialDeps = this.committedDeps;
             switch (command.saveStatus().phase)
             {
                 case Persist: return updateDurability(safeStore, safeCommand);

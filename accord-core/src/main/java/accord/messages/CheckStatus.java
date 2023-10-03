@@ -342,7 +342,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             if (validForAll.isInvalidated())
                 return true;
 
-            return foldlWithDefault(participants, CheckStatusMap::inferInvalidated, EnrichedKnown.Nothing, withQuorum, Objects::isNull) == withQuorum;
+            return null == foldlWithDefault(participants, CheckStatusMap::inferInvalidated, EnrichedKnown.Nothing, withQuorum, Objects::isNull);
         }
 
         private static WithQuorum inferInvalidated(EnrichedKnown known, WithQuorum withQuorum)

@@ -114,6 +114,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
                 case Invalidated:
                     locallyInvalidateAndCallback(node, txnId, someRoute, merged.toProgressToken(), callback);
+                    break;
 
                 case Erased:
                     WithQuorum withQuorum = success.withQuorum;
