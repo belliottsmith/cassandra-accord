@@ -29,6 +29,8 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import accord.api.RoutingKey;
+
 /**
  * Mostly copied/adapted from Cassandra's PaxosRepairHistory class
  *
@@ -81,6 +83,35 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
                 result = reduce.apply(result, values[i]);
         }
         return result;
+    }
+
+    public <V2> V2 foldl(BiFunction<V, V2, V2> reduce, V2 accumulator, Predicate<V2> terminate)
+    {
+        for (V value : values)
+        {
+            if (value != null)
+            {
+                accumulator = reduce.apply(value, accumulator);
+                if (terminate.test(accumulator))
+                    break;
+            }
+        }
+        return accumulator;
+    }
+
+    public <V2> V2 foldlWithBounds(QuadFunction<V, V2, K, K, V2> fold, V2 accumulator, Predicate<V2> terminate)
+    {
+        for (int i = 0 ; i < values.length ; ++i)
+        {
+            V value = values[i];
+            if (value != null)
+            {
+                accumulator = fold.apply(value, accumulator, starts[i], starts[i+1]);
+                if (terminate.test(accumulator))
+                    break;
+            }
+        }
+        return accumulator;
     }
 
     public String toString()

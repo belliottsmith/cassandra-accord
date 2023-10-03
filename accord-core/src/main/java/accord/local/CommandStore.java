@@ -478,8 +478,6 @@ public abstract class CommandStore implements AgentExecutor
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
     public void markShardStale(SafeCommandStore safeStore, Timestamp staleSince, Ranges ranges, boolean isSincePrecise)
     {
-        agent.onStale(staleSince, ranges);
-
         Timestamp staleUntilAtLeast = staleSince;
         if (isSincePrecise)
         {
@@ -491,6 +489,7 @@ public abstract class CommandStore implements AgentExecutor
             // make sure no in-progress bootstrap attempts will override the stale since for commands whose staleness bounds are unknown
             staleUntilAtLeast = Timestamp.max(bootstrapBeganAt.lastKey(), staleUntilAtLeast);
         }
+        agent.onStale(staleSince, ranges);
 
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, staleUntilAtLeast);
         setRedundantBefore(RedundantBefore.merge(redundantBefore, addRedundantBefore));

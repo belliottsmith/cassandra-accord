@@ -28,10 +28,9 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.local.SaveStatus;
 import accord.local.Status;
-import accord.messages.CheckStatus;
-import accord.primitives.Ballot;
+import accord.local.Status.Known;
+import accord.messages.CheckStatus.WithQuorum;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
@@ -41,10 +40,13 @@ import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 
+import static accord.coordinate.Infer.InvalidIf.IfPreempted;
+import static accord.coordinate.Infer.InvalidIf.IfQuorum;
+import static accord.coordinate.Infer.InvalidIf.NotKnown;
+import static accord.coordinate.Infer.InvalidIfNot.IfUnknown;
+import static accord.coordinate.Infer.InvalidIfNot.IfUndecided;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.Durability.Majority;
-import static accord.local.Status.NotDefined;
-import static accord.local.Status.PreAccepted;
 import static accord.local.Status.PreApplied;
 import static accord.local.Status.PreCommitted;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
@@ -53,6 +55,136 @@ import static accord.primitives.Route.isRoute;
 
 public class Infer
 {
+    public enum InvalidIfNot
+    {
+        /**
+         * There is no information to suggest the command is invalid
+         */
+        NotKnownToBeInvalid(NotKnown, NotKnown),
+
+        /**
+         * If the command has not been preaccepted on a majority of any shard and
+         * the command's original coordinator had been preempted prior to all responses we rely upon
+         * (so we are not racing with it)
+         */
+        IfUnknownAndPreempted(IfPreempted, NotKnown),
+
+        /**
+         * If the command has not had its execution timestamp agreed on any shard and
+         * the command's original coordinator had been preempted prior to all responses we rely upon
+         * (so we are not racing with it)
+         */
+        IfUndecidedAndPreempted(IfPreempted, IfPreempted),
+
+        /**
+         * If the command has not been preaccepted on a majority of any shard
+         */
+        IfUnknown(IfQuorum, NotKnown),
+
+        /**
+         * If the command has not had its execution timestamp agreed on any shard and
+         * the command's original coordinator had been preempted prior to all responses we rely upon
+         * (so we are not racing with it)
+         */
+        IfUnknownOrIfUndecidedAndPreempted(IfQuorum, IfPreempted),
+
+        /**
+         * If the command has not had its execution timestamp agreed on any shard
+         */
+        IfUndecided(IfQuorum, IfQuorum);
+
+        final InvalidIf unknown, undecided;
+        private static final InvalidIfNot[] LOOKUP;
+        private static final int invalidIfs = InvalidIf.values().length;
+
+        static
+        {
+            LOOKUP = new InvalidIfNot[invalidIfs * invalidIfs];
+            InvalidIfNot[] invalidIfNot = InvalidIfNot.values();
+            for (InvalidIfNot ifNot : invalidIfNot)
+                LOOKUP[ifNot.unknown.ordinal() * invalidIfs + ifNot.undecided.ordinal()] = ifNot;
+        }
+
+        InvalidIfNot(InvalidIf unknown, InvalidIf undecided)
+        {
+            this.unknown = unknown;
+            this.undecided = undecided;
+        }
+
+        public static boolean isMax(InvalidIfNot that)
+        {
+            return that == IfUndecided;
+        }
+
+        public InvalidIfNot merge(InvalidIfNot that)
+        {
+            return lookup(merge(this.unknown, that.unknown), merge(this.undecided, that.undecided));
+        }
+
+        private InvalidIfNot lookup(InvalidIf unknown, InvalidIf undecided)
+        {
+            return LOOKUP[unknown.ordinal() * invalidIfs + undecided.ordinal()];
+        }
+
+        private static InvalidIf merge(InvalidIf a, InvalidIf b)
+        {
+            if (a == b) return a;
+            return IfPreempted;
+        }
+
+        public boolean inferInvalid(WithQuorum withQuorum, IsPreempted isPreempted, Known known)
+        {
+            return inferInvalid(undecided, withQuorum, isPreempted, !known.isDecided())
+                   || inferInvalid(unknown, withQuorum, isPreempted, !known.hasDefinitionBeenKnown());
+        }
+
+        private static boolean inferInvalid(InvalidIf invalidIf, WithQuorum withQuorum, IsPreempted isPreempted, boolean hasCondition)
+        {
+            if (!hasCondition)
+                return false;
+
+            switch (invalidIf)
+            {
+                default: throw new AssertionError("Unhandled InvalidIf: " + invalidIf);
+                case NotKnown: break;
+                case IfQuorum:
+                    if (withQuorum == HasQuorum)
+                        return true;
+                case IfPreempted:
+                    if (isPreempted == IsPreempted.Preempted)
+                        return true;
+            }
+
+            return false;
+        }
+    }
+
+    enum InvalidIf
+    {
+        NotKnown,
+
+        /**
+         * We did not have a quorum of responses with the associated lower bound, so we require that the command has been preempted at a quorum
+         */
+        IfPreempted,
+
+        /**
+         * If we obtain a quorum of responses with the associated lower bound, we can infer the command is invalidated if it has not been witnessed at the lower bound
+         */
+        IfQuorum
+    }
+
+    public enum IsPreempted
+    {
+        NotPreempted, MaybePreempted, Preempted;
+
+        public IsPreempted merge(IsPreempted that)
+        {
+            if (this == that) return this;
+            return MaybePreempted;
+        }
+    }
+
     private static abstract class CleanupAndCallback<T> implements MapReduceConsume<SafeCommandStore, Void>
     {
         final Node node;
@@ -147,12 +279,12 @@ public class Infer
         }
     }
 
-    public static Status invalidIfNotAtLeast(SafeCommandStore safeStore, TxnId txnId, Unseekables<?> query)
+    public static InvalidIfNot invalidIfNotAtLeast(SafeCommandStore safeStore, TxnId txnId, Unseekables<?> query)
     {
         if (safeStore.commandStore().globalDurability(txnId).compareTo(Majority) >= 0)
         {
             Unseekables<?> preacceptsWith = isRoute(query) ? castToRoute(query).withHomeKey() : query;
-            return safeStore.commandStore().isRejectedIfNotPreAccepted(txnId, preacceptsWith) ? PreAccepted : PreCommitted;
+            return safeStore.commandStore().isRejectedIfNotPreAccepted(txnId, preacceptsWith) ? IfUnknown : IfUndecided;
         }
 
         // TODO (expected, consider): should we force this to be a Route or a Participants?
@@ -161,50 +293,31 @@ public class Infer
             Participants<?> participants = castToRoute(query).participants();
             // TODO (desired): limit to local participants to avoid O(n2) work across cluster
             if (safeStore.commandStore().durableBefore().isSomeShardDurable(txnId, participants, Majority))
-                return PreCommitted;
+                return IfUndecided;
         }
 
         if (safeStore.commandStore().durableBefore().isUniversal(txnId, safeStore.ranges().allAt(txnId.epoch())))
-            return PreCommitted;
+            return IfUndecided;
 
-        return Status.NotDefined;
+        return InvalidIfNot.NotKnownToBeInvalid;
     }
 
-    public static boolean inferInvalidated(CheckStatus.WithQuorum withQuorum, Status minInvalidIfNotAtLeast, Status maxInvalidIfNotAtLeast, SaveStatus saveStatus, SaveStatus maxSaveStatus, Ballot minPromised)
+    public enum YesNoMaybe
     {
-        if (saveStatus == SaveStatus.Invalidated)
-            return true;
-
-        if (withQuorum != HasQuorum)
-            return false;
-
-        // if everyone has witnessed a recovery, or everyone had invalidIfNotAtLeast, then we can rely on any inference;
-        // otherwise we might have raced with the original coordinator, and only witnessed part of their effects
-        Status invalidIfNotAtLeast = minPromised.compareTo(Ballot.ZERO) > 0 ? maxInvalidIfNotAtLeast : minInvalidIfNotAtLeast;
-        if (invalidIfNotAtLeast == NotDefined)
-            return false;
-
-        // we could reach a quorum without finding the definition without having to have entered the cleanup phase if
-        // we began our query before the pre-accepts arrived, however the above condition should exit in this case
-        Invariants.checkState(saveStatus != SaveStatus.Accepted || maxSaveStatus.phase == Status.Phase.Cleanup);
-        if (maxSaveStatus.status.compareTo(invalidIfNotAtLeast) < 0)
-            return true;
-
-        return invalidIfNotAtLeast.compareTo(PreAccepted) >= 0 && saveStatus == SaveStatus.AcceptedInvalidate;
+        No, Maybe, Yes
     }
 
+    // TODO (required): do we even need this?
     public static boolean safeToCleanup(SafeCommandStore safeStore, Command command, Route<?> fetchedWith, @Nullable Timestamp executeAt)
     {
         Invariants.checkArgument(fetchedWith != null || command.route() != null);
         TxnId txnId = command.txnId();
-        if (command.is(Status.NotDefined))
-            return !command.saveStatus().isUninitialised();
-
         if (command.route() != null || fetchedWith.covers(safeStore.ranges().allAt(txnId.epoch())))
         {
             Route<?> route = command.route();
             if (route == null) route = fetchedWith;
 
+            // TODO (required): is it safe to cleanup without an executeAt?
             executeAt = command.executeAtIfKnown(Timestamp.nonNullOrMax(executeAt, txnId));
             Ranges coordinateRanges = safeStore.ranges().coordinates(txnId);
             Ranges acceptRanges = executeAt.epoch() == txnId.epoch() ? coordinateRanges : safeStore.ranges().allBetween(txnId, executeAt);

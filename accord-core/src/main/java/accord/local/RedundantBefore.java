@@ -56,6 +56,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
     public static class Entry
     {
+        // TODO (desired): we don't need to maintain this now, and can simplify our builder, by migrating to ReducingRangeMap.foldWithBounds
         public final Range range;
         public final long startEpoch, endEpoch;
         public final @Nonnull TxnId redundantBefore, bootstrappedAt;

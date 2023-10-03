@@ -39,6 +39,7 @@ import accord.utils.MapReduceConsume;
 
 import javax.annotation.Nullable;
 
+import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.NotDefined;
@@ -274,17 +275,15 @@ public class FetchData extends CheckShards<Route<?>>
         @SuppressWarnings({"rawtypes"})
         public static void propagate(Node node, TxnId txnId, long sourceEpoch, WithQuorum withQuorum, Route route, @Nullable Known target, CheckStatusOkFull full, BiConsumer<Known, Throwable> callback)
         {
-            if (full.saveStatus.status == NotDefined && full.maxInvalidIfNotAtLeast == NotDefined)
+            if (full.maxKnowledgeSaveStatus.status == NotDefined && full.maxInvalidIfNot() == NotKnownToBeInvalid)
             {
                 callback.accept(Known.Nothing, null);
                 return;
             }
 
-            Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.saveStatus == SaveStatus.Erased);
+            Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.maxKnowledgeSaveStatus == SaveStatus.Erased);
 
             full = full.merge(route).withQuorum(withQuorum);
-//            if (withQuorum == HasQuorum)
-//                full = full.withQuorum();
             route = Invariants.nonNull(full.route);
 
             // TODO (required): permit individual shards that are behind to catch up by themselves
@@ -327,8 +326,7 @@ public class FetchData extends CheckShards<Route<?>>
                 }
             }
 
-            // TODO (now): move to Infer
-            boolean isTruncated = withQuorum == HasQuorum && (achieved.outcome.isTruncated() || (achieved.outcome == Status.Outcome.Apply && full.truncated.intersects(covering)));
+            boolean isTruncated = withQuorum == HasQuorum && (achieved.outcome.isTruncated() || (achieved.outcome == Status.Outcome.Apply && full.isTruncatedResponse(covering)));
 
             PartialTxn partialTxn = null;
             if (achieved.definition.isKnown())
@@ -377,7 +375,7 @@ public class FetchData extends CheckShards<Route<?>>
                 if (achieved.executeAt.isDecided())
                 {
                     Timestamp executeAt = command.executeAtIfKnown(full.executeAt);
-                    if (partialTxn == null && this.full.saveStatus.known.definition.isKnown())
+                    if (partialTxn == null && this.full.maxKnowledgeSaveStatus.known.definition.isKnown())
                     {
                         Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
                         PartialTxn existing = command.partialTxn();
@@ -395,7 +393,7 @@ public class FetchData extends CheckShards<Route<?>>
                 }
             }
 
-            Status propagate = achieved.merge(command.known()).propagatesStatus();
+            Status propagate = achieved.atLeast(command.known()).propagatesStatus();
             if (command.hasBeen(propagate))
             {
                 if (full.maxSaveStatus.phase == Cleanup && full.durability.isDurableOrInvalidated() && Infer.safeToCleanup(safeStore, command, route, full.executeAt))

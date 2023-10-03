@@ -637,7 +637,7 @@ public class SimpleProgressLog implements ProgressLog.Factory
             // TODO (expected): we should delete the in-memory state once we reach Done, and guard against backward progress with Command state
             //   however, we need to be careful:
             //     - we might participate in the execution epoch so need to be sure we have received a route covering both
-            if (!command.status().hasBeen(PreApplied) && command.route() != null && command.route().hasParticipants())
+            if (!command.status().hasBeen(PreApplied) && command.route() != null && command.route().participatesIn(commandStore.unsafeRangesForEpoch().allAt(command.txnId().epoch())))
                 state.recordBlocking(command.txnId(), WaitingToApply, command.route(), null);
             if (state.coordinateState != null)
                 state.coordinateState.durableGlobal();

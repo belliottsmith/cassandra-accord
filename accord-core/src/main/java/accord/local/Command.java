@@ -22,7 +22,6 @@ import java.util.Objects;
 
 import com.google.common.collect.ImmutableSortedSet;
 
-import accord.api.Data;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
@@ -34,12 +33,10 @@ import accord.primitives.FullRoute;
 import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
-import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.utils.ImmutableBitSet;
 import accord.utils.IndexedQuadConsumer;
@@ -51,7 +48,6 @@ import static accord.local.Command.AbstractCommand.validate;
 import static accord.local.Listeners.Immutable.EMPTY;
 import static accord.local.SaveStatus.Uninitialised;
 import static accord.local.Status.Durability.Local;
-import static accord.local.Status.Durability.MajorityOrInvalidated;
 import static accord.local.Status.Durability.NotDurable;
 import static accord.local.Status.Durability.ShardUniversal;
 import static accord.local.Status.Durability.Universal;
@@ -370,10 +366,12 @@ public abstract class Command implements CommonAttributes
                         Invariants.checkState(writes != null);
                         Invariants.checkState(result != null);
                         break;
+                    case Invalidated:
+                        Invariants.checkState(validate.durability().isMaybeInvalidated());
                     case Unknown:
+                        Invariants.checkState(validate.durability() != Local);
                     case Erased:
                     case WasApply:
-                    case Invalidated:
                         Invariants.checkState(writes == null);
                         Invariants.checkState(result == null);
                         break;
@@ -529,16 +527,6 @@ public abstract class Command implements CommonAttributes
     public boolean isAtLeast(SaveStatus.LocalExecution execution)
     {
         return saveStatus().execution.compareTo(execution) >= 0;
-    }
-
-    public boolean has(Status.Definition definition)
-    {
-        return known().definition.compareTo(definition) >= 0;
-    }
-
-    public boolean has(Status.Outcome outcome)
-    {
-        return known().outcome.compareTo(outcome) >= 0;
     }
 
     public boolean is(Status status)
@@ -701,7 +689,7 @@ public abstract class Command implements CommonAttributes
 
         public static Truncated erased(Command command)
         {
-            Durability durability = Durability.mergeAtLeast(command.durability(), Universal);
+            Durability durability = Durability.mergeAtLeast(command.durability(), UniversalOrInvalidated);
             return validate(new Truncated(command.txnId(), SaveStatus.Erased, durability, command.route(), null, EMPTY, null, null));
         }
 
@@ -744,6 +732,7 @@ public abstract class Command implements CommonAttributes
         public static Truncated invalidated(TxnId txnId, Listeners.Immutable durableListeners)
         {
             // TODO (expected): migrate to using null for executeAt when invalidated
+            // TODO (expected): is UniversalOrInvalidated correct here? Should we have a lower implication pure Invalidated?
             return validate(new Truncated(txnId, SaveStatus.Invalidated, UniversalOrInvalidated, null, Timestamp.NONE, durableListeners, null, null));
         }
 

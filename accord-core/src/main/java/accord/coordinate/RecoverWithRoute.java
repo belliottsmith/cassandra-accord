@@ -43,6 +43,7 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import javax.annotation.Nullable;
 
+import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.Durability.MajorityOrInvalidated;
 import static accord.local.Status.KnownDeps.DepsKnown;
 import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
@@ -169,11 +170,11 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 {
                     // TODO (expected): if we determine new durability, propagate it
                     CheckStatusOkFull propagate;
-                    if (!full.truncated.isEmpty())
+                    if (full.isTruncatedResponse())
                     {
                         // we might have only part of the full transaction, and a shard may have truncated;
                         // in this case we want to skip straight to apply, but only for the shards that haven't truncated
-                        Participants<?> sendTo = route.participants().subtract(full.truncated);
+                        Participants<?> sendTo = route.participants().subtract(full.truncatedResponse());
                         if (!sendTo.isEmpty())
                         {
                             known = full.sufficientFor(sendTo, success.withQuorum);
@@ -188,7 +189,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         else
                         {
                             // TODO (expected): tighten up / centralise this implication, perhaps in Infer
-                            propagate = full.merge(MajorityOrInvalidated);
+                            propagate = full.merge(Majority);
                         }
                     }
                     else

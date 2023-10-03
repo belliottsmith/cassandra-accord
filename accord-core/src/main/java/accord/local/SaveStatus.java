@@ -246,7 +246,7 @@ public enum SaveStatus
             case PreCommitted:
                 if (known.isSatisfiedBy(status.known))
                     return status;
-                return get(status.status, status.known.merge(known));
+                return get(status.status, status.known.atLeast(known));
 
             case Truncated:
                 switch (status)

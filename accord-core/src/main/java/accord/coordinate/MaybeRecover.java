@@ -79,7 +79,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
         else
         {
             Invariants.checkState(merged != null);
-            Known known = merged.saveStatus.known;
+            Known known = merged.maxKnown();
             Route<?> someRoute = reduceNonNull(Route::union, (Route)this.route, merged.route);
 
             switch (known.outcome)
@@ -117,7 +117,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
                 case Erased:
                     WithQuorum withQuorum = success.withQuorum;
-                    if (!merged.inferInvalidated(withQuorum)) eraseNonParticipatingAndCallback(node, txnId, someRoute, merged.toProgressToken(), callback);
+                    if (!merged.inferInvalidated(route.participants(), withQuorum)) eraseNonParticipatingAndCallback(node, txnId, someRoute, merged.toProgressToken(), callback);
                     else locallyInvalidateAndCallback(node, txnId, someRoute, merged.toProgressToken(), callback);
             }
         }

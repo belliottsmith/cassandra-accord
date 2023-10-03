@@ -19,10 +19,10 @@
 package accord.local;
 
 import accord.messages.BeginRecovery;
-import accord.messages.CheckStatus;
 import accord.primitives.Ballot;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.utils.Invariants;
 
 import java.util.List;
 import java.util.Objects;
@@ -42,7 +42,6 @@ import static accord.local.Status.KnownRoute.Full;
 import static accord.local.Status.KnownRoute.Maybe;
 import static accord.local.Status.Outcome.*;
 import static accord.local.Status.Phase.*;
-import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 
 public enum Status
 {
@@ -110,7 +109,7 @@ public enum Status
     public static class Known
     {
         public static final Known Nothing            = new Known(Maybe, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown);
-        // TODO (now): deprecate DefinitionOnly
+        // TODO (expected): deprecate DefinitionOnly
         public static final Known DefinitionOnly     = new Known(Maybe, DefinitionKnown,   ExecuteAtUnknown, DepsUnknown, Unknown);
         public static final Known DefinitionAndRoute = new Known(Full,  DefinitionKnown,   ExecuteAtUnknown, DepsUnknown, Unknown);
         public static final Known ExecuteAtOnly      = new Known(Maybe, DefinitionUnknown, ExecuteAtKnown,   DepsUnknown, Unknown);
@@ -124,6 +123,15 @@ public enum Status
         public final KnownDeps deps;
         public final Outcome outcome;
 
+        public Known(Known copy)
+        {
+            this.route = copy.route;
+            this.definition = copy.definition;
+            this.executeAt = copy.executeAt;
+            this.deps = copy.deps;
+            this.outcome = copy.outcome;
+        }
+
         public Known(KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome)
         {
             this.route = route;
@@ -133,17 +141,32 @@ public enum Status
             this.outcome = outcome;
         }
 
-        public Known merge(Known with)
+        public Known atLeast(Known with)
         {
+            KnownRoute maxRoute = route.atLeast(with.route);
             Definition maxDefinition = definition.compareTo(with.definition) >= 0 ? definition : with.definition;
             KnownExecuteAt maxExecuteAt = executeAt.compareTo(with.executeAt) >= 0 ? executeAt : with.executeAt;
             KnownDeps maxDeps = deps.compareTo(with.deps) >= 0 ? deps : with.deps;
-            Outcome maxOutcome = outcome.compareTo(with.outcome) >= 0 ? outcome : with.outcome;
-            if (maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps &&  maxOutcome == outcome)
+            Outcome maxOutcome = outcome.atLeast(with.outcome);
+            if (maxRoute == route && maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps &&  maxOutcome == outcome)
                 return this;
-            if (maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
+            if (maxRoute == with.route && maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
                 return with;
-            return new Known(route, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+            return new Known(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+        }
+
+        public Known validForBoth(Known with)
+        {
+            KnownRoute minRoute = route.validForBoth(with.route);
+            Definition minDefinition = definition.compareTo(with.definition) <= 0 ? definition : with.definition;
+            KnownExecuteAt maxExecuteAt = executeAt.compareTo(with.executeAt) >= 0 ? executeAt : with.executeAt;
+            KnownDeps minDeps = deps.compareTo(with.deps) <= 0 ? deps : with.deps;
+            Outcome minOutcome = outcome.atLeast(with.outcome);
+            if (minRoute == route && minDefinition == definition && maxExecuteAt == executeAt && minDeps == deps &&  minOutcome == outcome)
+                return this;
+            if (minRoute == with.route && minDefinition == with.definition && maxExecuteAt == with.executeAt && minDeps == with.deps && minOutcome == with.outcome)
+                return with;
+            return new Known(minRoute, minDefinition, maxExecuteAt, minDeps, minOutcome);
         }
 
         public boolean isSatisfiedBy(Known that)
@@ -260,6 +283,16 @@ public enum Status
             return definition.isKnown();
         }
 
+        public boolean hasDefinitionBeenKnown()
+        {
+            return definition.isKnown() || outcome.isDecided();
+        }
+
+        public boolean isTruncated()
+        {
+            return outcome.isTruncated();
+        }
+
         /**
          * The command may have an incomplete route when this is false
          */
@@ -281,18 +314,52 @@ public enum Status
             Definition newDefinition = subtract.definition.compareTo(definition) >= 0 ? DefinitionUnknown : definition;
             KnownExecuteAt newExecuteAt = subtract.executeAt.compareTo(executeAt) >= 0 ? ExecuteAtUnknown : executeAt;
             KnownDeps newDeps = subtract.deps.compareTo(deps) >= 0 ? DepsUnknown : deps;
-            Outcome newOutcome = subtract.outcome.compareTo(outcome) >= 0 ? Unknown : outcome;
+            Outcome newOutcome = outcome.subtract(subtract.outcome);
             return new Known(route, newDefinition, newExecuteAt, newDeps, newOutcome);
         }
 
+        public boolean isDecided()
+        {
+            return executeAt.isDecided() || outcome.isDecided();
+        }
+
+        public boolean isDecidedToExecute()
+        {
+            return executeAt.hasDecidedExecuteAt() || outcome.isOrWasApply();
+        }
 
         public String toString()
         {
             return Stream.of(definition.isKnown() ? "Definition" : null,
                              executeAt.isDecided() ? "ExecuteAt" : null,
                              deps.hasDecidedDeps() ? "Deps" : null,
-                             outcome.isOrWasApply() ? "Outcome" : null
+                             outcome.isDecided() ? outcome.toString() : null
             ).filter(Objects::nonNull).collect(Collectors.joining(",", "[", "]"));
+        }
+
+        @Override
+        public boolean equals(Object o)
+        {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Known that = (Known) o;
+            return route == that.route && definition == that.definition && executeAt == that.executeAt && deps == that.deps && outcome == that.outcome;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean hasDefinition()
+        {
+            return definition.isKnown();
+        }
+
+        public boolean hasDecidedDeps()
+        {
+            return deps.hasDecidedDeps();
         }
     }
 
@@ -322,6 +389,18 @@ public enum Status
         public boolean hasFull()
         {
             return this == Full;
+        }
+
+        public KnownRoute validForBoth(KnownRoute that)
+        {
+            if (this == that) return this;
+            if (this == Full || that == Full) return Full;
+            return Maybe;
+        }
+
+        public KnownRoute atLeast(KnownRoute that)
+        {
+            return this.compareTo(that) >= 0 ? this : that;
         }
     }
 
@@ -455,26 +534,25 @@ public enum Status
         Unknown,
 
         /**
+         * The transaction has been *completely cleaned up* - this means it has been made
+         * durable at every live replica of every shard we contacted
+         */
+        Erased,
+
+        /**
+         * The transaction has been cleaned-up, but was applied and the relevant portion of its outcome has been cleaned up
+         */
+        WasApply,
+
+        /**
          * The outcome is known
          */
         Apply,
 
         /**
-         * The transaction has been cleaned-up, but was applied and the relevant portion of its outcome has been cleaned up
-         * TODO (expected): is this state helpful? Feels like we can do without it
-         */
-        WasApply,
-
-        /**
          * The transaction is known to have been invalidated
          */
-        Invalidated,
-
-        /**
-         * The transaction has been *completely cleaned up* - this means it has been made
-         * durable at every live replica of every shard we contacted
-         */
-        Erased
+        Invalidated
         ;
 
         public boolean isOrWasApply()
@@ -518,6 +596,39 @@ public enum Status
         {
             return this == Erased || this == WasApply;
         }
+
+        public Outcome atLeast(Outcome that)
+        {
+            return this.compareTo(that) >= 0 ? this : that;
+        }
+
+        // return a status that can be used to reconstruct for both covered ranges.
+        // note: if one of the two is truncated, this pollutes the other with the concept of truncation;
+        // DO NOT rely on this for deriving actual truncation status
+        // TODO (expected): reify this distinction to avoid mistakes
+        public Outcome canReconstructForBoth(Outcome that)
+        {
+            if (this == that) return this;
+            Outcome max = this.compareTo(that) >= 0 ? this : that;
+            Outcome min = this.compareTo(that) <= 0 ? this : that;
+            if (max == Invalidated)
+            {
+                Invariants.checkState(min != Apply && min != WasApply);
+                return Invalidated;
+            }
+            if (max == Apply || max == WasApply) return WasApply;
+            return max;
+        }
+
+        public Outcome subtract(Outcome that)
+        {
+            return this.compareTo(that) <= 0 ? Unknown : this;
+        }
+
+        public boolean isDecided()
+        {
+            return this != Unknown;
+        }
     }
 
     public enum LogicalEpoch
@@ -538,8 +649,7 @@ public enum Status
      */
     public enum Durability
     {
-        NotDurable, Local,
-        ShardUniversalOrInvalidated, ShardUniversal,
+        NotDurable, Local, ShardUniversal,
         MajorityOrInvalidated, Majority,
         UniversalOrInvalidated, Universal;
 
@@ -553,12 +663,17 @@ public enum Status
             return compareTo(MajorityOrInvalidated) >= 0;
         }
 
+        public boolean isMaybeInvalidated()
+        {
+            return this == NotDurable || this == MajorityOrInvalidated || this == UniversalOrInvalidated;
+        }
+
         public static Durability merge(Durability a, Durability b)
         {
             int c = a.compareTo(b);
             if (c < 0) { Durability tmp = a; a = b; b = tmp; }
             if (a == UniversalOrInvalidated && (b == Majority || b == ShardUniversal || b == Local)) a = Universal;
-            if ((a == ShardUniversal || a == ShardUniversalOrInvalidated) && (b == Local || b == NotDurable)) a = a == ShardUniversal ? Local : b;
+            if ((a == ShardUniversal) && (b == Local || b == NotDurable)) a = Local;
             if (b == NotDurable && a.compareTo(MajorityOrInvalidated) < 0) a = NotDurable;
             return a;
         }

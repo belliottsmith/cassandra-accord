@@ -857,7 +857,7 @@ public class Commands
             case TRUNCATE:
                 Invariants.checkState(command.saveStatus().compareTo(TruncatedApply) < 0);
                 if (command.hasBeen(PreCommitted)) result = truncatedApply(command, Route.tryCastToFullRoute(maybeFullRoute));
-                else result = erased(command); // TODO (expected): check if we are stale; if not, is erase anyway correct outcome?
+                else result = command; // do nothing; we don't have enough information
                 break;
 
             case ERASE:
@@ -970,7 +970,7 @@ public class Commands
             return command;
 
         CommonAttributes attrs = route == null ? command : updateRoute(command, route);
-        if (executeAt != null && command.status().hasBeen(Committed) && !command.asCommitted().executeAt().equals(executeAt))
+        if (executeAt != null && command.status().hasBeen(Committed) && !command.executeAt().equals(executeAt))
             safeStore.agent().onInconsistentTimestamp(command, command.asCommitted().executeAt(), executeAt);
         attrs = attrs.mutable().durability(durability);
         command = safeCommand.updateAttributes(attrs);
