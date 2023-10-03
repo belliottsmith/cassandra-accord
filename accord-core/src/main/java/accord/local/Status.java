@@ -361,6 +361,11 @@ public enum Status
         {
             return deps.hasDecidedDeps();
         }
+
+        public boolean isInvalidated()
+        {
+            return outcome.isInvalidated();
+        }
     }
 
     public enum KnownRoute
@@ -501,16 +506,16 @@ public enum Status
         DefinitionUnknown,
 
         /**
+         * The definition is irrelevant, as the transaction has been invalidated and may be treated as a no-op
+         */
+        NoOp,
+
+        /**
          * The definition is known
          *
          * TODO (expected, clarity): distinguish between known for coordination epoch and known for commit/execute
          */
-        DefinitionKnown,
-
-        /**
-         * The definition is irrelevant, as the transaction has been invalidated and may be treated as a no-op
-         */
-        NoOp;
+        DefinitionKnown;
 
         public boolean canProposeInvalidation()
         {

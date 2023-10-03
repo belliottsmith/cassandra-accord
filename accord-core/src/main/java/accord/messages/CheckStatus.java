@@ -64,21 +64,13 @@ import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.IsPreempted.NotPreempted;
 import static accord.coordinate.Infer.IsPreempted.Preempted;
 import static accord.local.Status.Committed;
-import static accord.local.Status.Definition;
 import static accord.local.Status.Durability;
 import static accord.local.Status.Durability.Local;
 import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.Durability.ShardUniversal;
 import static accord.local.Status.Durability.Universal;
 import static accord.local.Status.Known;
-import static accord.local.Status.Known.Nothing;
-import static accord.local.Status.KnownDeps;
-import static accord.local.Status.KnownExecuteAt;
-import static accord.local.Status.KnownRoute.Covering;
-import static accord.local.Status.KnownRoute.Full;
-import static accord.local.Status.KnownRoute.Maybe;
 import static accord.local.Status.NotDefined;
-import static accord.local.Status.Outcome;
 import static accord.local.Status.Truncated;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 import static accord.messages.CheckStatus.WithQuorum.NoQuorum;
@@ -237,10 +229,18 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public EnrichedKnown atLeast(EnrichedKnown with)
         {
-            Known atLeast = super.atLeast(with);
-            if (atLeast == this)
+            Known known = super.atLeast(with);
+            if (known == this)
                 return this;
-            return new EnrichedKnown(atLeast, invalidIfNot.merge(with.invalidIfNot), isPreempted.merge(with.isPreempted));
+            return new EnrichedKnown(known, invalidIfNot.merge(with.invalidIfNot), isPreempted.merge(with.isPreempted));
+        }
+
+        public EnrichedKnown validForBoth(EnrichedKnown with)
+        {
+            Known known = super.validForBoth(with);
+            if (known == this)
+                return this;
+            return new EnrichedKnown(known, invalidIfNot.validForBoth(with.invalidIfNot), isPreempted.validForBoth(with.isPreempted));
         }
 
         public boolean inferInvalid(WithQuorum withQuorum)
@@ -260,11 +260,31 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
     public static class CheckStatusMap extends ReducingRangeMap<EnrichedKnown>
     {
-        private CheckStatusMap() {}
+        private transient final EnrichedKnown validForAll;
+
+        private CheckStatusMap()
+        {
+            this.validForAll = EnrichedKnown.Nothing;
+        }
 
         private CheckStatusMap(boolean inclusiveEnds, RoutingKey[] ends, EnrichedKnown[] values)
         {
             super(inclusiveEnds, ends, values);
+            EnrichedKnown validForAll = EnrichedKnown.Nothing;
+            for (EnrichedKnown value : values)
+            {
+                if (value != null)
+                    validForAll = validForAll.validForBoth(value);
+            }
+            this.validForAll = validForAll;
+            if (!validForAll.equals(EnrichedKnown.Nothing))
+            {
+                for (int i = 0 ; i < values.length ; ++i)
+                {
+                    if (values[i] != null)
+                        values[i] = values[i].atLeast(validForAll);
+                }
+            }
         }
 
         public static CheckStatusMap create(Unseekables<?> keysOrRanges, SaveStatus saveStatus, InvalidIfNot invalidIfNot, Ballot promised)
@@ -317,8 +337,11 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             return foldl((known, prev) -> known.outcome.isTruncated(), false, i -> i);
         }
 
-        public boolean inferInvalidated(Participants<?> participants, WithQuorum withQuorum)
+        public boolean isInvalidated(Participants<?> participants, WithQuorum withQuorum)
         {
+            if (validForAll.isInvalidated())
+                return true;
+
             return foldlWithDefault(participants, CheckStatusMap::inferInvalidated, EnrichedKnown.Nothing, withQuorum, Objects::isNull) == withQuorum;
         }
 
@@ -331,12 +354,14 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public Known inferredOrKnown(Routables<?> routables, WithQuorum withQuorum)
         {
+            Known result;
             switch (withQuorum)
             {
                 default: throw new AssertionError("Unhandled withQuorum: " + withQuorum);
-                case NoQuorum: return foldlWithDefault(routables, CheckStatusMap::inferredWithoutQuorumOrValidForBoth, EnrichedKnown.Nothing, null, i -> false);
-                case HasQuorum: return foldlWithDefault(routables, CheckStatusMap::inferredWithQuorumOrValidForBoth, EnrichedKnown.Nothing, null, i -> false);
+                case NoQuorum: result = foldlWithDefault(routables, CheckStatusMap::inferredWithoutQuorumOrValidForBoth, EnrichedKnown.Nothing, null, i -> false); break;
+                case HasQuorum: result = foldlWithDefault(routables, CheckStatusMap::inferredWithQuorumOrValidForBoth, EnrichedKnown.Nothing, null, i -> false);
             }
+            return result.atLeast(validForAll); // only logically necessary in case we matched nothing above
         }
 
         public Ranges matchingRanges(Predicate<EnrichedKnown> match)
@@ -474,7 +499,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public boolean inferInvalidated(Participants<?> participants, WithQuorum withQuorum)
         {
-            return map.inferInvalidated(participants, withQuorum);
+            return map.isInvalidated(participants, withQuorum);
         }
 
         public Known inferredOrKnown(Routables<?> route, WithQuorum withQuorum)

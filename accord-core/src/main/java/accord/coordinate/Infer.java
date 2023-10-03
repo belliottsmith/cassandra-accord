@@ -121,6 +121,11 @@ public class Infer
             return lookup(merge(this.unknown, that.unknown), merge(this.undecided, that.undecided));
         }
 
+        public InvalidIfNot validForBoth(InvalidIfNot that)
+        {
+            return lookup(validForBoth(this.unknown, that.unknown), validForBoth(this.undecided, that.undecided));
+        }
+
         private InvalidIfNot lookup(InvalidIf unknown, InvalidIf undecided)
         {
             return LOOKUP[unknown.ordinal() * invalidIfs + undecided.ordinal()];
@@ -130,6 +135,11 @@ public class Infer
         {
             if (a == b) return a;
             return IfPreempted;
+        }
+
+        private static InvalidIf validForBoth(InvalidIf a, InvalidIf b)
+        {
+            return a.compareTo(b) <= 0 ? a : b;
         }
 
         public boolean inferInvalid(WithQuorum withQuorum, IsPreempted isPreempted, Known known)
@@ -182,6 +192,11 @@ public class Infer
         {
             if (this == that) return this;
             return MaybePreempted;
+        }
+
+        public IsPreempted validForBoth(IsPreempted that)
+        {
+            return this.compareTo(that) <= 0 ? this : that;
         }
     }
 
