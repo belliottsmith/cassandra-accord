@@ -361,6 +361,7 @@ public class FetchData extends CheckShards<Route<?>>
             PartialDeps partialDeps = this.committedDeps;
             switch (command.saveStatus().phase)
             {
+                // Already know the outcome, waiting on durability so maybe update with new durability information which can also trigger cleanup
                 case Persist: return updateDurability(safeStore, safeCommand);
                 case Cleanup: return null;
             }
