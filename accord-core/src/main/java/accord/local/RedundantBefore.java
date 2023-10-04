@@ -148,9 +148,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return safeToRead;
         }
 
-        static Ranges expectToExecute(Entry entry, @Nonnull Ranges executeRanges, TxnId txnId, Timestamp executeAt)
+        static Ranges expectToExecute(Entry entry, @Nonnull Ranges executeRanges, TxnId txnId, @Nullable Timestamp executeAt)
         {
-            if (entry == null || entry.outOfBounds(txnId, executeAt))
+            if (entry == null || (executeAt == null ? entry.outOfBounds(txnId) : entry.outOfBounds(txnId, executeAt)))
                 return executeRanges;
 
             if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
@@ -191,6 +191,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         private boolean outOfBounds(Timestamp lb, EpochSupplier ub)
         {
             return ub.epoch() < startEpoch || lb.epoch() >= endEpoch;
+        }
+
+        private boolean outOfBounds(Timestamp lb)
+        {
+            return lb.epoch() >= endEpoch;
         }
 
         Entry withRange(Range range)
@@ -321,9 +326,18 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     /**
      * Subtract any ranges we consider stale or pre-bootstrap
      */
-    public Ranges expectToExecute(TxnId txnId, Timestamp executeAt, Ranges ranges)
+    public Ranges expectToExecute(TxnId txnId, @Nonnull Timestamp executeAt, Ranges ranges)
     {
+        Invariants.checkArgument(executeAt != null, "executeAt must not be null");
         return foldl(ranges, Entry::expectToExecute, ranges, txnId, executeAt, r -> false);
+    }
+
+    /**
+     * Subtract any ranges we consider stale or pre-bootstrap at any point
+     */
+    public Ranges everExpectToExecute(TxnId txnId, Ranges ranges)
+    {
+        return foldl(ranges, Entry::expectToExecute, ranges, txnId, null, r -> false);
     }
 
     /**

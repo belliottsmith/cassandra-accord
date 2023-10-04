@@ -110,6 +110,12 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
         return new RoutingKeys(result);
     }
 
+    @Override
+    public Participants<RoutingKey> participants(Ranges ranges, Slice slice)
+    {
+        return participants(ranges);
+    }
+
     public Ranges toRanges()
     {
         Invariants.checkState(isParticipatingHomeKey);

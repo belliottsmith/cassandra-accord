@@ -124,7 +124,12 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
     @Override
     public Participants<Range> participants(Ranges slice)
     {
-        Range[] ranges = slice(slice, Overlapping, this, null, (i1, i2, rs) -> rs);
+        return participants(slice, Overlapping);
+    }
+
+    public Participants<Range> participants(Ranges slice, Slice kind)
+    {
+        Range[] ranges = slice(slice, kind, this, null, (i1, i2, rs) -> rs);
         if (ranges == this.ranges && isParticipatingHomeKey)
             return this;
 

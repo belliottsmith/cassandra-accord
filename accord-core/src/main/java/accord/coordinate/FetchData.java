@@ -25,6 +25,7 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SaveStatus;
@@ -42,6 +43,7 @@ import javax.annotation.Nullable;
 import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.local.PreLoadContext.contextFor;
+import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
 import static accord.local.Status.PreApplied;
@@ -326,7 +328,7 @@ public class FetchData extends CheckShards<Route<?>>
                 }
             }
 
-            boolean isTruncated = withQuorum == HasQuorum && (achieved.outcome.isTruncated() || (achieved.outcome == Status.Outcome.Apply && full.isTruncatedResponse(covering)));
+            boolean isTruncated = withQuorum == HasQuorum && full.isTruncatedResponse(covering);
 
             PartialTxn partialTxn = null;
             if (achieved.definition.isKnown())
@@ -451,60 +453,78 @@ public class FetchData extends CheckShards<Route<?>>
             return updateDurability(safeStore, safeCommand);
         }
 
-        // if can only propagate Truncated, we might be stale; try to upgrade the
+        // if can only propagate Truncated, we might be stale; try to upgrade for this command store only, even partially if necessary
+        // note: this is invoked if the command is truncated for ANY local command store - we might
         private Known applyOrUpgradeTruncated(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
         {
-            // if our peers have truncated this command, then either:
-            // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
-            if (command.saveStatus().isUninitialised())
-                return null; // TODO (expected): maybe stale?
+            Invariants.checkState(!full.maxKnowledgeSaveStatus.is(Status.Invalidated));
 
-            if (command.hasBeen(PreApplied))
-            {
-                updateDurability(safeStore, safeCommand);
-                return null;
-            }
+            if (safeCommand.current().saveStatus().isUninitialised())
+                return null; // the command has already been cleaned up locally - don't recreate it
 
             if (Infer.safeToCleanup(safeStore, command, route, full.executeAt))
             {
+                // don't create a new Erased record if we're already cleaned up
                 Commands.setErased(safeStore, safeCommand);
                 return null;
             }
 
-            // we're now at least partially stale, but let's first see if we can progress this shard, or we can do so in part
             Timestamp executeAt = command.executeAtIfKnown(full.executeAtIfKnown());
+            Ranges ranges = safeStore.ranges().allBetween(txnId.epoch(), (executeAt == null ? txnId : executeAt).epoch());
+            Participants<?> participants = route.participants(ranges, Minimal);
+            Invariants.checkState(!participants.isEmpty()); // we shouldn't be fetching data for transactions we only coordinate
+            boolean isLocallyTruncated = full.isTruncatedResponse(participants);
+
+            if (!isLocallyTruncated)
+            {
+                // we're truncated *somewhere* but not locally; whether we have the executeAt is immaterial to this calculus,
+                // as we're either ready to go or we're waiting on the coordinating shard to complete this transaction, so pick
+                // the maximum we can achieve and return that
+                return full.sufficientFor(participants, withQuorum);
+            }
+
+            // if our peers have truncated this command, then either:
+            // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
+            // we're now at least partially stale, but let's first see if we can progress this shard, or we can do so in part
             if (executeAt == null)
             {
-                // we don't even know the execution time, so we cannot possibly proceed besides erasing the command state and marking ourselves stale
-                // TODO (required): we could in principle be stale for future epochs we haven't witnessed yet. Ensure up to date epochs before finalising this application.
-                safeStore.commandStore().markShardStale(safeStore, txnId, route.participants().toRanges(), false);
+                ranges = safeStore.commandStore().redundantBefore().everExpectToExecute(txnId, ranges);
+                if (!ranges.isEmpty())
+                {
+                    // TODO (now): check if the transaction is redundant, as if so it's definitely invalidated (and perhaps we didn't witness this remotely)
+                    // we don't even know the execution time, so we cannot possibly proceed besides erasing the command state and marking ourselves stale
+                    // TODO (required): we could in principle be stale for future epochs we haven't witnessed yet. Ensure up to date epochs before finalising this application, or else fetch a maximum possible epoch
+                    safeStore.commandStore().markShardStale(safeStore, txnId, participants.toRanges().slice(ranges, Minimal), false);
+                }
                 Commands.setErased(safeStore, safeCommand);
                 return null;
             }
 
-            Ranges executeRanges = safeStore.ranges().allBetween(txnId, executeAt);
-            executeRanges = safeStore.commandStore().redundantBefore().expectToExecute(txnId, executeAt, executeRanges);
-
-            if (executeRanges.isEmpty())
+            // compute the ranges we expect to execute - i.e. those we own, and are not stale or pre-bootstrap
+            ranges = safeStore.commandStore().redundantBefore().expectToExecute(txnId, executeAt, ranges);
+            if (ranges.isEmpty())
             {
                 // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
                 Commands.setTruncatedApply(safeStore, safeCommand, route);
                 return null;
             }
 
+            // if the command has been truncated globally, then we should expect to apply it
+            // if we cannot obtain enough information from a majority to do so then we have been left behind
             Known required = PreApplied.minKnown;
-            Known requireExtra = required.subtract(command.known());
-            Ranges achieveRanges = full.sufficientFor(requireExtra, executeRanges);
-            Participants<?> participants = route.participants().slice(executeRanges, Minimal);
+            Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
+            Ranges achieveRanges = full.sufficientFor(requireExtra, ranges); // the ranges for which we can successfully achieve this
 
             if (participants.isEmpty())
             {
                 // we only coordinate this transaction, so being unable to retrieve its state does not imply any staleness
+                // TODO (now): double check this doesn't stop us coordinating the transaction (it shouldn't, as doesn't imply durability)
                 Commands.setTruncatedApply(safeStore, safeCommand, route);
                 return null;
             }
 
-            Ranges staleRanges = executeRanges.subtract(achieveRanges);
+            // any ranges we execute but cannot achieve the pre-applied status for have been left behind and are stale
+            Ranges staleRanges = ranges.subtract(achieveRanges);
             Participants<?> staleParticipants = participants.slice(staleRanges, Minimal);
             staleRanges = staleParticipants.toRanges();
 

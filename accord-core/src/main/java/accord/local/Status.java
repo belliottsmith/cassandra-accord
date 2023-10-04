@@ -157,16 +157,16 @@ public enum Status
 
         public Known validForBoth(Known with)
         {
-            KnownRoute minRoute = route.validForBoth(with.route);
+            KnownRoute maxRoute = route.validForBoth(with.route);
             Definition minDefinition = definition.compareTo(with.definition) <= 0 ? definition : with.definition;
             KnownExecuteAt maxExecuteAt = executeAt.compareTo(with.executeAt) >= 0 ? executeAt : with.executeAt;
             KnownDeps minDeps = deps.compareTo(with.deps) <= 0 ? deps : with.deps;
-            Outcome minOutcome = outcome.atLeast(with.outcome);
-            if (minRoute == route && minDefinition == definition && maxExecuteAt == executeAt && minDeps == deps &&  minOutcome == outcome)
+            Outcome maxOutcome = outcome.validForBoth(with.outcome);
+            if (maxRoute == route && minDefinition == definition && maxExecuteAt == executeAt && minDeps == deps &&  maxOutcome == outcome)
                 return this;
-            if (minRoute == with.route && minDefinition == with.definition && maxExecuteAt == with.executeAt && minDeps == with.deps && minOutcome == with.outcome)
+            if (maxRoute == with.route && minDefinition == with.definition && maxExecuteAt == with.executeAt && minDeps == with.deps && maxOutcome == with.outcome)
                 return with;
-            return new Known(minRoute, minDefinition, maxExecuteAt, minDeps, minOutcome);
+            return new Known(maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
         }
 
         public boolean isSatisfiedBy(Known that)
@@ -290,7 +290,18 @@ public enum Status
 
         public boolean isTruncated()
         {
-            return outcome.isTruncated();
+            switch (outcome)
+            {
+                default: throw new AssertionError("Unhandled outcome: " + outcome);
+                case Invalidated:
+                case Unknown:
+                    return false;
+                case Apply:
+                    return !deps.hasDecidedDeps(); // if we don't have decided deps we're partially truncated
+                case Erased:
+                case WasApply:
+                    return true;
+            }
         }
 
         /**
@@ -597,32 +608,15 @@ public enum Status
             return this == Invalidated;
         }
 
-        public boolean isTruncated()
-        {
-            return this == Erased || this == WasApply;
-        }
-
         public Outcome atLeast(Outcome that)
         {
             return this.compareTo(that) >= 0 ? this : that;
         }
 
-        // return a status that can be used to reconstruct for both covered ranges.
-        // note: if one of the two is truncated, this pollutes the other with the concept of truncation;
-        // DO NOT rely on this for deriving actual truncation status
-        // TODO (expected): reify this distinction to avoid mistakes
-        public Outcome canReconstructForBoth(Outcome that)
+        // outcomes are universal - any replica of any shard may propagate its outcome to any other replica of any other shard
+        public Outcome validForBoth(Outcome that)
         {
-            if (this == that) return this;
-            Outcome max = this.compareTo(that) >= 0 ? this : that;
-            Outcome min = this.compareTo(that) <= 0 ? this : that;
-            if (max == Invalidated)
-            {
-                Invariants.checkState(min != Apply && min != WasApply);
-                return Invalidated;
-            }
-            if (max == Apply || max == WasApply) return WasApply;
-            return max;
+            return atLeast(that);
         }
 
         public Outcome subtract(Outcome that)

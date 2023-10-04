@@ -504,6 +504,12 @@ public abstract class Command implements CommonAttributes
         return executeAt == null || executeAt.equals(Timestamp.NONE) ? txnId() : executeAt;
     }
 
+    public final Timestamp executeAtIfKnownOrTxnId()
+    {
+        Timestamp executeAt = executeAtIfKnown();
+        return executeAt == null || executeAt.equals(Timestamp.NONE) ? txnId() : executeAt;
+    }
+
     public final Status status()
     {
         return saveStatus().status;

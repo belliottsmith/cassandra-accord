@@ -349,28 +349,4 @@ public class Cluster implements Scheduler
             lookup.values().forEach(Node::shutdown);
         }
     }
-//
-//    public List<TxnId> waitingOn(String txnIdString)
-//    {
-//        TxnId txnId = TxnId.parse(txnIdString);
-//        List<TxnId> waitingOn = new ArrayList<>();
-//    }
-//
-//    private void waitingOn(TxnId txnId, List<TxnId> waitingOn)
-//    {
-//        AtomicBoolean found = new AtomicBoolean();
-//        List<TxnId> explore = new ArrayList<>();
-//        for (Id id : sinks.keySet())
-//        {
-//            Node node = lookup.apply(id);
-//            node.commandStores().forEach(ss -> {
-//                SafeCommand safeCommand = ss.ifInitialised(txnId);
-//                if (safeCommand == null)
-//                    return;
-//                if (!safeCommand.current().hasBeen(Status.Committed))
-//                    waitingOn.add(txnId);
-//                return;
-//            })
-//        }
-//    }
 }

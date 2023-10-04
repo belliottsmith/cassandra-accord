@@ -158,7 +158,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         if (!command.has(Known.DefinitionOnly) && Route.isRoute(query) && safeStore.ranges().allAt(txnId.epoch()).contains(Route.castToRoute(query).homeKey()))
             Commands.informHome(safeStore, safeCommand, Route.castToRoute(query));
 
-        Ranges ranges = safeStore.ranges().allBetween(command.txnId().epoch(), command.executeAtOrTxnId().epoch());
+        Ranges ranges = safeStore.ranges().allBetween(command.txnId().epoch(), command.executeAtIfKnownOrTxnId().epoch());
         InvalidIfNot invalidIfNotAtLeast = invalidIfNotAtLeast(safeStore);
         boolean isCoordinating = isCoordinating(node, command);
         Durability durability = command.durability();
@@ -329,12 +329,12 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public boolean hasTruncated(Routables<?> routables)
         {
-            return foldlWithDefault(routables, (known, prev) -> known.outcome.isTruncated(), EnrichedKnown.Nothing, false, i -> i);
+            return foldlWithDefault(routables, (known, prev) -> known.isTruncated(), EnrichedKnown.Nothing, false, i -> i);
         }
 
         public boolean hasTruncated()
         {
-            return foldl((known, prev) -> known.outcome.isTruncated(), false, i -> i);
+            return foldl((known, prev) -> known.isTruncated(), false, i -> i);
         }
 
         public boolean isInvalidated(Participants<?> participants, WithQuorum withQuorum)
