@@ -38,17 +38,14 @@ import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import javax.annotation.Nullable;
 
 import static accord.local.Status.Durability.Majority;
-import static accord.local.Status.Durability.MajorityOrInvalidated;
 import static accord.local.Status.KnownDeps.DepsKnown;
 import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
 import static accord.local.Status.Outcome.Apply;
-import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 import static accord.messages.CheckStatus.WithQuorum.NoQuorum;
 import static accord.primitives.ProgressToken.APPLIED;
 import static accord.primitives.ProgressToken.INVALIDATED;
@@ -124,7 +121,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
     protected boolean isSufficient(Route<?> route, CheckStatusOk ok)
     {
         CheckStatusOkFull full = (CheckStatusOkFull)ok;
-        Known sufficientTo = full.sufficientFor(route.participants(), NoQuorum);
+        Known sufficientTo = full.knownFor(route.participants(), NoQuorum);
         if (!sufficientTo.isDefinitionKnown())
             return false;
 
@@ -145,7 +142,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         }
 
         CheckStatusOkFull full = ((CheckStatusOkFull) this.merged).withQuorum(success.withQuorum);
-        Known known = full.sufficientFor(route.participants(), success.withQuorum);
+        Known known = full.knownFor(route.participants(), success.withQuorum);
 
         switch (known.outcome)
         {
@@ -177,7 +174,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         Participants<?> sendTo = route.participants().subtract(full.truncatedResponse());
                         if (!sendTo.isEmpty())
                         {
-                            known = full.sufficientFor(sendTo, success.withQuorum);
+                            known = full.knownFor(sendTo, success.withQuorum);
                             if (known.executeAt == ExecuteAtKnown && known.deps == DepsKnown)
                             {
                                 Invariants.checkState(full.committedDeps.covering.containsAll(sendTo));

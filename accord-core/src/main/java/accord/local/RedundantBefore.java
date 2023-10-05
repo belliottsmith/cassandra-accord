@@ -59,15 +59,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         // TODO (desired): we don't need to maintain this now, and can simplify our builder, by migrating to ReducingRangeMap.foldWithBounds
         public final Range range;
         public final long startEpoch, endEpoch;
-        public final @Nonnull TxnId redundantBefore, bootstrappedAt;
+        public final @Nonnull TxnId appliedOrInvalidatedBefore, bootstrappedAt;
         public final @Nullable Timestamp staleUntilAtLeast;
 
-        public Entry(Range range, long startEpoch, long endEpoch, @Nonnull TxnId redundantBefore, @Nonnull TxnId bootstrappedAt, @Nullable Timestamp staleUntilAtLeast)
+        public Entry(Range range, long startEpoch, long endEpoch, @Nonnull TxnId appliedOrInvalidatedBefore, @Nonnull TxnId bootstrappedAt, @Nullable Timestamp staleUntilAtLeast)
         {
             this.range = range;
             this.startEpoch = startEpoch;
             this.endEpoch = endEpoch;
-            this.redundantBefore = redundantBefore;
+            this.appliedOrInvalidatedBefore = appliedOrInvalidatedBefore;
             this.bootstrappedAt = bootstrappedAt;
             this.staleUntilAtLeast = staleUntilAtLeast;
         }
@@ -87,7 +87,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
             long startEpoch = Long.max(a.startEpoch, b.startEpoch);
             long endEpoch = Long.min(a.endEpoch, b.endEpoch);
-            int cr = a.redundantBefore.compareTo(b.redundantBefore);
+            int cr = a.appliedOrInvalidatedBefore.compareTo(b.appliedOrInvalidatedBefore);
             int cb = a.bootstrappedAt.compareTo(b.bootstrappedAt);
             int csu = compareStaleUntilAtLeast(a.staleUntilAtLeast, b.staleUntilAtLeast);
 
@@ -96,7 +96,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             if (range.equals(b.range) && startEpoch == b.startEpoch && endEpoch == b.endEpoch && cr <= 0 && cb <= 0 && csu <= 0)
                 return b;
 
-            TxnId redundantBefore = cr >= 0 ? a.redundantBefore : b.redundantBefore;
+            TxnId redundantBefore = cr >= 0 ? a.appliedOrInvalidatedBefore : b.appliedOrInvalidatedBefore;
             TxnId bootstrappedAt = cb >= 0 ? a.bootstrappedAt : b.bootstrappedAt;
             Timestamp staleUntilAtLeast = csu >= 0 ? a.staleUntilAtLeast : b.staleUntilAtLeast;
 
@@ -163,7 +163,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         {
             if (staleUntilAtLeast != null || bootstrappedAt.compareTo(txnId) > 0)
                 return PRE_BOOTSTRAP_OR_STALE;
-            if (redundantBefore.compareTo(txnId) > 0)
+            if (appliedOrInvalidatedBefore.compareTo(txnId) > 0)
                 return SHARD_REDUNDANT;
             return LIVE;
         }
@@ -177,12 +177,12 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
         public final boolean isLocalRedundancyViaBootstrap()
         {
-            return redundantBefore.compareTo(bootstrappedAt) < 0;
+            return appliedOrInvalidatedBefore.compareTo(bootstrappedAt) < 0;
         }
 
         public final TxnId locallyRedundantBefore()
         {
-            return TxnId.min(bootstrappedAt, redundantBefore);
+            return TxnId.min(bootstrappedAt, appliedOrInvalidatedBefore);
         }
 
         // TODO (required, consider): this admits the range of epochs that cross the two timestamps, which matches our
@@ -200,7 +200,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
         Entry withRange(Range range)
         {
-            return new Entry(range, startEpoch, endEpoch, redundantBefore, bootstrappedAt, staleUntilAtLeast);
+            return new Entry(range, startEpoch, endEpoch, appliedOrInvalidatedBefore, bootstrappedAt, staleUntilAtLeast);
         }
 
         public boolean equals(Object that)
@@ -217,7 +217,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         {
             return this.startEpoch == that.startEpoch
                    && this.endEpoch == that.endEpoch
-                   && this.redundantBefore.equals(that.redundantBefore)
+                   && this.appliedOrInvalidatedBefore.equals(that.appliedOrInvalidatedBefore)
                    && this.bootstrappedAt.equals(that.bootstrappedAt)
                    && Objects.equals(this.staleUntilAtLeast, that.staleUntilAtLeast);
         }
@@ -228,7 +228,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return "("
                    + (startEpoch == Long.MIN_VALUE ? "-\u221E" : Long.toString(startEpoch)) + ","
                    + (endEpoch == Long.MAX_VALUE ? "\u221E" : Long.toString(endEpoch)) + ","
-                   + (redundantBefore.compareTo(bootstrappedAt) >= 0 ? redundantBefore + ")" : bootstrappedAt + "*)");
+                   + (appliedOrInvalidatedBefore.compareTo(bootstrappedAt) >= 0 ? appliedOrInvalidatedBefore + ")" : bootstrappedAt + "*)");
         }
     }
 
@@ -362,6 +362,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return a.equalsIgnoreRange(b);
         }
 
+        // we maintain the range that an Entry applies to for ease of some other functionality - this logic is applied here in append and above by overriding equals.
+        // entries may be null for ranges we do not have any knowledge for; the final "entry" we append is expected to be null by the ReducingIntervalMap.Builder
+        // TODO (desired): consider migrating to foldlWithBounds
         @Override
         public void append(RoutingKey start, @Nullable Entry value, BiFunction<Entry, Entry, Entry> reduce)
         {
@@ -383,7 +386,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return new Entry(a.range.newRange(
                 a.range.start().compareTo(b.range.start()) <= 0 ? a.range.start() : b.range.start(),
                 a.range.end().compareTo(b.range.end()) >= 0 ? a.range.end() : b.range.end()
-            ), a.startEpoch, a.endEpoch, a.redundantBefore, a.bootstrappedAt, a.staleUntilAtLeast);
+            ), a.startEpoch, a.endEpoch, a.appliedOrInvalidatedBefore, a.bootstrappedAt, a.staleUntilAtLeast);
         }
 
         @Override

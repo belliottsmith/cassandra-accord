@@ -553,6 +553,11 @@ public abstract class CommandStore implements AgentExecutor
             return b;
         }, builder, keyDeps, null, ignore -> false);
 
+        /**
+         * If we have to handle bootstrapping ranges for range transactions, these may only partially cover the
+         * transaction, in which case we should not remove the transaction as a dependency. But if it is fully
+         * covered by bootstrapping ranges then we *must* remove it as a dependency.
+         */
         class RangeState
         {
             final WaitingOn.Update builder;
@@ -565,6 +570,9 @@ public abstract class CommandStore implements AgentExecutor
                 this.builder = builder;
             }
 
+            /**
+             * Are the participating ranges for the txn fully covered by bootstrapping ranges for this command store
+             */
             boolean isFullyBootstrapping(int rangeTxnIdx)
             {
                 if (partiallyBootstrapping == null)
@@ -585,15 +593,20 @@ public abstract class CommandStore implements AgentExecutor
             // TODO (desired, efficiency): foldlInt so we can track the lower rangeidx bound and not revisit unnecessarily
             WaitingOn.Update b = s.builder;
             {
-                int tmp = d.txnIds().find(e.redundantBefore);
+                // find the txnIdx below which we are known to be fully redundant locally due to having been applied or invalidated
+                int tmp = d.txnIds().find(e.appliedOrInvalidatedBefore);
                 s.txnIdx = tmp < 0 ? -1 - tmp : tmp;
             }
+            // remove intersecting transactions with known redundant txnId
             d.forEach(ps, e.range, pi, pj, b, s, (b0, s0, txnIdx) -> {
                 if (txnIdx < s0.txnIdx)
                     b0.setAppliedOrInvalidatedRangeIdx(txnIdx);
             });
-            if (e.bootstrappedAt.compareTo(e.redundantBefore) > 0)
+            if (e.bootstrappedAt.compareTo(e.appliedOrInvalidatedBefore) > 0)
             {
+                // if we have any ranges where bootstrap is ahead of the latest known fully redundant txnId,
+                // we have to do a more complicated dance since this may imply only partial redundancy
+                // (we may still depend on the transaction for some other range)
                 {
                     int tmp = d.txnIds().find(e.bootstrappedAt);
                     s.txnIdx = tmp < 0 ? -1 - tmp : tmp;

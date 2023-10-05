@@ -143,33 +143,49 @@ public enum Status
             this.outcome = outcome;
         }
 
-        public Known atLeast(Known with)
+        public Known atLeast(Known that)
         {
-            KnownRoute maxRoute = route.atLeast(with.route);
-            Definition maxDefinition = definition.compareTo(with.definition) >= 0 ? definition : with.definition;
-            KnownExecuteAt maxExecuteAt = executeAt.compareTo(with.executeAt) >= 0 ? executeAt : with.executeAt;
-            KnownDeps maxDeps = deps.compareTo(with.deps) >= 0 ? deps : with.deps;
-            Outcome maxOutcome = outcome.atLeast(with.outcome);
-            return selectOrCreate(with, maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+            KnownRoute maxRoute = route.atLeast(that.route);
+            Definition maxDefinition = definition.atLeast(that.definition);
+            KnownExecuteAt maxExecuteAt = executeAt.atLeast(that.executeAt);
+            KnownDeps maxDeps = deps.atLeast(that.deps);
+            Outcome maxOutcome = outcome.atLeast(that.outcome);
+            return selectOrCreate(that, maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
         }
 
-        public Known validForBoth(Known with)
+        public Known reduce(Known that)
         {
-            KnownRoute maxRoute = route.validForBoth(with.route);
-            Definition minDefinition = definition.compareTo(with.definition) <= 0 ? definition : with.definition;
-            KnownExecuteAt maxExecuteAt = executeAt.compareTo(with.executeAt) >= 0 ? executeAt : with.executeAt;
-            KnownDeps minDeps = deps.compareTo(with.deps) <= 0 ? deps : with.deps;
-            Outcome maxOutcome = outcome.validForBoth(with.outcome);
-            return selectOrCreate(with, maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
+            KnownRoute maxRoute = route.reduce(that.route);
+            Definition minDefinition = definition.reduce(that.definition);
+            KnownExecuteAt maxExecuteAt = executeAt.reduce(that.executeAt);
+            KnownDeps minDeps = deps.reduce(that.deps);
+            Outcome maxOutcome = outcome.reduce(that.outcome);
+            return selectOrCreate(that, maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
+        }
+
+        public Known validForAll()
+        {
+            KnownRoute maxRoute = route.validForAll();
+            Definition minDefinition = definition.validForAll();
+            KnownExecuteAt maxExecuteAt = executeAt.validForAll();
+            KnownDeps minDeps = deps.validForAll();
+            Outcome maxOutcome = outcome.validForAll();
+            return selectOrCreate(maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
         }
 
         @Nonnull
         private Known selectOrCreate(Known with, KnownRoute maxRoute, Definition maxDefinition, KnownExecuteAt maxExecuteAt, KnownDeps maxDeps, Outcome maxOutcome)
         {
-            if (maxRoute == route && maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps &&  maxOutcome == outcome)
-                return this;
             if (maxRoute == with.route && maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
                 return with;
+            return selectOrCreate(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+        }
+
+        @Nonnull
+        private Known selectOrCreate(KnownRoute maxRoute, Definition maxDefinition, KnownExecuteAt maxExecuteAt, KnownDeps maxDeps, Outcome maxOutcome)
+        {
+            if (maxRoute == route && maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps &&  maxOutcome == outcome)
+                return this;
             return new Known(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
         }
 
@@ -416,11 +432,16 @@ public enum Status
             return this == Full;
         }
 
-        public KnownRoute validForBoth(KnownRoute that)
+        public KnownRoute reduce(KnownRoute that)
         {
             if (this == that) return this;
             if (this == Full || that == Full) return Full;
             return Maybe;
+        }
+
+        public KnownRoute validForAll()
+        {
+            return this == Covering ? Maybe : this;
         }
 
         public KnownRoute atLeast(KnownRoute that)
@@ -461,6 +482,21 @@ public enum Status
         public boolean isDecided()
         {
             return compareTo(ExecuteAtTruncated) >= 0;
+        }
+
+        public KnownExecuteAt atLeast(KnownExecuteAt that)
+        {
+            return compareTo(that) >= 0 ? this : that;
+        }
+
+        public KnownExecuteAt reduce(KnownExecuteAt that)
+        {
+            return atLeast(that);
+        }
+
+        public KnownExecuteAt validForAll()
+        {
+            return compareTo(ExecuteAtTruncated) <= 0 ? ExecuteAtUnknown : this;
         }
 
         public boolean hasDecidedExecuteAt()
@@ -524,6 +560,21 @@ public enum Status
         {
             return this == DepsProposed || this == DepsKnown;
         }
+
+        public KnownDeps atLeast(KnownDeps that)
+        {
+            return compareTo(that) >= 0 ? this : that;
+        }
+
+        public KnownDeps reduce(KnownDeps that)
+        {
+            return compareTo(that) <= 0 ? this : that;
+        }
+
+        public KnownDeps validForAll()
+        {
+            return this == NoDeps ? NoDeps : DepsUnknown;
+        }
     }
 
     /**
@@ -556,6 +607,22 @@ public enum Status
         public boolean isKnown()
         {
             return this == DefinitionKnown;
+        }
+
+        public Definition atLeast(Definition that)
+        {
+            return compareTo(that) >= 0 ? this : that;
+        }
+
+        // combine info about two shards into a composite representation
+        public Definition reduce(Definition that)
+        {
+            return compareTo(that) <= 0 ? this : that;
+        }
+
+        public Definition validForAll()
+        {
+            return this == NoOp ? NoOp : DefinitionUnknown;
         }
     }
 
@@ -634,9 +701,14 @@ public enum Status
         }
 
         // outcomes are universal - any replica of any shard may propagate its outcome to any other replica of any other shard
-        public Outcome validForBoth(Outcome that)
+        public Outcome reduce(Outcome that)
         {
             return atLeast(that);
+        }
+
+        public Outcome validForAll()
+        {
+            return this == Erased ? Unknown : this;
         }
 
         public Outcome subtract(Outcome that)
@@ -691,6 +763,7 @@ public enum Status
         {
             int c = a.compareTo(b);
             if (c < 0) { Durability tmp = a; a = b; b = tmp; }
+            // if we know we are applied, we can remove the OrInvalidated qualifier
             if (a == UniversalOrInvalidated && (b == Majority || b == ShardUniversal || b == Local)) a = Universal;
             if ((a == ShardUniversal) && (b == Local || b == NotDurable)) a = Local;
             if (b == NotDurable && a.compareTo(MajorityOrInvalidated) < 0) a = NotDurable;
@@ -765,15 +838,5 @@ public enum Status
         if (statusA.phase != Phase.Accept || acceptedA.compareTo(acceptedB) >= 0)
             return a;
         return b;
-    }
-
-    public static Status simpleMin(Status a, Status b)
-    {
-        return a.compareTo(b) <= 0 ? a : b;
-    }
-
-    public static Status simpleMax(Status a, Status b)
-    {
-        return a.compareTo(b) >= 0 ? a : b;
     }
 }

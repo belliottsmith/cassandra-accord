@@ -219,7 +219,7 @@ public class FetchData extends CheckShards<Route<?>>
 
     protected boolean isSufficient(Route<?> scope, CheckStatus.CheckStatusOk ok)
     {
-        return target.isSatisfiedBy(((CheckStatusOkFull)ok).sufficientFor(scope.participants(), NoQuorum));
+        return target.isSatisfiedBy(((CheckStatusOkFull)ok).knownFor(scope.participants(), NoQuorum));
     }
 
     @Override
@@ -294,7 +294,7 @@ public class FetchData extends CheckShards<Route<?>>
 
             Ranges covering = route.sliceCovering(sliceRanges, Minimal);
             Participants<?> participatingKeys = route.participants().slice(covering, Minimal);
-            Known achieved = full.sufficientFor(participatingKeys, withQuorum);
+            Known achieved = full.knownFor(participatingKeys, withQuorum);
             if (achieved.executeAt.isDecided() && full.executeAt.epoch() > toEpoch)
             {
                 Ranges acceptRanges;
@@ -312,7 +312,7 @@ public class FetchData extends CheckShards<Route<?>>
                     sliceRanges = acceptRanges;
                     covering = route.sliceCovering(sliceRanges, Minimal);
                     participatingKeys = route.participants().slice(covering, Minimal);
-                    Known knownForExecution = full.sufficientFor(participatingKeys, withQuorum);
+                    Known knownForExecution = full.knownFor(participatingKeys, withQuorum);
                     if ((target != null && target.isSatisfiedBy(knownForExecution)) || achieved.isSatisfiedBy(knownForExecution))
                     {
                         achieved = knownForExecution;
@@ -373,24 +373,20 @@ public class FetchData extends CheckShards<Route<?>>
                 if (achieved == null)
                     return null;
 
-                if (achieved.executeAt.isDecided())
+                Timestamp executeAt = command.executeAtIfKnown(full.executeAtIfKnown());
+                Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), (executeAt == null ? txnId : executeAt).epoch());
+                if (achieved.isDefinitionKnown() && partialTxn == null)
                 {
-                    Timestamp executeAt = command.executeAtIfKnown(full.executeAt);
-                    if (partialTxn == null && this.full.maxKnowledgeSaveStatus.known.definition.isKnown())
-                    {
-                        Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
-                        PartialTxn existing = command.partialTxn();
-                        if (existing != null)
-                            needed = needed.subtract(existing.covering());
-                        partialTxn = full.partialTxn.slice(needed, true).reconstitutePartial(needed);
-                    }
+                    PartialTxn existing = command.partialTxn();
+                    Ranges neededForDefinition = existing == null ? needed : needed.subtract(existing.covering());
+                    partialTxn = full.partialTxn.slice(needed, true).reconstitutePartial(neededForDefinition);
+                }
 
-                    if (partialDeps == null && !safeCommand.current().known().deps.hasDecidedDeps())
-                    {
-                        Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
-                        // we don't subtract existing partialDeps, as they cannot be committed deps; we only permit committing deps covering all participating ranges
-                        partialDeps = full.committedDeps.slice(needed).reconstitutePartial(needed);
-                    }
+                if (achieved.hasDecidedDeps() && partialDeps == null)
+                {
+                    Invariants.checkState(executeAt != null);
+                    // we don't subtract existing partialDeps, as they cannot be committed deps; we only permit committing deps covering all participating ranges
+                    partialDeps = full.committedDeps.slice(needed).reconstitutePartial(needed);
                 }
             }
 
@@ -478,7 +474,7 @@ public class FetchData extends CheckShards<Route<?>>
                 // we're truncated *somewhere* but not locally; whether we have the executeAt is immaterial to this calculus,
                 // as we're either ready to go or we're waiting on the coordinating shard to complete this transaction, so pick
                 // the maximum we can achieve and return that
-                return full.sufficientFor(participants, withQuorum);
+                return full.knownFor(participants, withQuorum);
             }
 
             // if our peers have truncated this command, then either:
@@ -511,7 +507,7 @@ public class FetchData extends CheckShards<Route<?>>
             // if we cannot obtain enough information from a majority to do so then we have been left behind
             Known required = PreApplied.minKnown;
             Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
-            Ranges achieveRanges = full.sufficientFor(requireExtra, ranges); // the ranges for which we can successfully achieve this
+            Ranges achieveRanges = full.knownFor(requireExtra, ranges); // the ranges for which we can successfully achieve this
 
             if (participants.isEmpty())
             {

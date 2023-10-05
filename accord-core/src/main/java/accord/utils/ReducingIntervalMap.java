@@ -29,13 +29,14 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
-import accord.api.RoutingKey;
-
 /**
- * Mostly copied/adapted from Cassandra's PaxosRepairHistory class
- *
  * Represents a map of ranges where precisely one value is bound to each point in the continuum of ranges,
  * and a simple function is sufficient to merge values inserted to overlapping ranges.
+ *
+ * Copied/adapted from Cassandra's PaxosRepairHistory class, however has a major distinction: applies only to the
+ * covered ranges, i.e. the first start bound is the lower bound, and the last start bound is the upper bound,
+ * and everything else is considered unknown. This is in contrast to the C* version where every logical range has
+ * some associated information, with the first and last entries applying to everything either side of the start/end bound.
  *
  * A simple sorted array of bounds is sufficient to represent the state and perform efficient lookups.
  *
@@ -360,6 +361,10 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             return a;
         }
 
+        /**
+         * null is a valid value to represent no knowledge, and is the *expected* final value, representing
+         * the bound of our knowledge (any higher key will find no associated information)
+         */
         public void append(K start, @Nullable V value, BiFunction<V, V, V> reduce)
         {
             int tailIdx = starts.size() - 1;

@@ -116,14 +116,14 @@ public class Infer
             return that == IfUndecided;
         }
 
-        public InvalidIfNot merge(InvalidIfNot that)
+        public InvalidIfNot atLeast(InvalidIfNot that)
         {
-            return lookup(merge(this.unknown, that.unknown), merge(this.undecided, that.undecided));
+            return lookup(atLeast(this.unknown, that.unknown), atLeast(this.undecided, that.undecided));
         }
 
-        public InvalidIfNot validForBoth(InvalidIfNot that)
+        public InvalidIfNot reduce(InvalidIfNot that)
         {
-            return lookup(validForBoth(this.unknown, that.unknown), validForBoth(this.undecided, that.undecided));
+            return lookup(reduce(this.unknown, that.unknown), reduce(this.undecided, that.undecided));
         }
 
         private InvalidIfNot lookup(InvalidIf unknown, InvalidIf undecided)
@@ -131,13 +131,13 @@ public class Infer
             return LOOKUP[unknown.ordinal() * invalidIfs + undecided.ordinal()];
         }
 
-        private static InvalidIf merge(InvalidIf a, InvalidIf b)
+        private static InvalidIf atLeast(InvalidIf a, InvalidIf b)
         {
             if (a == b) return a;
             return IfPreempted;
         }
 
-        private static InvalidIf validForBoth(InvalidIf a, InvalidIf b)
+        private static InvalidIf reduce(InvalidIf a, InvalidIf b)
         {
             return a.compareTo(b) <= 0 ? a : b;
         }

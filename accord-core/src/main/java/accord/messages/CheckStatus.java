@@ -237,15 +237,23 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             Known known = super.atLeast(with);
             if (known == this)
                 return this;
-            return new FoundKnown(known, invalidIfNot.merge(with.invalidIfNot), isPreempted.merge(with.isPreempted));
+            return new FoundKnown(known, invalidIfNot.atLeast(with.invalidIfNot), isPreempted.merge(with.isPreempted));
         }
 
-        public FoundKnown validForBoth(FoundKnown with)
+        public FoundKnown reduce(FoundKnown with)
         {
-            Known known = super.validForBoth(with);
+            Known known = super.reduce(with);
             if (known == this)
                 return this;
-            return new FoundKnown(known, invalidIfNot.validForBoth(with.invalidIfNot), isPreempted.validForBoth(with.isPreempted));
+            return new FoundKnown(known, invalidIfNot.reduce(with.invalidIfNot), isPreempted.validForBoth(with.isPreempted));
+        }
+
+        public FoundKnown validForAll()
+        {
+            Known known = super.validForAll();
+            if (known == this)
+                return this;
+            return new FoundKnown(known, NotKnownToBeInvalid, NotPreempted);
         }
 
         public boolean isTruncated()
@@ -301,9 +309,9 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             for (FoundKnown value : values)
             {
                 if (value != null)
-                    validForAll = validForAll.validForBoth(value);
+                    validForAll = validForAll.reduce(value);
             }
-            this.validForAll = validForAll;
+            this.validForAll = validForAll.validForAll();
             if (!validForAll.equals(FoundKnown.Nothing))
             {
                 for (int i = 0 ; i < values.length ; ++i)
@@ -380,7 +388,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             return withQuorum;
         }
 
-        public Known inferredOrKnown(Routables<?> routables, WithQuorum withQuorum)
+        public Known inferredOrKnownFor(Routables<?> routables, WithQuorum withQuorum)
         {
             Known result;
             switch (withQuorum)
@@ -415,10 +423,10 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             if (prev == null)
                 return foundKnown;
 
-            return prev.validForBoth(foundKnown);
+            return prev.reduce(foundKnown);
         }
 
-        public Ranges sufficientFor(Known required, Ranges expect)
+        public Ranges knownFor(Known required, Ranges expect)
         {
             // TODO (desired): implement and use foldlWithDefaultAndBounds so can subtract rather than add
             return foldlWithBounds(expect, (known, prev, start, end) -> {
@@ -532,7 +540,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public Known inferredOrKnown(Routables<?> route, WithQuorum withQuorum)
         {
-            return map.inferredOrKnown(route, withQuorum);
+            return map.inferredOrKnownFor(route, withQuorum);
         }
 
         @Override
@@ -615,7 +623,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public InvalidIfNot maxInvalidIfNot()
         {
-            return map.foldl((known, prev) -> known.invalidIfNot.merge(prev), NotKnownToBeInvalid, InvalidIfNot::isMax);
+            return map.foldl((known, prev) -> known.invalidIfNot.atLeast(prev), NotKnownToBeInvalid, InvalidIfNot::isMax);
         }
 
         @Override
@@ -724,9 +732,9 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         }
 
         // TODO (required): harden markShardStale against unnecessary actions by utilising inferInvalidated==MAYBE and performing a global query
-        public Known sufficientFor(Participants<?> participants, WithQuorum withQuorum)
+        public Known knownFor(Participants<?> participants, WithQuorum withQuorum)
         {
-            Known known = map.inferredOrKnown(participants, withQuorum);
+            Known known = map.inferredOrKnownFor(participants, withQuorum);
             // TODO (desired): make sure these match identically, rather than only ensuring Route.isFullRoute (either by coercing it here or by ensuring it at callers)
             Invariants.checkState(!known.hasFullRoute() || Route.isFullRoute(route));
             Invariants.checkState(!known.hasDefinition() || (partialTxn != null && partialTxn.covering().containsAll(participants)));
@@ -738,10 +746,10 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         // it is assumed that we are invoking this for a transaction that will execute;
         // the result may be erroneous if the transaction is invalidated, as logically this can apply to all ranges
-        public Ranges sufficientFor(Known required, Ranges expect)
+        public Ranges knownFor(Known required, Ranges expect)
         {
             Invariants.checkState(maxSaveStatus != SaveStatus.Invalidated);
-            return map.sufficientFor(required, expect);
+            return map.knownFor(required, expect);
         }
 
         @Override
