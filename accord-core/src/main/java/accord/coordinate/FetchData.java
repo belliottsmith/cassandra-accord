@@ -547,9 +547,6 @@ public class FetchData extends CheckShards<Route<?>>
             if (!full.durability.isDurable() || homeKey == null)
                 return null;
 
-            if (!safeStore.ranges().coordinates(txnId).contains(homeKey))
-                return null;
-
             Timestamp executeAt = full.executeAtIfKnown();
             Commands.setDurability(safeStore, safeCommand, full.durability, route, executeAt);
             return null;
