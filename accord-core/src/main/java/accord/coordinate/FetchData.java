@@ -523,6 +523,9 @@ public class FetchData extends CheckShards<Route<?>>
             return null;
         }
 
+        /*
+         *  If there is new information about the command being durable and we are in the coordination shard in the coordination epoch then update the durability information and possibly cleanup
+         */
         private Void updateDurability(SafeCommandStore safeStore, SafeCommand safeCommand)
         {
             // TODO (expected): Infer durability status from cleanup/truncation
