@@ -70,6 +70,7 @@ import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.Durability.ShardUniversal;
 import static accord.local.Status.Durability.Universal;
 import static accord.local.Status.Known;
+import static accord.local.Status.KnownDeps.DepsKnown;
 import static accord.local.Status.KnownDeps.DepsTruncated;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Truncated;
@@ -735,12 +736,12 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         public Known knownFor(Participants<?> participants, WithQuorum withQuorum)
         {
             Known known = map.inferredOrKnownFor(participants, withQuorum);
-            // TODO (desired): make sure these match identically, rather than only ensuring Route.isFullRoute (either by coercing it here or by ensuring it at callers)
             Invariants.checkState(!known.hasFullRoute() || Route.isFullRoute(route));
-            Invariants.checkState(!known.hasDefinition() || (partialTxn != null && partialTxn.covering().containsAll(participants)));
-            Invariants.checkState(!known.hasDecidedDeps() || (committedDeps != null && committedDeps.covering.containsAll(participants)));
             Invariants.checkState(!known.outcome.isInvalidated() || (!maxKnowledgeSaveStatus.known.isDecidedToExecute() && !maxSaveStatus.known.isDecidedToExecute()));
             Invariants.checkState(!(maxSaveStatus.known.outcome.isInvalidated() || maxKnowledgeSaveStatus.known.outcome.isInvalidated()) || !known.isDecidedToExecute());
+            // TODO (desired): make sure these match identically, rather than only ensuring Route.isFullRoute (either by coercing it here or by ensuring it at callers)
+            Invariants.checkState(!known.hasDefinition() || (partialTxn != null && partialTxn.covering().containsAll(participants)));
+            Invariants.checkState(!known.hasDecidedDeps() || (committedDeps != null && committedDeps.covering.containsAll(participants)));
             return known;
         }
 
