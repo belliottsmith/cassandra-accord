@@ -224,8 +224,8 @@ public enum SaveStatus
                 // if the decision is known, we're really PreCommitted
             case PreCommitted:
                 if (known.isDefinitionKnown())
-                    return known.deps.hasProposedOrDecidedDeps() ? PreCommittedWithDefinitionAndAcceptedDeps : PreCommittedWithDefinition;
-                return known.deps.hasProposedOrDecidedDeps() ? PreCommittedWithAcceptedDeps : PreCommitted;
+                    return known.deps == DepsProposed ? PreCommittedWithDefinitionAndAcceptedDeps : PreCommittedWithDefinition;
+                return known.deps == DepsProposed ? PreCommittedWithAcceptedDeps : PreCommitted;
             case Committed: return Committed;
             case ReadyToExecute: return ReadyToExecute;
             case PreApplied: return PreApplied;

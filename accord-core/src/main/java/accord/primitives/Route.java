@@ -27,7 +27,7 @@ public interface Route<K extends Unseekable> extends Unseekables<K>
     RoutingKey homeKey();
 
     /**
-     * @return true iff homeKey() is not involved in the transaction, only in its coordination (i.e. !txn.keys().contains(homeKey())
+     * @return true iff homeKey() is involved in the transaction, not only in its coordination (i.e. txn.keys().contains(homeKey())
      */
     boolean isParticipatingHomeKey();
     RoutingKey someParticipatingKey();

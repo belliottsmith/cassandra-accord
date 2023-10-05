@@ -70,6 +70,7 @@ import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.Durability.ShardUniversal;
 import static accord.local.Status.Durability.Universal;
 import static accord.local.Status.Known;
+import static accord.local.Status.KnownDeps.DepsTruncated;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Truncated;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
@@ -85,13 +86,13 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
     public static class SerializationSupport
     {
-        public static CheckStatusOk createOk(CheckStatusMap map, SaveStatus maxKnowledgeStatus, SaveStatus maxStatus, Ballot promised, Ballot accepted, @Nullable Timestamp executeAt,
+        public static CheckStatusOk createOk(FoundKnownMap map, SaveStatus maxKnowledgeStatus, SaveStatus maxStatus, Ballot promised, Ballot accepted, @Nullable Timestamp executeAt,
                                              boolean isCoordinating, Durability durability,
                                              @Nullable Route<?> route, @Nullable RoutingKey homeKey)
         {
             return new CheckStatusOk(map, maxKnowledgeStatus, maxStatus, promised, accepted, executeAt, isCoordinating, durability, route, homeKey);
         }
-        public static CheckStatusOk createOk(CheckStatusMap map, SaveStatus maxKnowledgeStatus, SaveStatus maxStatus,
+        public static CheckStatusOk createOk(FoundKnownMap map, SaveStatus maxKnowledgeStatus, SaveStatus maxStatus,
                                              Ballot promised, Ballot accepted, @Nullable Timestamp executeAt,
                                              boolean isCoordinating, Durability durability,
                                              @Nullable Route<?> route, @Nullable RoutingKey homeKey,
@@ -213,34 +214,60 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         boolean isOk();
     }
 
-    public static class EnrichedKnown extends Known
+    /**
+     * This is slightly different to Known, in that it represents the knowledge we have obtained from any shard that
+     * can be applied to any other shard, along with any information we might use to infer invalidation.
+     */
+    public static class FoundKnown extends Known
     {
-        public static final EnrichedKnown Nothing = new EnrichedKnown(Known.Nothing, NotKnownToBeInvalid, NotPreempted);
+        public static final FoundKnown Nothing = new FoundKnown(Known.Nothing, NotKnownToBeInvalid, NotPreempted);
 
         public final InvalidIfNot invalidIfNot;
         public final IsPreempted isPreempted;
 
-        public EnrichedKnown(Known known, InvalidIfNot invalidIfNot, IsPreempted isPreempted)
+        public FoundKnown(Known known, InvalidIfNot invalidIfNot, IsPreempted isPreempted)
         {
             super(known);
             this.invalidIfNot = invalidIfNot;
             this.isPreempted = isPreempted;
         }
 
-        public EnrichedKnown atLeast(EnrichedKnown with)
+        public FoundKnown atLeast(FoundKnown with)
         {
             Known known = super.atLeast(with);
             if (known == this)
                 return this;
-            return new EnrichedKnown(known, invalidIfNot.merge(with.invalidIfNot), isPreempted.merge(with.isPreempted));
+            return new FoundKnown(known, invalidIfNot.merge(with.invalidIfNot), isPreempted.merge(with.isPreempted));
         }
 
-        public EnrichedKnown validForBoth(EnrichedKnown with)
+        public FoundKnown validForBoth(FoundKnown with)
         {
             Known known = super.validForBoth(with);
             if (known == this)
                 return this;
-            return new EnrichedKnown(known, invalidIfNot.validForBoth(with.invalidIfNot), isPreempted.validForBoth(with.isPreempted));
+            return new FoundKnown(known, invalidIfNot.validForBoth(with.invalidIfNot), isPreempted.validForBoth(with.isPreempted));
+        }
+
+        public boolean isTruncated()
+        {
+            switch (outcome)
+            {
+                default: throw new AssertionError("Unhandled outcome: " + outcome);
+                case Invalidated:
+                case Unknown:
+                    return false;
+                case Apply:
+                    // since Apply is universal, we can
+                    return deps == DepsTruncated;
+                case Erased:
+                case WasApply:
+                    return true;
+            }
+        }
+
+        public boolean canProposeInvalidation()
+        {
+            return deps.canProposeInvalidation() && executeAt.canProposeInvalidation() && outcome.canProposeInvalidation();
         }
 
         public boolean inferInvalid(WithQuorum withQuorum)
@@ -253,45 +280,46 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         {
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
-            EnrichedKnown that = (EnrichedKnown) o;
+            FoundKnown that = (FoundKnown) o;
             return route == that.route && definition == that.definition && executeAt == that.executeAt && deps == that.deps && outcome == that.outcome && invalidIfNot == that.invalidIfNot && isPreempted == that.isPreempted;
         }
     }
 
-    public static class CheckStatusMap extends ReducingRangeMap<EnrichedKnown>
+    public static class FoundKnownMap extends ReducingRangeMap<FoundKnown>
     {
-        private transient final EnrichedKnown validForAll;
+        private transient final FoundKnown validForAll;
 
-        private CheckStatusMap()
+        private FoundKnownMap()
         {
-            this.validForAll = EnrichedKnown.Nothing;
+            this.validForAll = FoundKnown.Nothing;
         }
 
-        private CheckStatusMap(boolean inclusiveEnds, RoutingKey[] ends, EnrichedKnown[] values)
+        private FoundKnownMap(boolean inclusiveEnds, RoutingKey[] ends, FoundKnown[] values)
         {
             super(inclusiveEnds, ends, values);
-            EnrichedKnown validForAll = EnrichedKnown.Nothing;
-            for (EnrichedKnown value : values)
+            FoundKnown validForAll = FoundKnown.Nothing;
+            for (FoundKnown value : values)
             {
                 if (value != null)
                     validForAll = validForAll.validForBoth(value);
             }
             this.validForAll = validForAll;
-            if (!validForAll.equals(EnrichedKnown.Nothing))
+            if (!validForAll.equals(FoundKnown.Nothing))
             {
                 for (int i = 0 ; i < values.length ; ++i)
                 {
+                    // TODO (expected): merge new dups
                     if (values[i] != null)
                         values[i] = values[i].atLeast(validForAll);
                 }
             }
         }
 
-        public static CheckStatusMap create(Unseekables<?> keysOrRanges, SaveStatus saveStatus, InvalidIfNot invalidIfNot, Ballot promised)
+        public static FoundKnownMap create(Unseekables<?> keysOrRanges, SaveStatus saveStatus, InvalidIfNot invalidIfNot, Ballot promised)
         {
-            EnrichedKnown known = new EnrichedKnown(saveStatus.known, invalidIfNot, promised.equals(Ballot.ZERO) ? NotPreempted : Preempted);
+            FoundKnown known = new FoundKnown(saveStatus.known, invalidIfNot, promised.equals(Ballot.ZERO) ? NotPreempted : Preempted);
             if (keysOrRanges.isEmpty())
-                return new CheckStatusMap();
+                return new FoundKnownMap();
 
             switch (keysOrRanges.domain())
             {
@@ -302,8 +330,8 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
                     Builder builder = new Builder(ranges.get(0).endInclusive(), 2 * ranges.size());
                     for (Range range : ranges)
                     {
-                        builder.append(range.start(), known, EnrichedKnown::atLeast);
-                        builder.append(range.end(), null, EnrichedKnown::atLeast);
+                        builder.append(range.start(), known, FoundKnown::atLeast);
+                        builder.append(range.end(), null, FoundKnown::atLeast);
                     }
                     return builder.build();
                 }
@@ -314,22 +342,22 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
                     for (RoutingKey key : keys)
                     {
                         Range range = key.asRange();
-                        builder.append(range.start(), known, EnrichedKnown::atLeast);
-                        builder.append(range.end(), null, EnrichedKnown::atLeast);
+                        builder.append(range.start(), known, FoundKnown::atLeast);
+                        builder.append(range.end(), null, FoundKnown::atLeast);
                     }
                     return builder.build();
                 }
             }
         }
 
-        public static CheckStatusMap merge(CheckStatusMap a, CheckStatusMap b)
+        public static FoundKnownMap merge(FoundKnownMap a, FoundKnownMap b)
         {
-            return ReducingRangeMap.merge(a, b, EnrichedKnown::atLeast, Builder::new);
+            return ReducingRangeMap.merge(a, b, FoundKnown::atLeast, Builder::new);
         }
 
         public boolean hasTruncated(Routables<?> routables)
         {
-            return foldlWithDefault(routables, (known, prev) -> known.isTruncated(), EnrichedKnown.Nothing, false, i -> i);
+            return foldlWithDefault(routables, (known, prev) -> known.isTruncated(), FoundKnown.Nothing, false, i -> i);
         }
 
         public boolean hasTruncated()
@@ -342,10 +370,10 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             if (validForAll.isInvalidated())
                 return true;
 
-            return null == foldlWithDefault(participants, CheckStatusMap::inferInvalidated, EnrichedKnown.Nothing, withQuorum, Objects::isNull);
+            return null == foldlWithDefault(participants, FoundKnownMap::inferInvalidated, FoundKnown.Nothing, withQuorum, Objects::isNull);
         }
 
-        private static WithQuorum inferInvalidated(EnrichedKnown known, WithQuorum withQuorum)
+        private static WithQuorum inferInvalidated(FoundKnown known, WithQuorum withQuorum)
         {
             if (known.inferInvalid(withQuorum))
                 return null;
@@ -358,36 +386,36 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             switch (withQuorum)
             {
                 default: throw new AssertionError("Unhandled withQuorum: " + withQuorum);
-                case NoQuorum: result = foldlWithDefault(routables, CheckStatusMap::inferredWithoutQuorumOrValidForBoth, EnrichedKnown.Nothing, null, i -> false); break;
-                case HasQuorum: result = foldlWithDefault(routables, CheckStatusMap::inferredWithQuorumOrValidForBoth, EnrichedKnown.Nothing, null, i -> false);
+                case NoQuorum: result = foldlWithDefault(routables, FoundKnownMap::inferredWithoutQuorumOrValidForBoth, FoundKnown.Nothing, null, i -> false); break;
+                case HasQuorum: result = foldlWithDefault(routables, FoundKnownMap::inferredWithQuorumOrValidForBoth, FoundKnown.Nothing, null, i -> false);
             }
             return result.atLeast(validForAll); // only logically necessary in case we matched nothing above
         }
 
-        public Ranges matchingRanges(Predicate<EnrichedKnown> match)
+        public Ranges matchingRanges(Predicate<FoundKnown> match)
         {
             return foldlWithBounds((known, ranges, start, end) -> match.test(known) ? ranges.with(Ranges.of(start.asRange().newRange(start, end))) : ranges, Ranges.EMPTY, i -> false);
         }
 
-        private static Known inferredWithQuorumOrValidForBoth(EnrichedKnown enrichedKnown, @Nullable Known prev)
+        private static Known inferredWithQuorumOrValidForBoth(FoundKnown foundKnown, @Nullable Known prev)
         {
-            return inferredOrValidForBoth(enrichedKnown, prev, HasQuorum);
+            return inferredOrValidForBoth(foundKnown, prev, HasQuorum);
         }
 
-        private static Known inferredWithoutQuorumOrValidForBoth(EnrichedKnown enrichedKnown, @Nullable Known prev)
+        private static Known inferredWithoutQuorumOrValidForBoth(FoundKnown foundKnown, @Nullable Known prev)
         {
-            return inferredOrValidForBoth(enrichedKnown, prev, NoQuorum);
+            return inferredOrValidForBoth(foundKnown, prev, NoQuorum);
         }
 
-        private static Known inferredOrValidForBoth(EnrichedKnown enrichedKnown, @Nullable Known prev, WithQuorum withQuorum)
+        private static Known inferredOrValidForBoth(FoundKnown foundKnown, @Nullable Known prev, WithQuorum withQuorum)
         {
-            if (enrichedKnown.inferInvalid(withQuorum))
+            if (foundKnown.inferInvalid(withQuorum))
                 return Known.Invalidated;
 
             if (prev == null)
-                return enrichedKnown;
+                return foundKnown;
 
-            return prev.validForBoth(enrichedKnown);
+            return prev.validForBoth(foundKnown);
         }
 
         public Ranges sufficientFor(Known required, Ranges expect)
@@ -401,7 +429,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             }, Ranges.EMPTY, i -> false);
         }
 
-        static class Builder extends ReducingIntervalMap.Builder<RoutingKey, EnrichedKnown, CheckStatusMap>
+        static class Builder extends ReducingIntervalMap.Builder<RoutingKey, FoundKnown, FoundKnownMap>
         {
             protected Builder(boolean inclusiveEnds, int capacity)
             {
@@ -409,16 +437,16 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             }
 
             @Override
-            protected CheckStatusMap buildInternal()
+            protected FoundKnownMap buildInternal()
             {
-                return new CheckStatusMap(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new EnrichedKnown[0]));
+                return new FoundKnownMap(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new FoundKnown[0]));
             }
         }
     }
 
     public static class CheckStatusOk implements CheckStatusReply
     {
-        public final CheckStatusMap map;
+        public final FoundKnownMap map;
         // TODO (required): tighten up constraints here to ensure we only report truncated when the range is Durable
         // TODO (expected): stop using saveStatus and maxSaveStatus - move to only Known
         //   care needed when merging Accepted and AcceptedInvalidate; might be easier to retain saveStatus only for merging these cases
@@ -446,10 +474,10 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
                               boolean isCoordinating, Durability durability,
                               @Nullable Route<?> route, @Nullable RoutingKey homeKey)
         {
-            this(CheckStatusMap.create(ranges, saveStatus, invalidIfNot, promised), saveStatus, saveStatus, promised, accepted, executeAt, isCoordinating, durability, route, homeKey);
+            this(FoundKnownMap.create(ranges, saveStatus, invalidIfNot, promised), saveStatus, saveStatus, promised, accepted, executeAt, isCoordinating, durability, route, homeKey);
         }
 
-        private CheckStatusOk(CheckStatusMap map, SaveStatus maxKnowledgeSaveStatus, SaveStatus maxSaveStatus, Ballot promised, Ballot accepted,
+        private CheckStatusOk(FoundKnownMap map, SaveStatus maxKnowledgeSaveStatus, SaveStatus maxSaveStatus, Ballot promised, Ballot accepted,
                               @Nullable Timestamp executeAt, boolean isCoordinating, Durability durability,
                               @Nullable Route<?> route, @Nullable RoutingKey homeKey)
         {
@@ -494,7 +522,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public Ranges truncatedResponse()
         {
-            return map.matchingRanges(Known::isTruncated);
+            return map.matchingRanges(FoundKnown::isTruncated);
         }
 
         public boolean inferInvalidated(Participants<?> participants, WithQuorum withQuorum)
@@ -551,7 +579,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             CheckStatusOk defer = prefer == this ? that : this;
 
             // then select the max along each criteria, preferring the coordinator
-            CheckStatusMap mergeMap = CheckStatusMap.merge(prefer.map, defer.map);
+            FoundKnownMap mergeMap = FoundKnownMap.merge(prefer.map, defer.map);
             CheckStatusOk maxStatus = SaveStatus.max(prefer, prefer.maxKnowledgeSaveStatus, prefer.accepted, defer, defer.maxKnowledgeSaveStatus, defer.accepted, true);
             SaveStatus mergeMaxKnowledgeStatus = SaveStatus.merge(prefer.maxKnowledgeSaveStatus, prefer.accepted, defer.maxKnowledgeSaveStatus, defer.accepted, true);
             SaveStatus mergeMaxStatus = SaveStatus.merge(prefer.maxSaveStatus, prefer.accepted, defer.maxSaveStatus, defer.accepted, false);
@@ -613,9 +641,9 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             this.result = command.result();
         }
 
-        protected CheckStatusOkFull(CheckStatusMap map, SaveStatus maxNotTruncatedSaveStatus, SaveStatus maxSaveStatus, Ballot promised, Ballot accepted, Timestamp executeAt,
-                                  boolean isCoordinating, Durability durability, Route<?> route,
-                                  RoutingKey homeKey, PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, Result result)
+        protected CheckStatusOkFull(FoundKnownMap map, SaveStatus maxNotTruncatedSaveStatus, SaveStatus maxSaveStatus, Ballot promised, Ballot accepted, Timestamp executeAt,
+                                    boolean isCoordinating, Durability durability, Route<?> route,
+                                    RoutingKey homeKey, PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, Result result)
         {
             super(map, maxNotTruncatedSaveStatus, maxSaveStatus, promised, accepted, executeAt, isCoordinating, durability, route, homeKey);
             this.partialTxn = partialTxn;

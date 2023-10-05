@@ -96,8 +96,8 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
     public Participants<RoutingKey> participants(Ranges ranges)
     {
         RoutingKey[] keys = slice(ranges, RoutingKey[]::new);
-        if (keys == this.keys && !isParticipatingHomeKey)
-            return this;
+        if (isParticipatingHomeKey)
+            return keys == this.keys ? this : new RoutingKeys(keys);
 
         int removePos = Arrays.binarySearch(keys, homeKey);
         if (removePos < 0)

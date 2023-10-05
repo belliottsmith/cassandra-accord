@@ -25,7 +25,6 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.PreLoadContext;
-import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SaveStatus;
@@ -43,7 +42,6 @@ import javax.annotation.Nullable;
 import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.local.PreLoadContext.contextFor;
-import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
 import static accord.local.Status.PreApplied;
@@ -415,7 +413,7 @@ public class FetchData extends CheckShards<Route<?>>
                 case AcceptedInvalidate:
                     // we never "propagate" accepted statuses as these are essentially votes,
                     // and contribute nothing to our local state machine
-                    throw new IllegalStateException("Invalid states to propagate: " + achieved.propagatesStatus());
+                    throw new IllegalStateException("Invalid states to propagate: " + propagate);
 
                 case Invalidated:
                     Commands.commitInvalidate(safeStore, safeCommand, route);

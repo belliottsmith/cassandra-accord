@@ -22,7 +22,6 @@ import accord.messages.BeginRecovery;
 import accord.primitives.Ballot;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.utils.Invariants;
 
 import java.util.List;
 import java.util.Objects;
@@ -31,6 +30,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import static accord.local.Status.Definition.*;
@@ -105,6 +105,8 @@ public enum Status
      * A vector of various facets of knowledge about, or required for, processing a transaction.
      * Each property is treated independently, there is no precedence relationship between them.
      * Each property's values are however ordered with respect to each other.
+     *
+     * This information does not need to be consistent with
      */
     public static class Known
     {
@@ -148,11 +150,7 @@ public enum Status
             KnownExecuteAt maxExecuteAt = executeAt.compareTo(with.executeAt) >= 0 ? executeAt : with.executeAt;
             KnownDeps maxDeps = deps.compareTo(with.deps) >= 0 ? deps : with.deps;
             Outcome maxOutcome = outcome.atLeast(with.outcome);
-            if (maxRoute == route && maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps &&  maxOutcome == outcome)
-                return this;
-            if (maxRoute == with.route && maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
-                return with;
-            return new Known(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+            return selectOrCreate(with, maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
         }
 
         public Known validForBoth(Known with)
@@ -162,11 +160,17 @@ public enum Status
             KnownExecuteAt maxExecuteAt = executeAt.compareTo(with.executeAt) >= 0 ? executeAt : with.executeAt;
             KnownDeps minDeps = deps.compareTo(with.deps) <= 0 ? deps : with.deps;
             Outcome maxOutcome = outcome.validForBoth(with.outcome);
-            if (maxRoute == route && minDefinition == definition && maxExecuteAt == executeAt && minDeps == deps &&  maxOutcome == outcome)
+            return selectOrCreate(with, maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
+        }
+
+        @Nonnull
+        private Known selectOrCreate(Known with, KnownRoute maxRoute, Definition maxDefinition, KnownExecuteAt maxExecuteAt, KnownDeps maxDeps, Outcome maxOutcome)
+        {
+            if (maxRoute == route && maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps &&  maxOutcome == outcome)
                 return this;
-            if (maxRoute == with.route && minDefinition == with.definition && maxExecuteAt == with.executeAt && minDeps == with.deps && maxOutcome == with.outcome)
+            if (maxRoute == with.route && maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
                 return with;
-            return new Known(maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
+            return new Known(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
         }
 
         public boolean isSatisfiedBy(Known that)
@@ -214,6 +218,10 @@ public enum Status
             return new Known(route, definition, executeAt, newDeps, outcome);
         }
 
+        /**
+         * Convert this Known to one that represents the knowledge that can be propagated to another replica without
+         * further information available to that replica, e.g. we cannot apply without also knowing the definition.
+         */
         // TODO (expected): merge propagates and propagatesStatus
         public Known propagates()
         {
@@ -288,6 +296,14 @@ public enum Status
             return definition.isKnown() || outcome.isDecided();
         }
 
+        /**
+         * The command may have an incomplete route when this is false
+         */
+        public boolean hasFullRoute()
+        {
+            return definition.isKnown() || outcome.isOrWasApply();
+        }
+
         public boolean isTruncated()
         {
             switch (outcome)
@@ -297,19 +313,12 @@ public enum Status
                 case Unknown:
                     return false;
                 case Apply:
-                    return !deps.hasDecidedDeps(); // if we don't have decided deps we're partially truncated
+                    // since Apply is universal, we can
+                    return deps == DepsTruncated;
                 case Erased:
                 case WasApply:
                     return true;
             }
-        }
-
-        /**
-         * The command may have an incomplete route when this is false
-         */
-        public boolean hasFullRoute()
-        {
-            return definition.isKnown() || outcome.isOrWasApply();
         }
 
         public boolean canProposeInvalidation()
@@ -434,6 +443,11 @@ public enum Status
         ExecuteAtProposed,
 
         /**
+         * A decision to execute the transaction is known to have been reached and cleaned up
+         */
+        ExecuteAtTruncated,
+
+        /**
          * A decision to execute the transaction is known to have been reached, and the associated executeAt timestamp
          */
         ExecuteAtKnown,
@@ -446,7 +460,7 @@ public enum Status
 
         public boolean isDecided()
         {
-            return compareTo(ExecuteAtKnown) >= 0;
+            return compareTo(ExecuteAtTruncated) >= 0;
         }
 
         public boolean hasDecidedExecuteAt()
@@ -475,6 +489,12 @@ public enum Status
 
         /**
          * A decision to execute the transaction is known to have been reached, and the associated dependencies
+         * for the shard(s) in question have been cleaned up.
+         */
+        DepsTruncated,
+
+        /**
+         * A decision to execute the transaction is known to have been reached, and the associated dependencies
          * for the shard(s) in question are known for the coordination and execution epochs.
          */
         DepsKnown,
@@ -492,7 +512,7 @@ public enum Status
 
         public boolean isDecided()
         {
-            return compareTo(DepsKnown) >= 0;
+            return compareTo(DepsTruncated) >= 0;
         }
 
         public boolean canProposeInvalidation()
@@ -517,6 +537,11 @@ public enum Status
         DefinitionUnknown,
 
         /**
+         * The definition was known, but has been erased
+         */
+        DefinitionErased,
+
+        /**
          * The definition is irrelevant, as the transaction has been invalidated and may be treated as a no-op
          */
         NoOp,
@@ -527,11 +552,6 @@ public enum Status
          * TODO (expected, clarity): distinguish between known for coordination epoch and known for commit/execute
          */
         DefinitionKnown;
-
-        public boolean canProposeInvalidation()
-        {
-            return this == DefinitionUnknown;
-        }
 
         public boolean isKnown()
         {
