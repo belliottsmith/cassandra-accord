@@ -706,9 +706,12 @@ public enum Status
             return atLeast(that);
         }
 
+        /**
+         * Do not imply truncation where none has happened
+         */
         public Outcome validForAll()
         {
-            return this == Erased ? Unknown : this;
+            return compareTo(WasApply) <= 0 ? Unknown : this;
         }
 
         public Outcome subtract(Outcome that)

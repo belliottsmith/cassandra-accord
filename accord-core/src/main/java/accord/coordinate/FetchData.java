@@ -453,9 +453,6 @@ public class FetchData extends CheckShards<Route<?>>
         {
             Invariants.checkState(!full.maxKnowledgeSaveStatus.is(Status.Invalidated));
 
-            if (safeCommand.current().saveStatus().isUninitialised())
-                return null; // the command has already been cleaned up locally - don't recreate it
-
             if (Infer.safeToCleanup(safeStore, command, route, full.executeAt))
             {
                 // don't create a new Erased record if we're already cleaned up

@@ -312,7 +312,8 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
                 if (value != null)
                     validForAll = validForAll.reduce(value);
             }
-            this.validForAll = validForAll.validForAll();
+            validForAll = validForAll.validForAll();
+            this.validForAll = validForAll;
             if (!validForAll.equals(FoundKnown.Nothing))
             {
                 for (int i = 0 ; i < values.length ; ++i)
