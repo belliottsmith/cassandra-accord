@@ -145,6 +145,7 @@ public enum Status
 
         public Known atLeast(Known that)
         {
+            // TODO (expected): validate no inconsistent combos
             KnownRoute maxRoute = route.atLeast(that.route);
             Definition maxDefinition = definition.atLeast(that.definition);
             KnownExecuteAt maxExecuteAt = executeAt.atLeast(that.executeAt);

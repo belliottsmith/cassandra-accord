@@ -50,8 +50,8 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     // for simplicity at construction, we permit this to be overridden by the first insertion
     final boolean inclusiveEnds;
     // starts is 1 longer than values, so that starts[0] == start of values[0]
-    final K[] starts;
-    final V[] values;
+    protected final K[] starts;
+    protected final V[] values;
 
     public ReducingIntervalMap()
     {

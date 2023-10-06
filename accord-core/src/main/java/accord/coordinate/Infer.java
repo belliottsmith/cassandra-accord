@@ -142,13 +142,13 @@ public class Infer
             return a.compareTo(b) <= 0 ? a : b;
         }
 
-        public boolean inferInvalid(WithQuorum withQuorum, IsPreempted isPreempted, Known known)
+        public boolean inferInvalidWithQuorum(IsPreempted isPreempted, Known known)
         {
-            return inferInvalid(undecided, withQuorum, isPreempted, !known.isDecided())
-                   || inferInvalid(unknown, withQuorum, isPreempted, !known.hasDefinitionBeenKnown());
+            return inferInvalidWithQuorum(undecided, isPreempted, !known.isDecided())
+                   || inferInvalidWithQuorum(unknown, isPreempted, !known.hasDefinitionBeenKnown());
         }
 
-        private static boolean inferInvalid(InvalidIf invalidIf, WithQuorum withQuorum, IsPreempted isPreempted, boolean hasCondition)
+        private static boolean inferInvalidWithQuorum(InvalidIf invalidIf, IsPreempted isPreempted, boolean hasCondition)
         {
             if (!hasCondition)
                 return false;
@@ -157,9 +157,7 @@ public class Infer
             {
                 default: throw new AssertionError("Unhandled InvalidIf: " + invalidIf);
                 case NotKnown: break;
-                case IfQuorum:
-                    if (withQuorum == HasQuorum)
-                        return true;
+                case IfQuorum: return true;
                 case IfPreempted:
                     if (isPreempted == IsPreempted.Preempted)
                         return true;
@@ -184,6 +182,7 @@ public class Infer
         IfQuorum
     }
 
+    // only valid with a quorum of responses
     public enum IsPreempted
     {
         NotPreempted, MaybePreempted, Preempted;
@@ -286,7 +285,6 @@ public class Infer
         @Override
         Void apply(SafeCommandStore safeStore, SafeCommand safeCommand)
         {
-            // we're applying an invalidation, so the record will not be cleaned up until the whole range is truncated
             Command command = safeCommand.current();
             if (!command.hasBeen(PreApplied) && safeToCleanup(safeStore, command, Route.castToRoute(someUnseekables), null))
                 Commands.setErased(safeStore, safeCommand);

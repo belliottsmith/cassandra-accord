@@ -121,7 +121,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
     protected boolean isSufficient(Route<?> route, CheckStatusOk ok)
     {
         CheckStatusOkFull full = (CheckStatusOkFull)ok;
-        Known sufficientTo = full.knownFor(route.participants(), NoQuorum);
+        Known sufficientTo = full.knownFor(route.participants());
         if (!sufficientTo.isDefinitionKnown())
             return false;
 
@@ -141,8 +141,8 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
             return;
         }
 
-        CheckStatusOkFull full = ((CheckStatusOkFull) this.merged).withQuorum(success.withQuorum);
-        Known known = full.knownFor(route.participants(), success.withQuorum);
+        CheckStatusOkFull full = ((CheckStatusOkFull) this.merged).finish(route, success.withQuorum);
+        Known known = full.knownFor(route.participants());
 
         switch (known.outcome)
         {
@@ -174,7 +174,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         Participants<?> sendTo = route.participants().subtract(full.truncatedResponse());
                         if (!sendTo.isEmpty())
                         {
-                            known = full.knownFor(sendTo, success.withQuorum);
+                            known = full.knownFor(sendTo);
                             if (known.executeAt == ExecuteAtKnown && known.deps == DepsKnown)
                             {
                                 Invariants.checkState(full.committedDeps.covering.containsAll(sendTo));

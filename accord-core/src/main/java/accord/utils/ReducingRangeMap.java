@@ -46,9 +46,9 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         super();
     }
 
-    protected ReducingRangeMap(boolean inclusiveEnds, RoutingKey[] ends, V[] values)
+    protected ReducingRangeMap(boolean inclusiveEnds, RoutingKey[] starts, V[] values)
     {
-        super(inclusiveEnds, ends, values);
+        super(inclusiveEnds, starts, values);
     }
 
     public V foldl(Routables<?> routables, BiFunction<V, V, V> fold, V accumulator)

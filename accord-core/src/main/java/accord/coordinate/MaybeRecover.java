@@ -21,6 +21,8 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.local.Status.Known;
+import accord.messages.CheckStatus;
+import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.CheckStatus.WithQuorum;
 import accord.primitives.*;
 import accord.utils.Invariants;
@@ -79,14 +81,15 @@ public class MaybeRecover extends CheckShards<Route<?>>
         else
         {
             Invariants.checkState(merged != null);
-            Known known = merged.maxKnown();
-            Route<?> someRoute = reduceNonNull(Route::union, (Route)this.route, merged.route);
+            CheckStatusOk full = merged.finish(this.route, success.withQuorum);
+            Known known = full.maxKnown();
+            Route<?> someRoute = full.route;
 
             switch (known.outcome)
             {
                 default: throw new AssertionError();
                 case Unknown:
-                    if (known.canProposeInvalidation() && !Route.isFullRoute(merged.route))
+                    if (known.canProposeInvalidation() && !Route.isFullRoute(full.route))
                     {
                         // for correctness reasons, we have not necessarily preempted the initial pre-accept round and
                         // may have raced with it, so we must attempt to recover anything we see pre-accepted.
@@ -97,29 +100,28 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
                 case Apply:
                     // we have included the home key, and one that witnessed the definition has responded, so it should also know the full route
-                    if (hasMadeProgress(merged))
+                    if (hasMadeProgress(full))
                     {
-                        callback.accept(merged.toProgressToken(), null);
+                        callback.accept(full.toProgressToken(), null);
                     }
                     else
                     {
-                        Invariants.checkState(Route.isFullRoute(someRoute), "Require a full route but given %s", merged.route);
+                        Invariants.checkState(Route.isFullRoute(someRoute), "Require a full route but given %s", full.route);
                         node.recover(txnId, Route.castToFullRoute(someRoute)).addCallback(callback);
                     }
                     break;
 
                 case WasApply:
-                    callback.accept(merged.toProgressToken(), null);
+                    callback.accept(full.toProgressToken(), null);
                     break;
 
                 case Invalidated:
-                    locallyInvalidateAndCallback(node, txnId, someRoute, merged.toProgressToken(), callback);
+                    locallyInvalidateAndCallback(node, txnId, someRoute, full.toProgressToken(), callback);
                     break;
 
                 case Erased:
-                    WithQuorum withQuorum = success.withQuorum;
-                    if (!merged.inferInvalidated(route.participants(), withQuorum)) eraseNonParticipatingAndCallback(node, txnId, someRoute, merged.toProgressToken(), callback);
-                    else locallyInvalidateAndCallback(node, txnId, someRoute, merged.toProgressToken(), callback);
+                    Invariants.checkState(!full.knownFor(route.participants()).isInvalidated());
+                    eraseNonParticipatingAndCallback(node, txnId, someRoute, full.toProgressToken(), callback);
             }
         }
     }

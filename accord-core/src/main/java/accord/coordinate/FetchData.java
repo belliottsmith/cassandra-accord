@@ -219,7 +219,7 @@ public class FetchData extends CheckShards<Route<?>>
 
     protected boolean isSufficient(Route<?> scope, CheckStatus.CheckStatusOk ok)
     {
-        return target.isSatisfiedBy(((CheckStatusOkFull)ok).knownFor(scope.participants(), NoQuorum));
+        return target.isSatisfiedBy(ok.knownFor(scope.participants()));
     }
 
     @Override
@@ -283,7 +283,7 @@ public class FetchData extends CheckShards<Route<?>>
 
             Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.maxKnowledgeSaveStatus == SaveStatus.Erased);
 
-            full = full.merge(route).withQuorum(withQuorum);
+            full = full.finish(route, withQuorum);
             route = Invariants.nonNull(full.route);
 
             // TODO (required): permit individual shards that are behind to catch up by themselves
@@ -294,7 +294,7 @@ public class FetchData extends CheckShards<Route<?>>
 
             Ranges covering = route.sliceCovering(sliceRanges, Minimal);
             Participants<?> participatingKeys = route.participants().slice(covering, Minimal);
-            Known achieved = full.knownFor(participatingKeys, withQuorum);
+            Known achieved = full.knownFor(participatingKeys);
             if (achieved.executeAt.isDecided() && full.executeAt.epoch() > toEpoch)
             {
                 Ranges acceptRanges;
@@ -312,7 +312,7 @@ public class FetchData extends CheckShards<Route<?>>
                     sliceRanges = acceptRanges;
                     covering = route.sliceCovering(sliceRanges, Minimal);
                     participatingKeys = route.participants().slice(covering, Minimal);
-                    Known knownForExecution = full.knownFor(participatingKeys, withQuorum);
+                    Known knownForExecution = full.knownFor(participatingKeys);
                     if ((target != null && target.isSatisfiedBy(knownForExecution)) || achieved.isSatisfiedBy(knownForExecution))
                     {
                         achieved = knownForExecution;
@@ -471,7 +471,7 @@ public class FetchData extends CheckShards<Route<?>>
                 // we're truncated *somewhere* but not locally; whether we have the executeAt is immaterial to this calculus,
                 // as we're either ready to go or we're waiting on the coordinating shard to complete this transaction, so pick
                 // the maximum we can achieve and return that
-                return full.knownFor(participants, withQuorum);
+                return full.knownFor(participants);
             }
 
             // if our peers have truncated this command, then either:
