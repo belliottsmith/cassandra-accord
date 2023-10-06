@@ -74,7 +74,6 @@ import static accord.local.Status.KnownDeps.DepsTruncated;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Truncated;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
-import static accord.messages.CheckStatus.WithQuorum.NoQuorum;
 import static accord.messages.TxnRequest.computeScope;
 import static accord.primitives.Route.castToRoute;
 import static accord.primitives.Route.isRoute;
@@ -294,6 +293,8 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         }
     }
 
+    // TODO (expected, consider): build only with keys/ranges found in command stores, not the covering ranges of command stores?
+    //   by including the whole covering ranges we can infer
     public static class FoundKnownMap extends ReducingRangeMap<FoundKnown>
     {
         private transient final FoundKnown validForAll;
@@ -354,11 +355,21 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             return ReducingRangeMap.merge(a, b, FoundKnown::atLeast, Builder::new);
         }
 
-        private FoundKnownMap withQuorum(Unseekables<?> routeOrParticipants)
+        private FoundKnownMap finish(Unseekables<?> routeOrParticipants, WithQuorum withQuorum)
         {
-            FoundKnown validForAll = this.validForAll.atLeast(foldlWithDefault(routeOrParticipants, FoundKnownMap::reduceInferredOrKnownForWithQuorum, FoundKnown.Nothing, null, i -> false))
-                                                     .validForAll();
+            FoundKnown validForAll;
+            switch (withQuorum)
+            {
+                default: throw new AssertionError("Unhandled WithQuorum: " + withQuorum);
+                case HasQuorum: validForAll = foldlWithDefault(routeOrParticipants, FoundKnownMap::reduceInferredOrKnownForWithQuorum, FoundKnown.Nothing, null, i -> false); break;
+                case NoQuorum: validForAll = foldlWithDefault(routeOrParticipants, FoundKnownMap::reduceKnownFor, FoundKnown.Nothing, null, i -> false); break;
+            }
+            validForAll = this.validForAll.atLeast(validForAll).validForAll();
+            return with(validForAll);
+        }
 
+        private FoundKnownMap with(FoundKnown validForAll)
+        {
             if (validForAll.equals(this.validForAll))
                 return this;
 
@@ -433,6 +444,14 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         }
 
         private static Known reduceKnownFor(FoundKnown foundKnown, @Nullable Known prev)
+        {
+            if (prev == null)
+                return foundKnown;
+
+            return prev.reduce(foundKnown);
+        }
+
+        private static FoundKnown reduceKnownFor(FoundKnown foundKnown, @Nullable FoundKnown prev)
         {
             if (prev == null)
                 return foundKnown;
@@ -530,20 +549,22 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public CheckStatusOk finish(Unseekables<?> routeOrParticipants, WithQuorum withQuorum)
         {
+            CheckStatusOk finished = this;
+            if (withQuorum == HasQuorum)
+            {
+                Durability durability = this.durability;
+                if (durability == Local) durability = Majority;
+                else if (durability == ShardUniversal) durability = Universal;
+                finished = merge(durability);
+            }
             if (Route.isRoute(routeOrParticipants))
             {
-                CheckStatusOk finished = merge(Route.castToRoute(routeOrParticipants));
-                if (withQuorum == HasQuorum)
-                    finished = finished.withQuorum();
-                return finished;
-            }
-            else if (withQuorum == HasQuorum)
-            {
-                return withQuorum(routeOrParticipants);
+                finished = finished.merge(Route.castToRoute(routeOrParticipants));
+                return finished.with(finished.map.finish(finished.route, withQuorum));
             }
             else
             {
-                return this;
+                return finished.with(finished.map.finish(Unseekables.merge(routeOrParticipants, (Unseekables) finished.route), withQuorum));
             }
         }
 
@@ -590,21 +611,6 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
                 return this;
             return new CheckStatusOk(newMap, maxKnowledgeSaveStatus, maxSaveStatus, promised, accepted, executeAt,
                                          isCoordinating, durability, route, homeKey);
-        }
-
-        public CheckStatusOk withQuorum()
-        {
-            return withQuorum(route);
-        }
-
-        private CheckStatusOk withQuorum(@Nullable Unseekables<?> routeOrParticipants)
-        {
-            Durability durability = this.durability;
-            if (durability == Local) durability = Majority;
-            else if (durability == ShardUniversal) durability = Universal;
-
-            FoundKnownMap newMap = routeOrParticipants == null ? map : map.withQuorum(routeOrParticipants);
-            return merge(durability).with(newMap);
         }
 
         // TODO (required): harden markShardStale against unnecessary actions by utilising inferInvalidated==MAYBE and performing a global query
