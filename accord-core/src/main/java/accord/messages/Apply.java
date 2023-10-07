@@ -41,6 +41,7 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
 
 import static accord.messages.MessageType.APPLY_REQ;
 import static accord.messages.MessageType.APPLY_RSP;
@@ -65,6 +66,7 @@ public class Apply extends TxnRequest<ApplyReply>
     private Apply(Id to, Topologies participates, Topologies executes, TxnId txnId, Route<?> route, Txn txn, Timestamp executeAt, Deps deps, boolean isMaximal, Writes writes, Result result)
     {
         super(to, participates, route, txnId);
+        Invariants.checkState(txnId.rw() != Txn.Kind.Write || writes != null);
         Ranges slice = isMaximal || executes == participates ? scope.covering() : executes.computeRangesForNode(to);
         // TODO (desired): it's wasteful to encode the full set of ranges owned by the recipient node;
         //     often it will be cheaper to include the FullRoute for Deps scope (or come up with some other safety-preserving encoding scheme)

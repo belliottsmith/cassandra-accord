@@ -820,6 +820,16 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
                                          max.homeKey, partialTxn, committedDeps, writes, result);
         }
 
+        /**
+         * Reduce what is Known about all intersecting shards into a summary Known. This will be the maximal knowledge
+         * we have, i.e. if we have some outcome/decision on one shard but it is truncated on another intersecting shard,
+         * we will get the outcome/decision; if we only have it truncated on one shard and unknown on another, it will
+         * be shown as truncated.
+         *
+         * If a non-intersecting shard has information that can be propagated to this shard, i.e. the executeAt or outcome,
+         * then this will be merged as though it were an intersecting shard, however no record of truncation will be so propagated,
+         * nor any knowledge that does not transfer (i.e. Definition or Deps).
+         */
         @Override
         public Known knownFor(Routables<?> participants)
         {

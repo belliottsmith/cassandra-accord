@@ -153,11 +153,16 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                     Txn txn = full.partialTxn.reconstitute(route);
                     Recover.recover(node, txnId, txn, route, callback);
                 }
-                else
+                else if (!known.definition.isOrWasKnown())
                 {
+                    // TODO (required): this logic should be put in Infer, alongside any similar inferences in Recover
                     if (witnessedByInvalidation != null && witnessedByInvalidation.compareTo(Status.PreAccepted) > 0)
                         throw new IllegalStateException("We previously invalidated, finding a status that should be recoverable");
                     Invalidate.invalidate(node, txnId, route, witnessedByInvalidation != null, callback);
+                }
+                else
+                {
+                    callback.accept(full.toProgressToken(), null);
                 }
                 break;
 
@@ -175,7 +180,9 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         if (!sendTo.isEmpty())
                         {
                             known = full.knownFor(sendTo);
-                            if (known.executeAt == ExecuteAtKnown && known.deps == DepsKnown)
+                            // we might not know the Apply outcome because we might have raced with truncation on one shard, and the original apply on another,
+                            // so that we know to WasApply, but not
+                            if (known.executeAt == ExecuteAtKnown && known.deps == DepsKnown && known.outcome == Apply)
                             {
                                 Invariants.checkState(full.committedDeps.covering.containsAll(sendTo));
                                 Invariants.checkState(full.partialTxn.covering().containsAll(sendTo));

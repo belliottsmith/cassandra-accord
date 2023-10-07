@@ -610,6 +610,11 @@ public enum Status
             return this == DefinitionKnown;
         }
 
+        public boolean isOrWasKnown()
+        {
+            return this == DefinitionKnown;
+        }
+
         public Definition atLeast(Definition that)
         {
             return compareTo(that) >= 0 ? this : that;
