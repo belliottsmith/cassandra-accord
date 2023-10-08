@@ -83,7 +83,7 @@ public enum Status
     // TODO (expected): do we need both PreApplied and Applied here, or can we keep them to SaveStatus only?
     PreApplied        (Persist, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Outcome.Apply),
     Applied           (Persist, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Outcome.Apply),
-    Truncated         (Cleanup, Nothing),
+    Truncated         (Cleanup, Maybe, DefinitionErased,  ExecuteAtErased,  DepsErased,  Outcome.Erased),
     Invalidated       (Persist, Maybe, NoOp,              NoExecuteAt,      NoDeps,      Outcome.Invalidated),
     ;
 
@@ -246,15 +246,15 @@ public enum Status
                 return Invalidated;
 
             if (definition == DefinitionUnknown)
-                return executeAt.isDecided() ? ExecuteAtOnly : Nothing;
+                return executeAt.isKnownToExecute() ? ExecuteAtOnly : Nothing;
 
             KnownExecuteAt executeAt = this.executeAt;
-            if (!executeAt.isDecided())
+            if (!executeAt.isDecidedAndKnown())
                 return DefinitionOnly;
 
             // cannot propagate proposed deps; and cannot propagate known deps without executeAt
             KnownDeps deps = this.deps;
-            if (!deps.isDecided())
+            if (!deps.isDecidedAndKnown())
                 return SaveStatus.PreCommittedWithDefinition.known;
 
             switch (outcome)
@@ -283,14 +283,14 @@ public enum Status
 
                 case Apply:
                 case WasApply:
-                    if (executeAt.isDecided() && definition.isKnown() && deps.hasDecidedDeps())
+                    if (executeAt.isKnownToExecute() && definition.isKnown() && deps.hasDecidedDeps())
                         return PreApplied;
 
                 case Unknown:
-                    if (executeAt.isDecided() && definition.isKnown() && deps.hasDecidedDeps())
+                    if (executeAt.isKnownToExecute() && definition.isKnown() && deps.hasDecidedDeps())
                         return Committed;
 
-                    if (executeAt.isDecided())
+                    if (executeAt.isKnownToExecute())
                         return PreCommitted;
 
                     if (definition.isKnown())
@@ -331,7 +331,7 @@ public enum Status
                     return false;
                 case Apply:
                     // since Apply is universal, we can
-                    return deps == DepsTruncated;
+                    return deps == DepsErased;
                 case Erased:
                 case WasApply:
                     return true;
@@ -362,13 +362,13 @@ public enum Status
 
         public boolean isDecidedToExecute()
         {
-            return executeAt.hasDecidedExecuteAt() || outcome.isOrWasApply();
+            return executeAt.isKnownToExecute() || outcome.isOrWasApply();
         }
 
         public String toString()
         {
             return Stream.of(definition.isKnown() ? "Definition" : null,
-                             executeAt.isDecided() ? "ExecuteAt" : null,
+                             executeAt.isKnownToExecute() ? "ExecuteAt" : null,
                              deps.hasDecidedDeps() ? "Deps" : null,
                              outcome.isDecided() ? outcome.toString() : null
             ).filter(Objects::nonNull).collect(Collectors.joining(",", "[", "]"));
@@ -465,9 +465,9 @@ public enum Status
         ExecuteAtProposed,
 
         /**
-         * A decision to execute the transaction is known to have been reached and cleaned up
+         * A decision to execute or invalidate the transaction is known to have been reached and since been cleaned up
          */
-        ExecuteAtTruncated,
+        ExecuteAtErased,
 
         /**
          * A decision to execute the transaction is known to have been reached, and the associated executeAt timestamp
@@ -482,7 +482,17 @@ public enum Status
 
         public boolean isDecided()
         {
-            return compareTo(ExecuteAtTruncated) >= 0;
+            return compareTo(ExecuteAtErased) >= 0;
+        }
+
+        public boolean isDecidedAndKnown()
+        {
+            return compareTo(ExecuteAtKnown) >= 0;
+        }
+
+        public boolean isKnownToExecute()
+        {
+            return this == ExecuteAtKnown;
         }
 
         public KnownExecuteAt atLeast(KnownExecuteAt that)
@@ -497,12 +507,7 @@ public enum Status
 
         public KnownExecuteAt validForAll()
         {
-            return compareTo(ExecuteAtTruncated) <= 0 ? ExecuteAtUnknown : this;
-        }
-
-        public boolean hasDecidedExecuteAt()
-        {
-            return this == ExecuteAtKnown;
+            return compareTo(ExecuteAtErased) <= 0 ? ExecuteAtUnknown : this;
         }
 
         public boolean canProposeInvalidation()
@@ -525,10 +530,10 @@ public enum Status
         DepsProposed,
 
         /**
-         * A decision to execute the transaction is known to have been reached, and the associated dependencies
-         * for the shard(s) in question have been cleaned up.
+         * A decision to execute or invalidate the transaction is known to have been reached, and any associated
+         * dependencies for the shard(s) in question have been cleaned up.
          */
-        DepsTruncated,
+        DepsErased,
 
         /**
          * A decision to execute the transaction is known to have been reached, and the associated dependencies
@@ -547,9 +552,9 @@ public enum Status
             return this == DepsKnown;
         }
 
-        public boolean isDecided()
+        public boolean isDecidedAndKnown()
         {
-            return compareTo(DepsTruncated) >= 0;
+            return compareTo(DepsKnown) >= 0;
         }
 
         public boolean canProposeInvalidation()

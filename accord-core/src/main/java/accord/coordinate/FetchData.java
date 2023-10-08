@@ -295,7 +295,7 @@ public class FetchData extends CheckShards<Route<?>>
             Ranges covering = route.sliceCovering(sliceRanges, Minimal);
             Participants<?> participatingKeys = route.participants().slice(covering, Minimal);
             Known achieved = full.knownFor(participatingKeys);
-            if (achieved.executeAt.isDecided() && full.executeAt.epoch() > toEpoch)
+            if (achieved.executeAt.isDecidedAndKnown() && full.executeAt.epoch() > toEpoch)
             {
                 Ranges acceptRanges;
                 if (!node.topology().hasEpoch(full.executeAt.epoch()) ||

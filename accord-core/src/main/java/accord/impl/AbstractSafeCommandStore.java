@@ -120,8 +120,8 @@ public abstract class AbstractSafeCommandStore<CommandType extends SafeCommand, 
         else
         {
             RedundantBefore.Entry entry = commandStore().redundantBefore().get(key.toUnseekable());
-            if (entry != null && cfk.current().hasRedundant(entry.appliedOrInvalidatedBefore))
-                cfk.set(cfk.current().withoutRedundant(entry.appliedOrInvalidatedBefore));
+            if (entry != null && cfk.current().hasRedundant(entry.shardRedundantBefore()))
+                cfk.set(cfk.current().withoutRedundant(entry.shardRedundantBefore()));
         }
         return cfk;
     }

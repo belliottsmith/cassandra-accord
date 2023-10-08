@@ -46,7 +46,6 @@ import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.KnownDeps.DepsKnown;
 import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
 import static accord.local.Status.Outcome.Apply;
-import static accord.messages.CheckStatus.WithQuorum.NoQuorum;
 import static accord.primitives.ProgressToken.APPLIED;
 import static accord.primitives.ProgressToken.INVALIDATED;
 import static accord.primitives.ProgressToken.TRUNCATED;
@@ -207,7 +206,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 
                 // TODO (required): might not be able to fully recover transaction - may only have enough for local shard
                 Txn txn = full.partialTxn.reconstitute(route);
-                if (known.executeAt.hasDecidedExecuteAt() && known.deps.hasDecidedDeps() && known.outcome == Apply)
+                if (known.executeAt.isKnownToExecute() && known.deps.hasDecidedDeps() && known.outcome == Apply)
                 {
                     Deps deps = full.committedDeps.reconstitute(route());
                     node.withEpoch(full.executeAt.epoch(), () -> {

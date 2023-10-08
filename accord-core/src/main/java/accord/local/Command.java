@@ -317,6 +317,7 @@ public abstract class Command implements CommonAttributes
                 switch (known.definition)
                 {
                     default: throw new AssertionError("Unhandled Definition: " + known.definition);
+                    case DefinitionErased:
                     case DefinitionUnknown:
                     case NoOp:
                         Invariants.checkState(partialTxn == null);
@@ -331,6 +332,7 @@ public abstract class Command implements CommonAttributes
                 switch (known.executeAt)
                 {
                     default: throw new AssertionError("Unhandled KnownExecuteAt: " + known.executeAt);
+                    case ExecuteAtErased:
                     case ExecuteAtUnknown: break;
                     case ExecuteAtProposed:
                     case ExecuteAtKnown:
@@ -347,6 +349,7 @@ public abstract class Command implements CommonAttributes
                 {
                     default: throw new AssertionError("Unhandled KnownDeps: " + known.deps);
                     case DepsUnknown:
+                    case DepsErased:
                     case NoDeps:
                         Invariants.checkState(deps == null);
                         break;
@@ -706,7 +709,7 @@ public abstract class Command implements CommonAttributes
 
         public static Truncated truncatedApply(Command command, @Nullable FullRoute<?> route)
         {
-            Invariants.checkArgument(command.known().executeAt.isDecided());
+            Invariants.checkArgument(command.known().executeAt.isKnownToExecute());
             if (route == null) route = Route.castToNonNullFullRoute(command.route());
             Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
             return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApply, durability, route, command.executeAt(), EMPTY, null, null));

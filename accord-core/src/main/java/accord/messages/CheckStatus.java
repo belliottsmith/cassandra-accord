@@ -70,7 +70,7 @@ import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.Durability.ShardUniversal;
 import static accord.local.Status.Durability.Universal;
 import static accord.local.Status.Known;
-import static accord.local.Status.KnownDeps.DepsTruncated;
+import static accord.local.Status.KnownDeps.DepsErased;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Truncated;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
@@ -266,7 +266,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
                     return false;
                 case Apply:
                     // since Apply is universal, we can
-                    return deps == DepsTruncated;
+                    return deps == DepsErased;
                 case Erased:
                 case WasApply:
                     return true;
@@ -542,7 +542,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
         public Timestamp executeAtIfKnown()
         {
-            if (maxKnown().executeAt.isDecided())
+            if (maxKnown().executeAt.isDecidedAndKnown())
                 return executeAt;
             return null;
         }
