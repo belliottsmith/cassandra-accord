@@ -26,11 +26,11 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.PreLoadContext;
+import accord.local.RedundantStatus;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.Status;
 import accord.local.Status.Known;
-import accord.messages.CheckStatus.WithQuorum;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
@@ -49,7 +49,6 @@ import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.PreApplied;
 import static accord.local.Status.PreCommitted;
-import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 import static accord.primitives.Route.castToRoute;
 import static accord.primitives.Route.isRoute;
 
@@ -269,23 +268,27 @@ public class Infer
         }
     }
 
-    static class EraseNonParticipatingAndCallback<T> extends CleanupAndCallback<T>
+    /**
+     * Erase if it is safe to do so, i.e. if Infer.safeToCleanup permits it.
+     */
+    static class SafeEraseAndCallback<T> extends CleanupAndCallback<T>
     {
-        private EraseNonParticipatingAndCallback(Node node, TxnId txnId, Unseekables<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
+        private SafeEraseAndCallback(Node node, TxnId txnId, Unseekables<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
         {
             super(node, txnId, someUnseekables, param, callback);
         }
 
-        public static <T> void eraseNonParticipatingAndCallback(Node node, TxnId txnId, Unseekables<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
+        public static <T> void safeEraseAndCallback(Node node, TxnId txnId, Unseekables<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
         {
             if (!Route.isRoute(someUnseekables)) callback.accept(param, null);
-            else new EraseNonParticipatingAndCallback<>(node, txnId, someUnseekables, param, callback).start();
+            else new SafeEraseAndCallback<>(node, txnId, someUnseekables, param, callback).start();
         }
 
         @Override
         Void apply(SafeCommandStore safeStore, SafeCommand safeCommand)
         {
             Command command = safeCommand.current();
+            // TODO (required): introduce a special form of Erased where we do not imply the phase is "Cleanup"
             if (!command.hasBeen(PreApplied) && safeToCleanup(safeStore, command, Route.castToRoute(someUnseekables), null))
                 Commands.setErased(safeStore, safeCommand);
             return null;
@@ -320,22 +323,37 @@ public class Infer
         No, Maybe, Yes
     }
 
-    // TODO (required): do we even need this?
     public static boolean safeToCleanup(SafeCommandStore safeStore, Command command, Route<?> fetchedWith, @Nullable Timestamp executeAt)
     {
         Invariants.checkArgument(fetchedWith != null || command.route() != null);
         TxnId txnId = command.txnId();
-        if (command.route() != null || fetchedWith.covers(safeStore.ranges().allAt(txnId.epoch())))
-        {
-            Route<?> route = command.route();
-            if (route == null) route = fetchedWith;
+        if (command.route() == null || !fetchedWith.covers(safeStore.ranges().allAt(txnId.epoch())))
+            return false;
 
-            // TODO (required): is it safe to cleanup without an executeAt?
-            executeAt = command.executeAtIfKnown(Timestamp.nonNullOrMax(executeAt, txnId));
-            Ranges coordinateRanges = safeStore.ranges().coordinates(txnId);
-            Ranges acceptRanges = executeAt.epoch() == txnId.epoch() ? coordinateRanges : safeStore.ranges().allBetween(txnId, executeAt);
-            return !route.participatesIn(coordinateRanges) && !route.participatesIn(acceptRanges);
+        Route<?> route = command.route();
+        if (route == null) route = fetchedWith;
+
+        // TODO (required): is it safe to cleanup without an executeAt?
+        executeAt = command.executeAtIfKnown(Timestamp.nonNullOrMax(executeAt, txnId));
+        Ranges coordinateRanges = safeStore.ranges().coordinates(txnId);
+        Ranges acceptRanges = executeAt.epoch() == txnId.epoch() ? coordinateRanges : safeStore.ranges().allBetween(txnId, executeAt);
+        if (!route.participatesIn(coordinateRanges) && !route.participatesIn(acceptRanges))
+            return true;
+
+        RedundantStatus status = safeStore.commandStore().redundantBefore().status(txnId, executeAt, route.participants());
+        switch (status)
+        {
+            default: throw new AssertionError("Unhandled RedundantStatus: " + status);
+            case NOT_OWNED:
+            case LIVE:
+            case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
+            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
+                return false;
+            case LOCALLY_REDUNDANT:
+            case SHARD_REDUNDANT:
+                Invariants.checkState(!command.hasBeen(PreCommitted));
+            case PRE_BOOTSTRAP_OR_STALE:
+                return true;
         }
-        return false;
     }
 }

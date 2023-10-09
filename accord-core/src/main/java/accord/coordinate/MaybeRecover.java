@@ -21,9 +21,6 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.local.Status.Known;
-import accord.messages.CheckStatus;
-import accord.messages.CheckStatus.CheckStatusOkFull;
-import accord.messages.CheckStatus.WithQuorum;
 import accord.primitives.*;
 import accord.utils.Invariants;
 
@@ -31,7 +28,7 @@ import accord.local.Node;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
 
-import static accord.coordinate.Infer.EraseNonParticipatingAndCallback.eraseNonParticipatingAndCallback;
+import static accord.coordinate.Infer.SafeEraseAndCallback.safeEraseAndCallback;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.utils.Functions.reduceNonNull;
 
@@ -121,7 +118,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
                 case Erased:
                     Invariants.checkState(!full.knownFor(route.participants()).isInvalidated());
-                    eraseNonParticipatingAndCallback(node, txnId, someRoute, full.toProgressToken(), callback);
+                    safeEraseAndCallback(node, txnId, someRoute, full.toProgressToken(), callback);
             }
         }
     }

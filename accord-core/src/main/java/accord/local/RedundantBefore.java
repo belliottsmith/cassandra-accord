@@ -60,6 +60,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         // TODO (desired): we don't need to maintain this now, and can simplify our builder, by migrating to ReducingRangeMap.foldWithBounds
         public final Range range;
         public final long startEpoch, endEpoch;
+        // note that locally and shard applied may not represent actual local application if pre-bootstrap or stale
         public final @Nonnull TxnId locallyAppliedOrInvalidatedBefore, shardAppliedOrInvalidatedBefore, bootstrappedAt;
         public final @Nullable Timestamp staleUntilAtLeast;
 
