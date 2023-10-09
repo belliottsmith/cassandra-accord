@@ -293,7 +293,8 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
                 break;
 
             case PreCommitted:
-                Commands.precommit(safeStore, safeCommand, txnId, executeAtIfKnown, route);
+                confirm(Commands.precommit(safeStore, safeCommand, txnId, executeAtIfKnown, route));
+                // TODO (desired): would it be clearer to yield a SaveStatus so we can have PreCommittedWithDefinition
                 if (!achieved.definition.isKnown())
                     break;
 

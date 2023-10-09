@@ -377,11 +377,7 @@ public class Commands
 
         CommonAttributes attrs = command;
         if (command.route() == null || !command.route().kind().isFullRoute())
-        {
-            if (!route.kind().isFullRoute())
-                return CommitOutcome.Insufficient;
             attrs = updateRoute(command, route);
-        }
 
         safeCommand.precommit(attrs, executeAt);
         safeStore.progressLog().precommitted(command);
@@ -948,7 +944,7 @@ public class Commands
             case LIVE:
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
             case PRE_BOOTSTRAP_OR_STALE:
-            case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
+            case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
             case LOCALLY_REDUNDANT:
                 return NO;
             case SHARD_REDUNDANT:
@@ -1047,7 +1043,7 @@ public class Commands
                             case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
                             case SHARD_REDUNDANT:
                             case LOCALLY_REDUNDANT:
-                            case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
+                            case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                             case PRE_BOOTSTRAP_OR_STALE:
                                 removeRedundantDependencies(safeStore, prevSafe, txnIds[depth], redundantStatus == PRE_BOOTSTRAP_OR_STALE);
                                 prevSafe = get(safeStore, --depth - 1);
@@ -1149,8 +1145,8 @@ public class Commands
                             safeStore.progressLog().waiting(curSafe, until, null, participants);
                             break loop;
 
-                        case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                         case PRE_BOOTSTRAP_OR_STALE:
+                        case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                         case LOCALLY_REDUNDANT:
                         case SHARD_REDUNDANT:
                             Invariants.checkState(cur.hasBeen(Applied) || !cur.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP_OR_STALE);

@@ -346,7 +346,7 @@ public class Infer
             default: throw new AssertionError("Unhandled RedundantStatus: " + status);
             case NOT_OWNED:
             case LIVE:
-            case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
+            case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
                 return false;
             case LOCALLY_REDUNDANT:
