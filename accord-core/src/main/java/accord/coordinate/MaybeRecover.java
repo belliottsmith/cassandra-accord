@@ -30,7 +30,6 @@ import accord.messages.CheckStatus.IncludeInfo;
 
 import static accord.coordinate.Infer.SafeEraseAndCallback.safeEraseAndCallback;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
-import static accord.utils.Functions.reduceNonNull;
 
 /**
  * A result of null indicates the transaction is globally persistent

@@ -66,10 +66,8 @@ import static accord.local.PreLoadContext.contextFor;
 import static accord.local.PreLoadContext.empty;
 import static accord.local.SaveStatus.LocalExecution.NotReady;
 import static accord.local.SaveStatus.LocalExecution.WaitingToApply;
-import static accord.local.Status.Durability.Majority;
 import static accord.local.Status.Durability.MajorityOrInvalidated;
 import static accord.local.Status.PreApplied;
-import static accord.local.Status.PreCommitted;
 
 // TODO (desired, consider): consider propagating invalidations in the same way as we do applied
 // TODO (expected): report long-lived recurring transactions / operations

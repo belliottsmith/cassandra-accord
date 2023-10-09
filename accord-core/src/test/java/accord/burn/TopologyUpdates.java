@@ -25,7 +25,6 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.topology.Topology;
 import accord.utils.MessageTask;
-import accord.utils.async.AsyncExecutor;
 import org.agrona.collections.Long2ObjectHashMap;
 
 import java.util.*;
