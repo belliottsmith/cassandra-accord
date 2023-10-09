@@ -50,7 +50,6 @@ import static accord.local.SaveStatus.Uninitialised;
 import static accord.local.Status.Durability.Local;
 import static accord.local.Status.Durability.NotDurable;
 import static accord.local.Status.Durability.ShardUniversal;
-import static accord.local.Status.Durability.Universal;
 import static accord.local.Status.Durability.UniversalOrInvalidated;
 import static accord.local.Status.Invalidated;
 import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
@@ -334,6 +333,7 @@ public abstract class Command implements CommonAttributes
                 switch (known.definition)
                 {
                     default: throw new AssertionError("Unhandled Definition: " + known.definition);
+                    case DefinitionErased:
                     case DefinitionUnknown:
                     case NoOp:
                         Invariants.checkState(partialTxn == null);
@@ -348,6 +348,7 @@ public abstract class Command implements CommonAttributes
                 switch (known.executeAt)
                 {
                     default: throw new AssertionError("Unhandled KnownExecuteAt: " + known.executeAt);
+                    case ExecuteAtErased:
                     case ExecuteAtUnknown: break;
                     case ExecuteAtProposed:
                     case ExecuteAtKnown:
@@ -364,6 +365,7 @@ public abstract class Command implements CommonAttributes
                 {
                     default: throw new AssertionError("Unhandled KnownDeps: " + known.deps);
                     case DepsUnknown:
+                    case DepsErased:
                     case NoDeps:
                         Invariants.checkState(deps == null);
                         break;
@@ -383,10 +385,12 @@ public abstract class Command implements CommonAttributes
                         Invariants.checkState(writes != null);
                         Invariants.checkState(result != null);
                         break;
+                    case Invalidated:
+                        Invariants.checkState(validate.durability().isMaybeInvalidated());
                     case Unknown:
+                        Invariants.checkState(validate.durability() != Local);
                     case Erased:
                     case WasApply:
-                    case Invalidated:
                         Invariants.checkState(writes == null);
                         Invariants.checkState(result == null);
                         break;
@@ -519,6 +523,12 @@ public abstract class Command implements CommonAttributes
         return executeAt == null || executeAt.equals(Timestamp.NONE) ? txnId() : executeAt;
     }
 
+    public final Timestamp executeAtIfKnownOrTxnId()
+    {
+        Timestamp executeAt = executeAtIfKnown();
+        return executeAt == null || executeAt.equals(Timestamp.NONE) ? txnId() : executeAt;
+    }
+
     public final Status status()
     {
         return saveStatus().status;
@@ -542,16 +552,6 @@ public abstract class Command implements CommonAttributes
     public boolean isAtLeast(SaveStatus.LocalExecution execution)
     {
         return saveStatus().execution.compareTo(execution) >= 0;
-    }
-
-    public boolean has(Status.Definition definition)
-    {
-        return known().definition.compareTo(definition) >= 0;
-    }
-
-    public boolean has(Status.Outcome outcome)
-    {
-        return known().outcome.compareTo(outcome) >= 0;
     }
 
     public boolean is(Status status)
@@ -739,7 +739,7 @@ public abstract class Command implements CommonAttributes
 
         public static Truncated erased(Command command)
         {
-            Durability durability = Durability.mergeAtLeast(command.durability(), Universal);
+            Durability durability = Durability.mergeAtLeast(command.durability(), UniversalOrInvalidated);
             return erased(command.txnId(), durability, command.route());
         }
 
@@ -755,7 +755,7 @@ public abstract class Command implements CommonAttributes
 
         public static Truncated truncatedApply(Command command, @Nullable FullRoute<?> route)
         {
-            Invariants.checkArgument(command.known().executeAt.isDecided());
+            Invariants.checkArgument(command.known().executeAt.isKnownToExecute());
             if (route == null) route = Route.castToNonNullFullRoute(command.route());
             Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
             return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApply, durability, route, command.executeAt(), EMPTY, null, null));
@@ -786,7 +786,8 @@ public abstract class Command implements CommonAttributes
         public static Truncated invalidated(TxnId txnId, Listeners.Immutable durableListeners)
         {
             // TODO (expected): migrate to using null for executeAt when invalidated
-            return validate(new Truncated(txnId, SaveStatus.Invalidated, UniversalOrInvalidated, null, Timestamp.NONE, durableListeners, null, Result.INVALIDATED));
+            // TODO (expected): is UniversalOrInvalidated correct here? Should we have a lower implication pure Invalidated?
+            return validate(new Truncated(txnId, SaveStatus.Invalidated, UniversalOrInvalidated, null, Timestamp.NONE, durableListeners, null, null));
         }
 
         @Override

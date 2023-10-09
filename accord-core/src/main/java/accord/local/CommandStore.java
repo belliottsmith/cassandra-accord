@@ -104,13 +104,13 @@ public abstract class CommandStore implements AgentExecutor
         // TODO (desired): can better encapsulate by accepting only the newRangesForEpoch and deriving the add/remove ranges
         public void add(long epoch, RangesForEpoch newRangesForEpoch, Ranges addRanges)
         {
-            RedundantBefore addRedundantBefore = RedundantBefore.create(addRanges, epoch, Long.MAX_VALUE, TxnId.NONE, TxnId.minForEpoch(epoch));
+            RedundantBefore addRedundantBefore = RedundantBefore.create(addRanges, epoch, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.minForEpoch(epoch));
             update(newRangesForEpoch, addRedundantBefore);
         }
 
         public void remove(long epoch, RangesForEpoch newRangesForEpoch, Ranges removeRanges)
         {
-            RedundantBefore addRedundantBefore = RedundantBefore.create(removeRanges, Long.MIN_VALUE, epoch, TxnId.NONE, TxnId.NONE);
+            RedundantBefore addRedundantBefore = RedundantBefore.create(removeRanges, Long.MIN_VALUE, epoch, TxnId.NONE, TxnId.NONE, TxnId.NONE);
             update(newRangesForEpoch, addRedundantBefore);
         }
 
@@ -275,6 +275,14 @@ public abstract class CommandStore implements AgentExecutor
         ReducingRangeMap<Timestamp> newRejectBefore = rejectBefore != null ? rejectBefore : new ReducingRangeMap<>();
         newRejectBefore = ReducingRangeMap.add(newRejectBefore, ranges, txnId, Timestamp::max);
         setRejectBefore(newRejectBefore);
+    }
+
+    public final void markExclusiveSyncPointApplied(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
+    {
+        // TODO (desired): narrow ranges to those that are owned
+        Invariants.checkArgument(txnId.rw() == ExclusiveSyncPoint);
+        RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, txnId, TxnId.NONE, TxnId.NONE));
+        setRedundantBefore(newRedundantBefore);
     }
 
     final Timestamp preaccept(TxnId txnId, Seekables<?, ?> keys, SafeCommandStore safeStore, boolean permitFastPath)
@@ -459,7 +467,7 @@ public abstract class CommandStore implements AgentExecutor
     final void markBootstrapping(SafeCommandStore safeStore, TxnId globalSyncId, Ranges ranges)
     {
         setBootstrapBeganAt(bootstrap(globalSyncId, ranges, bootstrapBeganAt));
-        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, globalSyncId);
+        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, globalSyncId);
         setRedundantBefore(RedundantBefore.merge(redundantBefore, addRedundantBefore));
         DurableBefore addDurableBefore = DurableBefore.create(ranges, TxnId.NONE, TxnId.NONE);
         setDurableBefore(DurableBefore.merge(durableBefore, addDurableBefore));
@@ -469,7 +477,7 @@ public abstract class CommandStore implements AgentExecutor
     public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges ranges)
     {
         ranges = ranges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
-        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, TxnId.NONE);
+        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, globalSyncId, TxnId.NONE);
         setRedundantBefore(RedundantBefore.merge(redundantBefore, addRedundantBefore));
         DurableBefore addDurableBefore = DurableBefore.create(ranges, globalSyncId, globalSyncId);
         setDurableBefore(DurableBefore.merge(durableBefore, addDurableBefore));
@@ -478,8 +486,6 @@ public abstract class CommandStore implements AgentExecutor
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
     public void markShardStale(SafeCommandStore safeStore, Timestamp staleSince, Ranges ranges, boolean isSincePrecise)
     {
-        agent.onStale(staleSince, ranges);
-
         Timestamp staleUntilAtLeast = staleSince;
         if (isSincePrecise)
         {
@@ -491,8 +497,9 @@ public abstract class CommandStore implements AgentExecutor
             // make sure no in-progress bootstrap attempts will override the stale since for commands whose staleness bounds are unknown
             staleUntilAtLeast = Timestamp.max(bootstrapBeganAt.lastKey(), staleUntilAtLeast);
         }
+        agent.onStale(staleSince, ranges);
 
-        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, staleUntilAtLeast);
+        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, TxnId.NONE, TxnId.NONE, TxnId.NONE, staleUntilAtLeast);
         setRedundantBefore(RedundantBefore.merge(redundantBefore, addRedundantBefore));
         // find which ranges need to bootstrap, subtracting those already in progress that cover the id
 
@@ -540,7 +547,7 @@ public abstract class CommandStore implements AgentExecutor
         // TODO (required): make sure we have no races on HLC around SyncPoint else this resolution may not work (we need to know the micros equivalent timestamp of the snapshot)
         KeyDeps keyDeps = builder.deps.keyDeps;
         redundantBefore().foldl(keyDeps.keys(), (e, b, d, p2, ki, kj) -> {
-            int txnIdx = d.txnIds().find(e.locallyRedundantBefore());
+            int txnIdx = d.txnIds().find(TxnId.max(e.locallyAppliedOrInvalidatedBefore, e.bootstrappedAt));
             if (txnIdx < 0) txnIdx = -1 - txnIdx;
             while (ki < kj)
             {
@@ -554,6 +561,11 @@ public abstract class CommandStore implements AgentExecutor
             return b;
         }, builder, keyDeps, null, ignore -> false);
 
+        /**
+         * If we have to handle bootstrapping ranges for range transactions, these may only partially cover the
+         * transaction, in which case we should not remove the transaction as a dependency. But if it is fully
+         * covered by bootstrapping ranges then we *must* remove it as a dependency.
+         */
         class RangeState
         {
             final WaitingOn.Update builder;
@@ -566,6 +578,9 @@ public abstract class CommandStore implements AgentExecutor
                 this.builder = builder;
             }
 
+            /**
+             * Are the participating ranges for the txn fully covered by bootstrapping ranges for this command store
+             */
             boolean isFullyBootstrapping(int rangeTxnIdx)
             {
                 if (partiallyBootstrapping == null)
@@ -586,15 +601,20 @@ public abstract class CommandStore implements AgentExecutor
             // TODO (desired, efficiency): foldlInt so we can track the lower rangeidx bound and not revisit unnecessarily
             WaitingOn.Update b = s.builder;
             {
-                int tmp = d.txnIds().find(e.redundantBefore);
+                // find the txnIdx below which we are known to be fully redundant locally due to having been applied or invalidated
+                int tmp = d.txnIds().find(e.locallyAppliedOrInvalidatedBefore);
                 s.txnIdx = tmp < 0 ? -1 - tmp : tmp;
             }
+            // remove intersecting transactions with known redundant txnId
             d.forEach(ps, e.range, pi, pj, b, s, (b0, s0, txnIdx) -> {
                 if (txnIdx < s0.txnIdx)
                     b0.setAppliedOrInvalidatedRangeIdx(txnIdx);
             });
-            if (e.bootstrappedAt.compareTo(e.redundantBefore) > 0)
+            if (e.bootstrappedAt.compareTo(e.locallyAppliedOrInvalidatedBefore) > 0)
             {
+                // if we have any ranges where bootstrap is ahead of the latest known fully redundant txnId,
+                // we have to do a more complicated dance since this may imply only partial redundancy
+                // (we may still depend on the transaction for some other range)
                 {
                     int tmp = d.txnIds().find(e.bootstrappedAt);
                     s.txnIdx = tmp < 0 ? -1 - tmp : tmp;

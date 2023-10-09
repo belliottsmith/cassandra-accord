@@ -23,11 +23,11 @@ import accord.coordinate.Infer;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SaveStatus;
 import accord.local.Status;
+import accord.messages.CheckStatus.FoundKnownMap;
 import accord.messages.CheckStatus.WithQuorum;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Keys;
@@ -46,7 +46,7 @@ import accord.utils.MapReduceConsume;
 import javax.annotation.Nullable;
 import java.util.function.BiConsumer;
 
-import static accord.local.PreLoadContext.contextFor;
+import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
 import static accord.local.Status.PreApplied;
@@ -57,24 +57,28 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
 {
     public static class SerializerSupport
     {
-        public static Propagate create(TxnId txnId, Route<?> route, SaveStatus saveStatus, SaveStatus maxSaveStatus, Status.Durability durability, RoutingKey homeKey, RoutingKey progressKey, Status.Known achieved, PartialTxn partialTxn, PartialDeps partialDeps, long toEpoch, Timestamp executeAt, Writes writes, Result result)
+        public static Propagate create(TxnId txnId, Route<?> route, SaveStatus maxKnowledgeSaveStatus, SaveStatus maxSaveStatus, Status.Durability durability, RoutingKey homeKey, RoutingKey progressKey, Status.Known achieved, FoundKnownMap known, boolean isTruncated, PartialTxn partialTxn, PartialDeps committedDeps, long toEpoch, Timestamp executeAt, Writes writes, Result result)
         {
-            return new Propagate(txnId, route, saveStatus, maxSaveStatus, durability, homeKey, progressKey, achieved, partialTxn, partialDeps, toEpoch, executeAt, writes, result, null);
+            return new Propagate(txnId, route, maxKnowledgeSaveStatus, maxSaveStatus, durability, homeKey, progressKey, achieved, known, isTruncated, partialTxn, committedDeps, toEpoch, executeAt, writes, result, null);
         }
     }
 
     public final TxnId txnId;
     public final Route<?> route;
+    // TODO (expected): remove dependency on these two SaveStatus
+    public final SaveStatus maxKnowledgeSaveStatus;
+    public final SaveStatus maxSaveStatus;
     public final Status.Durability durability;
     @Nullable public final RoutingKey homeKey;
     @Nullable public final RoutingKey progressKey;
     // this is a WHOLE NODE measure, so if commit epoch has more ranges we do not count as committed if we can only commit in coordination epoch
     public final Status.Known achieved;
+    public final FoundKnownMap known;
     public final boolean isTruncated;
     @Nullable public final PartialTxn partialTxn;
-    @Nullable public final PartialDeps partialDeps;
+    @Nullable public final PartialDeps committedDeps;
     public final long toEpoch;
-    @Nullable public final Timestamp executeAt;
+    @Nullable public final Timestamp committedExecuteAt;
     @Nullable public final Writes writes;
     @Nullable public final Result result;
 
@@ -83,28 +87,36 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
     Propagate(
         TxnId txnId,
         Route<?> route,
+        SaveStatus maxKnowledgeSaveStatus,
+        SaveStatus maxSaveStatus,
         Status.Durability durability,
         @Nullable RoutingKey homeKey,
         @Nullable RoutingKey progressKey,
         Status.Known achieved,
+        FoundKnownMap known,
+        boolean isTruncated,
         @Nullable PartialTxn partialTxn,
-        @Nullable PartialDeps partialDeps,
+        @Nullable PartialDeps committedDeps,
         long toEpoch,
-        @Nullable Timestamp executeAt,
+        @Nullable Timestamp committedExecuteAt,
         @Nullable Writes writes,
         @Nullable Result result,
         BiConsumer<Status.Known, Throwable> callback)
     {
         this.txnId = txnId;
         this.route = route;
+        this.maxKnowledgeSaveStatus = maxKnowledgeSaveStatus;
+        this.maxSaveStatus = maxSaveStatus;
         this.durability = durability;
         this.homeKey = homeKey;
         this.progressKey = progressKey;
         this.achieved = achieved;
+        this.known = known;
+        this.isTruncated = isTruncated;
         this.partialTxn = partialTxn;
-        this.partialDeps = partialDeps;
+        this.committedDeps = committedDeps;
         this.toEpoch = toEpoch;
-        this.executeAt = executeAt;
+        this.committedExecuteAt = committedExecuteAt;
         this.writes = writes;
         this.result = result;
         this.callback = callback;
@@ -113,70 +125,69 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
     @SuppressWarnings({"rawtypes", "unchecked"})
     public static void propagate(Node node, TxnId txnId, long sourceEpoch, WithQuorum withQuorum, Route route, @Nullable Status.Known target, CheckStatus.CheckStatusOkFull full, BiConsumer<Status.Known, Throwable> callback)
     {
-        if (full.saveStatus.status == NotDefined && full.invalidIfNotAtLeast == NotDefined)
+        if (full.maxKnowledgeSaveStatus.status == NotDefined && full.maxInvalidIfNot() == NotKnownToBeInvalid)
         {
             callback.accept(Status.Known.Nothing, null);
             return;
         }
 
-        Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()));
-        Route<?> maxRoute = Route.merge(route, full.route);
+        Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.maxKnowledgeSaveStatus == SaveStatus.Erased);
+
+        full = full.finish(route, withQuorum);
+        route = Invariants.nonNull(full.route);
 
         // TODO (required): permit individual shards that are behind to catch up by themselves
         long toEpoch = sourceEpoch;
         Ranges sliceRanges = node.topology().localRangesForEpochs(txnId.epoch(), toEpoch);
-        if (!maxRoute.covers(sliceRanges))
-        {
-            callback.accept(Status.Known.Nothing, null);
-            return;
-        }
 
-        RoutingKey progressKey = node.trySelectProgressKey(txnId, maxRoute);
+        RoutingKey progressKey = node.trySelectProgressKey(txnId, route);
 
-        Ranges covering = maxRoute.sliceCovering(sliceRanges, Minimal);
-        Participants<?> participatingKeys = maxRoute.participants().slice(covering, Minimal);
-        Status.Known achieved = full.sufficientFor(participatingKeys, withQuorum);
-        if (achieved.executeAt.hasDecidedExecuteAt() && full.executeAt.epoch() > toEpoch)
+        Ranges covering = route.sliceCovering(sliceRanges, Minimal);
+        Participants<?> participatingKeys = route.participants().slice(covering, Minimal);
+        Status.Known achieved = full.knownFor(participatingKeys);
+        if (achieved.executeAt.isDecidedAndKnown() && full.executeAt.epoch() > toEpoch)
         {
             Ranges acceptRanges;
             if (!node.topology().hasEpoch(full.executeAt.epoch()) ||
-                    (!maxRoute.covers(acceptRanges = node.topology().localRangesForEpochs(txnId.epoch(), full.executeAt.epoch()))))
+                (!route.covers(acceptRanges = node.topology().localRangesForEpochs(txnId.epoch(), full.executeAt.epoch()))))
             {
                 // we don't know what the execution epoch requires, so we cannot be sure we can replicate it locally
                 // we *could* wait until we have the local epoch before running this
                 Status.Outcome outcome = achieved.outcome.propagatesBetweenShards() ? achieved.outcome : Status.Outcome.Unknown;
-                achieved = new Status.Known(achieved.definition, achieved.executeAt, Status.KnownDeps.DepsUnknown, outcome);
+                achieved = new Status.Known(achieved.route, achieved.definition, achieved.executeAt, Status.KnownDeps.DepsUnknown, outcome);
             }
             else
             {
                 // TODO (expected): this should only be the two precise epochs, not the full range of epochs
                 sliceRanges = acceptRanges;
-                covering = maxRoute.sliceCovering(sliceRanges, Minimal);
-                participatingKeys = maxRoute.participants().slice(covering, Minimal);
-                Status.Known knownForExecution = full.sufficientFor(participatingKeys, withQuorum);
-                if ((target != null && target.isSatisfiedBy(knownForExecution)) || knownForExecution.isSatisfiedBy(achieved))
+                covering = route.sliceCovering(sliceRanges, Minimal);
+                participatingKeys = route.participants().slice(covering, Minimal);
+                Status.Known knownForExecution = full.knownFor(participatingKeys);
+                if ((target != null && target.isSatisfiedBy(knownForExecution)) || achieved.isSatisfiedBy(knownForExecution))
                 {
                     achieved = knownForExecution;
                     toEpoch = full.executeAt.epoch();
                 }
                 else
-                {
+                {   // TODO (expected): does downgrading this ever block progress?
                     Invariants.checkState(sourceEpoch == txnId.epoch(), "%d != %d", sourceEpoch, txnId.epoch());
-                    achieved = new Status.Known(achieved.definition, achieved.executeAt, knownForExecution.deps, knownForExecution.outcome);
+                    achieved = new Status.Known(achieved.route, achieved.definition, achieved.executeAt, knownForExecution.deps, knownForExecution.outcome);
                 }
             }
         }
 
-        PartialTxn partialTxn = null;
+        boolean isTruncated = withQuorum == HasQuorum && full.isTruncatedResponse(covering);
+
+        PartialTxn partialTxn = full.partialTxn;
         if (achieved.definition.isKnown())
             partialTxn = full.partialTxn.slice(sliceRanges, true).reconstitutePartial(covering);
 
-        PartialDeps partialDeps = null;
+        PartialDeps committedDeps = full.committedDeps;
         if (achieved.deps.hasDecidedDeps())
-            partialDeps = full.committedDeps.slice(sliceRanges).reconstitutePartial(covering);
+            committedDeps = full.committedDeps.slice(sliceRanges).reconstitutePartial(covering);
 
         Propagate propagate =
-            new Propagate(txnId, maxRoute, full.saveStatus, full.maxSaveStatus, full.durability, full.homeKey, progressKey, achieved, partialTxn, partialDeps, toEpoch, full.executeAt, full.writes, full.result, callback);
+            new Propagate(txnId, route, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.durability, full.homeKey, progressKey, achieved, full.map, isTruncated, partialTxn, committedDeps, toEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
 
         node.localMessage(propagate);
     }
@@ -193,7 +204,7 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
         if (achieved.definition.isKnown())
             return partialTxn.keys();
         else if (achieved.deps.hasProposedOrDecidedDeps())
-            return partialDeps.keyDeps.keys();
+            return committedDeps.keyDeps.keys();
         else
             return Keys.EMPTY;
     }
@@ -209,40 +220,59 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
     {
         SafeCommand safeCommand = safeStore.get(txnId, this, route);
         Command command = safeCommand.current();
-        if (command.saveStatus().phase.compareTo(Status.Phase.Persist) >= 0)
-            return null;
 
-        Status propagate = achieved.propagate();
+        PartialTxn partialTxn = achieved.hasDefinition() ? this.partialTxn : null;
+        PartialDeps committedDeps = achieved.hasDecidedDeps() ? this.committedDeps : null;
+        switch (command.saveStatus().phase)
+        {
+            // Already know the outcome, waiting on durability so maybe update with new durability information which can also trigger cleanup
+            case Persist: return updateDurability(safeStore, safeCommand);
+            case Cleanup: return null;
+        }
+
+        Timestamp executeAtIfKnown = command.executeAtIfKnown(committedExecuteAt);
+        Status.Known achieved = this.achieved;
+        if (isTruncated)
+        {
+            achieved = applyOrUpgradeTruncated(safeStore, safeCommand, command, executeAtIfKnown);
+            if (achieved == null)
+                return null;
+
+            Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), (executeAtIfKnown == null ? txnId : executeAtIfKnown).epoch());
+            if (achieved.isDefinitionKnown() && partialTxn == null)
+            {
+                PartialTxn existing = command.partialTxn();
+                Ranges neededForDefinition = existing == null ? needed : needed.subtract(existing.covering());
+                partialTxn = this.partialTxn.slice(needed, true).reconstitutePartial(neededForDefinition);
+            }
+
+            if (achieved.hasDecidedDeps() && committedDeps == null)
+            {
+                Invariants.checkState(executeAtIfKnown != null);
+                // we don't subtract existing partialDeps, as they cannot be committed deps; we only permit committing deps covering all participating ranges
+                committedDeps = this.committedDeps.slice(needed).reconstitutePartial(needed);
+            }
+        }
+
+        Status propagate = achieved.atLeast(command.known()).propagatesStatus();
         if (command.hasBeen(propagate))
         {
-            if (maxSaveStatus.phase == Cleanup && durability.isDurableOrInvalidated() && Infer.safeToCleanup(safeStore, command, route, executeAt))
+            if (maxSaveStatus.phase == Cleanup && durability.isDurableOrInvalidated() && Infer.safeToCleanup(safeStore, command, route, executeAtIfKnown))
                 Commands.setTruncatedApply(safeStore, safeCommand);
-            return null;
+
+            // TODO (expected): maybe stale?
+            return updateDurability(safeStore, safeCommand);
         }
 
         switch (propagate)
         {
             default: throw new IllegalStateException("Unexpected status: " + propagate);
+            case Truncated: throw new IllegalStateException("Status expected to be handled elsewhere: " + propagate);
             case Accepted:
             case AcceptedInvalidate:
                 // we never "propagate" accepted statuses as these are essentially votes,
                 // and contribute nothing to our local state machine
-                throw new IllegalStateException("Invalid states to propagate: " + achieved.propagate());
-
-            case Truncated:
-                // if our peers have truncated this command, then either:
-                // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
-                if (command.hasBeen(PreApplied) || command.saveStatus().isUninitialised())
-                    break;
-
-                if (Infer.safeToCleanup(safeStore, command, route, executeAt))
-                {
-                    Commands.setErased(safeStore, safeCommand);
-                    break;
-                }
-
-                // TODO (required): check if we are stale
-                // otherwise we are either stale, or the command didn't reach consensus
+                throw new IllegalStateException("Invalid states to propagate: " + propagate);
 
             case Invalidated:
                 Commands.commitInvalidate(safeStore, safeCommand, route);
@@ -250,20 +280,20 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
 
             case Applied:
             case PreApplied:
-                Invariants.checkState(executeAt != null);
-                if (toEpoch >= executeAt.epoch())
+                Invariants.checkState(executeAtIfKnown != null);
+                if (toEpoch >= executeAtIfKnown.epoch())
                 {
-                    confirm(Commands.apply(safeStore, safeCommand, txnId, route, progressKey, executeAt, partialDeps, partialTxn, writes, result));
+                    confirm(Commands.apply(safeStore, safeCommand, txnId, route, progressKey, executeAtIfKnown, committedDeps, partialTxn, writes, result));
                     break;
                 }
 
             case Committed:
             case ReadyToExecute:
-                confirm(Commands.commit(safeStore, safeCommand, txnId, route, progressKey, partialTxn, executeAt, partialDeps));
+                confirm(Commands.commit(safeStore, safeCommand, txnId, route, progressKey, partialTxn, executeAtIfKnown, committedDeps));
                 break;
 
             case PreCommitted:
-                Commands.precommit(safeStore, safeCommand, txnId, executeAt, route);
+                Commands.precommit(safeStore, safeCommand, txnId, executeAtIfKnown, route);
                 if (!achieved.definition.isKnown())
                     break;
 
@@ -277,15 +307,105 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
                 break;
         }
 
+        return updateDurability(safeStore, safeCommand);
+    }
 
+    // if can only propagate Truncated, we might be stale; try to upgrade for this command store only, even partially if necessary
+    // note: this is invoked if the command is truncated for ANY local command store - we might
+    private Status.Known applyOrUpgradeTruncated(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, Timestamp executeAtIfKnown)
+    {
+        Invariants.checkState(!maxKnowledgeSaveStatus.is(Status.Invalidated));
+
+        if (Infer.safeToCleanup(safeStore, command, route, executeAtIfKnown))
+        {
+            // don't create a new Erased record if we're already cleaned up
+            Commands.setErased(safeStore, safeCommand);
+            return null;
+        }
+
+        Ranges ranges = safeStore.ranges().allBetween(txnId.epoch(), (executeAtIfKnown == null ? txnId : executeAtIfKnown).epoch());
+        Participants<?> participants = route.participants(ranges, Minimal);
+        Invariants.checkState(!participants.isEmpty()); // we shouldn't be fetching data for transactions we only coordinate
+        boolean isLocallyTruncated = known.hasTruncated(participants);
+
+        if (!isLocallyTruncated)
+        {
+            // we're truncated *somewhere* but not locally; whether we have the executeAt is immaterial to this calculus,
+            // as we're either ready to go or we're waiting on the coordinating shard to complete this transaction, so pick
+            // the maximum we can achieve and return that
+            return known.knownFor(participants);
+        }
+
+        // if our peers have truncated this command, then either:
+        // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
+        // we're now at least partially stale, but let's first see if we can progress this shard, or we can do so in part
+        if (executeAtIfKnown == null)
+        {
+            ranges = safeStore.commandStore().redundantBefore().everExpectToExecute(txnId, ranges);
+            if (!ranges.isEmpty())
+            {
+                // TODO (now): check if the transaction is redundant, as if so it's definitely invalidated (and perhaps we didn't witness this remotely)
+                // we don't even know the execution time, so we cannot possibly proceed besides erasing the command state and marking ourselves stale
+                // TODO (required): we could in principle be stale for future epochs we haven't witnessed yet. Ensure up to date epochs before finalising this application, or else fetch a maximum possible epoch
+                safeStore.commandStore().markShardStale(safeStore, txnId, participants.toRanges().slice(ranges, Minimal), false);
+            }
+            Commands.setErased(safeStore, safeCommand);
+            return null;
+        }
+
+        // compute the ranges we expect to execute - i.e. those we own, and are not stale or pre-bootstrap
+        ranges = safeStore.commandStore().redundantBefore().expectToExecute(txnId, executeAtIfKnown, ranges);
+        if (ranges.isEmpty())
+        {
+            // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
+            Commands.setTruncatedApply(safeStore, safeCommand, route);
+            return null;
+        }
+
+        // if the command has been truncated globally, then we should expect to apply it
+        // if we cannot obtain enough information from a majority to do so then we have been left behind
+        Status.Known required = PreApplied.minKnown;
+        Status.Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
+        Ranges achieveRanges = known.knownFor(requireExtra, ranges); // the ranges for which we can successfully achieve this
+
+        if (participants.isEmpty())
+        {
+            // we only coordinate this transaction, so being unable to retrieve its state does not imply any staleness
+            // TODO (now): double check this doesn't stop us coordinating the transaction (it shouldn't, as doesn't imply durability)
+            Commands.setTruncatedApply(safeStore, safeCommand, route);
+            return null;
+        }
+
+        // any ranges we execute but cannot achieve the pre-applied status for have been left behind and are stale
+        Ranges staleRanges = ranges.subtract(achieveRanges);
+        Participants<?> staleParticipants = participants.slice(staleRanges, Minimal);
+        staleRanges = staleParticipants.toRanges();
+
+        if (staleRanges.isEmpty())
+        {
+            Invariants.checkState(achieveRanges.containsAll(participants));
+            return required;
+        }
+
+        safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown, staleRanges, true);
+        if (!staleRanges.containsAll(participants))
+            return required;
+
+        // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
+        Commands.setTruncatedApply(safeStore, safeCommand, route);
+        return null;
+    }
+
+    /*
+     *  If there is new information about the command being durable and we are in the coordination shard in the coordination epoch then update the durability information and possibly cleanup
+     */
+    private Void updateDurability(SafeCommandStore safeStore, SafeCommand safeCommand)
+    {
+        // TODO (expected): Infer durability status from cleanup/truncation
         if (!durability.isDurable() || homeKey == null)
             return null;
 
-        if (!safeStore.ranges().coordinates(txnId).contains(homeKey))
-            return null;
-
-        Timestamp executeAt = saveStatus.known.executeAt.hasDecidedExecuteAt() ? this.executeAt : null;
-        Commands.setDurability(safeStore, safeCommand, durability, route, executeAt);
+        Commands.setDurability(safeStore, safeCommand, durability, route, committedExecuteAt);
         return null;
     }
 
@@ -305,11 +425,12 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
     @Override
     public MessageType type()
     {
-        switch (achieved.propagate())
+        // TODO (now): this logic doesn't work now we permit upgrading; need to pick the maximum *possible* status we might propagate
+        switch (achieved.propagatesStatus())
         {
             case Applied:
             case PreApplied:
-                if (toEpoch >= executeAt.epoch())
+                if (toEpoch >= committedExecuteAt.epoch())
                     return MessageType.PROPAGATE_APPLY_MSG;
             case Committed:
             case ReadyToExecute:
@@ -358,333 +479,14 @@ public class Propagate implements MapReduceConsume<SafeCommandStore, Void>, Epoc
     public String toString()
     {
         return "Propagate{type:" + type() +
-                ", txnId: " + txnId +
-                ", saveStatus: " + saveStatus +
-                ", deps: " + partialDeps +
-                ", txn: " + partialTxn +
-                ", executeAt: " + executeAt +
-                ", writes:" + writes +
-                ", result:" + result +
-                '}';
-    }
-
-    static class OnDone implements MapReduceConsume<SafeCommandStore, Void>, EpochSupplier
-    {
-        final Node node;
-        final TxnId txnId;
-        final Route<?> route;
-        final RoutingKey progressKey;
-        final CheckStatus.CheckStatusOkFull full;
-        // this is a WHOLE NODE measure, so if commit epoch has more ranges we do not count as committed if we can only commit in coordination epoch
-        final Status.Known achieved;
-        final boolean isTruncated;
-        final WithQuorum withQuorum;
-        final PartialTxn partialTxn;
-        final PartialDeps partialDeps;
-        final long toEpoch;
-        final BiConsumer<Status.Known, Throwable> callback;
-
-        OnDone(Node node, TxnId txnId, Route<?> route, RoutingKey progressKey, CheckStatus.CheckStatusOkFull full, Status.Known achieved, boolean isTruncated, WithQuorum withQuorum, PartialTxn partialTxn, PartialDeps partialDeps, long toEpoch, BiConsumer<Status.Known, Throwable> callback)
-        {
-            this.node = node;
-            this.txnId = txnId;
-            this.route = route;
-            this.progressKey = progressKey;
-            this.full = full;
-            this.achieved = achieved;
-            this.isTruncated = isTruncated;
-            this.withQuorum = withQuorum;
-            this.partialTxn = partialTxn;
-            this.partialDeps = partialDeps;
-            this.toEpoch = toEpoch;
-            this.callback = callback;
-        }
-
-        @SuppressWarnings({"rawtypes"})
-        public static void propagate(Node node, TxnId txnId, long sourceEpoch, WithQuorum withQuorum, Route route, @Nullable Status.Known target, CheckStatus.CheckStatusOkFull full, BiConsumer<Status.Known, Throwable> callback)
-        {
-            if (full.saveStatus.status == NotDefined && full.maxInvalidIfNotAtLeast == NotDefined)
-            {
-                callback.accept(Status.Known.Nothing, null);
-                return;
-            }
-
-            Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.saveStatus == SaveStatus.Erased);
-
-            full = full.merge(route).withQuorum(withQuorum);
-//            if (withQuorum == HasQuorum)
-//                full = full.withQuorum();
-            route = Invariants.nonNull(full.route);
-
-            // TODO (required): permit individual shards that are behind to catch up by themselves
-            long toEpoch = sourceEpoch;
-            Ranges sliceRanges = node.topology().localRangesForEpochs(txnId.epoch(), toEpoch);
-
-            RoutingKey progressKey = node.trySelectProgressKey(txnId, route);
-
-            Ranges covering = route.sliceCovering(sliceRanges, Minimal);
-            Participants<?> participatingKeys = route.participants().slice(covering, Minimal);
-            Status.Known achieved = full.sufficientFor(participatingKeys, withQuorum);
-            if (achieved.executeAt.isDecided() && full.executeAt.epoch() > toEpoch)
-            {
-                Ranges acceptRanges;
-                if (!node.topology().hasEpoch(full.executeAt.epoch()) ||
-                    (!route.covers(acceptRanges = node.topology().localRangesForEpochs(txnId.epoch(), full.executeAt.epoch()))))
-                {
-                    // we don't know what the execution epoch requires, so we cannot be sure we can replicate it locally
-                    // we *could* wait until we have the local epoch before running this
-                    Status.Outcome outcome = achieved.outcome.propagatesBetweenShards() ? achieved.outcome : Status.Outcome.Unknown;
-                    achieved = new Status.Known(achieved.route, achieved.definition, achieved.executeAt, Status.KnownDeps.DepsUnknown, outcome);
-                }
-                else
-                {
-                    // TODO (expected): this should only be the two precise epochs, not the full range of epochs
-                    sliceRanges = acceptRanges;
-                    covering = route.sliceCovering(sliceRanges, Minimal);
-                    participatingKeys = route.participants().slice(covering, Minimal);
-                    Status.Known knownForExecution = full.sufficientFor(participatingKeys, withQuorum);
-                    if ((target != null && target.isSatisfiedBy(knownForExecution)) || achieved.isSatisfiedBy(knownForExecution))
-                    {
-                        achieved = knownForExecution;
-                        toEpoch = full.executeAt.epoch();
-                    }
-                    else
-                    {   // TODO (expected): does downgrading this ever block progress?
-                        Invariants.checkState(sourceEpoch == txnId.epoch(), "%d != %d", sourceEpoch, txnId.epoch());
-                        achieved = new Status.Known(achieved.route, achieved.definition, achieved.executeAt, knownForExecution.deps, knownForExecution.outcome);
-                    }
-                }
-            }
-
-            // TODO (now): move to Infer
-            boolean isTruncated = withQuorum == HasQuorum && (achieved.outcome.isTruncated() || (achieved.outcome == Status.Outcome.Apply && full.truncated.intersects(covering)));
-
-            PartialTxn partialTxn = null;
-            if (achieved.definition.isKnown())
-                partialTxn = full.partialTxn.slice(sliceRanges, true).reconstitutePartial(covering);
-
-            PartialDeps partialDeps = null;
-            if (achieved.deps.hasDecidedDeps())
-                partialDeps = full.committedDeps.slice(sliceRanges).reconstitutePartial(covering);
-
-            new OnDone(node, txnId, route, progressKey, full, achieved, isTruncated, withQuorum, partialTxn, partialDeps, toEpoch, callback).start();
-        }
-
-        void start()
-        {
-            Seekables<?, ?> keys = Keys.EMPTY;
-            if (achieved.definition.isKnown())
-                keys = partialTxn.keys();
-            else if (achieved.deps.hasProposedOrDecidedDeps())
-                keys = partialDeps.keyDeps.keys();
-
-            PreLoadContext loadContext = contextFor(txnId, keys);
-            node.mapReduceConsumeLocal(loadContext, route, txnId.epoch(), toEpoch, this);
-        }
-
-        @Override
-        public Void apply(SafeCommandStore safeStore)
-        {
-            SafeCommand safeCommand = safeStore.get(txnId, this, route);
-            Command command = safeCommand.current();
-
-            PartialTxn partialTxn = this.partialTxn;
-            PartialDeps partialDeps = this.partialDeps;
-            switch (command.saveStatus().phase)
-            {
-                case Persist: return updateDurability(safeStore, safeCommand);
-                case Cleanup: return null;
-            }
-
-            Status.Known achieved = this.achieved;
-            if (isTruncated)
-            {
-                achieved = applyOrUpgradeTruncated(safeStore, safeCommand, command);
-                if (achieved == null)
-                    return null;
-
-                if (achieved.executeAt.isDecided())
-                {
-                    Timestamp executeAt = command.executeAtIfKnown(full.executeAt);
-                    if (partialTxn == null && this.full.saveStatus.known.definition.isKnown())
-                    {
-                        Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
-                        PartialTxn existing = command.partialTxn();
-                        if (existing != null)
-                            needed = needed.subtract(existing.covering());
-                        partialTxn = full.partialTxn.slice(needed, true).reconstitutePartial(needed);
-                    }
-
-                    if (partialDeps == null && !safeCommand.current().known().deps.hasDecidedDeps())
-                    {
-                        Ranges needed = safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch());
-                        // we don't subtract existing partialDeps, as they cannot be committed deps; we only permit committing deps covering all participating ranges
-                        partialDeps = full.committedDeps.slice(needed).reconstitutePartial(needed);
-                    }
-                }
-            }
-
-            Status propagate = achieved.merge(command.known()).propagatesStatus();
-            if (command.hasBeen(propagate))
-            {
-                if (full.maxSaveStatus.phase == Cleanup && full.durability.isDurableOrInvalidated() && Infer.safeToCleanup(safeStore, command, route, full.executeAt))
-                    Commands.setTruncatedApply(safeStore, safeCommand);
-
-                // TODO (expected): maybe stale?
-                return updateDurability(safeStore, safeCommand);
-            }
-            Timestamp executeAt = command.executeAtIfKnown(full.executeAt);
-
-            switch (propagate)
-            {
-                default: throw new IllegalStateException("Unexpected status: " + propagate);
-                case Truncated: throw new IllegalStateException("Status expected to be handled elsewhere: " + propagate);
-                case Accepted:
-                case AcceptedInvalidate:
-                    // we never "propagate" accepted statuses as these are essentially votes,
-                    // and contribute nothing to our local state machine
-                    throw new IllegalStateException("Invalid states to propagate: " + achieved.propagatesStatus());
-
-                case Invalidated:
-                    Commands.commitInvalidate(safeStore, safeCommand, route);
-                    break;
-
-                case Applied:
-                case PreApplied:
-                    Invariants.checkState(executeAt != null);
-                    if (toEpoch >= executeAt.epoch())
-                    {
-                        confirm(Commands.apply(safeStore, safeCommand, txnId, route, progressKey, executeAt, partialDeps, partialTxn, full.writes, full.result));
-                        break;
-                    }
-
-                case Committed:
-                case ReadyToExecute:
-                    confirm(Commands.commit(safeStore, safeCommand, txnId, route, progressKey, partialTxn, executeAt, partialDeps));
-                    break;
-
-                case PreCommitted:
-                    Commands.precommit(safeStore, safeCommand, txnId, executeAt, route);
-                    if (!achieved.definition.isKnown())
-                        break;
-
-                case PreAccepted:
-                    // only preaccept if we coordinate the transaction
-                    if (safeStore.ranges().coordinates(txnId).intersects(route) && Route.isFullRoute(route))
-                        Commands.preaccept(safeStore, safeCommand, txnId, txnId.epoch(), partialTxn, Route.castToFullRoute(route), progressKey);
-                    break;
-
-                case NotDefined:
-                    break;
-            }
-
-            return updateDurability(safeStore, safeCommand);
-        }
-
-        // if can only propagate Truncated, we might be stale; try to upgrade the
-        private Status.Known applyOrUpgradeTruncated(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
-        {
-            // if our peers have truncated this command, then either:
-            // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
-            if (command.saveStatus().isUninitialised())
-                return null; // TODO (expected): maybe stale?
-
-            if (command.hasBeen(PreApplied))
-            {
-                updateDurability(safeStore, safeCommand);
-                return null;
-            }
-
-            if (Infer.safeToCleanup(safeStore, command, route, full.executeAt))
-            {
-                Commands.setErased(safeStore, safeCommand);
-                return null;
-            }
-
-            // we're now at least partially stale, but let's first see if we can progress this shard, or we can do so in part
-            Timestamp executeAt = command.executeAtIfKnown(full.executeAtIfKnown());
-            if (executeAt == null)
-            {
-                // we don't even know the execution time, so we cannot possibly proceed besides erasing the command state and marking ourselves stale
-                // TODO (required): we could in principle be stale for future epochs we haven't witnessed yet. Ensure up to date epochs before finalising this application.
-                safeStore.commandStore().markShardStale(safeStore, txnId, route.participants().toRanges(), false);
-                Commands.setErased(safeStore, safeCommand);
-                return null;
-            }
-
-            Ranges executeRanges = safeStore.ranges().allBetween(txnId, executeAt);
-            executeRanges = safeStore.commandStore().redundantBefore().expectToExecute(txnId, executeAt, executeRanges);
-
-            if (executeRanges.isEmpty())
-            {
-                // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
-                Commands.setTruncatedApply(safeStore, safeCommand, route);
-                return null;
-            }
-
-            Status.Known required = PreApplied.minKnown;
-            Status.Known requireExtra = required.subtract(command.known());
-            Ranges achieveRanges = full.sufficientFor(requireExtra, executeRanges);
-            Participants<?> participants = route.participants().slice(executeRanges, Minimal);
-
-            if (participants.isEmpty())
-            {
-                // we only coordinate this transaction, so being unable to retrieve its state does not imply any staleness
-                Commands.setTruncatedApply(safeStore, safeCommand, route);
-                return null;
-            }
-
-            Ranges staleRanges = executeRanges.subtract(achieveRanges);
-            Participants<?> staleParticipants = participants.slice(staleRanges, Minimal);
-            staleRanges = staleParticipants.toRanges();
-
-            if (staleRanges.isEmpty())
-            {
-                Invariants.checkState(achieveRanges.containsAll(participants));
-                return required;
-            }
-
-            safeStore.commandStore().markShardStale(safeStore, executeAt, staleRanges, true);
-            if (!staleRanges.containsAll(participants))
-                return required;
-
-            // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
-            Commands.setTruncatedApply(safeStore, safeCommand, route);
-            return null;
-        }
-
-        private Void updateDurability(SafeCommandStore safeStore, SafeCommand safeCommand)
-        {
-            // TODO (expected): Infer durability status from cleanup/truncation
-            RoutingKey homeKey = full.homeKey;
-            if (!full.durability.isDurable() || homeKey == null)
-                return null;
-
-            if (!safeStore.ranges().coordinates(txnId).contains(homeKey))
-                return null;
-
-            Timestamp executeAt = full.executeAtIfKnown();
-            Commands.setDurability(safeStore, safeCommand, full.durability, route, executeAt);
-            return null;
-        }
-
-        @Override
-        public Void reduce(Void o1, Void o2)
-        {
-            return null;
-        }
-
-        @Override
-        public void accept(Void result, Throwable failure)
-        {
-            callback.accept(failure  == null ? achieved.propagates() : null, failure);
-        }
-
-        @Override
-        public long epoch()
-        {
-            return toEpoch;
-        }
+               ", txnId: " + txnId +
+               ", saveStatus: " + maxKnowledgeSaveStatus +
+               ", deps: " + committedDeps +
+               ", txn: " + partialTxn +
+               ", executeAt: " + committedExecuteAt +
+               ", writes:" + writes +
+               ", result:" + result +
+               '}';
     }
 
 }

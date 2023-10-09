@@ -35,7 +35,6 @@ import accord.messages.Reply;
 import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
-import accord.utils.async.AsyncExecutor;
 
 import static accord.impl.basic.Packet.SENTINEL_MESSAGE_ID;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;

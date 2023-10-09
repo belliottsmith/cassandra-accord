@@ -19,7 +19,6 @@
 package accord.local;
 
 import accord.messages.BeginRecovery;
-import accord.messages.CheckStatus;
 import accord.primitives.Ballot;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -31,6 +30,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import static accord.local.Status.Definition.*;
@@ -42,7 +42,6 @@ import static accord.local.Status.KnownRoute.Full;
 import static accord.local.Status.KnownRoute.Maybe;
 import static accord.local.Status.Outcome.*;
 import static accord.local.Status.Phase.*;
-import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 
 public enum Status
 {
@@ -84,7 +83,7 @@ public enum Status
     // TODO (expected): do we need both PreApplied and Applied here, or can we keep them to SaveStatus only?
     PreApplied        (Persist, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Outcome.Apply),
     Applied           (Persist, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,   Outcome.Apply),
-    Truncated         (Cleanup, Nothing),
+    Truncated         (Cleanup, Maybe, DefinitionErased,  ExecuteAtErased,  DepsErased,  Outcome.Erased),
     Invalidated       (Persist, Maybe, NoOp,              NoExecuteAt,      NoDeps,      Outcome.Invalidated),
     ;
 
@@ -106,11 +105,13 @@ public enum Status
      * A vector of various facets of knowledge about, or required for, processing a transaction.
      * Each property is treated independently, there is no precedence relationship between them.
      * Each property's values are however ordered with respect to each other.
+     *
+     * This information does not need to be consistent with
      */
     public static class Known
     {
         public static final Known Nothing            = new Known(Maybe, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown);
-        // TODO (now): deprecate DefinitionOnly
+        // TODO (expected): deprecate DefinitionOnly
         public static final Known DefinitionOnly     = new Known(Maybe, DefinitionKnown,   ExecuteAtUnknown, DepsUnknown, Unknown);
         public static final Known DefinitionAndRoute = new Known(Full,  DefinitionKnown,   ExecuteAtUnknown, DepsUnknown, Unknown);
         public static final Known ExecuteAtOnly      = new Known(Maybe, DefinitionUnknown, ExecuteAtKnown,   DepsUnknown, Unknown);
@@ -124,6 +125,15 @@ public enum Status
         public final KnownDeps deps;
         public final Outcome outcome;
 
+        public Known(Known copy)
+        {
+            this.route = copy.route;
+            this.definition = copy.definition;
+            this.executeAt = copy.executeAt;
+            this.deps = copy.deps;
+            this.outcome = copy.outcome;
+        }
+
         public Known(KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome)
         {
             this.route = route;
@@ -133,17 +143,51 @@ public enum Status
             this.outcome = outcome;
         }
 
-        public Known merge(Known with)
+        public Known atLeast(Known that)
         {
-            Definition maxDefinition = definition.compareTo(with.definition) >= 0 ? definition : with.definition;
-            KnownExecuteAt maxExecuteAt = executeAt.compareTo(with.executeAt) >= 0 ? executeAt : with.executeAt;
-            KnownDeps maxDeps = deps.compareTo(with.deps) >= 0 ? deps : with.deps;
-            Outcome maxOutcome = outcome.compareTo(with.outcome) >= 0 ? outcome : with.outcome;
-            if (maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps &&  maxOutcome == outcome)
-                return this;
-            if (maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
+            // TODO (expected): validate no inconsistent combos
+            KnownRoute maxRoute = route.atLeast(that.route);
+            Definition maxDefinition = definition.atLeast(that.definition);
+            KnownExecuteAt maxExecuteAt = executeAt.atLeast(that.executeAt);
+            KnownDeps maxDeps = deps.atLeast(that.deps);
+            Outcome maxOutcome = outcome.atLeast(that.outcome);
+            return selectOrCreate(that, maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+        }
+
+        public Known reduce(Known that)
+        {
+            KnownRoute maxRoute = route.reduce(that.route);
+            Definition minDefinition = definition.reduce(that.definition);
+            KnownExecuteAt maxExecuteAt = executeAt.reduce(that.executeAt);
+            KnownDeps minDeps = deps.reduce(that.deps);
+            Outcome maxOutcome = outcome.reduce(that.outcome);
+            return selectOrCreate(that, maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
+        }
+
+        public Known validForAll()
+        {
+            KnownRoute maxRoute = route.validForAll();
+            Definition minDefinition = definition.validForAll();
+            KnownExecuteAt maxExecuteAt = executeAt.validForAll();
+            KnownDeps minDeps = deps.validForAll();
+            Outcome maxOutcome = outcome.validForAll();
+            return selectOrCreate(maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
+        }
+
+        @Nonnull
+        private Known selectOrCreate(Known with, KnownRoute maxRoute, Definition maxDefinition, KnownExecuteAt maxExecuteAt, KnownDeps maxDeps, Outcome maxOutcome)
+        {
+            if (maxRoute == with.route && maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
                 return with;
-            return new Known(route, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+            return selectOrCreate(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+        }
+
+        @Nonnull
+        private Known selectOrCreate(KnownRoute maxRoute, Definition maxDefinition, KnownExecuteAt maxExecuteAt, KnownDeps maxDeps, Outcome maxOutcome)
+        {
+            if (maxRoute == route && maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps &&  maxOutcome == outcome)
+                return this;
+            return new Known(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
         }
 
         public boolean isSatisfiedBy(Known that)
@@ -191,6 +235,10 @@ public enum Status
             return new Known(route, definition, executeAt, newDeps, outcome);
         }
 
+        /**
+         * Convert this Known to one that represents the knowledge that can be propagated to another replica without
+         * further information available to that replica, e.g. we cannot apply without also knowing the definition.
+         */
         // TODO (expected): merge propagates and propagatesStatus
         public Known propagates()
         {
@@ -198,15 +246,15 @@ public enum Status
                 return Invalidated;
 
             if (definition == DefinitionUnknown)
-                return executeAt.isDecided() ? ExecuteAtOnly : Nothing;
+                return executeAt.isKnownToExecute() ? ExecuteAtOnly : Nothing;
 
             KnownExecuteAt executeAt = this.executeAt;
-            if (!executeAt.isDecided())
+            if (!executeAt.isDecidedAndKnown())
                 return DefinitionOnly;
 
             // cannot propagate proposed deps; and cannot propagate known deps without executeAt
             KnownDeps deps = this.deps;
-            if (!deps.isDecided())
+            if (!deps.isDecidedAndKnown())
                 return SaveStatus.PreCommittedWithDefinition.known;
 
             switch (outcome)
@@ -235,14 +283,14 @@ public enum Status
 
                 case Apply:
                 case WasApply:
-                    if (executeAt.isDecided() && definition.isKnown() && deps.hasDecidedDeps())
+                    if (executeAt.isKnownToExecute() && definition.isKnown() && deps.hasDecidedDeps())
                         return PreApplied;
 
                 case Unknown:
-                    if (executeAt.isDecided() && definition.isKnown() && deps.hasDecidedDeps())
+                    if (executeAt.isKnownToExecute() && definition.isKnown() && deps.hasDecidedDeps())
                         return Committed;
 
-                    if (executeAt.isDecided())
+                    if (executeAt.isKnownToExecute())
                         return PreCommitted;
 
                     if (definition.isKnown())
@@ -260,12 +308,34 @@ public enum Status
             return definition.isKnown();
         }
 
+        public boolean hasDefinitionBeenKnown()
+        {
+            return definition.isKnown() || outcome.isDecided();
+        }
+
         /**
          * The command may have an incomplete route when this is false
          */
         public boolean hasFullRoute()
         {
             return definition.isKnown() || outcome.isOrWasApply();
+        }
+
+        public boolean isTruncated()
+        {
+            switch (outcome)
+            {
+                default: throw new AssertionError("Unhandled outcome: " + outcome);
+                case Invalidated:
+                case Unknown:
+                    return false;
+                case Apply:
+                    // since Apply is universal, we can
+                    return deps == DepsErased;
+                case Erased:
+                case WasApply:
+                    return true;
+            }
         }
 
         public boolean canProposeInvalidation()
@@ -281,18 +351,57 @@ public enum Status
             Definition newDefinition = subtract.definition.compareTo(definition) >= 0 ? DefinitionUnknown : definition;
             KnownExecuteAt newExecuteAt = subtract.executeAt.compareTo(executeAt) >= 0 ? ExecuteAtUnknown : executeAt;
             KnownDeps newDeps = subtract.deps.compareTo(deps) >= 0 ? DepsUnknown : deps;
-            Outcome newOutcome = subtract.outcome.compareTo(outcome) >= 0 ? Unknown : outcome;
+            Outcome newOutcome = outcome.subtract(subtract.outcome);
             return new Known(route, newDefinition, newExecuteAt, newDeps, newOutcome);
         }
 
+        public boolean isDecided()
+        {
+            return executeAt.isDecided() || outcome.isDecided();
+        }
+
+        public boolean isDecidedToExecute()
+        {
+            return executeAt.isKnownToExecute() || outcome.isOrWasApply();
+        }
 
         public String toString()
         {
             return Stream.of(definition.isKnown() ? "Definition" : null,
-                             executeAt.isDecided() ? "ExecuteAt" : null,
+                             executeAt.isKnownToExecute() ? "ExecuteAt" : null,
                              deps.hasDecidedDeps() ? "Deps" : null,
-                             outcome.isOrWasApply() ? "Outcome" : null
+                             outcome.isDecided() ? outcome.toString() : null
             ).filter(Objects::nonNull).collect(Collectors.joining(",", "[", "]"));
+        }
+
+        @Override
+        public boolean equals(Object o)
+        {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Known that = (Known) o;
+            return route == that.route && definition == that.definition && executeAt == that.executeAt && deps == that.deps && outcome == that.outcome;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean hasDefinition()
+        {
+            return definition.isKnown();
+        }
+
+        public boolean hasDecidedDeps()
+        {
+            return deps.hasDecidedDeps();
+        }
+
+        public boolean isInvalidated()
+        {
+            return outcome.isInvalidated();
         }
     }
 
@@ -323,6 +432,23 @@ public enum Status
         {
             return this == Full;
         }
+
+        public KnownRoute reduce(KnownRoute that)
+        {
+            if (this == that) return this;
+            if (this == Full || that == Full) return Full;
+            return Maybe;
+        }
+
+        public KnownRoute validForAll()
+        {
+            return this == Covering ? Maybe : this;
+        }
+
+        public KnownRoute atLeast(KnownRoute that)
+        {
+            return this.compareTo(that) >= 0 ? this : that;
+        }
     }
 
     public enum KnownExecuteAt
@@ -339,6 +465,11 @@ public enum Status
         ExecuteAtProposed,
 
         /**
+         * A decision to execute or invalidate the transaction is known to have been reached and since been cleaned up
+         */
+        ExecuteAtErased,
+
+        /**
          * A decision to execute the transaction is known to have been reached, and the associated executeAt timestamp
          */
         ExecuteAtKnown,
@@ -351,12 +482,32 @@ public enum Status
 
         public boolean isDecided()
         {
+            return compareTo(ExecuteAtErased) >= 0;
+        }
+
+        public boolean isDecidedAndKnown()
+        {
             return compareTo(ExecuteAtKnown) >= 0;
         }
 
-        public boolean hasDecidedExecuteAt()
+        public boolean isKnownToExecute()
         {
             return this == ExecuteAtKnown;
+        }
+
+        public KnownExecuteAt atLeast(KnownExecuteAt that)
+        {
+            return compareTo(that) >= 0 ? this : that;
+        }
+
+        public KnownExecuteAt reduce(KnownExecuteAt that)
+        {
+            return atLeast(that);
+        }
+
+        public KnownExecuteAt validForAll()
+        {
+            return compareTo(ExecuteAtErased) <= 0 ? ExecuteAtUnknown : this;
         }
 
         public boolean canProposeInvalidation()
@@ -377,6 +528,12 @@ public enum Status
          * for the shard(s) in question are known for the coordination epoch (txnId.epoch) only.
          */
         DepsProposed,
+
+        /**
+         * A decision to execute or invalidate the transaction is known to have been reached, and any associated
+         * dependencies for the shard(s) in question have been cleaned up.
+         */
+        DepsErased,
 
         /**
          * A decision to execute the transaction is known to have been reached, and the associated dependencies
@@ -400,7 +557,7 @@ public enum Status
             return this == DepsKnown;
         }
 
-        public boolean isDecided()
+        public boolean isDecidedAndKnown()
         {
             return compareTo(DepsKnown) >= 0;
         }
@@ -413,6 +570,21 @@ public enum Status
         public boolean hasProposedOrDecidedDeps()
         {
             return this == DepsProposed || this == DepsKnown;
+        }
+
+        public KnownDeps atLeast(KnownDeps that)
+        {
+            return compareTo(that) >= 0 ? this : that;
+        }
+
+        public KnownDeps reduce(KnownDeps that)
+        {
+            return compareTo(that) <= 0 ? this : that;
+        }
+
+        public KnownDeps validForAll()
+        {
+            return this == NoDeps ? NoDeps : DepsUnknown;
         }
     }
 
@@ -427,25 +599,46 @@ public enum Status
         DefinitionUnknown,
 
         /**
-         * The definition is known
-         *
-         * TODO (expected, clarity): distinguish between known for coordination epoch and known for commit/execute
+         * The definition was known, but has been erased
          */
-        DefinitionKnown,
+        DefinitionErased,
 
         /**
          * The definition is irrelevant, as the transaction has been invalidated and may be treated as a no-op
          */
-        NoOp;
+        NoOp,
 
-        public boolean canProposeInvalidation()
-        {
-            return this == DefinitionUnknown;
-        }
+        /**
+         * The definition is known
+         *
+         * TODO (expected, clarity): distinguish between known for coordination epoch and known for commit/execute
+         */
+        DefinitionKnown;
 
         public boolean isKnown()
         {
             return this == DefinitionKnown;
+        }
+
+        public boolean isOrWasKnown()
+        {
+            return this == DefinitionKnown;
+        }
+
+        public Definition atLeast(Definition that)
+        {
+            return compareTo(that) >= 0 ? this : that;
+        }
+
+        // combine info about two shards into a composite representation
+        public Definition reduce(Definition that)
+        {
+            return compareTo(that) <= 0 ? this : that;
+        }
+
+        public Definition validForAll()
+        {
+            return this == NoOp ? NoOp : DefinitionUnknown;
         }
     }
 
@@ -460,26 +653,25 @@ public enum Status
         Unknown,
 
         /**
+         * The transaction has been *completely cleaned up* - this means it has been made
+         * durable at every live replica of every shard we contacted
+         */
+        Erased,
+
+        /**
+         * The transaction has been cleaned-up, but was applied and the relevant portion of its outcome has been cleaned up
+         */
+        WasApply,
+
+        /**
          * The outcome is known
          */
         Apply,
 
         /**
-         * The transaction has been cleaned-up, but was applied and the relevant portion of its outcome has been cleaned up
-         * TODO (expected): is this state helpful? Feels like we can do without it
-         */
-        WasApply,
-
-        /**
          * The transaction is known to have been invalidated
          */
-        Invalidated,
-
-        /**
-         * The transaction has been *completely cleaned up* - this means it has been made
-         * durable at every live replica of every shard we contacted
-         */
-        Erased
+        Invalidated
         ;
 
         public boolean isOrWasApply()
@@ -519,9 +711,33 @@ public enum Status
             return this == Invalidated;
         }
 
-        public boolean isTruncated()
+        public Outcome atLeast(Outcome that)
         {
-            return this == Erased || this == WasApply;
+            return this.compareTo(that) >= 0 ? this : that;
+        }
+
+        // outcomes are universal - any replica of any shard may propagate its outcome to any other replica of any other shard
+        public Outcome reduce(Outcome that)
+        {
+            return atLeast(that);
+        }
+
+        /**
+         * Do not imply truncation where none has happened
+         */
+        public Outcome validForAll()
+        {
+            return compareTo(WasApply) <= 0 ? Unknown : this;
+        }
+
+        public Outcome subtract(Outcome that)
+        {
+            return this.compareTo(that) <= 0 ? Unknown : this;
+        }
+
+        public boolean isDecided()
+        {
+            return this != Unknown;
         }
     }
 
@@ -543,8 +759,7 @@ public enum Status
      */
     public enum Durability
     {
-        NotDurable, Local,
-        ShardUniversalOrInvalidated, ShardUniversal,
+        NotDurable, Local, ShardUniversal,
         MajorityOrInvalidated, Majority,
         UniversalOrInvalidated, Universal;
 
@@ -558,12 +773,18 @@ public enum Status
             return compareTo(MajorityOrInvalidated) >= 0;
         }
 
+        public boolean isMaybeInvalidated()
+        {
+            return this == NotDurable || this == MajorityOrInvalidated || this == UniversalOrInvalidated;
+        }
+
         public static Durability merge(Durability a, Durability b)
         {
             int c = a.compareTo(b);
             if (c < 0) { Durability tmp = a; a = b; b = tmp; }
+            // if we know we are applied, we can remove the OrInvalidated qualifier
             if (a == UniversalOrInvalidated && (b == Majority || b == ShardUniversal || b == Local)) a = Universal;
-            if ((a == ShardUniversal || a == ShardUniversalOrInvalidated) && (b == Local || b == NotDurable)) a = a == ShardUniversal ? Local : b;
+            if ((a == ShardUniversal) && (b == Local || b == NotDurable)) a = Local;
             if (b == NotDurable && a.compareTo(MajorityOrInvalidated) < 0) a = NotDurable;
             return a;
         }
@@ -636,15 +857,5 @@ public enum Status
         if (statusA.phase != Phase.Accept || acceptedA.compareTo(acceptedB) >= 0)
             return a;
         return b;
-    }
-
-    public static Status simpleMin(Status a, Status b)
-    {
-        return a.compareTo(b) <= 0 ? a : b;
-    }
-
-    public static Status simpleMax(Status a, Status b)
-    {
-        return a.compareTo(b) >= 0 ? a : b;
     }
 }

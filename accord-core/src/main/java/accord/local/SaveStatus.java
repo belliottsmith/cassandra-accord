@@ -25,6 +25,7 @@ import accord.primitives.TxnId;
 
 import static accord.local.SaveStatus.LocalExecution.CleaningUp;
 import static accord.local.SaveStatus.LocalExecution.NotReady;
+import static accord.local.Status.Definition.DefinitionErased;
 import static accord.local.Status.Definition.DefinitionKnown;
 import static accord.local.Status.Definition.DefinitionUnknown;
 import static accord.local.Status.Known.Apply;
@@ -74,12 +75,12 @@ public enum SaveStatus
     Applied                         (Status.Applied,                                                                                               LocalExecution.Applied),
     // TruncatedApplyWithDeps is a state never adopted within a single replica; it is however a useful state we may enter by combining state from multiple replicas
     // TODO (desired): if we migrate away from SaveStatus in CheckStatusOk towards Known we can remove this TruncatedApplyWithDeps
-    TruncatedApplyWithDeps          (Status.Truncated,             Full,    DefinitionUnknown, ExecuteAtKnown,    DepsKnown,    Outcome.Apply,    CleaningUp),
-    TruncatedApplyWithOutcome       (Status.Truncated,             Full,    DefinitionUnknown, ExecuteAtKnown,    DepsUnknown,  Outcome.Apply,    CleaningUp),
-    TruncatedApply                  (Status.Truncated,             Full,    DefinitionUnknown, ExecuteAtKnown,    DepsUnknown,  Outcome.WasApply, CleaningUp),
+    TruncatedApplyWithDeps          (Status.Truncated,             Full,    DefinitionErased, ExecuteAtKnown,    DepsKnown,    Outcome.Apply,    CleaningUp),
+    TruncatedApplyWithOutcome       (Status.Truncated,             Full,    DefinitionErased, ExecuteAtKnown,    DepsErased,   Outcome.Apply,    CleaningUp),
+    TruncatedApply                  (Status.Truncated,             Full,    DefinitionErased, ExecuteAtKnown,    DepsErased,   Outcome.WasApply, CleaningUp),
     // Expunged means the command is either entirely pre-bootstrap or stale and we don't have enough information to move it through the normal redundant->truncation path (i.e. it might be truncated, it might be applied)
-    Erased                          (Status.Truncated,             Maybe,   DefinitionUnknown, ExecuteAtUnknown,  DepsUnknown,  Outcome.Erased,   CleaningUp),
-    Invalidated                     (Status.Invalidated,                                                                                          CleaningUp),
+    Erased                          (Status.Truncated,             Maybe,   DefinitionErased, ExecuteAtErased,   DepsErased,   Outcome.Erased,   CleaningUp),
+    Invalidated                     (Status.Invalidated,                                                                                         CleaningUp),
     ;
 
     /**
@@ -208,8 +209,8 @@ public enum SaveStatus
         switch (status)
         {
             default: throw new AssertionError("Unexpected status: " + status);
-            case NotDefined: return known.executeAt.isDecided() ? PreCommitted : NotDefined;
-            case PreAccepted: return known.executeAt.isDecided() ? PreCommittedWithDefinition : PreAccepted;
+            case NotDefined: return known.executeAt.isKnownToExecute() ? PreCommitted : NotDefined;
+            case PreAccepted: return known.executeAt.isKnownToExecute() ? PreCommittedWithDefinition : PreAccepted;
             case AcceptedInvalidate:
                 // AcceptedInvalidate logically clears any proposed deps and executeAt
                 if (!known.executeAt.isDecided())
@@ -224,8 +225,8 @@ public enum SaveStatus
                 // if the decision is known, we're really PreCommitted
             case PreCommitted:
                 if (known.isDefinitionKnown())
-                    return known.deps.hasProposedOrDecidedDeps() ? PreCommittedWithDefinitionAndAcceptedDeps : PreCommittedWithDefinition;
-                return known.deps.hasProposedOrDecidedDeps() ? PreCommittedWithAcceptedDeps : PreCommitted;
+                    return known.deps == DepsProposed ? PreCommittedWithDefinitionAndAcceptedDeps : PreCommittedWithDefinition;
+                return known.deps == DepsProposed ? PreCommittedWithAcceptedDeps : PreCommitted;
             case Committed: return Committed;
             case ReadyToExecute: return ReadyToExecute;
             case PreApplied: return PreApplied;
@@ -246,7 +247,7 @@ public enum SaveStatus
             case PreCommitted:
                 if (known.isSatisfiedBy(status.known))
                     return status;
-                return get(status.status, status.known.merge(known));
+                return get(status.status, status.known.atLeast(known));
 
             case Truncated:
                 switch (status)

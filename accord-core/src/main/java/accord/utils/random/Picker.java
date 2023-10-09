@@ -19,9 +19,6 @@
 package accord.utils.random;
 
 import java.util.Arrays;
-import java.util.List;
-import java.util.function.IntSupplier;
-import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import accord.utils.Invariants;

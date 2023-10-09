@@ -28,7 +28,6 @@ import java.util.function.BiConsumer;
 
 import accord.api.ProgressLog;
 import accord.coordinate.FetchData;
-import accord.coordinate.Invalidate;
 import accord.coordinate.Outcome;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -43,6 +42,7 @@ import accord.local.Status.Known;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.ProgressToken;
+import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -67,9 +67,8 @@ import static accord.local.PreLoadContext.contextFor;
 import static accord.local.PreLoadContext.empty;
 import static accord.local.SaveStatus.LocalExecution.NotReady;
 import static accord.local.SaveStatus.LocalExecution.WaitingToApply;
-import static accord.local.Status.Durability.Majority;
+import static accord.local.Status.Durability.MajorityOrInvalidated;
 import static accord.local.Status.PreApplied;
-import static accord.local.Status.PreCommitted;
 
 // TODO (desired, consider): consider propagating invalidations in the same way as we do applied
 // TODO (expected): report long-lived recurring transactions / operations
@@ -233,6 +232,7 @@ public class SimpleProgressLog implements ProgressLog.Factory
                             throw new IllegalStateException("Unexpected status: " + status);
 
                         case ReadyToExecute:
+                            // TODO (expected): we should have already exited this loop if this conditions is true
                             if (command.durability().isDurableOrInvalidated())
                             {
                                 // should not reach here with an invalidated state
@@ -244,48 +244,35 @@ public class SimpleProgressLog implements ProgressLog.Factory
                         case Uncommitted:
                         {
                             Invariants.checkState(token.status != Status.Invalidated, "ProgressToken is invalidated, but we have not cleared the ProgressLog");
-                            // TODO (expected): this should be encapsulated in Recover/FetchData
-                            if (!command.durability().isDurable() && token.durability.isDurableOrInvalidated() && (token.durability.isDurable() || command.hasBeen(PreCommitted)))
-                                command = Commands.setDurability(safeStore, safeCommand, Majority);
-
-                            if (command.durability().isDurable() || token.durability.isDurableOrInvalidated())
+                            // TODO (expected): we should have already exited this loop if either of these conditions are true
+                            if (command.durability().isDurableOrInvalidated() || token.durability.isDurableOrInvalidated())
                             {
-                                // not guaranteed to know the execution epoch, as might have received durability info obliquely
-                                Timestamp executeAt = command.executeAtIfKnown();
-                                long epoch = executeAt == null ? txnId.epoch() : executeAt.epoch();
-                                Route<?> route = command.route();
-                                EpochSupplier forLocalEpoch = safeStore.ranges().latestEpochWithNewParticipants(txnId.epoch(), route);
+                                if (!command.durability().isDurableOrInvalidated())
+                                    Commands.setDurability(safeStore, safeCommand, MajorityOrInvalidated);
 
-                                node.withEpoch(epoch, () -> debugInvestigating = FetchData.fetch(PreApplied.minKnown, node, txnId, route, forLocalEpoch, executeAt, (success, fail) -> {
-                                    commandStore.execute(empty(), ignore -> {
-                                        // should have found enough information to apply the result, but in case we did not reset progress
-                                        if (progress() == Investigating)
+                                durableGlobal();
+                                return;
+                            }
+
+                            Route<?> route = Invariants.nonNull(command.route()).withHomeKey();
+                            node.withEpoch(txnId.epoch(), () -> {
+                                AsyncResult<? extends Outcome> recover = node.maybeRecover(txnId, route, token);
+                                recover.addCallback((success, fail) -> {
+                                    // TODO (expected): callback should be on safeStore, and should provide safeStore as a parameter
+                                    commandStore.execute(contextFor(txnId), safeStore0 -> {
+                                        if (status.isAtMostReadyToExecute() && progress() == Investigating)
+                                        {
                                             setProgress(Expected);
-                                    }).begin(commandStore.agent());
-                                }));
-                            }
-                            else
-                            {
-                                Route<?> route = Invariants.nonNull(command.route()).withHomeKey();
-                                node.withEpoch(txnId.epoch(), () -> {
-                                    AsyncResult<? extends Outcome> recover = node.maybeRecover(txnId, route, token);
-                                    recover.addCallback((success, fail) -> {
-                                        // TODO (expected): callback should be on safeStore, and should provide safeStore as a parameter
-                                        commandStore.execute(contextFor(txnId), safeStore0 -> {
-                                            if (status.isAtMostReadyToExecute() && progress() == Investigating)
-                                            {
-                                                setProgress(Expected);
-                                                if (fail != null)
-                                                    return;
+                                            if (fail != null)
+                                                return;
 
-                                                updateMax(success.asProgressToken());
-                                            }
-                                        });
+                                            updateMax(success.asProgressToken());
+                                        }
                                     });
-
-                                    debugInvestigating = recover;
                                 });
-                            }
+
+                                debugInvestigating = recover;
+                            });
                         }
                     }
                 }
@@ -382,24 +369,6 @@ public class SimpleProgressLog implements ProgressLog.Factory
                     return Participants.merge(route == null ? null : route.participants(), (Participants) participants);
                 }
 
-                private void invalidate(Node node, TxnId txnId, Participants<?> participants)
-                {
-                    setProgress(Investigating);
-                    // TODO (now): we should avoid invalidating with home key, as this simplifies erasing of invalidated transactions
-                    // TODO (required): exponential back-off or time-slicing
-                    debugInvestigating = Invalidate.invalidate(node, txnId, participants, (success, fail) -> {
-                        commandStore.execute(contextFor(txnId), safeStore -> {
-                            if (progress() != Investigating)
-                                return;
-
-                            setProgress(Expected);
-                            SafeCommand safeCommand = safeStore.ifInitialised(txnId);
-                            Invariants.checkState(safeCommand != null, "No initialised command for %s but have active progress log", txnId);
-                            record(safeCommand.current().known());
-                        }).begin(commandStore.agent());
-                    });
-                }
-
                 @Override
                 public String toString()
                 {
@@ -462,7 +431,7 @@ public class SimpleProgressLog implements ProgressLog.Factory
                 blockingState.recordBlocking(waitingFor, route, participants);
             }
 
-            CoordinateState local()
+            CoordinateState coordinate()
             {
                 if (coordinateState == null)
                     coordinateState = new CoordinateState();
@@ -471,12 +440,12 @@ public class SimpleProgressLog implements ProgressLog.Factory
 
             void ensureAtLeast(Command command, CoordinateStatus newStatus, Progress newProgress)
             {
-                local().ensureAtLeast(command, newStatus, newProgress);
+                coordinate().ensureAtLeast(command, newStatus, newProgress);
             }
 
             void ensureAtLeast(CoordinateStatus newStatus, Progress newProgress)
             {
-                local().ensureAtLeast(newStatus, newProgress);
+                coordinate().ensureAtLeast(newStatus, newProgress);
             }
 
             void touchNonHomeUnsafe()
@@ -641,10 +610,14 @@ public class SimpleProgressLog implements ProgressLog.Factory
             // TODO (expected): we should delete the in-memory state once we reach Done, and guard against backward progress with Command state
             //   however, we need to be careful:
             //     - we might participate in the execution epoch so need to be sure we have received a route covering both
-            if (!command.status().hasBeen(PreApplied) && command.route() != null && command.route().hasParticipants())
+            if (command.route() == null)
+                return;
+
+            Ranges coordinateRanges = commandStore.unsafeRangesForEpoch().allAt(command.txnId().epoch());
+            if (!command.status().hasBeen(PreApplied) && command.route().participatesIn(coordinateRanges))
                 state.recordBlocking(command.txnId(), WaitingToApply, command.route(), null);
-            if (state.coordinateState != null)
-                state.coordinateState.durableGlobal();
+            if (coordinateRanges.contains(command.route().homeKey()))
+                state.coordinate().durableGlobal();
         }
 
         @Override

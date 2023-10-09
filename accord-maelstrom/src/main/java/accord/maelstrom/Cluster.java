@@ -34,8 +34,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -52,9 +50,7 @@ import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.NodeTimeService;
-import accord.local.SafeCommand;
 import accord.local.ShardDistributor;
-import accord.local.Status;
 import accord.messages.Callback;
 import accord.messages.LocalMessage;
 import accord.messages.Reply;
@@ -62,7 +58,6 @@ import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
-import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChains;
@@ -353,28 +348,4 @@ public class Cluster implements Scheduler
             lookup.values().forEach(Node::shutdown);
         }
     }
-//
-//    public List<TxnId> waitingOn(String txnIdString)
-//    {
-//        TxnId txnId = TxnId.parse(txnIdString);
-//        List<TxnId> waitingOn = new ArrayList<>();
-//    }
-//
-//    private void waitingOn(TxnId txnId, List<TxnId> waitingOn)
-//    {
-//        AtomicBoolean found = new AtomicBoolean();
-//        List<TxnId> explore = new ArrayList<>();
-//        for (Id id : sinks.keySet())
-//        {
-//            Node node = lookup.apply(id);
-//            node.commandStores().forEach(ss -> {
-//                SafeCommand safeCommand = ss.ifInitialised(txnId);
-//                if (safeCommand == null)
-//                    return;
-//                if (!safeCommand.current().hasBeen(Status.Committed))
-//                    waitingOn.add(txnId);
-//                return;
-//            })
-//        }
-//    }
 }

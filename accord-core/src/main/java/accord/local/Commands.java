@@ -97,6 +97,7 @@ import static accord.local.Status.ReadyToExecute;
 import static accord.local.Status.Truncated;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.isFullRoute;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
 
 public class Commands
@@ -537,7 +538,7 @@ public class Commands
     {
         logger.trace("{} applied, setting status to Applied and notifying listeners", txnId);
         SafeCommand safeCommand = safeStore.get(txnId);
-        safeCommand.applied();
+        Command.Executed command = safeCommand.applied();
         safeStore.notifyListeners(safeCommand);
     }
 
@@ -672,6 +673,12 @@ public class Commands
                     //      but: if we later support transitive dependency elision this could be dangerous
                     logger.trace("{}: applying no-op", command.txnId());
                     safeCommand.applied();
+                    if (command.txnId().rw() == ExclusiveSyncPoint)
+                    {
+                        Ranges ranges = safeStore.ranges().allAt(command.txnId().epoch());
+                        ranges = command.route().slice(ranges, Minimal).participants().toRanges();
+                        safeStore.commandStore().markExclusiveSyncPointApplied(safeStore, command.txnId(), ranges);
+                    }
                     safeStore.notifyListeners(safeCommand);
                     return true;
                 }
@@ -863,7 +870,7 @@ public class Commands
             case TRUNCATE:
                 Invariants.checkState(command.saveStatus().compareTo(TruncatedApply) < 0);
                 if (command.hasBeen(PreCommitted)) result = truncatedApply(command, Route.tryCastToFullRoute(maybeFullRoute));
-                else result = erased(command); // TODO (expected): check if we are stale; if not, is erase anyway correct outcome?
+                else result = command; // do nothing; we don't have enough information
                 break;
 
             case ERASE:
@@ -942,6 +949,7 @@ public class Commands
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
             case PRE_BOOTSTRAP_OR_STALE:
             case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
+            case LOCALLY_REDUNDANT:
                 return NO;
             case SHARD_REDUNDANT:
                 if (enforceInvariants && status.hasBeen(PreCommitted) && !status.hasBeen(Applied) && redundantBefore.preBootstrapOrStale(txnId, toEpoch, route.participants()) != FULLY)
@@ -981,7 +989,7 @@ public class Commands
             return command;
 
         CommonAttributes attrs = route == null ? command : updateRoute(command, route);
-        if (executeAt != null && command.status().hasBeen(Committed) && !command.asCommitted().executeAt().equals(executeAt))
+        if (executeAt != null && command.status().hasBeen(Committed) && !command.executeAt().equals(executeAt))
             safeStore.agent().onInconsistentTimestamp(command, command.asCommitted().executeAt(), executeAt);
         attrs = attrs.mutable().durability(durability);
         command = safeCommand.updateAttributes(attrs);
@@ -1038,6 +1046,7 @@ public class Commands
                             default: throw new AssertionError("Unexpected redundant status: " + redundantStatus);
                             case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
                             case SHARD_REDUNDANT:
+                            case LOCALLY_REDUNDANT:
                             case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                             case PRE_BOOTSTRAP_OR_STALE:
                                 removeRedundantDependencies(safeStore, prevSafe, txnIds[depth], redundantStatus == PRE_BOOTSTRAP_OR_STALE);
@@ -1142,6 +1151,7 @@ public class Commands
 
                         case PARTIALLY_REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                         case PRE_BOOTSTRAP_OR_STALE:
+                        case LOCALLY_REDUNDANT:
                         case SHARD_REDUNDANT:
                             Invariants.checkState(cur.hasBeen(Applied) || !cur.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP_OR_STALE);
                             if (prev == null)

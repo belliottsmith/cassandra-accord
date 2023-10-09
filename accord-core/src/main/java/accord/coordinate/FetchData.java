@@ -20,10 +20,6 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.local.Node;
-import accord.local.PreLoadContext;
-import accord.local.SafeCommand;
-import accord.local.SafeCommandStore;
-import accord.local.SaveStatus;
 import accord.local.Status;
 import accord.local.Status.Known;
 import accord.messages.CheckStatus;
@@ -34,13 +30,14 @@ import accord.utils.Invariants;
 
 import javax.annotation.Nullable;
 
+import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
 import static accord.local.Status.PreApplied;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
-import static accord.messages.CheckStatus.WithQuorum.NoQuorum;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.castToRoute;
 import static accord.primitives.Route.isRoute;
 
@@ -212,7 +209,7 @@ public class FetchData extends CheckShards<Route<?>>
 
     protected boolean isSufficient(Route<?> scope, CheckStatus.CheckStatusOk ok)
     {
-        return target.isSatisfiedBy(((CheckStatusOkFull)ok).sufficientFor(scope.participants(), NoQuorum));
+        return target.isSatisfiedBy(ok.knownFor(scope.participants()));
     }
 
     @Override

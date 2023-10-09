@@ -30,7 +30,6 @@ import org.slf4j.LoggerFactory;
 import accord.api.DataStore;
 import accord.api.Key;
 import accord.api.Write;
-import accord.impl.CommandsForKey;
 import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemorySafeCommandsForKey;
 import accord.local.CommandStore;

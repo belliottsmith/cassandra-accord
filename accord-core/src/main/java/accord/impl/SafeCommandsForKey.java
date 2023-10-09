@@ -22,7 +22,6 @@ import accord.api.Key;
 import accord.api.VisibleForImplementation;
 import accord.impl.CommandTimeseries.CommandLoader;
 import accord.local.Command;
-import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
