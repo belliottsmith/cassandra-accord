@@ -281,11 +281,12 @@ public class Cluster implements Scheduler
                 AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale);
                 executorMap.put(id, nodeExecutor);
                 BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
+                BooleanSupplier isLoadedCheck = random.biasedUniformBools(0.5f);
                 Node node = new Node(id, messageSink, LocalMessage::process, configService, nowSupplier, NodeTimeService.unixWrapper(TimeUnit.MILLISECONDS, nowSupplier),
                                      () -> new ListStore(id), new ShardDistributor.EvenSplit<>(8, ignore -> new IntHashKey.Splitter()),
                                      nodeExecutor.agent(),
                                      randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER,
-                                     SimpleProgressLog::new, DelayedCommandStores.factory(sinks.pending), localConfig);
+                                     SimpleProgressLog::new, DelayedCommandStores.factory(sinks.pending, isLoadedCheck), localConfig);
                 nodeMap.put(id, node);
                 durabilityScheduling.add(new CoordinateDurabilityScheduling(node));
             }

@@ -100,6 +100,11 @@ public abstract class InMemoryCommandStore extends CommandStore
         super(id, time, agent, store, progressLogFactory, epochUpdateHolder);
     }
 
+    protected boolean canExposeUnloaded()
+    {
+        return true;
+    }
+
     @Override
     public Agent agent()
     {
@@ -606,6 +611,11 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         protected InMemorySafeCommand getIfLoaded(TxnId txnId)
         {
+            InMemorySafeCommand safeCommand = commands.get(txnId);
+            if (safeCommand != null)
+                return safeCommand;
+            if (!commandStore.canExposeUnloaded())
+                return null;
             GlobalCommand global = commandStore.ifPresent(txnId);
             return global != null ? global.createSafeReference() : null;
         }
@@ -613,6 +623,11 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         protected InMemorySafeCommandsForKey getIfLoaded(RoutableKey key)
         {
+            InMemorySafeCommandsForKey safeCommandsForKey = commandsForKey.get((Key) key);
+            if (safeCommandsForKey != null)
+                return safeCommandsForKey;
+            if (!commandStore.canExposeUnloaded())
+                return null;
             GlobalCommandsForKey global = commandStore.ifPresent((Key) key);
             return global != null ? global.createSafeReference() : null;
         }
