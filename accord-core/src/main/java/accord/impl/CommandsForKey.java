@@ -30,10 +30,8 @@ import java.util.function.Consumer;
 import static accord.local.Status.PreAccepted;
 import static accord.local.Status.PreCommitted;
 
-public class CommandsForKey implements CommandTimeseriesHolder
+public class CommandsForKey implements DomainCommands
 {
-    public static final long NO_LAST_EXECUTED_HLC = Long.MIN_VALUE;
-
     public static class SerializerSupport
     {
         public static Listener listener(Key key)
@@ -41,13 +39,12 @@ public class CommandsForKey implements CommandTimeseriesHolder
             return new Listener(key);
         }
 
-        public static  <D> CommandsForKey create(Key key, Timestamp max,
-                                                 Timestamp lastExecutedTimestamp, long lastExecutedHlc, Timestamp lastWriteTimestamp,
+        public static  <D> CommandsForKey create(Key key,
                                                  CommandLoader<D> loader,
                                                  ImmutableSortedMap<Timestamp, D> byId,
                                                  ImmutableSortedMap<Timestamp, D> byExecuteAt)
         {
-            return new CommandsForKey(key, max, lastExecutedTimestamp, lastExecutedHlc, lastWriteTimestamp, loader, byId, byExecuteAt);
+            return new CommandsForKey(key, loader, byId, byExecuteAt);
         }
     }
 
@@ -89,8 +86,7 @@ public class CommandsForKey implements CommandTimeseriesHolder
         @Override
         public void onChange(SafeCommandStore safeStore, SafeCommand safeCommand)
         {
-            SafeCommandsForKey cfk = ((AbstractSafeCommandStore) safeStore).commandsForKey(listenerKey);
-            cfk.listenerUpdate(safeCommand.current());
+            CommandsForKeys.listenerUpdate((AbstractSafeCommandStore<?,?,?,?>) safeStore, listenerKey, safeCommand.current());
         }
 
         @Override
@@ -101,40 +97,25 @@ public class CommandsForKey implements CommandTimeseriesHolder
     }
 
     private final Key key;
-    private final Timestamp max;
-    private final Timestamp lastExecutedTimestamp;
-    // TODO (desired): we have leaked C* implementation details here
-    private final long rawLastExecutedHlc;
-    private final Timestamp lastWriteTimestamp;
     private final CommandTimeseries<?> byId;
     // TODO (expected): we probably do not need to separately maintain byExecuteAt - probably better to just filter byId
     private final CommandTimeseries<?> byExecuteAt;
 
-    <D> CommandsForKey(Key key, Timestamp max,
-                       Timestamp lastExecutedTimestamp,
-                       long rawLastExecutedHlc,
-                       Timestamp lastWriteTimestamp,
+    <D> CommandsForKey(Key key,
                        CommandTimeseries<D> byId,
                        CommandTimeseries<D> byExecuteAt)
     {
         this.key = key;
-        this.max = max;
-        this.lastExecutedTimestamp = lastExecutedTimestamp;
-        this.rawLastExecutedHlc = rawLastExecutedHlc;
-        this.lastWriteTimestamp = lastWriteTimestamp;
         this.byId = byId;
         this.byExecuteAt = byExecuteAt;
     }
 
-    <D> CommandsForKey(Key key, Timestamp max,
-                       Timestamp lastExecutedTimestamp,
-                       long rawLastExecutedHlc,
-                       Timestamp lastWriteTimestamp,
+    <D> CommandsForKey(Key key,
                        CommandLoader<D> loader,
                        ImmutableSortedMap<Timestamp, D> committedById,
                        ImmutableSortedMap<Timestamp, D> committedByExecuteAt)
     {
-        this(key, max, lastExecutedTimestamp, rawLastExecutedHlc, lastWriteTimestamp,
+        this(key,
              new CommandTimeseries<>(key, loader, committedById),
              new CommandTimeseries<>(key, loader, committedByExecuteAt));
     }
@@ -142,10 +123,6 @@ public class CommandsForKey implements CommandTimeseriesHolder
     public <D> CommandsForKey(Key key, CommandLoader<D> loader)
     {
         this.key = key;
-        this.max = Timestamp.NONE;
-        this.lastExecutedTimestamp = Timestamp.NONE;
-        this.rawLastExecutedHlc = 0;
-        this.lastWriteTimestamp = Timestamp.NONE;
         this.byId = new CommandTimeseries<>(key, loader);
         this.byExecuteAt = new CommandTimeseries<>(key, loader);
     }
@@ -162,11 +139,7 @@ public class CommandsForKey implements CommandTimeseriesHolder
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         CommandsForKey that = (CommandsForKey) o;
-        return rawLastExecutedHlc == that.rawLastExecutedHlc
-               && key.equals(that.key)
-               && Objects.equals(max, that.max)
-               && Objects.equals(lastExecutedTimestamp, that.lastExecutedTimestamp)
-               && Objects.equals(lastWriteTimestamp, that.lastWriteTimestamp)
+        return key.equals(that.key)
                && byId.equals(that.byId)
                && byExecuteAt.equals(that.byExecuteAt);
     }
@@ -177,40 +150,9 @@ public class CommandsForKey implements CommandTimeseriesHolder
         throw new UnsupportedOperationException();
     }
 
-    public final Command.DurableAndIdempotentListener asListener()
-    {
-        return new Listener(key());
-    }
-
     public Key key()
     {
         return key;
-    }
-
-    @Override
-    public Timestamp max()
-    {
-        return max;
-    }
-
-    public Timestamp lastExecutedTimestamp()
-    {
-        return lastExecutedTimestamp;
-    }
-
-    public long lastExecutedHlc()
-    {
-        return rawLastExecutedHlc == NO_LAST_EXECUTED_HLC ? lastExecutedTimestamp.hlc() : rawLastExecutedHlc;
-    }
-
-    public long rawLastExecutedHlc()
-    {
-        return rawLastExecutedHlc;
-    }
-
-    public Timestamp lastWriteTimestamp()
-    {
-        return lastWriteTimestamp;
     }
 
     @Override
@@ -225,6 +167,15 @@ public class CommandsForKey implements CommandTimeseriesHolder
         return byExecuteAt;
     }
 
+    public <D> CommandsForKey update(CommandTimeseries.Update<TxnId, D> byId,
+                                     CommandTimeseries.Update<Timestamp, D> byExecuteAt)
+    {
+        if (byId.isEmpty() && byExecuteAt.isEmpty())
+            return this;
+
+        return new CommandsForKey(key, byId.apply((CommandTimeseries<D>) this.byId), byExecuteAt.apply((CommandTimeseries<D>) this.byExecuteAt));
+    }
+
     public boolean hasRedundant(TxnId redundantBefore)
     {
         return byId.minTimestamp().compareTo(redundantBefore) < 0;
@@ -234,12 +185,9 @@ public class CommandsForKey implements CommandTimeseriesHolder
     {
         Timestamp removeExecuteAt = byId.maxExecuteAtBefore(redundantBefore);
 
-        return new CommandsForKey(key, max.compareTo(redundantBefore) < 0 ? Timestamp.NONE : max,
-                                  lastExecutedTimestamp.compareTo(redundantBefore) < 0 ? Timestamp.NONE : lastExecutedTimestamp,
-                                  rawLastExecutedHlc < redundantBefore.hlc() ? NO_LAST_EXECUTED_HLC : rawLastExecutedHlc,
-                                  lastWriteTimestamp.compareTo(redundantBefore) < 0 ? Timestamp.NONE : lastWriteTimestamp,
-                                  (CommandTimeseries)byId.beginUpdate().removeBefore(redundantBefore).build(),
-                                  (CommandTimeseries)byExecuteAt.beginUpdate().removeBefore(removeExecuteAt).build()
+        return new CommandsForKey(key,
+                                  (CommandTimeseries)byId.unbuild().removeBefore(redundantBefore).build(),
+                                  (CommandTimeseries)byExecuteAt.unbuild().removeBefore(removeExecuteAt).build()
                                  );
     }
 
@@ -249,24 +197,6 @@ public class CommandsForKey implements CommandTimeseriesHolder
         byExecuteAt.between(minTs, maxTs, status -> status.hasBeen(PreCommitted)).forEach(consumer);
     }
 
-    public void validateExecuteAtTime(Timestamp executeAt, boolean isForWriteTxn)
-    {
-        if (executeAt.compareTo(lastWriteTimestamp) < 0)
-            throw new IllegalArgumentException(String.format("%s is less than the most recent write timestamp %s", executeAt, lastWriteTimestamp));
+    public interface Update {}
 
-        int cmp = executeAt.compareTo(lastExecutedTimestamp);
-        // execute can be in the past if it's for a read and after the most recent write
-        if (cmp == 0 || (!isForWriteTxn && cmp < 0))
-            return;
-        if (cmp < 0)
-            throw new IllegalArgumentException(String.format("%s is less than the most recent executed timestamp %s", executeAt, lastExecutedTimestamp));
-        else
-            throw new IllegalArgumentException(String.format("%s is greater than the most recent executed timestamp, cfk should be updated", executeAt, lastExecutedTimestamp));
-    }
-
-    public long hlcFor(Timestamp executeAt, boolean isForWriteTxn)
-    {
-        validateExecuteAtTime(executeAt, isForWriteTxn);
-        return rawLastExecutedHlc == NO_LAST_EXECUTED_HLC ? lastExecutedTimestamp.hlc() : rawLastExecutedHlc;
-    }
 }
