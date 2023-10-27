@@ -60,8 +60,38 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         // TODO (desired): we don't need to maintain this now, and can simplify our builder, by migrating to ReducingRangeMap.foldWithBounds
         public final Range range;
         public final long startEpoch, endEpoch;
-        // note that locally and shard applied may not represent actual local application if pre-bootstrap or stale
-        public final @Nonnull TxnId locallyAppliedOrInvalidatedBefore, shardAppliedOrInvalidatedBefore, bootstrappedAt;
+
+        /**
+         * Represents the maximum TxnId we know to have fully executed until locally for the range in question.
+         * Unless we are stale or pre-bootstrap, in which case no such guarantees can be made.
+         */
+        public final @Nonnull TxnId locallyAppliedOrInvalidatedBefore;
+
+        /**
+         * Represents the maximum TxnId we know to have fully executed until across all healthy replicas for the range in question.
+         * Unless we are stale or pre-bootstrap, in which case no such guarantees can be made.
+         */
+        public final @Nonnull TxnId shardAppliedOrInvalidatedBefore;
+
+        /**
+         * bootstrappedAt defines the txnId bounds we expect to maintain data for locally.
+         *
+         * We can bootstrap ranges at different times, and have a transaction that participates in both ranges -
+         * in this case one of the portions of the transaction may be totally unordered with respect to other transactions
+         * in that range because both occur prior to the bootstrappedAt point, so their dependencies are entirely erased.
+         * We can also re-bootstrap the same range because bootstrap failed, and leave dangling transactions to execute
+         * which then execute in an unordered fashion.
+         *
+         * See also {@link CommandStore#safeToRead}.
+         */
+        public final @Nonnull TxnId bootstrappedAt;
+
+        /**
+         * staleUntilAtLeast provides a minimum TxnId until which we know we will be unable to completely execute
+         * transactions locally for the impacted range.
+         *
+         * See also {@link CommandStore#safeToRead}.
+         */
         public final @Nullable Timestamp staleUntilAtLeast;
 
         public Entry(Range range, long startEpoch, long endEpoch, @Nonnull TxnId locallyAppliedOrInvalidatedBefore, @Nonnull TxnId shardAppliedOrInvalidatedBefore, @Nonnull TxnId bootstrappedAt, @Nullable Timestamp staleUntilAtLeast)
