@@ -16,26 +16,20 @@
  * limitations under the License.
  */
 
-package accord.api;
-
-import accord.coordinate.Outcome;
-import accord.primitives.ProgressToken;
+package accord.local;
 
 /**
- * A result to be returned to a client, or be stored in a node's command state.
+ * For operations that need information on historical operations, this indicates the
+ * amount of data needed.
  */
-public interface Result extends Outcome
+public enum KeyHistory
 {
-    @VisibleForImplementation
-    Result APPLIED = new Result() { };
+    DEPS,
+    ALL,
+    NONE;
 
-    @VisibleForImplementation
-    Result INVALIDATED = new Result()
+    public boolean isNone()
     {
-        @Override
-        public ProgressToken asProgressToken() { return ProgressToken.INVALIDATED; }
-    };
-
-    @Override
-    default ProgressToken asProgressToken() { return ProgressToken.APPLIED; }
+        return this == NONE;
+    }
 }

@@ -22,14 +22,11 @@ import java.util.List;
 import java.util.Objects;
 import javax.annotation.Nullable;
 
-import accord.local.Command;
-import accord.local.Commands;
+import accord.impl.DepsBuilder;
+import accord.local.*;
 import accord.local.Node.Id;
-import accord.local.SafeCommand;
-import accord.local.SafeCommandStore;
 import accord.local.SafeCommandStore.TestKind;
 import accord.messages.TxnRequest.WithUnsynced;
-import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
@@ -88,6 +85,12 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
     public Seekables<?, ?> keys()
     {
         return partialTxn.keys();
+    }
+
+    @Override
+    public KeyHistory keyHistory()
+    {
+        return KeyHistory.DEPS;
     }
 
     @Override
@@ -245,26 +248,18 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
 
     static PartialDeps calculatePartialDeps(SafeCommandStore commandStore, TxnId txnId, Seekables<?, ?> keys, Timestamp executeAt, Ranges ranges)
     {
-        try (PartialDeps.Builder builder = PartialDeps.builder(ranges))
-        {
-            return calculateDeps(commandStore, txnId, keys, executeAt, ranges, builder);
-        }
-    }
-
-    private static <T extends Deps> T calculateDeps(SafeCommandStore commandStore, TxnId txnId, Seekables<?, ?> keys, Timestamp executeAt, Ranges ranges, Deps.AbstractBuilder<T> builder)
-    {
+        DepsBuilder builder = new DepsBuilder(txnId);
         TestKind testKind = TestKind.conflicts(txnId.rw());
         // could use MAY_EXECUTE_BEFORE to prune those we know execute later.
         // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute after it.
         //       This is necessary for reporting to a bootstrapping replica which TxnId it must not prune from dependencies
         //       i.e. the source replica reports to the target replica those TxnId that STARTED_BEFORE and EXECUTES_AFTER.
-        commandStore.mapReduce(keys, ranges, testKind, STARTED_BEFORE, executeAt, ANY_DEPS, null, null, null,
-                (txnId0, keyOrRange, testTxnId, testExecuteAt, in) -> {
-                    if (!testTxnId.equals(txnId0))
-                        in.add(keyOrRange, testTxnId);
-                    return in;
-                }, txnId, builder, null);
-        return builder.build();
+        commandStore.mapReduce(keys, ranges, KeyHistory.DEPS, testKind, STARTED_BEFORE, executeAt, ANY_DEPS, null, null, null,
+                               (p1, keyOrRange, testTxnId, testExecuteAt, status, deps, in) -> {
+                                          builder.add(testTxnId, keyOrRange, status, testExecuteAt, deps.get());
+                                          return in;
+                                      }, null, builder, null);
+        return builder.buildPartialDeps(commandStore, ranges);
     }
 
     /**

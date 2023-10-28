@@ -19,23 +19,17 @@
 package accord.local;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.impl.ErasedSafeCommand;
-import accord.primitives.Deps;
-import accord.primitives.EpochSupplier;
-import accord.primitives.Participants;
-import accord.primitives.Ranges;
-import accord.primitives.Seekable;
-import accord.primitives.Seekables;
-import accord.primitives.Timestamp;
+import accord.primitives.*;
 import accord.primitives.Txn.Kind;
-import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 
 import javax.annotation.Nullable;
 
@@ -55,7 +49,7 @@ public abstract class SafeCommandStore
 {
     public interface CommandFunction<P1, I, O>
     {
-        O apply(P1 p1, Seekable keyOrRange, TxnId txnId, Timestamp executeAt, I in);
+        O apply(P1 p1, Seekable keyOrRange, TxnId txnId, Timestamp executeAt, Status status, Supplier<List<TxnId>> depsSupplier, I in);
     }
 
     public enum TestTimestamp
@@ -146,6 +140,8 @@ public abstract class SafeCommandStore
         return maybeTruncate(safeCommand, command, txnId, null);
     }
 
+    public abstract void removeCommandFromSeekableDeps(Seekable seekable, TxnId txnId, Timestamp executeAt, Status status);
+
     // decidedExecuteAt == null if not yet PreCommitted
 
     /**
@@ -211,12 +207,12 @@ public abstract class SafeCommandStore
 
     /**
      * Visits keys first and then ranges, both in ascending order.
-     * Within each key or range visits TxnId in ascending order of queried timestamp.
+     * Within each key or range visits all unevicted txnids needed for the given scope in ascending order of queried timestamp.
      */
-    public abstract <P1, T> T mapReduce(Seekables<?, ?> keys, Ranges slice,
-                    TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
-                    TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus,
-                    CommandFunction<P1, T, T> map, P1 p1, T initialValue, T terminalValue);
+    public abstract <P1, T> T mapReduce(Seekables<?, ?> keys, Ranges slice, KeyHistory keyHistory,
+                                        TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp,
+                                        TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus,
+                                        CommandFunction<P1, T, T> map, P1 p1, T initialValue, T terminalValue);
 
     protected abstract void register(Seekables<?, ?> keysOrRanges, Ranges slice, Command command);
     protected abstract void register(Seekable keyOrRange, Ranges slice, Command command);

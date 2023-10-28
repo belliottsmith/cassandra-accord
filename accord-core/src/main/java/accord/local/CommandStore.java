@@ -20,6 +20,7 @@ package accord.local;
 
 import accord.api.ProgressLog;
 import accord.api.DataStore;
+import accord.api.VisibleForImplementationTesting;
 import accord.coordinate.CollectDeps;
 import accord.local.Command.WaitingOn;
 
@@ -221,11 +222,11 @@ public abstract class CommandStore implements AgentExecutor
 
     private static Timestamp maxApplied(SafeCommandStore safeStore, Seekables<?, ?> keysOrRanges, Ranges slice)
     {
-        return safeStore.mapReduce(keysOrRanges, slice, SafeCommandStore.TestKind.Ws,
+        return safeStore.mapReduce(keysOrRanges, slice, KeyHistory.NONE, SafeCommandStore.TestKind.Ws,
                                    SafeCommandStore.TestTimestamp.STARTED_AFTER, Timestamp.NONE,
                                    SafeCommandStore.TestDep.ANY_DEPS, null,
                                    Status.PreApplied, Status.Truncated,
-                                   (p1, key, txnId, executeAt, max) -> Timestamp.max(max, executeAt),
+                                   (p1, key, txnId, executeAt, status, deps, max) -> Timestamp.max(max, executeAt),
                                    null, Timestamp.NONE, Timestamp.MAX);
     }
 
@@ -280,6 +281,18 @@ public abstract class CommandStore implements AgentExecutor
     protected synchronized void setSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
     {
         this.safeToRead = newSafeToRead;
+    }
+
+    @VisibleForImplementationTesting
+    public NavigableMap<TxnId, Ranges> bootstrapBeganAt()
+    {
+        return bootstrapBeganAt;
+    }
+
+    @VisibleForImplementationTesting
+    public NavigableMap<Timestamp, Ranges> safeToRead()
+    {
+        return safeToRead;
     }
 
     public final void markExclusiveSyncPoint(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)

@@ -16,26 +16,43 @@
  * limitations under the License.
  */
 
-package accord.api;
+package accord.impl;
 
-import accord.coordinate.Outcome;
-import accord.primitives.ProgressToken;
+import accord.api.Key;
+import accord.impl.InMemoryCommandStore.GlobalTimestampsForKey;
 
-/**
- * A result to be returned to a client, or be stored in a node's command state.
- */
-public interface Result extends Outcome
+public class InMemorySafeTimestampsForKey extends SafeTimestampsForKey
 {
-    @VisibleForImplementation
-    Result APPLIED = new Result() { };
+    private boolean invalidated = false;
+    private final GlobalTimestampsForKey global;
 
-    @VisibleForImplementation
-    Result INVALIDATED = new Result()
+    public InMemorySafeTimestampsForKey(Key key, GlobalTimestampsForKey global)
     {
-        @Override
-        public ProgressToken asProgressToken() { return ProgressToken.INVALIDATED; }
-    };
+        super(key);
+        this.global = global;
+    }
 
     @Override
-    default ProgressToken asProgressToken() { return ProgressToken.APPLIED; }
+    public TimestampsForKey current()
+    {
+        return global.value();
+    }
+
+    @Override
+    protected void set(TimestampsForKey update)
+    {
+        global.value(update);
+    }
+
+    @Override
+    public void invalidate()
+    {
+        invalidated = true;
+    }
+
+    @Override
+    public boolean invalidated()
+    {
+        return invalidated;
+    }
 }

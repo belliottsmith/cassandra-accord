@@ -30,14 +30,7 @@ import accord.utils.Invariants;
 
 import javax.annotation.Nullable;
 
-import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
-import static accord.local.PreLoadContext.contextFor;
-import static accord.local.Status.NotDefined;
-import static accord.local.Status.Phase.Cleanup;
-import static accord.local.Status.PreApplied;
-import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
-import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.castToRoute;
 import static accord.primitives.Route.isRoute;
 

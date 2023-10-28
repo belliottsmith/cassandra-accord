@@ -81,7 +81,7 @@ public class PreAcceptTest
         {
             Raw key = IntKey.key(10);
             CommandStore commandStore = node.unsafeForKey(key);
-            Assertions.assertFalse(inMemory(commandStore).hasCommandsForKey(key));
+            Assertions.assertFalse(inMemory(commandStore).hasDepsCommandsForKey(key));
 
             TxnId txnId = clock.idForNode(1, ID2);
             Txn txn = writeTxn(Keys.of(key));
@@ -90,7 +90,7 @@ public class PreAcceptTest
             preAccept.process(node, ID2, REPLY_CONTEXT);
 
             commandStore.execute(PreLoadContext.contextFor(txnId, txn.keys()), safeStore -> {
-                CommandsForKey cfk = ((AbstractSafeCommandStore) safeStore).commandsForKey(key).current();
+                CommandsForKey cfk = ((AbstractSafeCommandStore) safeStore).depsCommandsForKey(key).current();
                 TxnId commandId = convert(cfk.byId(), CommandLoader::txnId).findFirst().get();
                 Command command = safeStore.ifInitialised(commandId).current();
                 Assertions.assertEquals(Status.PreAccepted, command.status());
@@ -118,7 +118,7 @@ public class PreAcceptTest
         {
             Raw key = IntKey.key(10);
             CommandStore commandStore = node.unsafeForKey(key);
-            Assertions.assertFalse(inMemory(commandStore).hasCommandsForKey(key));
+            Assertions.assertFalse(inMemory(commandStore).hasDepsCommandsForKey(key));
 
             TxnId txnId = clock.idForNode(1, ID2);
             Txn txn = writeTxn(Keys.of(key));
@@ -141,7 +141,7 @@ public class PreAcceptTest
         {
             Raw key = IntKey.key(10);
             CommandStore commandStore = node.unsafeForKey(key);
-            Assertions.assertFalse(inMemory(commandStore).hasCommandsForKey(key));
+            Assertions.assertFalse(inMemory(commandStore).hasDepsCommandsForKey(key));
 
             TxnId txnId = clock.idForNode(1, ID2);
             Txn txn = writeTxn(Keys.of(key));
@@ -259,7 +259,7 @@ public class PreAcceptTest
             preAccept.process(node, ID2, REPLY_CONTEXT);
 
             commandStore.execute(PreLoadContext.contextFor(txnId, txn.keys()), safeStore -> {
-                CommandsForKey cfk = ((AbstractSafeCommandStore) safeStore).commandsForKey(key).current();
+                CommandsForKey cfk = ((AbstractSafeCommandStore) safeStore).depsCommandsForKey(key).current();
                 TxnId commandId = convert(cfk.byId(), CommandLoader::txnId).findFirst().get();
                 Command command = safeStore.ifInitialised(commandId).current();
                 Assertions.assertEquals(Status.PreAccepted, command.status());
