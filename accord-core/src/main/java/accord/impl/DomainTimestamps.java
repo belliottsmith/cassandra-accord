@@ -16,26 +16,11 @@
  * limitations under the License.
  */
 
-package accord.api;
+package accord.impl;
 
-import accord.coordinate.Outcome;
-import accord.primitives.ProgressToken;
+import accord.primitives.Timestamp;
 
-/**
- * A result to be returned to a client, or be stored in a node's command state.
- */
-public interface Result extends Outcome
+public interface DomainTimestamps
 {
-    @VisibleForImplementation
-    Result APPLIED = new Result() { };
-
-    @VisibleForImplementation
-    Result INVALIDATED = new Result()
-    {
-        @Override
-        public ProgressToken asProgressToken() { return ProgressToken.INVALIDATED; }
-    };
-
-    @Override
-    default ProgressToken asProgressToken() { return ProgressToken.APPLIED; }
+    Timestamp max();
 }

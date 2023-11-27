@@ -16,26 +16,11 @@
  * limitations under the License.
  */
 
-package accord.api;
+package accord.impl;
 
-import accord.coordinate.Outcome;
-import accord.primitives.ProgressToken;
-
-/**
- * A result to be returned to a client, or be stored in a node's command state.
- */
-public interface Result extends Outcome
+public interface DomainCommands
 {
-    @VisibleForImplementation
-    Result APPLIED = new Result() { };
+    enum Kind { COORDINATION, RECOVERY }
 
-    @VisibleForImplementation
-    Result INVALIDATED = new Result()
-    {
-        @Override
-        public ProgressToken asProgressToken() { return ProgressToken.INVALIDATED; }
-    };
-
-    @Override
-    default ProgressToken asProgressToken() { return ProgressToken.APPLIED; }
+    CommandTimeseries<?> commands();
 }
