@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nullable;
 import java.util.*;
+import java.util.function.Predicate;
 
 public class DepsBuilderTest
 {
@@ -61,7 +62,7 @@ public class DepsBuilderTest
         @Override protected SafeCommand getInternal(TxnId txnId) { throw new UnsupportedOperationException(); }
         @Override protected SafeCommand getInternalIfLoadedAndInitialised(TxnId txnId) { throw new UnsupportedOperationException(); }
         @Override public boolean canExecuteWith(PreLoadContext context) { throw new UnsupportedOperationException(); }
-        @Override public <P1, T> T mapReduce(Seekables<?, ?> keys, Ranges slice, KeyHistory keyHistory, TestKind testKind, TestTimestamp testTimestamp, Timestamp timestamp, TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus, CommandFunction<P1, T, T> map, P1 p1, T initialValue, T terminalValue) { throw new UnsupportedOperationException(); }
+        @Override public <P1, T> T mapReduce(Seekables<?, ?> keys, Ranges slice, KeyHistory keyHistory, Txn.Kind.Kinds testKind, TestTimestamp testTimestamp, Timestamp timestamp, TestDep testDep, @Nullable TxnId depId, @Nullable Status minStatus, @Nullable Status maxStatus, CommandFunction<P1, T, T> map, P1 p1, T initialValue, Predicate<? super T> terminate) { throw new UnsupportedOperationException(); }
         @Override protected void register(Seekables<?, ?> keysOrRanges, Ranges slice, Command command) { throw new UnsupportedOperationException(); }
         @Override protected void register(Seekable keyOrRange, Ranges slice, Command command) { throw new UnsupportedOperationException(); }
         @Override public CommandStore commandStore() { throw new UnsupportedOperationException(); }

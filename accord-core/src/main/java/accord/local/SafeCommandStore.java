@@ -39,8 +39,6 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
-import accord.primitives.*;
-import accord.primitives.Txn.Kind;
 
 import javax.annotation.Nullable;
 

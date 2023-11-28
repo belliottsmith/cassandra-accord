@@ -261,7 +261,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
                             (p1, keyOrRange, testTxnId, testExecuteAt, status, deps, in) -> {
                                 builder.add(testTxnId, keyOrRange, status, testExecuteAt, deps.get());
                                 return in;
-                            }, null, builder, null);
+                            }, null, builder);
         return builder.buildPartialDeps(safeStore, ranges);
     }
 

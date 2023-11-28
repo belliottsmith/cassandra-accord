@@ -347,7 +347,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
                         if (executeAt.compareTo(startedBefore) > 0)
                             builder.add(keyOrRange, txnId);
                         return builder;
-                    }, startedBefore, builder, null);
+                    }, startedBefore, builder);
             return builder.build();
         }
     }
@@ -357,7 +357,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
         try (Deps.Builder builder = Deps.builder())
         {
             safeStore.mapReduce(keys, ranges, KeyHistory.ALL, startedBefore.rw().witnesses(), STARTED_BEFORE, startedBefore, WITH, startedBefore, Committed, null,
-                                          (p1, keyOrRange, txnId, executeAt, status, deps, prev) -> builder.add(keyOrRange, txnId), null, (Deps.AbstractBuilder<Deps>)builder, null);
+                                          (p1, keyOrRange, txnId, executeAt, status, deps, prev) -> builder.add(keyOrRange, txnId), null, (Deps.AbstractBuilder<Deps>)builder);
             return builder.build();
         }
     }

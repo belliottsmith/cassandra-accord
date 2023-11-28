@@ -108,8 +108,15 @@ public class CommandTimeseries<D>
         Timestamp result = null;
         for (D data : commands.values())
         {
-            result = Timestamp.max(result, loader.txnId(data));
-            result = Timestamp.max(result, loader.executeAt(data));
+            if (result == null)
+            {
+                result = Timestamp.max(loader.txnId(data), loader.executeAt(data));
+            }
+            else
+            {
+                result = Timestamp.max(result, loader.txnId(data));
+                result = Timestamp.max(result, loader.executeAt(data));
+            }
         }
         return result;
     }
@@ -121,8 +128,15 @@ public class CommandTimeseries<D>
         Timestamp result = null;
         for (D data : commands.values())
         {
-            result = Timestamp.max(result, loader.txnId(data));
-            result = Timestamp.max(result, loader.executeAt(data));
+            if (result == null)
+            {
+                result = Timestamp.min(loader.txnId(data), loader.executeAt(data));
+            }
+            else
+            {
+                result = Timestamp.min(result, loader.txnId(data));
+                result = Timestamp.min(result, loader.executeAt(data));
+            }
         }
         return result;
     }
