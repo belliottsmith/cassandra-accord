@@ -19,7 +19,6 @@
 package accord.local;
 
 import java.util.Iterator;
-import java.util.Collection;
 import java.util.List;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
