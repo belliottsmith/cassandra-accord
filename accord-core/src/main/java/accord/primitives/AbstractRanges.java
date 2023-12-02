@@ -56,7 +56,10 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     @Override
     public int indexOf(Range find)
     {
-        return SortedArrays.binarySearch(ranges, 0, ranges.length, find, Range::compareIntersecting, FAST);
+        // Use "CEIL" so we return the first match in the list and not any random match seen first.  This can become imporant
+        // when different views of Ranges may have more or less non-intersecting ranges in the backing array, causing
+        // different nodes to return different matches
+        return SortedArrays.binarySearch(ranges, 0, ranges.length, find, Range::compareIntersecting, CEIL);
     }
 
     @Override
