@@ -198,21 +198,23 @@ public class PrefixedIntHashKey implements RoutableKey
         return new Hash(prefix, hash);
     }
 
+    private static final long DOMAIN_SIZE = (long) Math.pow(2, 32);
+
     public static accord.primitives.Range[] ranges(int prefix, int count)
     {
         List<accord.primitives.Range> result = new ArrayList<>(count);
         // The hash is crc32, which is 32 bits, but to keep this logic simple shrink the domain to 16 bits.
         // Since this method is only for testing, changing this to 32 bits in the future is fine.
-        long delta = 0xffff / count;
-        long start = 0;
+        long delta = DOMAIN_SIZE / count;
+        long start = Integer.MIN_VALUE;
         Hash prev = new Hash(prefix, (int) start);
         for (int i = 1; i < count; ++i)
         {
-            Hash next = new Hash(prefix, (int) Math.min(0xffff, start + i * delta));
+            Hash next = new Hash(prefix, (int) (start + i * delta));
             result.add(new Range(prev, next));
             prev = next;
         }
-        result.add(new Range(prev, new Hash(prefix, 0xffff)));
+        result.add(new Range(prev, new Hash(prefix, Integer.MAX_VALUE)));
         return toArray(result, accord.primitives.Range[]::new);
     }
 
