@@ -128,14 +128,17 @@ public class CommandTimeseries<D>
         Timestamp result = null;
         for (D data : commands.values())
         {
+            TxnId txnId = loader.txnId(data);
+            Timestamp executeAt = loader.executeAt(data);
             if (result == null)
             {
-                result = Timestamp.min(loader.txnId(data), loader.executeAt(data));
+                result = executeAt == null ? txnId : Timestamp.min(txnId, executeAt);
             }
             else
             {
-                result = Timestamp.min(result, loader.txnId(data));
-                result = Timestamp.min(result, loader.executeAt(data));
+                result = Timestamp.min(result, txnId);
+                if (executeAt != null)
+                    result = Timestamp.min(result, executeAt);
             }
         }
         return result;
