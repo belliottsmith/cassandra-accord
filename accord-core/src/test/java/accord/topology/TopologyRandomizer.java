@@ -40,6 +40,7 @@ import org.slf4j.LoggerFactory;
 import accord.burn.TopologyUpdates;
 import accord.impl.PrefixedIntHashKey;
 import accord.impl.PrefixedIntHashKey.Hash;
+import accord.impl.PrefixedIntHashKey.PrefixedIntRoutingKey;
 import accord.local.Node;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -162,20 +163,20 @@ public class TopologyRandomizer
         int idx = shards.length == 1 ? 0 : random.nextInt(shards.length - 1);
         Shard split = shards[idx];
         PrefixedIntHashKey.Range splitRange = (PrefixedIntHashKey.Range) split.range;
-        PrefixedIntHashKey minBound = (PrefixedIntHashKey) splitRange.start();
-        PrefixedIntHashKey maxBound = (PrefixedIntHashKey) splitRange.end();
+        PrefixedIntRoutingKey minBound = (PrefixedIntRoutingKey) splitRange.start();
+        PrefixedIntRoutingKey maxBound = (PrefixedIntRoutingKey) splitRange.end();
 
         if (minBound.hash + 1 == maxBound.hash)
             // no split is possible
             return shards;
 
-        Hash newBound = PrefixedIntHashKey.forHash(minBound.prefix, minBound.hash + 1 + random.nextInt(maxBound.hash - (1 + minBound.hash)));
+        Hash newBound = PrefixedIntHashKey.forHash(minBound.prefix, random.nextInt(minBound.hash + 1, maxBound.hash));
 
         Shard[] result = new Shard[shards.length + 1];
         System.arraycopy(shards, 0, result, 0, idx);
         System.arraycopy(shards, idx, result, idx + 1, shards.length - idx);
-        result[idx] = new Shard(PrefixedIntHashKey.range((Hash)splitRange.start(), newBound), split.nodes, split.fastPathElectorate, split.joining);
-        result[idx+1] = new Shard(PrefixedIntHashKey.range(newBound, (Hash)splitRange.end()), split.nodes, split.fastPathElectorate, split.joining);
+        result[idx] = new Shard(PrefixedIntHashKey.range(minBound, newBound), split.nodes, split.fastPathElectorate, split.joining);
+        result[idx+1] = new Shard(PrefixedIntHashKey.range(newBound, maxBound), split.nodes, split.fastPathElectorate, split.joining);
         logger.debug("Split boundary on {} & {} {} to {} {}", idx, idx + 1, split,
                      result[idx].toString(true), result[idx + 1].toString(true));
 

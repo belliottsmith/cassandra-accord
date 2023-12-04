@@ -247,7 +247,7 @@ public class PrefixedIntHashKey implements RoutableKey
         return toArray(result, accord.primitives.Range[]::new);
     }
 
-    public static accord.primitives.Range range(Hash start, Hash end)
+    public static accord.primitives.Range range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
     {
         return new Range(start, end);
     }
