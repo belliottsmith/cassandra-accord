@@ -32,8 +32,7 @@ import accord.primitives.TxnId;
 
 public class ListResult implements Result, Reply
 {
-    public enum Status
-    { Applied, RecoveryApplied, HeartBeat, Invalidated, Lost, Other, Truncated, Failure }
+    public enum Status { Applied, RecoveryApplied, HeartBeat, Invalidated, Lost, Other, Truncated, Failure }
     public final Id client;
     public final long requestId;
     public final TxnId txnId;

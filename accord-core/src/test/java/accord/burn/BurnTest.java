@@ -335,10 +335,10 @@ public class BurnTest
                 {
                     switch (reply.status())
                     {
-                        case Lost:          lost.incrementAndGet();             break;
-                        case Invalidated:   nacks.incrementAndGet();            break;
-                        case Failure:       failedToCheck.incrementAndGet();    break;
-                        case Truncated:     truncated.incrementAndGet();        break;
+                        case Lost:           lost.incrementAndGet();             break;
+                        case Invalidated:    nacks.incrementAndGet();            break;
+                        case Failure:        failedToCheck.incrementAndGet();    break;
+                        case Truncated:      truncated.incrementAndGet();        break;
                         // txn was applied?, but client saw a timeout, so response isn't known
                         case Other:                                             break;
                         default:            throw new AssertionError("Unexpected fault: " + reply.status());
