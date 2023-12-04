@@ -25,6 +25,7 @@ import javax.annotation.Nonnull;
 
 import accord.api.RoutingKey;
 import accord.local.ShardDistributor;
+import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.utils.CRCUtils;
@@ -116,7 +117,32 @@ public class PrefixedIntHashKey implements RoutableKey
         }
     }
 
-    public static final class Hash extends PrefixedIntHashKey implements RoutingKey
+    public static abstract class PrefixedIntRoutingKey extends PrefixedIntHashKey implements RoutingKey
+    {
+        private PrefixedIntRoutingKey(int prefix, int key, boolean isHash)
+        {
+            super(prefix, key, isHash);
+        }
+    }
+
+    public static final class Sentinel extends PrefixedIntRoutingKey
+    {
+        private final boolean isMin;
+
+        private Sentinel(int prefix, boolean isMin)
+        {
+            super(prefix, isMin ? Integer.MIN_VALUE : Integer.MAX_VALUE, true);
+            this.isMin = isMin;
+        }
+
+        @Override
+        public accord.primitives.Range asRange()
+        {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    public static final class Hash extends PrefixedIntRoutingKey
     {
         private Hash(int prefix, int hash)
         {
@@ -126,13 +152,16 @@ public class PrefixedIntHashKey implements RoutableKey
         @Override
         public accord.primitives.Range asRange()
         {
-            return new Range(new Hash(prefix, hash - 1), new Hash(prefix, hash));
+            PrefixedIntRoutingKey start = hash == Integer.MIN_VALUE ?
+                                          new Sentinel(prefix, true) :
+                                          new Hash(prefix, hash - 1);
+            return new Range(start, new Hash(prefix, hash));
         }
     }
 
     public static class Range extends accord.primitives.Range.EndInclusive
     {
-        public Range(Hash start, Hash end)
+        public Range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
         {
             super(start, end);
             assert start.prefix == end.prefix : String.format("Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
@@ -141,14 +170,14 @@ public class PrefixedIntHashKey implements RoutableKey
         @Override
         public accord.primitives.Range newRange(RoutingKey start, RoutingKey end)
         {
-            return new Range((Hash) start, (Hash) end);
+            return new Range((PrefixedIntRoutingKey) start, (PrefixedIntRoutingKey) end);
         }
 
         public Ranges split(int count)
         {
-            int prefix = ((Hash) start()).prefix;
-            int startHash = ((Hash) start()).hash;
-            int endHash = ((Hash) end()).hash;
+            int prefix = ((PrefixedIntRoutingKey) start()).prefix;
+            int startHash = ((PrefixedIntRoutingKey) start()).hash;
+            int endHash = ((PrefixedIntRoutingKey) end()).hash;
             int currentSize = endHash - startHash;
             if (currentSize < count)
                 return Ranges.of(this);
@@ -270,7 +299,18 @@ public class PrefixedIntHashKey implements RoutableKey
         PrefixedIntHashKey other = (PrefixedIntHashKey) that;
         int rc = Integer.compare(prefix, other.prefix);
         if (rc == 0)
+        {
             rc = Integer.compare(this.hash, other.hash);
+            if (rc == 0)
+            {
+                if (this instanceof Sentinel || that instanceof Sentinel)
+                {
+                    int leftInt = this instanceof Sentinel ? (((Sentinel) this).isMin ? -1 : 1) : 0;
+                    int rightInt = that instanceof Sentinel ? (((Sentinel) that).isMin ? -1 : 1) : 0;
+                    rc = Integer.compare(leftInt, rightInt);
+                }
+            }
+        }
         return rc;
     }
 }
