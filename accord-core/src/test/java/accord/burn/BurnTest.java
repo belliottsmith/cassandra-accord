@@ -277,6 +277,7 @@ public class BurnTest
         AtomicInteger nacks = new AtomicInteger();
         AtomicInteger lost = new AtomicInteger();
         AtomicInteger truncated = new AtomicInteger();
+        AtomicInteger recovered = new AtomicInteger();
         AtomicInteger failedToCheck = new AtomicInteger();
         AtomicInteger clock = new AtomicInteger();
         AtomicInteger requestIndex = new AtomicInteger();
@@ -311,7 +312,7 @@ public class BurnTest
 
             try
             {
-                if (!reply.isSuccess() && reply.fault() == ListResult.Fault.HeartBeat)
+                if (!reply.isSuccess() && reply.status() == ListResult.Status.HeartBeat)
                     return; // interrupted; will fetch our actual reply once rest of simulation is finished (but wanted to send another request to keep correct number in flight)
 
                 int start = starts[(int)packet.replyId];
@@ -321,8 +322,7 @@ public class BurnTest
 
                 if (!reply.isSuccess())
                 {
-
-                    switch (reply.fault())
+                    switch (reply.status())
                     {
                         case Lost:          lost.incrementAndGet();             break;
                         case Invalidated:   nacks.incrementAndGet();            break;
@@ -330,12 +330,17 @@ public class BurnTest
                         case Truncated:     truncated.incrementAndGet();        break;
                         // txn was applied?, but client saw a timeout, so response isn't known
                         case Other:                                             break;
-                        default:            throw new AssertionError("Unexpected fault: " + reply.fault());
+                        default:            throw new AssertionError("Unexpected fault: " + reply.status());
                     }
                     return;
                 }
 
-                acks.incrementAndGet();
+                switch (reply.status())
+                {
+                    default: throw new AssertionError("Unhandled status: " + reply.status());
+                    case Applied: acks.incrementAndGet(); break;
+                    case RecoveryApplied: recovered.incrementAndGet(); // NOTE: technically this might have been applied by the coordinator and it simply timed out
+                }
                 // TODO (correctness): when a keyspace is removed, the history/validator isn't cleaned up...
                 // the current logic for add keyspace only knows what is there, so a ABA problem exists where keyspaces
                 // may come back... logically this is a problem as the history doesn't get reset, but practically that
@@ -392,10 +397,11 @@ public class BurnTest
             throw t;
         }
 
-        logger.info("Received {} acks, {} nacks, {} lost, {} truncated ({} total) to {} operations", acks.get(), nacks.get(), lost.get(), truncated.get(), acks.get() + nacks.get() + lost.get() + truncated.get(), operations);
+        int observedOperations = acks.get() + recovered.get() + nacks.get() + lost.get() + truncated.get();
+        logger.info("Received {} acks, {} recovered, {} nacks, {} lost, {} truncated ({} total) to {} operations", acks.get(), recovered.get(), nacks.get(), lost.get(), truncated.get(), observedOperations, operations);
         logger.info("Message counts: {}", messageStatsMap.entrySet());
         logger.info("Took {} and in logical time of {}", Duration.ofNanos(System.nanoTime() - startNanos), Duration.ofMillis(queue.nowInMillis() - startLogicalMillis));
-        if (clock.get() != operations * 2)
+        if (clock.get() != operations * 2 || observedOperations != operations)
         {
             StringBuilder sb = new StringBuilder();
             for (int i = 0 ; i < requests.length ; ++i)
@@ -408,7 +414,8 @@ public class BurnTest
                     logger.info(sb.toString());
                 }
             }
-            throw new AssertionError("Incomplete set of responses; clock=" + clock.get() + ", expected operations=" + (operations * 2));
+            if (clock.get() != operations * 2) throw new AssertionError("Incomplete set of responses; clock=" + clock.get() + ", expected operations=" + (operations * 2));
+            else throw new AssertionError("Incomplete set of responses; ack+recovered+other+nacks+lost+truncated=" + observedOperations + ", expected operations=" + (operations * 2));
         }
     }
 
