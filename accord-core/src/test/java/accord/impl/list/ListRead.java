@@ -75,7 +75,8 @@ public class ListRead implements Read
                 case Key:
                     Timestamped<int[]> data = s.get(unavailable, executeAt, (Key)key);
                     logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
-                    Invariants.checkState(data.timestamp.compareTo(executeAt) < 0);
+                    Invariants.checkState(data.timestamp.compareTo(executeAt) < 0,
+                                          "Data timestamp %s >= execute at %s", data.timestamp, executeAt);
                     result.put((Key)key, data);
                     break;
                 case Range:
