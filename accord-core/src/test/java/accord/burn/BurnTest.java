@@ -262,6 +262,8 @@ public class BurnTest
 
         MessageListener listener = MessageListener.get();
 
+        if (keyCount > ((long) HASH_RANGE_END - (long) HASH_RANGE_START + 1L))
+            throw new AssertionError(String.format("Attempted to create %d keys which is larger than the range (%d, %d]", keyCount, HASH_RANGE_START, HASH_RANGE_END));
         int[] keys = new int[keyCount];
         {
             IntHashSet seen = new IntHashSet();
