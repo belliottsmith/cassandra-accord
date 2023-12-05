@@ -463,7 +463,40 @@ public class BurnTest
     @Timeout(value = 3, unit = TimeUnit.MINUTES)
     public void testOne()
     {
-        run(ThreadLocalRandom.current().nextLong(), 1000);
+        // the following seeds are valid if you make reads blocking
+//        run(3335571352266000L, 1000); // Command [6,5975,1(RR),1] that is being loaded is not owned by this shard on route {homeKey:812#4821,[(812#1367,812#4821], (816#27490,816#28236]]}
+        /*
+Node{4} / DelayedCommandStore{id=10}
+
+// this is the state when the PreAccept is first seen
+txnId = {TxnId@5759} "[6,5975,1(RR),1]"
+accord.messages.Request.knownEpoch() = 5
+PreAccept.waitForEpoch = 5
+PreAccept.maxEpoch = 6
+topologies = {ArrayList@6426}  size = 2 // as known from the coordinator
+ 0 = {Topology@6430} "Topology{epoch=6, [Shard[812#-306783380,812#306783376]:(5f, 1f, 7f, 2, 6f), Shard[816#-306783380,816#306783376]:(7f, 4, 3f, 1f, 6f, 2, 5f)]}"
+ 1 = {Topology@6431} "Topology{epoch=5, [Shard[816#-306783380,816#306783376]:(7f, 4, 3f, 1f, 6f, 2, 5f)]}"
+result = {CommandStores$RangesForEpoch@5774} "2: [(812#-628905930,812#-306783380], (812#-306783380,812#306783376], (812#920350132,812#958698052]]"
+ epochs = {long[1]@6723} [2]
+ ranges = {Ranges[1]@6724}
+  0 = {Ranges@6732} "[(812#-628905930,812#-306783380], (812#-306783380,812#306783376], (812#920350132,812#958698052]]"
+safeStore.latestEpoch() = 5
+partialTxn = {read:[(812#1367,812#4821], (816#27490,816#28236]]} // when the PreAccept is first seen, this is stored
+partialTxn.keys().slice(safeStore.ranges().allAt(6)) = [(812#1367,812#4821]]
+
+// this is the state when the check fails
+ranges().allAt(safeCommand.current().executeAt()) = [(812#-628905930,812#-306783380]]
+command = {Command$PreAccepted@6667} "Command@923539816{[6,5975,1(RR),1]:PreAccepted}"
+command.route() = {homeKey:812#4821,[(812#1367,812#4821], (816#27490,816#28236]]}
+((ListStore) dataStore()).history(Ranges.of((Range) safeCommand.current().route().get(0))):
+    Added in 2: [(0#1717986913,0#2147483647], (812#-2147483648,812#-1533916892], (812#-1533916892,812#-920350136], (812#-920350136,812#-306783380], (812#-306783380,812#306783376], (812#920350132,812#1533916888], (813#-2147483648,813#-1533916892], (813#-1533916892,813#-920350136], (813#-920350136,813#-306783380], (813#-306783380,813#27283698], (813#27283698,813#306783376], (813#306783376,813#920350132], (813#920350132,813#1533916888], (813#1533916888,813#2147483647]]
+    Removed in 6: [(0#-1288490190,0#-858993461], (812#-306783380,812#306783376], (812#920350132,812#1533916888]]
+
+         */
+
+//        run(3336164512512916L, 1000); // 489:1#-1711753095 was not specified in PreLoadContext // benedict thinks he has seen this... ignoring for now
+
+        run(System.nanoTime(), 1000);
     }
 
     private static void run(long seed, int operations)
