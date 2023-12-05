@@ -496,6 +496,9 @@ command.route() = {homeKey:812#4821,[(812#1367,812#4821], (816#27490,816#28236]]
 
 //        run(3336164512512916L, 1000); // 489:1#-1711753095 was not specified in PreLoadContext // benedict thinks he has seen this... ignoring for now
 
+        // if you revert blocking reads so reads are async
+//        run(3342955928166708L, 1000); // Data timestamp [8,17452,2(KW),2] >= execute at [8,17452,2(KW),2]
+
         run(System.nanoTime(), 1000);
     }
 
