@@ -530,11 +530,13 @@ public class TopologyManager
         Topologies.Builder topologies = new Topologies.Builder(maxi - i);
 
         Unseekables<?> remaining = select;
+        // tracks what ranges are unknown to any epoch
         Unseekables<?> unknown = null;
         while (i < maxi)
         {
             EpochState epochState = snapshot.epochs[i++];
             Ranges ranges = epochState.global().ranges();
+            // use remaining.slice(ranges) to avoid searching for ranges which may not be in the epoch
             topologies.add(epochState.global.forSelection(remaining.slice(ranges)));
             remaining = remaining.subtract(epochState.addedRanges);
             unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(ranges));
@@ -554,18 +556,23 @@ public class TopologyManager
         }
 
         // include any additional epochs to reach sufficiency
-        remaining = remaining.subtract(isSufficientFor.apply(snapshot.epochs[maxi - 1]));
-        if (remaining.isEmpty())
-            return topologies.build(sorter);
+        EpochState prev = snapshot.epochs[maxi - 1];
         do
         {
-            EpochState next = snapshot.epochs[i++];
-            topologies.add(next.global.forSelection(remaining.slice(next.global().ranges())));
-            remaining = remaining.subtract(isSufficientFor.apply(next));
-            remaining = remaining.subtract(next.addedRanges);
+            Ranges sufficient = isSufficientFor.apply(prev);
+            remaining = remaining.subtract(sufficient);
+            remaining = remaining.subtract(prev.addedRanges);
             if (remaining.isEmpty())
                 return topologies.build(sorter);
+
+            EpochState next = snapshot.epochs[i++];
+            // use remaining.slice(ranges) to avoid searching for ranges which may not be in the epoch
+            topologies.add(next.global.forSelection(remaining.slice(next.global().ranges())));
+            prev = next;
         } while (i < snapshot.epochs.length);
+        // needd to remove sufficent / added else remaining may not be empty when the final matches are the last epoch
+        remaining = remaining.subtract(isSufficientFor.apply(prev));
+        remaining = remaining.subtract(prev.addedRanges);
 
         if (!remaining.isEmpty()) throw new IllegalArgumentException("Ranges " + remaining + " could not be found");
 
