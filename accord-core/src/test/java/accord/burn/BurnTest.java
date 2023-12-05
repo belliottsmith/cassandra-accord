@@ -40,11 +40,11 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import accord.burn.random.FrequentLargeRange;
 import accord.impl.MessageListener;
+import accord.utils.CRCUtils;
 import accord.verify.CompositeVerifier;
 import accord.verify.ElleVerifier;
 import accord.verify.StrictSerializabilityVerifier;
@@ -55,7 +55,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Key;
-import accord.impl.IntHashKey;
 import accord.impl.TopologyFactory;
 import accord.impl.PrefixedIntHashKey;
 import accord.impl.basic.Cluster;
@@ -91,6 +90,7 @@ import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
 
 import static accord.impl.PrefixedIntHashKey.forHash;
+import static accord.impl.PrefixedIntHashKey.range;
 import static accord.impl.PrefixedIntHashKey.ranges;
 import static accord.utils.Utils.toArray;
 
@@ -98,14 +98,13 @@ public class BurnTest
 {
     private static final Logger logger = LoggerFactory.getLogger(BurnTest.class);
 
-    static List<Packet> generate(RandomSource random, MessageListener listener, Function<? super CommandStore, AsyncExecutor> executor, List<Id> clients, List<Id> nodes, int keyCount, int operations)
-    {
-        List<Key> keys = new ArrayList<>();
-        for (int i = 0 ; i < keyCount ; ++i)
-            keys.add(IntHashKey.key(i));
+    private static final int HASH_RANGE_START = 0;
+    private static final int HASH_RANGE_END = 1 << 16;
 
+    static List<Packet> generate(RandomSource random, MessageListener listener, Function<? super CommandStore, AsyncExecutor> executor, List<Id> clients, List<Id> nodes, int[] keys, int operations)
+    {
         List<Packet> packets = new ArrayList<>();
-        int[] next = new int[keyCount];
+        Int2ObjectHashMap<int[]> prefixKeyUpdates = new Int2ObjectHashMap<>();
         double readInCommandStore = random.nextDouble();
 
         for (int count = 0 ; count < operations ; ++count)
@@ -127,9 +126,10 @@ public class BurnTest
                     List<Range> requestRanges = new ArrayList<>();
                     while (--rangeCount >= 0)
                     {
-                        int j = 1 + random.nextInt(0xffff), i = Math.max(0, j - (1 + random.nextInt(0x1ffe)));
                         int prefix = random.pickInt(prefixes);
-                        requestRanges.add(PrefixedIntHashKey.range(forHash(prefix, i), forHash(prefix, j)));
+                        int i = random.nextInt(HASH_RANGE_START, HASH_RANGE_END);
+                        int j = 1 + random.nextInt(i, HASH_RANGE_END);
+                        requestRanges.add(range(forHash(prefix, i), forHash(prefix, j)));
                     }
                     Ranges ranges = Ranges.of(requestRanges.toArray(new Range[0]));
                     ListRead read = new ListRead(random.decide(readInCommandStore) ? Function.identity() : executor, ranges, ranges);
@@ -150,15 +150,16 @@ public class BurnTest
                     TreeSet<Key> requestKeys = new TreeSet<>();
                     IntHashSet readValues = new IntHashSet();
                     while (readCount-- > 0)
-                        requestKeys.add(randomKey(random, prefixes, keyCount, readValues));
+                        requestKeys.add(randomKey(random, prefixes, keys, readValues));
 
                     ListUpdate update = isWrite ? new ListUpdate(executor) : null;
                     IntHashSet writeValues = isWrite ? new IntHashSet() : null;
                     while (writeCount-- > 0)
                     {
-                        int i = randomKeyValue(random, keyCount, writeValues);
-                        int prefix = random.pickInt(prefixes);
-                        update.put(PrefixedIntHashKey.key(prefix, i), ++next[i]);
+                        PrefixedIntHashKey.Key key = randomKey(random, prefixes, keys, writeValues);
+                        int i = Arrays.binarySearch(keys, key.key);
+                        int[] keyUpdateCounter = prefixKeyUpdates.computeIfAbsent(key.prefix, ignore -> new int[keys.length]);
+                        update.put(key, ++keyUpdateCounter[i]);
                     }
 
                     Keys readKeys = new Keys(requestKeys);
@@ -188,24 +189,16 @@ public class BurnTest
         return prefixes;
     }
 
-    private static Key randomKey(RandomSource random, int[] prefixes, int keyCount, Set<Integer> notIn)
+    private static PrefixedIntHashKey.Key randomKey(RandomSource random, int[] prefixes, int[] keys, Set<Integer> seen)
     {
         int prefix = random.pickInt(prefixes);
-        int value = randomKeyValue(random, keyCount, notIn);
-        return PrefixedIntHashKey.key(prefix, value);
-    }
-
-    private static int randomKeyValue(RandomSource random, int keyCount, Set<Integer> notIn)
-    {
-        return randomKeyValue(random, keyCount, notIn::contains);
-    }
-
-    private static int randomKeyValue(RandomSource random, int keyCount, Predicate<Integer> notIn)
-    {
-        int i;
-        //noinspection StatementWithEmptyBody
-        while (notIn.test(i = random.nextInt(keyCount)));
-        return i;
+        int key;
+        do
+        {
+            key = random.pickInt(keys);
+        }
+        while (!seen.add(key));
+        return PrefixedIntHashKey.key(prefix, key);
     }
 
     @SuppressWarnings("unused")
@@ -269,7 +262,23 @@ public class BurnTest
 
         MessageListener listener = MessageListener.get();
 
-        Packet[] requests = toArray(generate(random, listener, executor, clients, nodes, keyCount, operations), Packet[]::new);
+        int[] keys = new int[keyCount];
+        {
+            IntHashSet seen = new IntHashSet();
+            for (int i = 0; i < keyCount; i++)
+            {
+                int hash;
+                do
+                {
+                    // start is exclusive, and end is inclusive; which is the oposite of nextInt, so +1 to account for this
+                    hash = 1 + random.nextInt(HASH_RANGE_START, HASH_RANGE_END);
+                }
+                while (!seen.add(hash));
+                keys[i] = CRCUtils.reverseCRC32LittleEnding(hash);
+            }
+            Arrays.sort(keys);
+        }
+        Packet[] requests = toArray(generate(random, listener, executor, clients, nodes, keys, operations), Packet[]::new);
         int[] starts = new int[requests.length];
         Packet[] replies = new Packet[requests.length];
 
@@ -350,7 +359,8 @@ public class BurnTest
                 {
                     Key key = reply.responseKeys.get(i);
                     int prefix = prefix(key);
-                    int k = key(key);
+                    int keyValue = key(key);
+                    int k = Arrays.binarySearch(keys, keyValue);
                     Verifier verifier = validators.computeIfAbsent(prefix, ignore -> createVerifier(keyCount));
                     Verifier.Checker check = seen.computeIfAbsent(prefix, ignore -> verifier.witness(start, end));
 
@@ -484,7 +494,7 @@ public class BurnTest
 
             List<Id> nodes = generateIds(false, random.nextInt(rf, rf * 3));
 
-            burn(random, new TopologyFactory(rf, ranges(0, random.nextInt(Math.max(nodes.size() + 1, rf), nodes.size() * 3))),
+            burn(random, new TopologyFactory(rf, ranges(0, HASH_RANGE_START, HASH_RANGE_END, random.nextInt(Math.max(nodes.size() + 1, rf), nodes.size() * 3))),
                     clients,
                     nodes,
                     5 + random.nextInt(15),

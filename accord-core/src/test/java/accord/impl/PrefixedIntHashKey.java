@@ -25,7 +25,6 @@ import javax.annotation.Nonnull;
 
 import accord.api.RoutingKey;
 import accord.local.ShardDistributor;
-import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.utils.CRCUtils;
@@ -227,15 +226,18 @@ public class PrefixedIntHashKey implements RoutableKey
         return new Hash(prefix, hash);
     }
 
-    private static final long DOMAIN_SIZE = (long) Math.pow(2, 32);
-
     public static accord.primitives.Range[] ranges(int prefix, int count)
     {
+        return ranges(prefix, Integer.MIN_VALUE, Integer.MAX_VALUE, count);
+    }
+
+    public static accord.primitives.Range[] ranges(int prefix, int startHash, int endHash, int count)
+    {
+        assert startHash < endHash : String.format("%d >= %d", startHash, endHash);
         List<accord.primitives.Range> result = new ArrayList<>(count);
-        // The hash is crc32, which is 32 bits, but to keep this logic simple shrink the domain to 16 bits.
-        // Since this method is only for testing, changing this to 32 bits in the future is fine.
-        long delta = DOMAIN_SIZE / count;
-        long start = Integer.MIN_VALUE;
+        long domainSize = (long) endHash - (long) startHash + 1L;
+        long delta = domainSize / count;
+        long start = startHash;
         Hash prev = new Hash(prefix, (int) start);
         for (int i = 1; i < count; ++i)
         {
@@ -243,7 +245,7 @@ public class PrefixedIntHashKey implements RoutableKey
             result.add(new Range(prev, next));
             prev = next;
         }
-        result.add(new Range(prev, new Hash(prefix, Integer.MAX_VALUE)));
+        result.add(new Range(prev, new Hash(prefix, endHash)));
         return toArray(result, accord.primitives.Range[]::new);
     }
 
