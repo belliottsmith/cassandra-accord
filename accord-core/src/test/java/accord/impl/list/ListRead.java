@@ -67,24 +67,26 @@ public class ListRead implements Read
         // read synchronously, logically taking a snapshot, so we can impose our invariant of not reading the future
         ListStore s = (ListStore)store;
         Ranges unavailable = safeStore.ranges().unsafeToReadAt(executeAt);
-        return executor.apply(safeStore.commandStore()).submit(() -> {
-            ListData result = new ListData();
-            switch (key.domain())
-            {
-                default: throw new AssertionError();
-                case Key:
-                    Timestamped<int[]> data = s.get(unavailable, executeAt, (Key)key);
-                    logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
-                    Invariants.checkState(data.timestamp.compareTo(executeAt) < 0,
-                                          "Data timestamp %s >= execute at %s", data.timestamp, executeAt);
-                    result.put((Key)key, data);
-                    break;
-                case Range:
-                    for (Map.Entry<Key, Timestamped<int[]>> e : s.get(unavailable, executeAt, (Range)key))
-                        result.put(e.getKey(), e.getValue());
-            }
-            return result;
-        });
+        // TODO (now, correctness): move the read into the executor thread to match real impl
+        // There is a bug (link jira) where the stale read handle logic no longer detects and fails with the new assert below
+        // There is a comment early about running synchronously, but this isn't easy for different implementations so should likely
+        // be an optimization impl take rather than a foundational requirement...
+        ListData result = new ListData();
+        switch (key.domain())
+        {
+            default: throw new AssertionError();
+            case Key:
+                Timestamped<int[]> data = s.get(unavailable, executeAt, (Key)key);
+                logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
+                Invariants.checkState(data.timestamp.compareTo(executeAt) < 0,
+                                      "Data timestamp %s >= execute at %s", data.timestamp, executeAt);
+                result.put((Key)key, data);
+                break;
+            case Range:
+                for (Map.Entry<Key, Timestamped<int[]>> e : s.get(unavailable, executeAt, (Range)key))
+                    result.put(e.getKey(), e.getValue());
+        }
+        return executor.apply(safeStore.commandStore()).submit(() -> result);
     }
 
     @Override
