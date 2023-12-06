@@ -535,10 +535,9 @@ public class TopologyManager
         while (i < maxi)
         {
             EpochState epochState = snapshot.epochs[i++];
-            Ranges ranges = epochState.global().ranges();
             topologies.add(epochState.global.forSelection(remaining));
             remaining = remaining.subtract(epochState.addedRanges);
-            unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(ranges));
+            unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(epochState.global().ranges()));
             unknown = unknown.subtract(epochState.removedRanges);
         }
 
@@ -591,10 +590,9 @@ public class TopologyManager
         for (int i = count - 1 ; i >= 0 ; --i)
         {
             EpochState epochState = snapshot.get(minEpoch + i);
-            Ranges ranges = epochState.global().ranges();
-            topologies.add(epochState.global.forSelection(remaining.slice(ranges)));
+            topologies.add(epochState.global.forSelection(remaining));
             remaining = remaining.subtract(epochState.addedRanges);
-            unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(ranges));
+            unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(epochState.global().ranges()));
             unknown = unknown.subtract(epochState.removedRanges);
         }
         if (unknown != null && !unknown.isEmpty())
