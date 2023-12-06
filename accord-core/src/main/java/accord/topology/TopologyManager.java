@@ -536,8 +536,7 @@ public class TopologyManager
         {
             EpochState epochState = snapshot.epochs[i++];
             Ranges ranges = epochState.global().ranges();
-            // use remaining.slice(ranges) to avoid searching for ranges which may not be in the epoch
-            topologies.add(epochState.global.forSelection(remaining.slice(ranges)));
+            topologies.add(epochState.global.forSelection(remaining));
             remaining = remaining.subtract(epochState.addedRanges);
             unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(ranges));
             unknown = unknown.subtract(epochState.removedRanges);
@@ -566,8 +565,7 @@ public class TopologyManager
                 return topologies.build(sorter);
 
             EpochState next = snapshot.epochs[i++];
-            // use remaining.slice(ranges) to avoid searching for ranges which may not be in the epoch
-            topologies.add(next.global.forSelection(remaining.slice(next.global().ranges())));
+            topologies.add(next.global.forSelection(remaining));
             prev = next;
         } while (i < snapshot.epochs.length);
         // needd to remove sufficent / added else remaining may not be empty when the final matches are the last epoch
