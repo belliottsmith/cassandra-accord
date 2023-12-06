@@ -518,6 +518,9 @@ public class TopologyManager
         Invariants.checkArgument(minEpoch <= maxEpoch);
         Epochs snapshot = epochs;
 
+        if (!snapshot.get(maxEpoch).global().ranges().containsAll(select))
+            throw new IllegalArgumentException(String.format("Unable to find %s in epoch range [%d, %d]", select.subtract(snapshot.get(maxEpoch).global().ranges()), minEpoch, maxEpoch));
+
         if (maxEpoch == Long.MAX_VALUE) maxEpoch = snapshot.currentEpoch;
         else Invariants.checkState(snapshot.currentEpoch >= maxEpoch, "current epoch %d < max %d", snapshot.currentEpoch, maxEpoch);
 
@@ -530,19 +533,17 @@ public class TopologyManager
         Topologies.Builder topologies = new Topologies.Builder(maxi - i);
 
         Unseekables<?> remaining = select;
-        // tracks what ranges are unknown to any epoch
-        Unseekables<?> unknown = null;
         while (i < maxi)
         {
             EpochState epochState = snapshot.epochs[i++];
-            topologies.add(epochState.global.forSelection(remaining));
-            remaining = remaining.subtract(epochState.addedRanges);
-            unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(epochState.global().ranges()));
-            unknown = unknown.subtract(epochState.removedRanges);
+            // use remaining.slice(ranges) to avoid searching for ranges which may not be in the epoch
+            topologies.add(epochState.global.forSelection(select));
+            Unseekables<?> prevSelect = select;
+            select = select.subtract(epochState.addedRanges);
+            if (select != prevSelect)
+                remaining = remaining.subtract(epochState.addedRanges);
         }
 
-        if (unknown != null && !unknown.isEmpty())
-            throw new IllegalArgumentException(String.format("Unable to find %s in epoch range [%d, %d]", unknown, minEpoch, maxEpoch));
         if (remaining.isEmpty())
             return topologies.build(sorter);
 
@@ -559,12 +560,16 @@ public class TopologyManager
         {
             Ranges sufficient = isSufficientFor.apply(prev);
             remaining = remaining.subtract(sufficient);
-            remaining = remaining.subtract(prev.addedRanges);
+            Unseekables<?> prevSelect = select;
+            select = select.subtract(prev.addedRanges);
+            if (select != prevSelect)
+                remaining = remaining.subtract(prev.addedRanges);
             if (remaining.isEmpty())
                 return topologies.build(sorter);
 
             EpochState next = snapshot.epochs[i++];
-            topologies.add(next.global.forSelection(remaining));
+            // use remaining.slice(ranges) to avoid searching for ranges which may not be in the epoch
+            topologies.add(next.global.forSelection(select));
             prev = next;
         } while (i < snapshot.epochs.length);
         // needd to remove sufficent / added else remaining may not be empty when the final matches are the last epoch
@@ -580,23 +585,20 @@ public class TopologyManager
     {
         Epochs snapshot = epochs;
 
+        if (!snapshot.get(maxEpoch).global().ranges().containsAll(select))
+            throw new IllegalArgumentException(String.format("Unable to find %s in epoch range [%d, %d]", select.subtract(snapshot.get(maxEpoch).global().ranges()), minEpoch, maxEpoch));
+
         if (minEpoch == maxEpoch)
             return new Single(sorter, snapshot.get(minEpoch).global.forSelection(select));
 
         int count = (int)(1 + maxEpoch - minEpoch);
         Topologies.Builder topologies = new Topologies.Builder(count);
-        Unseekables<?> remaining = select;
-        Unseekables<?> unknown = null;
         for (int i = count - 1 ; i >= 0 ; --i)
         {
             EpochState epochState = snapshot.get(minEpoch + i);
-            topologies.add(epochState.global.forSelection(remaining));
-            remaining = remaining.subtract(epochState.addedRanges);
-            unknown = Unseekables.merge((Unseekables<Unseekable>) unknown, (Unseekables<Unseekable>) remaining.subtract(epochState.global().ranges()));
-            unknown = unknown.subtract(epochState.removedRanges);
+            topologies.add(epochState.global.forSelection(select));
+            select = select.subtract(epochState.addedRanges);
         }
-        if (unknown != null && !unknown.isEmpty())
-            throw new IllegalArgumentException(String.format("Unable to find %s in epoch range [%d, %d]", unknown, minEpoch, maxEpoch));
 
         Invariants.checkState(!topologies.isEmpty(), "Unable to find an epoch that contained %s", select);
 

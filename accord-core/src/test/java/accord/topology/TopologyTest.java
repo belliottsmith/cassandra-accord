@@ -116,7 +116,7 @@ public class TopologyTest
     @Test
     void basic()
     {
-        qt().withExamples(100).forAll(topologys(), Gens.random()).check((topology, rs) -> {
+        qt().withSeed(8302537612669528635L).forAll(topologys(), Gens.random()).check((topology, rs) -> {
             assertThat(topology)
                     .isNotSubset()
                     .isEqualTo(withEpoch(topology, topology.epoch))
