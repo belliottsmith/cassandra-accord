@@ -78,8 +78,13 @@ public abstract class AbstractExecute extends ReadData implements Command.Transi
 
     public AbstractExecute(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, Timestamp executeAt)
     {
+        this(to, topologies, txnId, readScope, executeAt.epoch());
+    }
+
+    public AbstractExecute(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    {
         super(to, topologies, txnId, readScope);
-        this.executeAtEpoch = executeAt.epoch();
+        this.executeAtEpoch = executeAtEpoch;
     }
 
     public AbstractExecute(TxnId txnId, Participants<?> readScope, long waitForEpoch, long executeAtEpoch)

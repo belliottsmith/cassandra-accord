@@ -34,8 +34,8 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import java.util.function.Predicate;
 
-import static accord.primitives.Txn.Kind.Kinds.Any;
-import static accord.primitives.Txn.Kind.Kinds.AnyGlobal;
+import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
+import static accord.primitives.Txn.Kind.Kinds.Nothing;
 import static accord.primitives.Txn.Kind.Kinds.RorWs;
 import static accord.primitives.Txn.Kind.Kinds.SyncPoints;
 import static accord.primitives.Txn.Kind.Kinds.Ws;
@@ -46,6 +46,14 @@ public interface Txn
     enum Kind
     {
         Read,
+
+        /**
+         * A non-durable read that cannot be recovered and provides only per-key linearizability guarantees.
+         * This may be used to implement single-partition-key reads with strict serializable isolation OR
+         * weaker isolation multi-key/range reads for interoperability with weaker isolation systems.
+         */
+        EphemeralRead,
+
         Write,
 
         /**
@@ -98,12 +106,25 @@ public interface Txn
          */
         ExclusiveSyncPoint,
 
+        /**
+         * Used for local book-keeping only, not visible to any other replica or directly to other transactions.
+         * This is used to create pseudo transactions that take the place of dependencies that will be fulfilled by a bootstrap.
+         */
         LocalOnly
         ;
 
         public enum Kinds implements Predicate<Kind>
         {
-            Ws, RorWs, WsOrSyncPoint, SyncPoints, AnyGlobal, Any;
+            Nothing,
+            Ws,
+
+            /**
+             * Any DURABLE read or write. This does not witness EphemeralReads.
+             */
+            RorWs,
+            WsOrSyncPoint,
+            SyncPoints,
+            AnyGloballyVisible;
 
             @Override
             public boolean test(Kind kind)
@@ -111,12 +132,12 @@ public interface Txn
                 switch (this)
                 {
                     default: throw new AssertionError();
-                    case Any: return true;
-                    case AnyGlobal: return !kind.isLocal();
+                    case AnyGloballyVisible: return kind.isGloballyVisible();
                     case WsOrSyncPoint: return kind == Write || kind == Kind.SyncPoint || kind == ExclusiveSyncPoint;
                     case SyncPoints: return kind == Kind.SyncPoint || kind == ExclusiveSyncPoint;
-                    case Ws: return kind == Write;
                     case RorWs: return kind == Read || kind == Write;
+                    case Ws: return kind == Write;
+                    case Nothing: return false; // TODO (expected, consider): throw exception? we shouldn't ever be presented the option to test even.
                 }
             }
         }
@@ -140,11 +161,24 @@ public interface Txn
             return this == LocalOnly;
         }
 
+        public boolean isDurable()
+        {
+            return this != EphemeralRead;
+        }
+
+        public boolean isGloballyVisible()
+        {
+            return this != EphemeralRead && this != LocalOnly;
+        }
+
         public boolean isSyncPoint()
         {
             return this == ExclusiveSyncPoint || this == SyncPoint;
         }
 
+        /**
+         * An ExclusiveSyncPoint executes only after all of its dependencies, regardless of their executeAt.
+         */
         public boolean awaitsFutureDeps()
         {
             return this == ExclusiveSyncPoint;
@@ -160,6 +194,7 @@ public interface Txn
             switch (this)
             {
                 default: throw new AssertionError();
+                case EphemeralRead:
                 case Read:
                 case NoOp:
                     return Ws;
@@ -167,7 +202,7 @@ public interface Txn
                     return RorWs;
                 case SyncPoint:
                 case ExclusiveSyncPoint:
-                    return AnyGlobal;
+                    return AnyGloballyVisible;
             }
         }
 
@@ -176,10 +211,12 @@ public interface Txn
             switch (this)
             {
                 default: throw new AssertionError();
+                case EphemeralRead:
+                    return Nothing;
                 case Read:
                     return WsOrSyncPoint;
                 case Write:
-                    return AnyGlobal;
+                    return AnyGloballyVisible;
                 case SyncPoint:
                 case ExclusiveSyncPoint:
                 case NoOp:

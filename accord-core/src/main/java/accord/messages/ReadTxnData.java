@@ -40,6 +40,11 @@ public class ReadTxnData extends AbstractExecute
         super(to, topologies, txnId, readScope, executeAt);
     }
 
+    public ReadTxnData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    {
+        super(to, topologies, txnId, readScope, executeAtEpoch);
+    }
+
     public ReadTxnData(TxnId txnId, Participants<?> readScope, long waitForEpoch, long executeAtEpoch)
     {
         super(txnId, readScope, waitForEpoch, executeAtEpoch);

@@ -1235,7 +1235,7 @@ public class Commands
                 if (attrs.partialTxn() != null)
                 {
                     partialTxn = partialTxn.slice(allRanges, shard.isHome());
-                    if (!command.txnId().kind().isLocal())
+                    if (command.txnId().kind().isGloballyVisible())
                     {
                         Invariants.checkState(attrs.partialTxn().covers(existingRanges));
                         Routables.foldl(partialTxn.keys(), additionalRanges, (keyOrRange, p, v, i) -> {

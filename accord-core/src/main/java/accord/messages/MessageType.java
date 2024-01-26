@@ -40,6 +40,8 @@ public class MessageType
     public static final MessageType ACCEPT_INVALIDATE_REQ             = remote("ACCEPT_INVALIDATE_REQ",             true );
     public static final MessageType GET_DEPS_REQ                      = remote("GET_DEPS_REQ",                      false);
     public static final MessageType GET_DEPS_RSP                      = remote("GET_DEPS_RSP",                      false);
+    public static final MessageType GET_EPHEMERAL_READ_DEPS_REQ       = remote("GET_EPHEMERAL_READ_DEPS_REQ",       false);
+    public static final MessageType GET_EPHEMERAL_READ_DEPS_RSP       = remote("GET_EPHEMERAL_READ_DEPS_RSP",       false);
     public static final MessageType COMMIT_SLOW_PATH_REQ              = remote("COMMIT_SLOW_PATH_REQ",              true);
     public static final MessageType COMMIT_MAXIMAL_REQ                = remote("COMMIT_MAXIMAL_REQ",                true );
     public static final MessageType STABLE_FAST_PATH_REQ              = remote("STABLE_FAST_PATH_REQ",              true);

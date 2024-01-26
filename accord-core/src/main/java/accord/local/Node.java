@@ -599,7 +599,13 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
 
     private AsyncResult<Result> initiateCoordination(TxnId txnId, Txn txn)
     {
-        return CoordinateTransaction.coordinate(this, txnId, txn, computeRoute(txnId, txn.keys()));
+        switch (txnId.kind())
+        {
+            case EphemeralRead:
+                return CoordinateTransaction.coordinate(this, txnId, txn, computeRoute(txnId, txn.keys()));
+            default:
+                return CoordinateTransaction.coordinate(this, txnId, txn, computeRoute(txnId, txn.keys()));
+        }
     }
 
     public FullRoute<?> computeRoute(TxnId txnId, Seekables<?, ?> keysOrRanges)
