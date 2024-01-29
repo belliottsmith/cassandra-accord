@@ -97,6 +97,7 @@ import org.agrona.collections.IntHashSet;
 import static accord.impl.PrefixedIntHashKey.forHash;
 import static accord.impl.PrefixedIntHashKey.range;
 import static accord.impl.PrefixedIntHashKey.ranges;
+import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.utils.Utils.toArray;
 
 public class BurnTest
@@ -142,7 +143,7 @@ public class BurnTest
                     while (--rangeCount >= 0)
                         requestRanges.add(nextRange.apply(prefixes));
                     Ranges ranges = Ranges.of(requestRanges.toArray(EMPTY_RANGES));
-                    ListRead read = new ListRead(random.decide(readInCommandStore) ? Function.identity() : executor, ranges, ranges);
+                    ListRead read = new ListRead(random.decide(readInCommandStore) ? Function.identity() : executor, false, ranges, ranges);
                     ListQuery query = new ListQuery(client, finalCount);
                     return new Txn.InMemory(ranges, read, query);
                 };
@@ -156,6 +157,7 @@ public class BurnTest
                     boolean isWrite = random.nextBoolean();
                     int readCount = 1 + random.nextInt(2);
                     int writeCount = isWrite ? 1 + random.nextInt(2) : 0;
+                    Txn.Kind kind = isWrite ? Txn.Kind.Write : readCount == 1 ? EphemeralRead : Txn.Kind.Read;
 
                     TreeSet<Key> requestKeys = new TreeSet<>();
                     IntHashSet readValues = new IntHashSet();
@@ -175,9 +177,9 @@ public class BurnTest
                     Keys readKeys = new Keys(requestKeys);
                     if (isWrite)
                         requestKeys.addAll(update.keySet());
-                    ListRead read = new ListRead(random.decide(readInCommandStore) ? Function.identity() : executor, readKeys, new Keys(requestKeys));
+                    ListRead read = new ListRead(random.decide(readInCommandStore) ? Function.identity() : executor, kind == EphemeralRead, readKeys, new Keys(requestKeys));
                     ListQuery query = new ListQuery(client, finalCount);
-                    return new Txn.InMemory(new Keys(requestKeys), read, query, update);
+                    return new Txn.InMemory(kind, new Keys(requestKeys), read, query, update);
                 };
             }
             packets.add(new Packet(client, node, count, new ListRequest(description, txnGenerator, listener)));

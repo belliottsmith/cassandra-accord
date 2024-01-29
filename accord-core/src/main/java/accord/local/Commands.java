@@ -430,6 +430,22 @@ public class Commands
         safeStore.notifyListeners(safeCommand);
     }
 
+    public static void stableEphemeralRead(SafeCommandStore safeStore, SafeCommand safeCommand, Route<?> route, TxnId txnId, PartialTxn partialTxn, PartialDeps partialDeps)
+    {
+        // TODO (expected): introduce in-memory only commands
+        Command command = safeCommand.current();
+        if (command.hasBeen(Stable))
+            return;
+
+        Ranges coordinateRanges = coordinateRanges(safeStore, txnId);
+        // TODO (desired, consider): in the case of sync points, the coordinator is unlikely to be a home shard, do we mind this? should document at least
+        ProgressShard progressShard = No;
+        Invariants.checkState(validate(command.status(), command, Ranges.EMPTY, coordinateRanges, progressShard, route, Set, partialTxn, Set, partialDeps, Set));
+        CommonAttributes attrs = set(safeStore, command, command, Ranges.EMPTY, coordinateRanges, progressShard, route, partialTxn, Set, partialDeps, Set);
+        safeCommand.stable(attrs, Ballot.ZERO, txnId, initialiseWaitingOn(safeStore, txnId, Timestamp.MAX, attrs.partialDeps(), route));
+        maybeExecute(safeStore, safeCommand, false, true);
+    }
+
     public static void applyRecipientLocalSyncPoint(SafeCommandStore safeStore, TxnId localSyncId, Seekables<?, ?> keys)
     {
         SafeCommand safeCommand = safeStore.get(localSyncId);
@@ -1254,7 +1270,7 @@ public class Commands
                 attrs = attrs.mutable().partialTxn(partialTxn = partialTxn.slice(allRanges, true));
                 // TODO (expected, efficiency): we may register the same ranges more than once
                 // TODO (desirable, efficiency): no need to register on PreAccept if already Accepted
-                if (!command.txnId().kind().isLocal())
+                if (command.txnId().kind().isGloballyVisible())
                     safeStore.register(partialTxn.keys(), allRanges, command);
                 break;
         }

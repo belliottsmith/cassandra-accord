@@ -18,19 +18,17 @@
 
 package accord.coordinate;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 
 import accord.coordinate.tracking.QuorumTracker;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Callback;
 import accord.primitives.FullRoute;
-import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
@@ -38,14 +36,11 @@ import accord.utils.Invariants;
 import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
-import static accord.primitives.Timestamp.mergeMax;
-import static accord.utils.Functions.foldl;
+import static accord.coordinate.tracking.RequestStatus.Success;
 
 /**
- * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
- * If we are preempted by a recovery coordinator, we abort and let them complete (and notify us about the execution result)
- *
- * TODO (desired, testing): dedicated burn test to validate outcomes
+ * Abstract parent class for implementing preaccept-like operations where we may need to fetch additional replies
+ * from future epochs.
  */
 abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> implements Callback<R>, BiConsumer<T, Throwable>
 {
@@ -64,7 +59,7 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         {
             // TODO (desired, efficiency): consider sending only to electorate of most recent topology (as only these PreAccept votes matter)
             // note that we must send to all replicas of old topology, as electorate may not be reachable
-            contact(tracker.topologies().nodes(), this);
+            contact(tracker.topologies().nodes(), topologies, this);
         }
 
         @Override
@@ -89,7 +84,12 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
             synchronized (AbstractCoordinatePreAccept.this)
             {
                 if (!extraRoundIsDone)
-                    onExtraSuccessInternal(from, reply);
+                {
+                    if (!onExtraSuccessInternal(from, reply))
+                        setFailure(new Preempted(txnId, route.homeKey()));
+                    else if (tracker.recordSuccess(from) == Success)
+                        onPreAcceptedOrNewEpoch();
+                }
             }
         }
     }
@@ -100,7 +100,6 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
     final FullRoute<?> route;
 
     private Topologies topologies;
-    final List<R> oks;
     private boolean initialRoundIsDone;
     private ExtraEpochs extraEpochs;
     private Map<Id, Object> debug = Invariants.debug() ? new LinkedHashMap<>() : null;
@@ -117,23 +116,27 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         this.txn = txn;
         this.route = route;
         this.topologies = topologies;
-        this.oks = new ArrayList<>(topologies.estimateUniqueNodes());
     }
 
-    void start()
+    final void start()
     {
-        contact(topologies.nodes(), this);
+        contact(topologies.nodes(), topologies, this);
     }
 
-    abstract void contact(Set<Id> nodes, Callback<R> callback);
+    abstract void contact(Set<Id> nodes, Topologies topologies, Callback<R> callback);
     abstract void onSuccessInternal(Id from, R reply);
-    abstract void onExtraSuccessInternal(Id from, R reply);
+    /**
+     * The tracker for the extra rounds only is provided by the AbstractCoordinatePreAccept, so we expect a boolean back
+     * indicating if the "success" reply was actually a good response or a failure (i.e. preempted)
+     */
+    abstract boolean onExtraSuccessInternal(Id from, R reply);
     abstract void onFailureInternal(Id from, Throwable failure);
-    abstract void onNewEpochTopologyMismatch();
-    abstract void onPreAccepted(Topologies topologies, Timestamp executeAt, List<R> oks);
+    abstract void onNewEpochTopologyMismatch(TopologyMismatch mismatch);
+    abstract void onPreAccepted(Topologies topologies);
+    abstract long executeAtEpoch();
 
     @Override
-    public synchronized void onFailure(Id from, Throwable failure)
+    public synchronized final void onFailure(Id from, Throwable failure)
     {
         if (debug != null) debug.putIfAbsent(from, failure);
         if (!initialRoundIsDone)
@@ -156,11 +159,10 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         if (debug != null) debug.putIfAbsent(from, reply);
         if (!initialRoundIsDone)
             onSuccessInternal(from, reply);
-
     }
 
     @Override
-    public void setFailure(Throwable failure)
+    public final void setFailure(Throwable failure)
     {
         Invariants.checkState(!initialRoundIsDone || (extraEpochs != null && !extraEpochs.extraRoundIsDone));
         initialRoundIsDone = true;
@@ -180,7 +182,7 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         super.setFailure(failure);
     }
 
-    void onPreAcceptedOrNewEpoch()
+    final void onPreAcceptedOrNewEpoch()
     {
         Invariants.checkState(!initialRoundIsDone || (extraEpochs != null && !extraEpochs.extraRoundIsDone));
         initialRoundIsDone = true;
@@ -190,44 +192,44 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         // if the epoch we are accepting in is later, we *must* contact the later epoch for pre-accept, as this epoch
         // could have moved ahead, and the timestamp we may propose may be stale.
         // Note that these future epochs are non-voting, they only serve to inform the timestamp we decide
-        Timestamp executeAt = foldl(oks, (ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
-        if (executeAt.epoch() <= topologies.currentEpoch())
-            onPreAccepted(topologies, executeAt, oks);
+        long latestEpoch = executeAtEpoch();
+        if (latestEpoch <= topologies.currentEpoch())
+            onPreAccepted(topologies);
         else
-            onNewEpoch(topologies, executeAt, oks);
+            onNewEpoch(topologies, latestEpoch);
     }
 
-    void onNewEpoch(Topologies prevTopologies, Timestamp executeAt, List<R> successes)
+    final void onNewEpoch(Topologies prevTopologies, long latestEpoch)
     {
         // TODO (desired, efficiency): check if we have already have a valid quorum for the future epoch
         //  (noting that nodes may have adopted new ranges, in which case they should be discounted, and quorums may have changed shape)
-        node.withEpoch(executeAt.epoch(), () -> {
-            TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(executeAt.epoch()), txnId, route.homeKey(), txn.keys());
+        node.withEpoch(latestEpoch, () -> {
+            TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(latestEpoch), txnId, route.homeKey(), txn.keys());
             if (mismatch != null)
             {
                 initialRoundIsDone = true;
-                onNewEpochTopologyMismatch();
+                onNewEpochTopologyMismatch(mismatch);
                 return;
             }
-            topologies = node.topology().withUnsyncedEpochs(route, txnId.epoch(), executeAt.epoch());
+            topologies = node.topology().withUnsyncedEpochs(route, txnId.epoch(), latestEpoch);
             boolean equivalent = topologies.oldestEpoch() <= prevTopologies.currentEpoch();
             for (long epoch = topologies.currentEpoch() ; equivalent && epoch > prevTopologies.currentEpoch() ; --epoch)
                 equivalent = topologies.forEpoch(epoch).shards().equals(prevTopologies.current().shards());
 
             if (equivalent)
             {
-                onPreAccepted(topologies, executeAt, oks);
+                onPreAccepted(topologies);
             }
             else
             {
-                extraEpochs = new ExtraEpochs(prevTopologies.currentEpoch() + 1, executeAt.epoch());
+                extraEpochs = new ExtraEpochs(prevTopologies.currentEpoch() + 1, latestEpoch);
                 extraEpochs.start();
             }
         });
     }
 
     @Override
-    public void accept(T success, Throwable failure)
+    public final void accept(T success, Throwable failure)
     {
         if (success != null)
         {

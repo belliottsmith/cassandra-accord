@@ -410,7 +410,7 @@ public abstract class Command implements CommonAttributes
                 case CleaningUp:
                     break;
                 case ReadyToExclude:
-                    Invariants.checkState(validate.asCommitted().waitingOn == null);
+                    Invariants.checkState(!validate.saveStatus().hasBeen(Status.Committed) || validate.asCommitted().waitingOn == null);
                     break;
                 case WaitingToExecute:
                 case ReadyToExecute:

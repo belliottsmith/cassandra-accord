@@ -30,7 +30,7 @@ import accord.local.Node.Id;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
-import accord.messages.ReadTxnData;
+import accord.messages.ReadEphemeralTxnData;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Ranges;
@@ -75,7 +75,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
     @Override
     public void contact(Id to)
     {
-        node.send(to, new ReadTxnData(to, allTopologies, txnId, txn.keys().toParticipants(), allTopologies.currentEpoch()), this);
+        node.send(to, new ReadEphemeralTxnData(to, allTopologies, txnId, txn.keys().toParticipants(), allTopologies.currentEpoch(), txn, deps, route), this);
     }
 
     @Override

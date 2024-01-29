@@ -19,45 +19,69 @@ package accord.messages;
 
 import javax.annotation.Nonnull;
 
+import accord.local.Commands;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.Deps;
+import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
+import accord.primitives.Ranges;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+
+import static accord.messages.TxnRequest.computeScope;
+import static accord.messages.TxnRequest.computeWaitForEpoch;
+import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 
 public class ReadEphemeralTxnData extends ReadTxnData
 {
     public static class SerializerSupport
     {
-        public static ReadEphemeralTxnData create(TxnId txnId, Participants<?> scope, long waitForEpoch, long executeAtEpoch, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps)
+        public static ReadEphemeralTxnData create(TxnId txnId, Participants<?> scope, long waitForEpoch, long executeAtEpoch, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps, @Nonnull FullRoute<?> route)
         {
-            return new ReadEphemeralTxnData(txnId, scope, waitForEpoch, executeAtEpoch, partialTxn, partialDeps);
+            return new ReadEphemeralTxnData(txnId, scope, waitForEpoch, executeAtEpoch, partialTxn, partialDeps, route);
         }
     }
 
     public final @Nonnull PartialTxn partialTxn;
     public final @Nonnull PartialDeps partialDeps;
+    public final @Nonnull FullRoute<?> route; // TODO (desired): should be unnecessary, only included to not breach Stable command validations
 
-    public ReadEphemeralTxnData(Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps)
+    public ReadEphemeralTxnData(Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route)
     {
-        super(to, topologies, txnId, readScope, executeAtEpoch);
-        this.partialTxn = partialTxn;
-        this.partialDeps = partialDeps;
+        this(to, topologies, txnId, readScope, executeAtEpoch, txn, deps, route, latestRelevantEpochIndex(to, topologies, readScope));
     }
 
-    public ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, long waitForEpoch, long executeAtEpoch, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps)
+    private ReadEphemeralTxnData(Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route, int latestRelevantIndex)
+    {
+        this(txnId, readScope, computeScope(to, topologies, null, latestRelevantIndex, (i, r) -> r, Ranges::with), computeWaitForEpoch(to, topologies, latestRelevantIndex), executeAtEpoch, txn, deps, route);
+    }
+
+    private ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, Ranges slice, long waitForEpoch, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route)
+    {
+        super(txnId, readScope.slice(slice), waitForEpoch, executeAtEpoch);
+        this.route = route;
+        this.partialTxn = txn.slice(slice, false);
+        this.partialDeps = deps.slice(slice);
+    }
+
+    public ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, long waitForEpoch, long executeAtEpoch, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps, @Nonnull FullRoute<?> route)
     {
         super(txnId, readScope, waitForEpoch, executeAtEpoch);
         this.partialTxn = partialTxn;
         this.partialDeps = partialDeps;
+        this.route = route;
     }
 
     @Override
     protected synchronized CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
+        // TODO (expected): if one of our dependencies commits in a future epoch, so that we will never apply it locally, we should send a nack with the epoch to retry with
+        Commands.stableEphemeralRead(safeStore, safeCommand, route, txnId, partialTxn, partialDeps);
         return super.apply(safeStore, safeCommand);
     }
 }

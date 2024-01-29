@@ -19,7 +19,10 @@
 package accord.primitives;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -30,8 +33,11 @@ import accord.api.Read;
 import accord.api.Result;
 import accord.api.Update;
 import accord.local.SafeCommandStore;
+import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+
+import java.util.Set;
 import java.util.function.Predicate;
 
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
@@ -40,6 +46,7 @@ import static accord.primitives.Txn.Kind.Kinds.RorWs;
 import static accord.primitives.Txn.Kind.Kinds.SyncPoints;
 import static accord.primitives.Txn.Kind.Kinds.Ws;
 import static accord.primitives.Txn.Kind.Kinds.WsOrSyncPoint;
+import static accord.utils.Invariants.illegalState;
 
 public interface Txn
 {
@@ -104,14 +111,23 @@ public interface Txn
          *
          * Invisible to other transactions.
          */
-        ExclusiveSyncPoint,
+        ExclusiveSyncPoint('X'),
 
         /**
          * Used for local book-keeping only, not visible to any other replica or directly to other transactions.
          * This is used to create pseudo transactions that take the place of dependencies that will be fulfilled by a bootstrap.
          */
-        LocalOnly
-        ;
+        LocalOnly;
+
+        Kind()
+        {
+            this.shortName = name().charAt(0);
+        }
+
+        Kind(char shortName)
+        {
+            this.shortName = shortName;
+        }
 
         public enum Kinds implements Predicate<Kind>
         {
@@ -145,6 +161,14 @@ public interface Txn
         // in future: BlindWrite, Interactive?
 
         private static final Kind[] VALUES = Kind.values();
+        static
+        {
+            Map<Character, Kind> shortNames = new HashMap<>();
+            for (Kind kind : VALUES)
+                Invariants.checkState(null == shortNames.putIfAbsent(kind.shortName, kind), "Short name conflict between: " + kind + " and " + shortNames.get(kind.shortName));
+        }
+
+        private final char shortName;
 
         public boolean isWrite()
         {
@@ -177,11 +201,11 @@ public interface Txn
         }
 
         /**
-         * An ExclusiveSyncPoint executes only after all of its dependencies, regardless of their executeAt.
+         * An ExclusiveSyncPoint and EphemeralRead execute only after all of their dependencies, regardless of their executeAt.
          */
         public boolean awaitsFutureDeps()
         {
-            return this == ExclusiveSyncPoint;
+            return this == ExclusiveSyncPoint || this == EphemeralRead;
         }
 
         public static Kind ofOrdinal(int ordinal)
