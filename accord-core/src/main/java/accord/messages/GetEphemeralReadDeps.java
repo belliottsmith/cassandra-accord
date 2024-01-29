@@ -93,7 +93,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     @Override
     public MessageType type()
     {
-        return MessageType.GET_DEPS_REQ;
+        return MessageType.GET_EPHEMERAL_READ_DEPS_REQ;
     }
 
     @Override
