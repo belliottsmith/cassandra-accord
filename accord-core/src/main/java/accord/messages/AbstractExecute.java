@@ -94,12 +94,6 @@ public abstract class AbstractExecute extends ReadData implements Command.Transi
     }
 
     @Override
-    public ReadType kind()
-    {
-        return ReadType.readTxnData;
-    }
-
-    @Override
     protected long executeAtEpoch()
     {
         return executeAtEpoch;

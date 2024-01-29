@@ -29,9 +29,9 @@ public class ReadTxnData extends AbstractExecute
 {
     public static class SerializerSupport
     {
-        public static ReadTxnData create(TxnId txnId, Participants<?> scope, long executeAtEpoch, long waitForEpoch)
+        public static ReadTxnData create(TxnId txnId, Participants<?> scope, long waitForEpoch, long executeAtEpoch)
         {
-            return new ReadTxnData(txnId, scope, executeAtEpoch, waitForEpoch);
+            return new ReadTxnData(txnId, scope, waitForEpoch, executeAtEpoch);
         }
     }
 
@@ -53,6 +53,12 @@ public class ReadTxnData extends AbstractExecute
     protected boolean canExecutePreApplied()
     {
         return false;
+    }
+
+    @Override
+    public ReadType kind()
+    {
+        return ReadType.readTxnData;
     }
 
     @Override

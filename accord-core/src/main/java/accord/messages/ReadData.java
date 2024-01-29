@@ -51,8 +51,9 @@ public abstract class ReadData extends AbstractEpochRequest<CommitOrReadNack>
     public enum ReadType
     {
         readTxnData(0),
-        waitUntilApplied(1),
-        applyThenWaitUntilApplied(2);
+        readEphemeralTxnData(1),
+        waitUntilApplied(2),
+        applyThenWaitUntilApplied(3);
 
         public final byte val;
 
@@ -68,8 +69,10 @@ public abstract class ReadData extends AbstractEpochRequest<CommitOrReadNack>
                 case 0:
                     return readTxnData;
                 case 1:
-                    return waitUntilApplied;
+                    return readEphemeralTxnData;
                 case 2:
+                    return waitUntilApplied;
+                case 3:
                     return applyThenWaitUntilApplied;
                 default:
                     throw new IllegalArgumentException("Unrecognized ReadType value " + val);

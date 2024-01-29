@@ -37,7 +37,7 @@ import static accord.messages.TxnRequest.computeScope;
 import static accord.messages.TxnRequest.computeWaitForEpoch;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 
-public class ReadEphemeralTxnData extends ReadTxnData
+public class ReadEphemeralTxnData extends AbstractExecute
 {
     public static class SerializerSupport
     {
@@ -78,10 +78,28 @@ public class ReadEphemeralTxnData extends ReadTxnData
     }
 
     @Override
+    protected boolean canExecutePreApplied()
+    {
+        return false;
+    }
+
+    @Override
     protected synchronized CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
         // TODO (expected): if one of our dependencies commits in a future epoch, so that we will never apply it locally, we should send a nack with the epoch to retry with
         Commands.stableEphemeralRead(safeStore, safeCommand, route, txnId, partialTxn, partialDeps);
         return super.apply(safeStore, safeCommand);
+    }
+
+    @Override
+    public ReadType kind()
+    {
+        return ReadType.readTxnData;
+    }
+
+    @Override
+    public MessageType type()
+    {
+        return MessageType.READ_EPHEMERAL_REQ;
     }
 }

@@ -52,6 +52,7 @@ public class MessageType
     public static final MessageType APPLY_MAXIMAL_REQ                 = remote("APPLY_MAXIMAL_REQ",                 true );
     public static final MessageType APPLY_RSP                         = remote("APPLY_RSP",                         false);
     public static final MessageType READ_REQ                          = remote("READ_REQ",                          false);
+    public static final MessageType READ_EPHEMERAL_REQ                = remote("READ_EPHEMERAL_REQ",                false);
     public static final MessageType READ_RSP                          = remote("READ_RSP",                          false);
     public static final MessageType BEGIN_RECOVER_REQ                 = remote("BEGIN_RECOVER_REQ",                 true );
     public static final MessageType BEGIN_RECOVER_RSP                 = remote("BEGIN_RECOVER_RSP",                 false);
