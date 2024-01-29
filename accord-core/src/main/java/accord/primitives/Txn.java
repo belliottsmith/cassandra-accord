@@ -20,7 +20,6 @@ package accord.primitives;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,7 +36,6 @@ import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
-import java.util.Set;
 import java.util.function.Predicate;
 
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
@@ -46,7 +44,6 @@ import static accord.primitives.Txn.Kind.Kinds.RorWs;
 import static accord.primitives.Txn.Kind.Kinds.SyncPoints;
 import static accord.primitives.Txn.Kind.Kinds.Ws;
 import static accord.primitives.Txn.Kind.Kinds.WsOrSyncPoint;
-import static accord.utils.Invariants.illegalState;
 
 public interface Txn
 {

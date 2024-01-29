@@ -24,7 +24,6 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 
 import accord.coordinate.tracking.QuorumTracker;
-import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Callback;
