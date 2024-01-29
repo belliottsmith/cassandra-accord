@@ -94,7 +94,7 @@ public class ReadEphemeralTxnData extends AbstractExecute
     @Override
     public ReadType kind()
     {
-        return ReadType.readTxnData;
+        return ReadType.readEphemeralTxnData;
     }
 
     @Override
