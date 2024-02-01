@@ -351,7 +351,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     public static RedundantBefore create(Ranges ranges, long startEpoch, long endEpoch, @Nonnull TxnId locallyAppliedOrInvalidatedBefore, @Nonnull TxnId shardAppliedOrInvalidatedBefore, @Nonnull TxnId bootstrappedAt, @Nullable Timestamp staleUntilAtLeast)
     {
         if (ranges.isEmpty())
-            return new RedundantBefore();
+            return RedundantBefore.EMPTY;
 
         Entry entry = new Entry(null, startEpoch, endEpoch, locallyAppliedOrInvalidatedBefore, shardAppliedOrInvalidatedBefore, bootstrappedAt, staleUntilAtLeast);
         Builder builder = new Builder(ranges.get(0).endInclusive(), ranges.size() * 2);

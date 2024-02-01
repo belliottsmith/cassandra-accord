@@ -22,6 +22,7 @@ import accord.primitives.*;
 
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import static accord.utils.SortedArrays.Search.FAST;
 import static accord.utils.SortedArrays.exponentialSearch;
@@ -299,13 +300,18 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     public static <V> ReducingRangeMap<V> create(Ranges ranges, V value)
     {
+        return create(ranges, value, ReducingRangeMap::new, ReducingRangeMap.Builder::new);
+    }
+
+    protected static <V, M extends ReducingRangeMap<V>> ReducingRangeMap<V> create(Ranges ranges, V value, Supplier<M> empty, BuilderFactory<RoutingKey, V, M> builderFactory)
+    {
         if (value == null)
             throw new IllegalArgumentException("value is null");
 
         if (ranges.isEmpty())
-            return new ReducingRangeMap<>();
+            return empty.get();
 
-        ReducingRangeMap.Builder<V> builder = new ReducingRangeMap.Builder<>(ranges.get(0).endInclusive(), ranges.size() * 2);
+        ReducingRangeMap.AbstractBoundariesBuilder<RoutingKey, V, M> builder = builderFactory.create(ranges.get(0).endInclusive(), ranges.size() * 2);
         for (Range range : ranges)
         {
             builder.append(range.start(), value, (a, b) -> { throw new IllegalStateException(); });

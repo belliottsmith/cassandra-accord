@@ -300,6 +300,7 @@ public class Infer
         if (safeStore.commandStore().globalDurability(txnId).compareTo(Majority) >= 0)
         {
             Unseekables<?> preacceptsWith = isRoute(query) ? castToRoute(query).withHomeKey() : query;
+            // TODO (required): test this condition, as may have been inverted and not caught
             return safeStore.commandStore().isRejectedIfNotPreAccepted(txnId, preacceptsWith) ? IfUnknown : IfUndecided;
         }
 

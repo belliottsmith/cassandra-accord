@@ -36,7 +36,6 @@ import accord.utils.async.AsyncChain;
 import accord.api.ConfigurationService.EpochReady;
 import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
-import accord.utils.ReducingRangeMap;
 import accord.utils.async.AsyncResult;
 
 import java.util.AbstractMap.SimpleImmutableEntry;
@@ -44,7 +43,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.NavigableMap;
-import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Callable;
@@ -154,7 +152,7 @@ public abstract class CommandStore implements AgentExecutor
     private DurableBefore durableBefore = DurableBefore.EMPTY;
     protected RangesForEpoch rangesForEpoch;
 
-    // TODO (desired): merge with redundantBefore?
+    // TODO (expected): merge with redundantBefore
     /**
      * safeToRead is related to RedundantBefore, but a distinct concept.
      * While bootstrappedAt defines the txnId bounds we expect to maintain data for locally,
@@ -172,7 +170,7 @@ public abstract class CommandStore implements AgentExecutor
     private NavigableMap<Timestamp, Ranges> safeToRead = ImmutableSortedMap.of(Timestamp.NONE, Ranges.EMPTY);
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
     // TODO (required): we must synchronise this on joining, prior to marking ourselves ready to coordinate
-    @Nullable private ReducingRangeMap<Timestamp> rejectBefore;
+    @Nullable private RejectBefore rejectBefore;
 
     protected CommandStore(int id, NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, EpochUpdateHolder epochUpdateHolder)
     {
@@ -239,7 +237,7 @@ public abstract class CommandStore implements AgentExecutor
     }
 
     // implementations are expected to override this for persistence
-    protected void setRejectBefore(ReducingRangeMap<Timestamp> newRejectBefore)
+    protected void setRejectBefore(RejectBefore newRejectBefore)
     {
         this.rejectBefore = newRejectBefore;
     }
@@ -290,8 +288,8 @@ public abstract class CommandStore implements AgentExecutor
     {
         // TODO (desired): narrow ranges to those that are owned
         Invariants.checkArgument(txnId.kind() == ExclusiveSyncPoint);
-        ReducingRangeMap<Timestamp> newRejectBefore = rejectBefore != null ? rejectBefore : new ReducingRangeMap<>();
-        newRejectBefore = ReducingRangeMap.add(newRejectBefore, ranges, txnId, Timestamp::max);
+        RejectBefore newRejectBefore = rejectBefore != null ? rejectBefore : RejectBefore.EMPTY;
+        newRejectBefore = RejectBefore.add(newRejectBefore, ranges, txnId);
         setRejectBefore(newRejectBefore);
     }
 
@@ -308,7 +306,7 @@ public abstract class CommandStore implements AgentExecutor
         NodeTimeService time = safeStore.time();
         boolean isExpired = agent().isExpired(txnId, safeStore.time().now());
         if (rejectBefore != null && !isExpired)
-            isExpired = null == rejectBefore.foldl(keys, (rejectIfBefore, test) -> rejectIfBefore.compareTo(test) > 0 ? null : test, txnId, Objects::isNull);
+            isExpired = rejectBefore.rejects(txnId, keys);
 
         if (isExpired)
             return time.uniqueNow(txnId).asRejected();
@@ -564,7 +562,7 @@ public abstract class CommandStore implements AgentExecutor
         if (rejectBefore == null)
             return false;
 
-        return null != rejectBefore.foldl(participants, (rejectIfBefore, test) -> rejectIfBefore.compareTo(test) > 0 ? null : test, txnId, Objects::isNull);
+        return rejectBefore.rejects(txnId, participants);
     }
 
     public final void removeRedundantDependencies(Unseekables<?> participants, WaitingOn.Update builder)
