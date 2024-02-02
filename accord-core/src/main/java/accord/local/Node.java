@@ -377,7 +377,8 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         if (current.epoch() >= proposed.epoch() && current.hlc() >= proposed.hlc())
             return current;
 
-        return proposed.withEpochAtLeast(proposed.epoch())
+        // TODO (required): double check why erroneous proposed.withEpochAtLeast(proposed.epoch()) went unnoticed - maybe not algorithmically necessary?
+        return proposed.withEpochAtLeast(current.epoch())
                        .withHlcAtLeast(current.hlc())
                        .withNode(current.node);
     }
