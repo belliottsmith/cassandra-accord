@@ -101,7 +101,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Execute
     @Override
     public void contact(Id to)
     {
-        node.send(to, new ReadTxnData(to, topologies(), txnId, readScope, executeAt), this);
+        node.send(to, new ReadTxnData(to, topologies(), txnId, readScope, executeAt.epoch()), this);
     }
 
     @Override

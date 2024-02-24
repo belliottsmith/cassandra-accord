@@ -22,7 +22,6 @@ import accord.impl.basic.NodeSink;
 import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.messages.Message;
-import accord.messages.ReadData;
 import accord.messages.Request;
 import accord.messages.SimpleReply;
 import accord.messages.TxnRequest;

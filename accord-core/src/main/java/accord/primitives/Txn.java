@@ -198,9 +198,9 @@ public interface Txn
         }
 
         /**
-         * An ExclusiveSyncPoint and EphemeralRead execute only after all of their dependencies, regardless of their executeAt.
+         * An ExclusiveSyncPoint and EphemeralRead execute only after all of their dependencies, and have no logical executeAt.
          */
-        public boolean awaitsFutureDeps()
+        public boolean awaitsOnlyDeps()
         {
             return this == ExclusiveSyncPoint || this == EphemeralRead;
         }
