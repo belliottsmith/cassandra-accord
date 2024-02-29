@@ -1480,6 +1480,14 @@ public abstract class Command implements CommonAttributes
                 return waitingOnApply.get(index) || waitingOnCommit.get(index);
             }
 
+            public boolean hasUpdatedDirectDependency(WaitingOn prev)
+            {
+                int i = prev.waitingOnApply.lastSetBit();
+                if (i >= 0) return !waitingOnApply.get(i);
+                i = prev.waitingOnCommit.lastSetBit();
+                return i >= 0 && !waitingOnCommit.get(i);
+            }
+
             public boolean addWaitingOnApply(TxnId txnId)
             {
                 int index = deps.indexOf(txnId);
@@ -1745,7 +1753,7 @@ public abstract class Command implements CommonAttributes
 
     static Command.Committed stable(Command command, CommonAttributes attrs, Ballot ballot, Timestamp executeAt, Command.WaitingOn waitingOn)
     {
-        return validate(Command.Committed.committed(attrs, SaveStatus.get(Status.Stable, command.known()), executeAt, Ballot.max(command.promised(), ballot), ballot, waitingOn));
+        return validate(Command.Committed.committed(attrs, SaveStatus.Stable, executeAt, Ballot.max(command.promised(), ballot), ballot, waitingOn));
     }
 
     static Command precommit(CommonAttributes attrs, Command command, Timestamp executeAt)

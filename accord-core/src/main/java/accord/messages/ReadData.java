@@ -202,6 +202,7 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
                 waitingOn.set(safeStore.commandStore().id());
                 reading.set(safeStore.commandStore().id());
                 ++waitingOnCount;
+                safeCommand.addListener(this);
                 read(safeStore, safeCommand.current());
                 return null;
         }

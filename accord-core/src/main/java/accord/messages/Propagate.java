@@ -52,11 +52,13 @@ import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
 import static accord.local.SaveStatus.Stable;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
+import static accord.local.Status.PreAccepted;
 import static accord.local.Status.PreApplied;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 
+// TODO (required): detect propagate loops where we don't manage to update anything but should
 public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
 {
     public static class SerializerSupport
@@ -145,6 +147,11 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
     @SuppressWarnings({"rawtypes", "unchecked"})
     public static void propagate(Node node, TxnId txnId, long sourceEpoch, WithQuorum withQuorum, Route route, @Nullable Status.Known target, CheckStatus.CheckStatusOkFull full, BiConsumer<Status.Known, Throwable> callback)
     {
+        propagate(node, txnId, sourceEpoch, sourceEpoch, withQuorum, route, target, full, callback);
+    }
+
+    public static void propagate(Node node, TxnId txnId, long sourceEpoch, long toEpoch, WithQuorum withQuorum, Route route, @Nullable Status.Known target, CheckStatus.CheckStatusOkFull full, BiConsumer<Status.Known, Throwable> callback)
+    {
         if (full.maxKnowledgeSaveStatus.status == NotDefined && full.maxInvalidIfNot() == NotKnownToBeInvalid)
         {
             callback.accept(Status.Known.Nothing, null);
@@ -156,8 +163,6 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
         full = full.finish(route, withQuorum);
         route = Invariants.nonNull(full.route);
 
-        // TODO (required): permit individual shards that are behind to catch up by themselves
-        long toEpoch = sourceEpoch;
         Ranges sliceRanges = node.topology().localRangesForEpochs(txnId.epoch(), toEpoch);
 
         RoutingKey progressKey = node.trySelectProgressKey(txnId, route);
@@ -330,7 +335,6 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
                 }
 
             case Stable:
-            case ReadyToExecute:
                 confirm(Commands.commit(safeStore, safeCommand, Stable, ballot, txnId, route, progressKey, partialTxn, executeAtIfKnown, stableDeps));
                 break;
 
@@ -465,7 +469,7 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
         if (!durability.isDurable() || homeKey == null)
             return null;
 
-        Commands.setDurability(safeStore, safeCommand, durability, route, committedExecuteAt);
+        Commands.setDurability(safeStore, safeCommand, durability, route, committedExecuteAt, this);
         return null;
     }
 
@@ -494,7 +498,6 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
                 if (toEpoch >= committedExecuteAt.epoch())
                     return MessageType.PROPAGATE_APPLY_MSG;
             case Committed:
-            case ReadyToExecute:
                 return MessageType.PROPAGATE_STABLE_MSG;
             case PreCommitted:
                 if (!achieved.definition.isKnown())

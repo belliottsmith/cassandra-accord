@@ -48,6 +48,8 @@ import static accord.utils.Invariants.illegalState;
 
 public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 {
+    public static final EpochSupplier NO_UPPER_BOUND = () -> Long.MAX_VALUE;
+
     public static class SerializerSupport
     {
         public static RedundantBefore create(boolean inclusiveEnds, RoutingKey[] ends, Entry[] values)

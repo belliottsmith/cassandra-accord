@@ -345,6 +345,7 @@ public class SimpleProgressLog implements ProgressLog.Factory
                                 return;
 
                             setProgress(Expected);
+                            // TODO (required): we might not be in the coordinating OR execution epochs if an accept round contacted us but recovery did not (quite hard to achieve)
                             Invariants.checkState(fail != null || !blockedUntil.isSatisfiedBy(success.propagates()));
                         }).begin(commandStore.agent());
                     };
