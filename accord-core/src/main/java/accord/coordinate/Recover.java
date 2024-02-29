@@ -270,7 +270,6 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     return;
                 }
 
-                case ReadyToExecute:
                 case Stable:
                 {
                     withCommittedDeps(executeAt, stableDeps -> {

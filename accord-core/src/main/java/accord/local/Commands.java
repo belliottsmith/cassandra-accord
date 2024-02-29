@@ -18,8 +18,8 @@
 
 package accord.local;
 
-import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
@@ -74,8 +74,9 @@ import static accord.local.PreLoadContext.contextFor;
 import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.SaveStatus.Applying;
 import static accord.local.SaveStatus.Erased;
+import static accord.local.SaveStatus.LocalExecution.CleaningUp;
 import static accord.local.SaveStatus.LocalExecution.ReadyToExclude;
-import static accord.local.SaveStatus.LocalExecution.WaitingToExecute;
+import static accord.local.SaveStatus.LocalExecution.ReadyToExecute;
 import static accord.local.SaveStatus.TruncatedApply;
 import static accord.local.Status.Accepted;
 import static accord.local.Status.AcceptedInvalidate;
@@ -88,7 +89,6 @@ import static accord.local.Status.NotDefined;
 import static accord.local.Status.PreAccepted;
 import static accord.local.Status.PreApplied;
 import static accord.local.Status.PreCommitted;
-import static accord.local.Status.ReadyToExecute;
 import static accord.local.Status.Stable;
 import static accord.local.Status.Truncated;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -555,7 +555,6 @@ public class Commands
             case PreCommitted:
             case Committed:
             case Stable:
-            case ReadyToExecute:
             case PreApplied:
             case Applied:
             case Invalidated:
@@ -839,7 +838,9 @@ public class Commands
         if (updateWaitingOn(safeStore, command.txnId(), command.executeAt(), waitingOn, predecessor))
         {
             safeCommand.updateWaitingOn(waitingOn);
-            maybeExecute(safeStore, safeCommand, false, notifyWaitingOn);
+            // don't bother invoking maybeExecute if we weren't already blocked on the updated command
+            if (!waitingOn.isWaitingOn(command.waitingOn().nextWaitingOn()))
+                maybeExecute(safeStore, safeCommand, false, notifyWaitingOn);
         }
         else
         {
@@ -981,40 +982,33 @@ public class Commands
         return setDurability(safeStore, safeCommand, durability, null, null);
     }
 
-    // TODO (expected): we should have a new SaveState that avoids us duplicating work that indicates we're WaitingToExecute;
-    //  this means that once we have begun visiting a transaction on behalf of some later transaction, we don't need to do so again.
     static class NotifyWaitingOn implements PreLoadContext, Consumer<SafeCommandStore>
     {
-        LocalExecution[] blockedUntil = new LocalExecution[4];
-        TxnId[] txnIds = new TxnId[4];
-        int depth;
+        final TxnId rootId;
+        TxnId loadChildId;
 
         public NotifyWaitingOn(SafeCommand root)
         {
-            txnIds[0] = root.txnId();
-            blockedUntil[0] = LocalExecution.Applied;
+            Invariants.checkArgument(root.current().hasBeen(Stable));
+            this.rootId = root.txnId();
         }
 
         @Override
         public void accept(SafeCommandStore safeStore)
         {
-            // first do a simple loop to skip over txns that have been truncated
-            SafeCommand prevSafe = ifInitialised(safeStore, depth - 1);
-            if (depth > 0 && (prevSafe == null || prevSafe.current().hasBeen(Truncated)))
+            SafeCommand rootSafe = safeStore.get(rootId);
+            SafeCommand childSafe = null;
             {
-                while (depth > 0 && (prevSafe == null || prevSafe.current().hasBeen(Truncated)))
-                    prevSafe = ifInitialised(safeStore, --depth - 1);
-            }
-            else
-            {
-                // we know we loaded cur, so if it's null it's either truncated or we haven't witnessed it and need to initialise;
-                // in this case use our predecessor's intersecting keys to decide which
-                SafeCommand curSafe = ifInitialised(safeStore, depth);
-                if (curSafe == null)
+                Command root = rootSafe.current();
+                if (root.saveStatus().compareTo(Applying) >= 0)
+                    return; // nothing to do
+
+                if (loadChildId != null)
                 {
-                    if (prevSafe != null)
+                    childSafe = safeStore.ifInitialised(loadChildId);
+                    if (childSafe == null)
                     {
-                        RedundantStatus redundantStatus = safeStore.commandStore().redundantBefore().status(txnIds[depth], prevSafe.current().executeAt(), prevSafe.current().partialDeps().participants(txnIds[depth]));
+                        RedundantStatus redundantStatus = safeStore.commandStore().redundantBefore().status(rootId, root.executeAt(), root.partialDeps().participants(loadChildId));
                         switch (redundantStatus)
                         {
                             default: throw new AssertionError("Unexpected redundant status: " + redundantStatus);
@@ -1023,182 +1017,136 @@ public class Commands
                             case LOCALLY_REDUNDANT:
                             case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                             case PRE_BOOTSTRAP_OR_STALE:
-                                removeRedundantDependencies(safeStore, prevSafe, txnIds[depth]);
-                                prevSafe = get(safeStore, --depth - 1);
+                                removeRedundantDependencies(safeStore, rootSafe, loadChildId);
                                 break;
                             case LIVE:
                             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-                                initialise(safeStore, depth);
                         }
-                    }
-                    else
-                    {
-                        do
-                        {
-                            if (--depth == -1)
-                                return; // the command must have been truncated
-                            curSafe = prevSafe;
-                            prevSafe = ifInitialised(safeStore, depth - 1);
-                        } while (curSafe == null);
                     }
                 }
             }
 
-            Invariants.checkState(depth == 0 || prevSafe != null);
-            loop: while (depth >= 0)
+            while (true)
             {
-                if (depth > 100000) // TODO (expected): dump more debug info to aid investigation
-                    throw new StackOverflowError("Exploring a probably-recursive or otherwise faulty dependency graph from " + txnIds[0]);
-                Command prev = prevSafe != null ? prevSafe.current() : null;
-                SafeCommand curSafe = ifLoadedAndInitialised(safeStore, depth);
-                Command cur = curSafe != null ? curSafe.current() : null;
-                LocalExecution until = blockedUntil[depth];
-                if (cur == null)
+                Command root = rootSafe.current();
+                if (childSafe == null)
                 {
-                    // need to load; schedule execution for later
-                    safeStore.commandStore().execute(this, this).begin(safeStore.agent());
-                    return;
-                }
-
-                if (prev != null)
-                {
-                    if (cur.isAtLeast(until) || (cur.hasBeen(PreCommitted) && cur.executeAt().compareTo(prev.executeAt()) > 0 && !prev.txnId().kind().awaitsOnlyDeps()))
+                    WaitingOn waitingOn = root.asCommitted().waitingOn();
+                    TxnId directlyBlockedOn = waitingOn.nextWaitingOnApply();
+                    if (directlyBlockedOn == null) directlyBlockedOn = waitingOn.nextWaitingOnCommit();
+                    if (directlyBlockedOn == null)
                     {
-                        updateDependencyAndMaybeExecute(safeStore, prevSafe, curSafe, false);
-                        --depth;
-                        prevSafe = get(safeStore, depth - 1);
-                        continue;
-                    }
-                }
-                else if (cur.isAtLeast(until))
-                {
-                    // we're done; already applying
-                    Invariants.checkState(depth == 0);
-                    break;
-                }
+                        switch (root.saveStatus())
+                        {
+                            default: throw illegalState("Invalid saveStatus with empty waitingOn: " + root.saveStatus());
+                            case ReadyToExecute:
+                            case Applied:
+                            case Applying:
+                                return;
 
-                WaitingOn waitingOn = cur.hasBeen(Stable) ? cur.asCommitted().waitingOn() : WaitingOn.EMPTY;
-                TxnId directlyBlockedOnCommit;
-                TxnId directlyBlockedOnApply = waitingOn.nextWaitingOnApply();
-                if (directlyBlockedOnApply != null)
-                {
-                    // preferentially block on apply, as this probably saves us additional bookkeeping
-                    // by giving other dependencies time to complete
-                    push(directlyBlockedOnApply, LocalExecution.Applied);
-                    prevSafe = curSafe;
-                }
-                else if ((directlyBlockedOnCommit = waitingOn.nextWaitingOnCommit()) != null)
-                {
-                    push(directlyBlockedOnCommit, WaitingToExecute);
-                    prevSafe = curSafe;
+                            case Stable:
+                            case PreApplied:
+                                boolean executed = maybeExecute(safeStore, rootSafe, true, false);
+                                Invariants.checkState(executed);
+                                return;
+                        }
+                    }
+                    childSafe = safeStore.ifLoadedAndInitialised(directlyBlockedOn);
+                    if (childSafe == null)
+                    {
+                        loadChildId = directlyBlockedOn;
+                        safeStore.commandStore().execute(this, this).begin(safeStore.agent());
+                        return;
+                    }
                 }
                 else
                 {
-                    if (cur.hasBeen(Stable))
+                    Command child = childSafe.current();
+                    SaveStatus childStatus = child.saveStatus();
+                    switch (childStatus.known.executeAt)
                     {
-                        if (!cur.is(ReadyToExecute) && cur.saveStatus() != Applying && !cur.asCommitted().isWaitingOnDependency())
-                        {
-                            if (!maybeExecute(safeStore, curSafe, false, false))
-                                throw new AssertionError("Is able to Apply, but has not done so");
-                            // loop and re-test the command's status; we may still want to notify blocking, esp. if not homeShard
-                            continue;
-                        }
-                    }
-                    else if (!cur.hasBeen(PreCommitted))
-                        until = ReadyToExclude;
-
-                    Timestamp executeAt = prev == null ? cur.executeAt() : prev.executeAt();
-                    Participants<?> participants = prev != null // TODO (desired): slightly costly to invert a large partialDeps collection
-                                                   ? prev.partialDeps().participants(cur.txnId()) // we do want to limit to the intersection of keys with the waiting transaction
-                                                   : cur.route().participants(); // no need to slice to execution ranges, as implicitly done for us by RedundantBefore
-
-                    RedundantStatus redundantStatus = safeStore.commandStore().redundantBefore().status(cur.txnId(), executeAt, participants);
-                    switch (redundantStatus)
-                    {
-                        default: throw new AssertionError("Unknown redundant status: " + redundantStatus);
-                        case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
-                        case LIVE:
-                        case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-                            logger.trace("{} blocked on {} until {}", txnIds[0], cur.txnId(), until);
-                            safeStore.progressLog().waiting(curSafe, until, null, participants);
-                            break loop;
-
-                        case LOCALLY_REDUNDANT:
-                        case SHARD_REDUNDANT:
-                            if (cur.txnId().kind() == EphemeralRead)
-                            {
-                                removeRedundantDependencies(safeStore, curSafe, null);
-                                maybeExecute(safeStore, curSafe, false, false);
-                                --depth;
-                                prevSafe = get(safeStore, depth - 1);
+                        case ExecuteAtKnown:
+                            if (rootId.kind().awaitsOnlyDeps() || child.executeAt().compareTo(root.executeAt()) < 0)
                                 break;
-                            }
-                        case PRE_BOOTSTRAP_OR_STALE:
-                        case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
-                            Invariants.checkState(cur.txnId().kind() == EphemeralRead || cur.hasBeen(Applied) || !cur.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP_OR_STALE);
-                            if (prev == null)
+
+                        case NoExecuteAt:
+                            updateDependencyAndMaybeExecute(safeStore, rootSafe, childSafe, false);
+                            Invariants.checkState(!rootSafe.current().asCommitted().waitingOn().isWaitingOn(child.txnId()));
+                            childSafe = null;
+                            continue;
+                    }
+
+                    if (!Route.isFullRoute(child.route()) || childStatus.hasBeen(Truncated))
+                    {
+                        // TODO (desired): slightly costly to invert a large partialDeps collection
+                        Participants<?> participants = root.partialDeps().participants(child.txnId());
+                        RedundantStatus redundantStatus = safeStore.commandStore().redundantBefore().status(child.txnId(), root.executeAt(), participants);
+                        switch (redundantStatus)
+                        {
+                            default: throw new AssertionError("Unknown redundant status: " + redundantStatus);
+                            case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
+                            case LIVE:
+                            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
+                                if (logger.isTraceEnabled()) logger.trace("{} blocked on {} until ReadyToExclude", rootId, child.txnId());
+                                childSafe.addListener(root.asListener());
+                                safeStore.progressLog().waiting(childSafe, ReadyToExclude, null, participants);
                                 return;
 
-                            curSafe.removeListener(prev.asListener());
+                            case LOCALLY_REDUNDANT:
+                            case SHARD_REDUNDANT:
+                            case PRE_BOOTSTRAP_OR_STALE:
+                            case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
+                                Invariants.checkState(child.hasBeen(Applied) || !child.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP_OR_STALE);
 
-                            // we've been applied, invalidated, or are no longer relevant
-                            removeRedundantDependencies(safeStore, prevSafe, cur.txnId());
+                                // we've been applied, invalidated, or are no longer relevant
+                                removeRedundantDependencies(safeStore, rootSafe, child.txnId());
+                                childSafe = null;
+                                continue;
+                        }
+                    }
 
-                            --depth;
-                            prevSafe = get(safeStore, depth - 1);
+                    switch (childStatus.execution)
+                    {
+                        default: throw new AssertionError("Unhandled LocalExecution: " + childStatus.execution);
+                        case CleaningUp: throw illegalState("Invalid LocalExecution (should already be handled): " + childStatus.execution);
+
+                        case NotReady:
+                        case ReadyToExclude:
+                        case WaitingToExecute:
+                        case ReadyToExecute:
+                            safeStore.progressLog().waiting(childSafe, LocalExecution.Applied, child.route(), null);
+
+                        case Applying:
+                            childSafe.addListener(root.asListener());
+                            return;
+
+                        case WaitingToApply:
+                            if (!child.asCommitted().isWaitingOnDependency())
+                            {
+                                maybeExecute(safeStore, childSafe, false, false);
+                                Invariants.checkState(childSafe.current().saveStatus() == Applying);
+                            }
+                            childSafe.addListener(root.asListener());
+                            return;
+
+                        case Applied:
+                            updateDependencyAndMaybeExecute(safeStore, rootSafe, childSafe, false);
+                            childSafe = null;
                     }
                 }
             }
-            for (int i = 1 ; i <= depth ; ++i)
-                initialise(safeStore, i).addListener(get(safeStore, i - 1).current().asListener());
-        }
-
-        private SafeCommand ifInitialised(SafeCommandStore safeStore, int i)
-        {
-            if (i < 0) return null;
-            return safeStore.ifInitialised(txnIds[i]);
-        }
-
-        private SafeCommand ifLoadedAndInitialised(SafeCommandStore safeStore, int i)
-        {
-            if (i < 0) return null;
-            return safeStore.ifLoadedAndInitialised(txnIds[i]);
-        }
-
-        private SafeCommand get(SafeCommandStore safeStore, int i)
-        {
-            if (i < 0) return null;
-            SafeCommand result = safeStore.ifInitialised(txnIds[i]);
-            Invariants.checkState(result != null);
-            return result;
-        }
-
-        private SafeCommand initialise(SafeCommandStore safeStore, int i)
-        {
-            return safeStore.get(txnIds[i]);
-        }
-
-        void push(TxnId by, LocalExecution until)
-        {
-            if (++depth == txnIds.length)
-            {
-                txnIds = Arrays.copyOf(txnIds, txnIds.length * 2);
-                blockedUntil = Arrays.copyOf(blockedUntil, txnIds.length);
-            }
-            txnIds[depth] = by;
-            blockedUntil[depth] = until;
         }
 
         @Override
         public TxnId primaryTxnId()
         {
-            return txnIds[0];
+            return rootId;
         }
 
         @Override
         public Collection<TxnId> additionalTxnIds()
         {
-            return Arrays.asList(txnIds).subList(1, depth + 1);
+            return loadChildId == null ? Collections.emptyList() : Collections.singletonList(loadChildId);
         }
     }
 

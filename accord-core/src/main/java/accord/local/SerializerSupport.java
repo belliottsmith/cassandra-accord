@@ -74,7 +74,6 @@ public class SerializerSupport
                 return accepted(attrs, status, executeAt, promised, accepted, messageProvider);
             case Committed:
             case Stable:
-            case ReadyToExecute:
                 return committed(attrs, status, executeAt, promised, accepted, waitingOnProvider, messageProvider);
             case PreApplied:
             case Applied:
@@ -244,7 +243,6 @@ public class SerializerSupport
 
             case Committed:
             case Stable:
-            case ReadyToExecute:
                 witnessed = messageProvider.test(PRE_ACCEPT_COMMIT_TYPES);
                 if (witnessed.contains(STABLE_MAXIMAL_REQ))
                 {

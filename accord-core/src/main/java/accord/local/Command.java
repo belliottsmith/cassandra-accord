@@ -1745,7 +1745,7 @@ public abstract class Command implements CommonAttributes
 
     static Command.Committed stable(Command command, CommonAttributes attrs, Ballot ballot, Timestamp executeAt, Command.WaitingOn waitingOn)
     {
-        return validate(Command.Committed.committed(attrs, SaveStatus.get(Status.Stable, command.known()), executeAt, Ballot.max(command.promised(), ballot), ballot, waitingOn));
+        return validate(Command.Committed.committed(attrs, SaveStatus.Stable, executeAt, Ballot.max(command.promised(), ballot), ballot, waitingOn));
     }
 
     static Command precommit(CommonAttributes attrs, Command command, Timestamp executeAt)

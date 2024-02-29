@@ -18,10 +18,13 @@
 
 package accord.messages;
 
+import javax.annotation.Nonnull;
+
 import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
+import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 
 public abstract class AbstractEpochRequest<R extends Reply> implements PreLoadContext, Request, MapReduceConsume<SafeCommandStore, R>
