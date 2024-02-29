@@ -93,7 +93,6 @@ import static accord.local.Status.Stable;
 import static accord.local.Status.Truncated;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.isFullRoute;
-import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
 
