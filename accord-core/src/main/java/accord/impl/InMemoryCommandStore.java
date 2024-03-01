@@ -757,14 +757,14 @@ public abstract class InMemoryCommandStore extends CommandStore
             return ranges;
         }
 
-        // TODO (preferable): this can have protected visibility if under CommandStore, and this is perhaps a better place to put it also
+        // TODO (desired): this can have protected visibility if under CommandStore, and this is perhaps a better place to put it also
         @Override
         public void registerHistoricalTransactions(Deps deps)
         {
             RangesForEpoch rangesForEpoch = commandStore.rangesForEpoch;
             Ranges allRanges = rangesForEpoch.all();
             deps.keyDeps.keys().forEach(allRanges, key -> {
-                deps.keyDeps.forEach(key, txnId -> {
+                deps.keyDeps.forEach(key, (txnId, txnIdx) -> {
                     // TODO (desired, efficiency): this can be made more efficient by batching by epoch
                     if (rangesForEpoch.coordinates(txnId).contains(key))
                         return; // already coordinates, no need to replicate
@@ -1221,12 +1221,10 @@ public abstract class InMemoryCommandStore extends CommandStore
             return prefix.toString();
         }
 
-        private static String suffix(boolean blockingOnCommit, boolean blockingOnApply)
+        private static String suffix(boolean blocking)
         {
-            if (blockingOnApply)
-                return " <Blocking On Apply>";
-            if (blockingOnCommit)
-                return " <Blocking On Commit>";
+            if (blocking)
+                return " <Blocking>";
             return "";
         }
 
@@ -1240,11 +1238,11 @@ public abstract class InMemoryCommandStore extends CommandStore
             log(prefix, suffix, "{} {}", command.txnId(), command.saveStatus());
         }
 
-        private static void logDependencyGraph(InMemoryCommandStore commandStore, TxnId txnId, Set<TxnId> visited, boolean verbose, int level, boolean blockingOnCommit, boolean blockingOnApply)
+        private static void logDependencyGraph(InMemoryCommandStore commandStore, TxnId txnId, Set<TxnId> visited, boolean verbose, int level, boolean blocking)
         {
             String prefix = prefix(level, verbose);
             boolean previouslyVisited = !visited.add(txnId); // prevents infinite loops if command deps overlap
-            String suffix = suffix(blockingOnCommit, blockingOnApply);
+            String suffix = suffix(blocking);
             if (previouslyVisited) suffix = suffix + " -- PREVIOUSLY VISITED";
             GlobalCommand global = commandStore.commands.get(txnId);
             if (global == null || global.isEmpty())
@@ -1262,17 +1260,14 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (level == 0 || verbose || !committed.isWaitingOnDependency())
                     log(prefix, suffix, command);
 
-                Set<TxnId> waitingOnCommit = committed.waitingOn.computeWaitingOnCommit();
-                Set<TxnId> waitingOnApply = committed.waitingOn.computeWaitingOnApply();
-
                 if (committed.isWaitingOnDependency() && !previouslyVisited)
-                    deps.forEach(depId -> logDependencyGraph(commandStore, depId, visited, verbose, level+1, waitingOnCommit.contains(depId), waitingOnApply.contains(depId)));
+                    deps.forEach(depId -> logDependencyGraph(commandStore, depId, visited, verbose, level+1, committed.waitingOn.isWaitingOn(depId)));
             }
             else
             {
                 log(prefix, suffix, command);
                 if (!previouslyVisited)
-                    deps.forEach(depId -> logDependencyGraph(commandStore, depId, visited, verbose, level+1, false, false));
+                    deps.forEach(depId -> logDependencyGraph(commandStore, depId, visited, verbose, level+1, false));
             }
         }
 
@@ -1282,7 +1277,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             InMemoryCommandStore inMemoryCommandStore = (InMemoryCommandStore) commandStore;
             logger.info("Node: {}, CommandStore #{}", inMemoryCommandStore.time.id(), commandStore.id());
             Set<TxnId> visited = new HashSet<>();
-            logDependencyGraph(inMemoryCommandStore, txnId, visited, verbose, 0, false, false);
+            logDependencyGraph(inMemoryCommandStore, txnId, visited, verbose, 0, false);
         }
 
         /**

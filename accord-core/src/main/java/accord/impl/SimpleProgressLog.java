@@ -70,6 +70,7 @@ import static accord.local.PreLoadContext.empty;
 import static accord.local.SaveStatus.LocalExecution.NotReady;
 import static accord.local.SaveStatus.LocalExecution.WaitingToApply;
 import static accord.local.Status.PreApplied;
+import static accord.utils.Invariants.debug;
 import static accord.utils.Invariants.illegalState;
 
 // TODO (desired, consider): consider propagating invalidations in the same way as we do applied
@@ -180,8 +181,6 @@ public class SimpleProgressLog implements ProgressLog.Factory
                 CoordinateStatus status = CoordinateStatus.NotWitnessed;
                 ProgressToken token = ProgressToken.NONE;
 
-                Object debugInvestigating;
-
                 void ensureAtLeast(Command command, CoordinateStatus newStatus, Progress newProgress)
                 {
                     ensureAtLeast(newStatus, newProgress);
@@ -270,8 +269,6 @@ public class SimpleProgressLog implements ProgressLog.Factory
                                         }
                                     }).begin(node.agent());
                                 });
-
-                                debugInvestigating = recover;
                             });
                         }
                     }
@@ -290,8 +287,6 @@ public class SimpleProgressLog implements ProgressLog.Factory
 
                 Route<?> route;
                 Participants<?> participants;
-
-                Object debugInvestigating;
 
                 @SuppressWarnings({"unchecked", "rawtypes"})
                 void recordBlocking(LocalExecution blockedUntil, @Nullable Route<?> route, @Nullable Participants<?> participants)
@@ -350,7 +345,7 @@ public class SimpleProgressLog implements ProgressLog.Factory
                     };
 
                     node.withEpoch(blockedUntil.fetchEpoch(txnId, executeAt), () -> {
-                        debugInvestigating = FetchData.fetch(blockedUntil.requires, node, txnId, fetchKeys, forLocalEpoch, executeAt, callback);
+                        FetchData.fetch(blockedUntil.requires, node, txnId, fetchKeys, forLocalEpoch, executeAt, callback);
                     });
                 }
 
@@ -360,13 +355,6 @@ public class SimpleProgressLog implements ProgressLog.Factory
                     Route<?> route = Route.merge(command.route(), (Route)this.route);
                     if (route != null) route = route.withHomeKey();
                     return Unseekables.merge(route == null ? null : route.withHomeKey(), (Unseekables)participants);
-                }
-
-                @SuppressWarnings({"unchecked", "rawtypes"})
-                private Participants<?> maxParticipants(Command command)
-                {
-                    Route<?> route = Route.merge(command.route(), (Route)this.route);
-                    return Participants.merge(route == null ? null : route.participants(), (Participants) participants);
                 }
 
                 @Override
@@ -696,7 +684,7 @@ public class SimpleProgressLog implements ProgressLog.Factory
             }
             catch (Throwable t)
             {
-                t.printStackTrace();
+                node.agent().onUncaughtException(t);
             }
             finally
             {

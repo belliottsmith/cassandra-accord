@@ -29,6 +29,7 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.api.Key;
 
 import accord.local.Command;
+import accord.local.Command.WaitingOn;
 import accord.local.SafeCommandStore.CommandFunction;
 import accord.local.SafeCommandStore.TestDep;
 import accord.local.SafeCommandStore.TestStartedAt;
@@ -40,10 +41,13 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
+import accord.utils.RelationMultiMap;
+import accord.utils.RelationMultiMap.SortedRelationList;
 import accord.utils.SortedArrays;
 import accord.utils.SortedList;
 
 import static accord.impl.CommandsForKey.InternalStatus.ACCEPTED;
+import static accord.impl.CommandsForKey.InternalStatus.APPLIED;
 import static accord.impl.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.impl.CommandsForKey.InternalStatus.STABLE;
 import static accord.impl.CommandsForKey.InternalStatus.HISTORICAL;
@@ -128,8 +132,7 @@ public class CommandsForKey implements CommandsSummary
         ACCEPTED(true),
         COMMITTED(true),
         STABLE(true),
-        // TODO (required): we can probably retire this status; STABLE is sufficient
-        PREAPPLIED(true),
+        APPLIED(true),
         INVALID_OR_TRUNCATED(false);
 
         static final EnumMap<SaveStatus, InternalStatus> convert = new EnumMap<>(SaveStatus.class);
@@ -146,9 +149,9 @@ public class CommandsForKey implements CommandsSummary
             convert.put(SaveStatus.Committed, COMMITTED);
             convert.put(SaveStatus.Stable, STABLE);
             convert.put(SaveStatus.ReadyToExecute, STABLE);
-            convert.put(SaveStatus.PreApplied, PREAPPLIED);
-            convert.put(SaveStatus.Applying, PREAPPLIED);
-            convert.put(SaveStatus.Applied, PREAPPLIED);
+            convert.put(SaveStatus.PreApplied, STABLE);
+            convert.put(SaveStatus.Applying, STABLE);
+            convert.put(SaveStatus.Applied, APPLIED);
             convert.put(SaveStatus.TruncatedApplyWithDeps, INVALID_OR_TRUNCATED);
             convert.put(SaveStatus.TruncatedApplyWithOutcome, INVALID_OR_TRUNCATED);
             convert.put(SaveStatus.TruncatedApply, INVALID_OR_TRUNCATED);
@@ -187,7 +190,7 @@ public class CommandsForKey implements CommandsSummary
 
         boolean hasStableDeps()
         {
-            return this == STABLE || this == PREAPPLIED;
+            return this == STABLE || this == APPLIED;
         }
 
         public Timestamp depsKnownBefore(TxnId txnId, @Nullable Timestamp executeAt)
@@ -204,7 +207,7 @@ public class CommandsForKey implements CommandsSummary
                 case ACCEPTED:
                     return txnId;
 
-                case PREAPPLIED:
+                case APPLIED:
                 case STABLE:
                 case COMMITTED:
                     return executeAt == null ? txnId : executeAt;
@@ -459,7 +462,7 @@ public class CommandsForKey implements CommandsSummary
             {
                 case COMMITTED:
                 case STABLE:
-                case PREAPPLIED:
+                case APPLIED:
                     // TODO (expected): prove the correctness of this approach
                     if (!PRUNE_TRANSITIVE_DEPENDENCIES || maxStableWrite == null || info.executeAt(txnId).compareTo(maxStableWrite) >= 0)
                         break;
@@ -990,6 +993,33 @@ public class CommandsForKey implements CommandsSummary
             return maxStableWrite;
 
         return executeAt;
+    }
+
+    public void initialiseWaitingOn(TxnId waitingId, WaitingOn.Update update)
+    {
+
+        SortedRelationList<TxnId> waitingOnIds = update.deps.keyDeps.txnIds(key);
+        int cfkIdx = 0;
+        for (int i = 0 ; i < waitingOnIds.size() ; ++i)
+        {
+            int waitingOnIdx = waitingOnIds.getValueIndex(i);
+            boolean isWaitingOnApply = update.isWaitingOnApply(waitingOnIdx);
+            boolean isWaitingOnCommit = !isWaitingOnApply && update.isWaitingOnCommit(waitingOnIdx);
+            if (!(isWaitingOnApply | isWaitingOnCommit)) continue;
+            cfkIdx = SortedArrays.exponentialSearch(txnIds, cfkIdx, txnIds.length, waitingOnIds.getForValueIndex(waitingOnIdx));
+            Invariants.checkState(cfkIdx >= 0);
+            Info info = infos[cfkIdx];
+            switch (info.status)
+            {
+                case PREACCEPTED:
+                case HISTORICAL:
+                case ACCEPTED:
+                    continue;
+            }
+        }
+        update.deps.keyDeps.forEach(key, (txnId, txnIdx) -> {
+
+        });
     }
 
     public CommandsForKey withoutRedundant(TxnId redundantBefore)

@@ -65,6 +65,9 @@ public abstract class SafeCommand
     <C extends Command> C update(SafeCommandStore safeStore, @Nullable Seekables<?, ?> keysOrRanges, C update)
     {
         Command prev = current();
+        if (prev == update)
+            return update;
+
         set(update);
         safeStore.update(prev, update, keysOrRanges);
         return update;
@@ -72,6 +75,9 @@ public abstract class SafeCommand
 
      private <C extends Command> C incidentalUpdate(C update)
     {
+        if (current() == update)
+            return update;
+
         set(update);
         return update;
     }
@@ -171,7 +177,9 @@ public abstract class SafeCommand
 
     public Command.Executed applied(SafeCommandStore safeStore)
     {
-        return update(safeStore, null, Command.applied(current().asExecuted()));
+        Command.Executed executed = update(safeStore, null, Command.applied(current().asExecuted()));
+        safeStore.progressLog().clear(txnId);
+        return executed;
     }
 
     public Command.NotDefined uninitialised()

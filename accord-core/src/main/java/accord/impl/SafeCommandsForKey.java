@@ -38,12 +38,6 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         return key;
     }
 
-    CommandsForKey update(CommandsForKey update)
-    {
-        set(update);
-        return update;
-    }
-
     CommandsForKey update(Command prev, Command update)
     {
         CommandsForKey current = current();
