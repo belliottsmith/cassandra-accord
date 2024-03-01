@@ -50,6 +50,7 @@ import java.util.function.BiConsumer;
 import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
 import static accord.local.SaveStatus.Stable;
+import static accord.local.SaveStatus.Uninitialised;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
 import static accord.local.Status.PreAccepted;
@@ -374,9 +375,22 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
 
         Ranges ranges = safeStore.ranges().allBetween(txnId.epoch(), (executeAtIfKnown == null ? txnId : executeAtIfKnown).epoch());
         Participants<?> participants = route.participants(ranges, Minimal);
-        Invariants.checkState(!participants.isEmpty()); // we shouldn't be fetching data for transactions we only coordinate
-        boolean isTruncatedForLocalRanges = known.hasTruncated(participants);
+        if (participants.isEmpty())
+        {
+            // we shouldn't be fetching data for transactions we only coordinate
+            // however we might fetch data for ranges we expected to execute (e.g. during accept round) but ended up not executing
+            if (command.additionalKeysOrRanges() == null)
+            {
+                Invariants.checkState(command.saveStatus() == Uninitialised);
+                return null;
+            }
 
+            // TODO (required): if everyone else has truncated, we might not have enough information on any replicas we contact
+            //    in this case we should erase
+            return known.knownForAny();
+        }
+
+        boolean isTruncatedForLocalRanges = known.hasTruncated(participants);
         if (!isTruncatedForLocalRanges)
         {
             // we're truncated *somewhere* but not locally; whether we have the executeAt is immaterial to this calculus,

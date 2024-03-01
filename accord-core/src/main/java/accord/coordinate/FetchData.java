@@ -78,13 +78,13 @@ public class FetchData extends CheckShards<Route<?>>
             if (fail != null) callback.accept(null, fail);
             else if (foundRoute.route == null)
             {
-                reportRouteNotFound(node, txnId, someUnseekables, executeAt, foundRoute.known, callback);
+                reportRouteNotFound(node, txnId, executeAt, forLocalEpoch, someUnseekables, foundRoute.known, callback);
             }
             else if (isRoute(someUnseekables) && someUnseekables.containsAll(foundRoute.route))
             {
                 // this is essentially a reentrancy check; we can only reach this point if we have already tried once to fetchSomeRoute
                 // (as a user-provided Route is used to fetchRoute, not fetchSomeRoute)
-                reportRouteNotFound(node, txnId, someUnseekables, executeAt, foundRoute.known, callback);
+                reportRouteNotFound(node, txnId, executeAt, forLocalEpoch, someUnseekables, foundRoute.known, callback);
             }
             else
             {
@@ -96,14 +96,15 @@ public class FetchData extends CheckShards<Route<?>>
         });
     }
 
-    private static void reportRouteNotFound(Node node, TxnId txnId, Unseekables<?> someUnseekables, @Nullable Timestamp executeAt, Known found, BiConsumer<? super Known, Throwable> callback)
+    private static void reportRouteNotFound(Node node, TxnId txnId, @Nullable Timestamp executeAt, @Nullable EpochSupplier forLocalEpoch, Unseekables<?> someUnseekables, Known found, BiConsumer<? super Known, Throwable> callback)
     {
         Invariants.checkState(executeAt == null);
         switch (found.outcome)
         {
             default: throw new AssertionError("Unknown outcome: " + found.outcome);
             case Invalidated:
-                locallyInvalidateAndCallback(node, txnId, someUnseekables, found, callback);
+                if (forLocalEpoch == null) forLocalEpoch = txnId;
+                locallyInvalidateAndCallback(node, txnId, forLocalEpoch, someUnseekables, found, callback);
                 break;
 
             case Unknown:

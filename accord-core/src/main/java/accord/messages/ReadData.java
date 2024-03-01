@@ -276,6 +276,7 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
     void read(SafeCommandStore safeStore, Command command)
     {
         // TODO (required): do we need to check unavailable again on completion, or throughout execution?
+        //    e.g. if we are marked stale and begin processing later commands
         Ranges unavailable = unavailable(safeStore, command);
         CommandStore unsafeStore = safeStore.commandStore();
         beginRead(safeStore, command.executeAt(), command.partialTxn(), unavailable).begin((next, throwable) -> {

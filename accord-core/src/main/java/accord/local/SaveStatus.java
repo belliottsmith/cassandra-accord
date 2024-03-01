@@ -95,6 +95,8 @@ public enum SaveStatus
         ReadyToExclude(ExecuteAtOnly),
         WaitingToExecute(Decision),
         ReadyToExecute(Decision),
+        // TODO (expected): we seem to be able to await this when we know there are still local execution dependencies
+        //   we should only request this when we know the transaction can execute locally
         WaitingToApply(Apply),
         Applying(Apply),
         Applied(Apply),

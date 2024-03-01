@@ -26,13 +26,13 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Key;
 import accord.api.ProgressLog.ProgressShard;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.coordinate.Infer;
 import accord.local.Command.ProxyListener;
 import accord.local.Command.WaitingOn;
-import accord.local.SaveStatus.LocalExecution;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
@@ -75,6 +75,7 @@ import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.SaveStatus.Applying;
 import static accord.local.SaveStatus.Erased;
 import static accord.local.SaveStatus.LocalExecution.ReadyToExclude;
+import static accord.local.SaveStatus.LocalExecution.WaitingToApply;
 import static accord.local.SaveStatus.TruncatedApply;
 import static accord.local.Status.Accepted;
 import static accord.local.Status.AcceptedInvalidate;
@@ -255,6 +256,7 @@ public class Commands
         //  recovery. We probably don't want to directly persist a Route in any other circumstances, either, to ease persistence.
         CommonAttributes attrs = set(command, coordinateRanges, acceptRanges, shard, route, null, Ignore, partialDeps, Set);
 
+        keysOrRanges = keysOrRanges.slice(acceptRanges);
         command = safeCommand.accept(safeStore, keysOrRanges, attrs, executeAt, ballot);
         safeStore.progressLog().accepted(command, shard);
         safeStore.notifyListeners(safeCommand);
@@ -346,18 +348,18 @@ public class Commands
         logger.trace("{}: committed with executeAt: {}, deps: {}", txnId, executeAt, partialDeps);
         if (newStatus == SaveStatus.Stable)
         {
-            WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, executeAt, attrs.partialDeps(), attrs.route());
-            command = safeCommand.stable(safeStore, attrs, Ballot.max(command.acceptedOrCommitted(), ballot), executeAt, waitingOn);
             safeStore.progressLog().stable(command, shard);
+            WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, attrs, executeAt, attrs.route());
+            command = safeCommand.stable(safeStore, attrs, Ballot.max(command.acceptedOrCommitted(), ballot), executeAt, waitingOn);
             safeStore.agent().metricsEventsListener().onStable(command);
             // TODO (expected, safety): introduce intermediate status to avoid reentry when notifying listeners (which might notify us)
             maybeExecute(safeStore, safeCommand, true, true);
         }
         else
         {
+            safeStore.progressLog().precommitted(command);
             Invariants.checkArgument(command.acceptedOrCommitted().compareTo(ballot) <= 0);
             command = safeCommand.commit(safeStore, attrs, ballot, executeAt);
-            safeStore.progressLog().precommitted(command);
             safeStore.notifyListeners(safeCommand);
             safeStore.agent().metricsEventsListener().onCommitted(command);
         }
@@ -440,7 +442,7 @@ public class Commands
         ProgressShard progressShard = No;
         Invariants.checkState(validate(command.status(), command, Ranges.EMPTY, coordinateRanges, progressShard, route, Set, partialTxn, Set, partialDeps, Set));
         CommonAttributes attrs = set(command, Ranges.EMPTY, coordinateRanges, progressShard, route, partialTxn, Set, partialDeps, Set);
-        safeCommand.stable(safeStore, attrs, Ballot.ZERO, txnId, initialiseWaitingOn(safeStore, txnId, txnId, attrs.partialDeps(), route));
+        safeCommand.stable(safeStore, attrs, Ballot.ZERO, txnId, initialiseWaitingOn(safeStore, txnId, attrs, txnId, route));
         maybeExecute(safeStore, safeCommand, false, true);
     }
 
@@ -511,7 +513,7 @@ public class Commands
 
         CommonAttributes attrs = set(command, coordinateRanges, acceptRanges, shard, route, partialTxn, Add, partialDeps, command.hasBeen(Committed) ? TryAdd : TrySet);
 
-        WaitingOn waitingOn = !command.hasBeen(Stable) ? initialiseWaitingOn(safeStore, txnId, executeAt, attrs.partialDeps(), attrs.route()) : command.asCommitted().waitingOn();
+        WaitingOn waitingOn = !command.hasBeen(Stable) ? initialiseWaitingOn(safeStore, txnId, attrs, executeAt, attrs.route()) : command.asCommitted().waitingOn();
         safeCommand.preapplied(safeStore, attrs, executeAt, waitingOn, writes, result);
         logger.trace("{}: apply, status set to Executed with executeAt: {}, deps: {}", txnId, executeAt, partialDeps);
 
@@ -645,8 +647,13 @@ public class Commands
         }
     }
 
-    // TODO (expected, API consistency): maybe split into maybeExecute and maybeApply?
     private static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, boolean alwaysNotifyListeners, boolean notifyWaitingOn)
+    {
+        return maybeExecute(safeStore, safeCommand, alwaysNotifyListeners, notifyWaitingOn, false);
+    }
+
+    // TODO (expected, API consistency): maybe split into maybeExecute and maybeApply?
+    private static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, boolean alwaysNotifyListeners, boolean notifyWaitingOn, boolean executeAsync)
     {
         Command command = safeCommand.current();
         if (logger.isTraceEnabled())
@@ -659,13 +666,23 @@ public class Commands
             return false;
         }
 
-        if (command.asCommitted().isWaitingOnDependency())
+        WaitingOn waitingOn = command.asCommitted().waitingOn();
+        if (waitingOn.isWaiting())
         {
             if (alwaysNotifyListeners)
                 safeStore.notifyListeners(safeCommand);
 
-            if (notifyWaitingOn)
+            if (notifyWaitingOn && waitingOn.isWaitingOnCommand())
                 new NotifyWaitingOn(safeCommand).accept(safeStore);
+            return false;
+        }
+
+        if (executeAsync)
+        {
+            TxnId txnId = command.txnId();
+            safeStore.commandStore().execute(contextFor(command.txnId(), command.keysOrRanges(), KeyHistory.COMMANDS), safeStore0 -> {
+                maybeExecute(safeStore0, safeStore0.get(txnId), alwaysNotifyListeners, notifyWaitingOn, false);
+            }).begin(safeStore.agent());
             return false;
         }
 
@@ -715,45 +732,38 @@ public class Commands
         }
     }
 
-    protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp executeWaitingAt, PartialDeps deps, Route<?> route)
+    protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, CommonAttributes waiting, Timestamp waitingExecuteAt, Route<?> route)
     {
         if (waitingId.kind().awaitsOnlyDeps())
-            executeWaitingAt = Timestamp.maxForEpoch(waitingId.epoch());
+            waitingExecuteAt = Timestamp.maxForEpoch(waitingId.epoch());
 
-        Ranges ranges = safeStore.ranges().allAt(executeWaitingAt);
-        Unseekables<?> executionParticipants = route.participants().slice(ranges, Minimal);
-        WaitingOn.Update update = new WaitingOn.Update(deps);
-        deps.keyDeps.forEach(ranges, 0, deps.keyDeps.txnIdCount(), update, null, (u, v, i) -> {
-            u.initialiseWaitingOnCommit(i);
-        });
+        Ranges ranges = safeStore.ranges().allAt(waitingExecuteAt);
+        PartialDeps deps = waiting.partialDeps();
+        WaitingOn.Update update = new WaitingOn.Update(waitingId, deps);
         // we select range deps on actual participants rather than covered ranges,
         // since we may otherwise adopt false dependencies for range txns
-        deps.rangeDeps.forEach(executionParticipants, update, (u, i) -> {
-            u.initialiseWaitingOnCommit(u.deps.keyDeps.txnIdCount() + i);
-        });
-        return updateWaitingOn(safeStore, waitingId, executeWaitingAt, update, route.participants()).build();
+
+        Unseekables<?> executionParticipants = route.participants().slice(ranges, Minimal);
+        deps.rangeDeps.forEach(executionParticipants, update, WaitingOn.Update::initialiseWaiting);
+        deps.keyDeps.keys().foldl(ranges, (u, rd, k, v, i) -> {
+            u.initialiseWaiting(rd.txnIdCount() + i);
+            return null;
+        }, update, deps.rangeDeps, null);
+        return updateWaitingOn(safeStore, waiting, waitingExecuteAt, update, route.participants()).build();
     }
 
-    protected static WaitingOn.Update updateWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp executeAt, WaitingOn.Update update, Participants<?> participants)
+    protected static WaitingOn.Update updateWaitingOn(SafeCommandStore safeStore, CommonAttributes waiting, Timestamp executeAt, WaitingOn.Update update, Participants<?> participants)
     {
         CommandStore commandStore = safeStore.commandStore();
         TxnId minWaitingOnTxnId = update.minWaitingOnTxnId();
         if (minWaitingOnTxnId != null && commandStore.hasLocallyRedundantDependencies(update.minWaitingOnTxnId(), executeAt, participants))
-            safeStore.commandStore().removeRedundantDependencies(participants, update);
+            safeStore.commandStore().removeRedundantDependencies(participants, waiting.partialDeps(), update);
 
-        update.forEachWaitingOnCommit(safeStore, update, waitingId, executeAt, (safeStore0, upd, id, exec, i) -> {
-            // TODO (expected): load read-only to reduce overhead; upgrade only if we need to remove listener
-            SafeCommand dep = safeStore0.ifLoadedAndInitialised(upd.deps.txnId(i));
+        update.forEachWaitingOnId(safeStore, update, waiting, executeAt, (store, upd, w, exec, i) -> {
+            SafeCommand dep = store.ifLoadedAndInitialised(upd.txnIds.get(i));
             if (dep == null || !dep.current().hasBeen(PreCommitted))
                 return;
-            updateWaitingOn(safeStore0, id, exec, upd, dep);
-        });
-
-        update.forEachWaitingOnApply(safeStore, update, waitingId, executeAt, (store, upd, id, exec, i) -> {
-            SafeCommand dep = store.ifLoadedAndInitialised(upd.deps.txnId(i));
-            if (dep == null || !dep.current().hasBeen(PreCommitted))
-                return;
-            updateWaitingOn(store, id, exec, upd, dep);
+            updateWaitingOn(store, w, exec, upd, dep);
         });
 
         return update;
@@ -763,8 +773,9 @@ public class Commands
      * @param dependencySafeCommand is either committed truncated, or invalidated
      * @return true iff {@code maybeExecute} might now have a different outcome
      */
-    private static boolean updateWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp executeWaitingAt, WaitingOn.Update waitingOn, SafeCommand dependencySafeCommand)
+    private static boolean updateWaitingOn(SafeCommandStore safeStore, CommonAttributes waiting, Timestamp waitingExecuteAt, WaitingOn.Update waitingOn, SafeCommand dependencySafeCommand)
     {
+        TxnId waitingId = waiting.txnId();
         Command dependency = dependencySafeCommand.current();
         Invariants.checkState(dependency.hasBeen(PreCommitted));
         TxnId dependencyId = dependency.txnId();
@@ -779,7 +790,7 @@ public class Commands
                 case TruncatedApply:
                 case TruncatedApplyWithOutcome:
                 case TruncatedApplyWithDeps:
-                    Invariants.checkState(dependency.executeAt().compareTo(executeWaitingAt) < 0 || waitingId.kind().awaitsOnlyDeps());
+                    Invariants.checkState(dependency.executeAt().compareTo(waitingExecuteAt) < 0 || waitingId.kind().awaitsOnlyDeps());
                 case ErasedOrInvalidated:
                 case Erased:
                     logger.trace("{}: {} is truncated. Stop listening and removing from waiting on commit set.", waitingId, dependencyId);
@@ -790,7 +801,7 @@ public class Commands
             dependencySafeCommand.removeListener(new ProxyListener(waitingId));
             return waitingOn.setAppliedOrInvalidated(dependencyId);
         }
-        else if (dependency.executeAt().compareTo(executeWaitingAt) > 0 && !waitingId.kind().awaitsOnlyDeps())
+        else if (dependency.executeAt().compareTo(waitingExecuteAt) > 0 && !waitingId.kind().awaitsOnlyDeps())
         {
             // dependency cannot be a predecessor if it executes later
             logger.trace("{}: {} executes after us. Stop listening and removing from waiting on apply set.", waitingId, dependencyId);
@@ -803,18 +814,11 @@ public class Commands
             dependencySafeCommand.removeListener(new ProxyListener(waitingId));
             return waitingOn.setAppliedAndPropagate(dependencyId, dependency.asCommitted().waitingOn());
         }
-        else if (waitingOn.removeWaitingOnCommit(dependencyId))
-        {
-            logger.trace("{}: adding {} to waiting on apply set.", waitingId, dependencyId);
-            boolean addedWaitingOnApply = waitingOn.addWaitingOnApply(dependencyId);
-            Invariants.checkState(addedWaitingOnApply);
-            return true;
-        }
-        else if (waitingOn.isWaitingOnApply(dependencyId))
+        else if (waitingOn.isWaitingOn(dependencyId))
         {
             return false;
         }
-        else if (safeStore.isFullyPreBootstrapOrStale(dependency, waitingOn.deps.participants(dependency.txnId())))
+        else if (safeStore.isFullyPreBootstrapOrStale(dependency, waiting.partialDeps().participants(dependency.txnId())))
         {
             // TODO (expected): erase the dependency or otherwise prevent from executing
             return false;
@@ -832,12 +836,13 @@ public class Commands
             return;
 
         WaitingOn.Update waitingOn = new WaitingOn.Update(command);
-        if (updateWaitingOn(safeStore, command.txnId(), command.executeAt(), waitingOn, predecessor))
+        if (updateWaitingOn(safeStore, command, command.executeAt(), waitingOn, predecessor))
         {
             safeCommand.updateWaitingOn(waitingOn);
             // don't bother invoking maybeExecute if we weren't already blocked on the updated command
             if (waitingOn.hasUpdatedDirectDependency(command.waitingOn()))
                 maybeExecute(safeStore, safeCommand, false, notifyWaitingOn);
+            else Invariants.checkState(waitingOn.isWaiting());
         }
         else
         {
@@ -846,9 +851,28 @@ public class Commands
             {
                 TxnId nextWaitingOn = command.waitingOn().nextWaitingOn();
                 if (nextWaitingOn != null && nextWaitingOn.equals(pred.txnId()))
-                    safeStore.progressLog().waiting(predecessor, LocalExecution.Applied, pred.route(), null);
+                    safeStore.progressLog().waiting(predecessor, WaitingToApply, pred.route(), null);
             }
         }
+    }
+
+    static void removeWaitingOnKeyAndMaybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, Key key, boolean executeAsync)
+    {
+        if (safeCommand.current().hasBeen(Applied))
+            return;
+
+        Command.Committed command = safeCommand.current().asCommitted();
+
+        WaitingOn currentWaitingOn = command.waitingOn;
+        int keyIndex = currentWaitingOn.keys.indexOf(key);
+        if (keyIndex < 0 || !currentWaitingOn.isWaitingOnKey(keyIndex))
+            return;
+
+        WaitingOn.Update waitingOn = new WaitingOn.Update(command);
+        waitingOn.removeWaitingOnKey(keyIndex);
+        safeCommand.updateWaitingOn(waitingOn);
+        if (!waitingOn.isWaiting())
+            maybeExecute(safeStore, safeCommand, false, true, executeAsync);
     }
 
     // TODO (now): document and justify all calls
@@ -866,20 +890,20 @@ public class Commands
         if (executeAt == null) executeAt = command.executeAtIfKnown();
         if (route == null || executeAt == null)
         {
-            safeCommand.update(safeStore, null, erased(command));
+            safeCommand.update(safeStore, erased(command));
         }
         else
         {
             CommonAttributes attributes = command.mutable().route(route);
             if (!safeCommand.txnId().kind().awaitsOnlyDeps())
             {
-                safeCommand.update(safeStore, null, truncatedApply(attributes, TruncatedApply, executeAt, null, null));
+                safeCommand.update(safeStore, truncatedApply(attributes, TruncatedApply, executeAt, null, null));
             }
             else if (safeCommand.current().saveStatus().hasBeen(Applied))
             {
                 Timestamp executesAtLeast = safeCommand.current().executesAtLeast();
-                if (executesAtLeast == null) safeCommand.update(safeStore, null, erased(command));
-                else safeCommand.update(safeStore, null, truncatedApply(attributes, TruncatedApply, executeAt, null, null, executesAtLeast));
+                if (executesAtLeast == null) safeCommand.update(safeStore, erased(command));
+                else safeCommand.update(safeStore, truncatedApply(attributes, TruncatedApply, executeAt, null, null, executesAtLeast));
             }
         }
     }
@@ -933,7 +957,7 @@ public class Commands
                 break;
         }
 
-        safeCommand.update(safeStore, keysOrRanges, result);
+        safeCommand.update(safeStore, result);
         safeStore.progressLog().clear(safeCommand.txnId());
         if (notifyListeners)
             safeStore.notifyListeners(safeCommand, result, command.durableListeners(), safeCommand.transientListeners());
@@ -1037,6 +1061,9 @@ public class Commands
                     TxnId directlyBlockedOn = waitingOn.nextWaitingOn();
                     if (directlyBlockedOn == null)
                     {
+                        if (waitingOn.isWaiting())
+                            return; // nothing more we can do; all direct dependencies are notified
+
                         switch (waiting.saveStatus())
                         {
                             default: throw illegalState("Invalid saveStatus with empty waitingOn: " + waiting.saveStatus());
@@ -1052,6 +1079,7 @@ public class Commands
                                 return;
                         }
                     }
+
                     depSafe = safeStore.ifLoadedAndInitialised(directlyBlockedOn);
                     if (depSafe == null)
                     {
@@ -1063,8 +1091,8 @@ public class Commands
                 else
                 {
                     Command dep = depSafe.current();
-                    SaveStatus childStatus = dep.saveStatus();
-                    switch (childStatus.known.executeAt)
+                    SaveStatus depStatus = dep.saveStatus();
+                    switch (depStatus.known.executeAt)
                     {
                         case ExecuteAtKnown:
                             if (waitingId.kind().awaitsOnlyDeps() || dep.executeAt().compareTo(waiting.executeAt()) < 0)
@@ -1077,7 +1105,7 @@ public class Commands
                             continue;
                     }
 
-                    if (!Route.isFullRoute(dep.route()) || childStatus.hasBeen(Truncated))
+                    if (!Route.isFullRoute(dep.route()) || depStatus.hasBeen(Truncated))
                     {
                         // TODO (desired): slightly costly to invert a large partialDeps collection
                         Participants<?> participants = waiting.partialDeps().participants(dep.txnId());
@@ -1106,29 +1134,41 @@ public class Commands
                         }
                     }
 
-                    switch (childStatus.execution)
+                    switch (depStatus.execution)
                     {
-                        default: throw new AssertionError("Unhandled LocalExecution: " + childStatus.execution);
-                        case CleaningUp: throw illegalState("Invalid LocalExecution (should already be handled): " + childStatus.execution);
+                        default: throw new AssertionError("Unhandled LocalExecution: " + depStatus.execution);
+                        case CleaningUp: throw illegalState("Invalid LocalExecution (should already be handled): " + depStatus.execution);
 
                         case NotReady:
                         case ReadyToExclude:
                         case WaitingToExecute:
                         case ReadyToExecute:
-                            safeStore.progressLog().waiting(depSafe, LocalExecution.Applied, dep.route(), null);
+                            safeStore.progressLog().waiting(depSafe, WaitingToApply, dep.route(), null);
 
                         case Applying:
                             depSafe.addListener(waiting.asListener());
                             return;
 
                         case WaitingToApply:
-                            if (!dep.asCommitted().isWaitingOnDependency())
+                            if (dep.asCommitted().isWaitingOnDependency())
+                            {
+                                depSafe.addListener(waiting.asListener());
+                                return;
+                            }
+                            else
                             {
                                 maybeExecute(safeStore, depSafe, false, false);
-                                Invariants.checkState(depSafe.current().saveStatus() == Applying);
+                                switch (depSafe.current().saveStatus())
+                                {
+                                    default: throw illegalState("Invalid child status after attempt to execute: " + depSafe.current().saveStatus());
+                                    case Applying:
+                                        depSafe.addListener(waiting.asListener());
+                                        return;
+
+                                    case Applied:
+                                        // fall-through to outer Applied branch
+                                }
                             }
-                            depSafe.addListener(waiting.asListener());
-                            return;
 
                         case Applied:
                             updateDependencyAndMaybeExecute(safeStore, waitingSafe, depSafe, false);
@@ -1158,7 +1198,7 @@ public class Commands
         WaitingOn.Update update = new WaitingOn.Update(current.waitingOn);
         TxnId minWaitingOnTxnId = update.minWaitingOnTxnId();
         if (minWaitingOnTxnId != null && commandStore.hasLocallyRedundantDependencies(update.minWaitingOnTxnId(), current.executeAt(), current.route().participants()))
-            safeStore.commandStore().removeRedundantDependencies(current.route().participants(), update);
+            safeStore.commandStore().removeRedundantDependencies(current.route().participants(), current.partialDeps(), update);
 
         // if we are a range transaction, being redundant for this transaction does not imply we are redundant for all transactions
         if (redundant != null)
