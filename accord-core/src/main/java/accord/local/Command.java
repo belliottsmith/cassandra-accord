@@ -19,12 +19,9 @@
 package accord.local;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-
-import com.google.common.collect.ImmutableSortedSet;
 
 import accord.api.Key;
 import accord.api.Result;
@@ -39,17 +36,17 @@ import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.RangeDeps;
-import accord.primitives.Routable;
 import accord.primitives.Route;
+import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.ImmutableBitSet;
 import accord.utils.IndexedQuadConsumer;
+import accord.utils.IndexedTriConsumer;
 import accord.utils.Invariants;
 import accord.utils.SimpleBitSet;
-import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.SortedArrayList;
 
 import javax.annotation.Nullable;
@@ -532,6 +529,7 @@ public abstract class Command implements CommonAttributes
 
     @Override
     public abstract PartialTxn partialTxn();
+    public abstract Seekables<?, ?> keysOrRanges();
 
     @Override
     public abstract @Nullable PartialDeps partialDeps();
@@ -724,6 +722,12 @@ public abstract class Command implements CommonAttributes
         }
 
         @Override
+        public Seekables<?, ?> keysOrRanges()
+        {
+            return null;
+        }
+
+        @Override
         public @Nullable PartialDeps partialDeps()
         {
             return null;
@@ -889,6 +893,12 @@ public abstract class Command implements CommonAttributes
         }
 
         @Override
+        public Seekables<?, ?> keysOrRanges()
+        {
+            return null;
+        }
+
+        @Override
         public @Nullable PartialDeps partialDeps()
         {
             return null;
@@ -1021,6 +1031,12 @@ public abstract class Command implements CommonAttributes
         }
 
         @Override
+        public Seekables<?, ?> keysOrRanges()
+        {
+            return partialTxn == null ? null : partialTxn.keys();
+        }
+
+        @Override
         public @Nullable PartialDeps partialDeps()
         {
             return partialDeps;
@@ -1090,6 +1106,73 @@ public abstract class Command implements CommonAttributes
         public Ballot acceptedOrCommitted()
         {
             return acceptedOrCommitted;
+        }
+    }
+
+    public static class AcceptedWithoutDefinition extends Accepted
+    {
+        // null if AcceptedInvalidate and never previously Accepted
+        final @Nullable Seekables<?, ?> keysOrRanges;
+
+        AcceptedWithoutDefinition(CommonAttributes common, SaveStatus status, Ballot promised, Timestamp executeAt, Ballot acceptedOrCommitted, Seekables<?, ?> keysOrRanges)
+        {
+            super(common, status, promised, executeAt, acceptedOrCommitted);
+            this.keysOrRanges = keysOrRanges;
+        }
+
+        AcceptedWithoutDefinition(CommonAttributes common, SaveStatus status, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, Seekables<?, ?> keysOrRanges)
+        {
+            super(common, status, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
+            this.keysOrRanges = keysOrRanges;
+        }
+
+        @Override
+        public Command updateAttributes(CommonAttributes attrs, Ballot promised)
+        {
+            return validate(new AcceptedWithoutDefinition(attrs, saveStatus(), promised, executeAt(), acceptedOrCommitted(), keysOrRanges));
+        }
+
+        @Override
+        public Seekables<?, ?> keysOrRanges()
+        {
+            return keysOrRanges;
+        }
+
+        @Override
+        public boolean equals(Object o)
+        {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            if (!super.equals(o)) return false;
+            AcceptedWithoutDefinition that = (AcceptedWithoutDefinition) o;
+            return keysOrRanges.equals(that.keysOrRanges);
+        }
+
+        @Override
+        public boolean isEqualOrFuller(Command c)
+        {
+            if (this == c) return true;
+            if (c == null || getClass() != c.getClass()) return false;
+            if (!super.equals(c)) return false;
+            AcceptedWithoutDefinition that = (AcceptedWithoutDefinition) c;
+            return keysOrRanges.equals(that.keysOrRanges);
+        }
+
+        static AcceptedWithoutDefinition acceptedWithoutDefinition(CommonAttributes common, SaveStatus status, Timestamp executeAt, Ballot promised, Ballot accepted, Seekables<?, ?> keysOrRanges)
+        {
+            return validate(new AcceptedWithoutDefinition(common, status, promised, executeAt, accepted, keysOrRanges));
+        }
+
+        static AcceptedWithoutDefinition acceptedWithoutDefinition(Accepted command, CommonAttributes common, SaveStatus status, Ballot promised, Seekables<?, ?> keysOrRanges)
+        {
+            checkPromised(command, promised);
+            checkSameClass(command, Accepted.class, "Cannot update");
+            return validate(new AcceptedWithoutDefinition(common, status, promised, command.executeAt(), command.acceptedOrCommitted(), keysOrRanges));
+        }
+
+        static AcceptedWithoutDefinition acceptedWithoutDefinition(AcceptedWithoutDefinition command, CommonAttributes common, Ballot promised, Seekables<?, ?> keysOrRanges)
+        {
+            return acceptedWithoutDefinition(command, common, command.saveStatus(), promised, keysOrRanges);
         }
     }
 
@@ -1307,7 +1390,7 @@ public abstract class Command implements CommonAttributes
 
         public TxnId nextWaitingOn()
         {
-            int i = waitingOn.lastSetBit();
+            int i = waitingOn.prevSetBit(txnIds.size());
             return i < 0 ? null : txnIds.get(i);
         }
 
@@ -1446,6 +1529,16 @@ public abstract class Command implements CommonAttributes
                 this.executeAtLeast = Timestamp.nonNullOrMax(executeAtLeast, this.executeAtLeast);
             }
 
+            boolean removeWaitingOnTxnId(int i)
+            {
+                return removeWaitingOn(i);
+            }
+
+            boolean removeWaitingOnKey(int i)
+            {
+                return removeWaitingOn(txnIds.size() + i);
+            }
+
             boolean removeWaitingOn(int i)
             {
                 if (waitingOn.get(i))
@@ -1507,9 +1600,14 @@ public abstract class Command implements CommonAttributes
                 return true;
             }
 
-            public <P1, P2, P3, P4> void forEachWaitingOn(P1 p1, P2 p2, P3 p3, P4 p4, IndexedQuadConsumer<P1, P2, P3, P4> forEach)
+            public <P1, P2, P3, P4> void forEachWaitingOnId(P1 p1, P2 p2, P3 p3, P4 p4, IndexedQuadConsumer<P1, P2, P3, P4> forEach)
             {
-                waitingOn.reverseForEach(p1, p2, p3, p4, forEach);
+                waitingOn.reverseForEach(0, txnIds.size(), p1, p2, p3, p4, forEach);
+            }
+
+            public <P1, P2, P3, P4> void forEachWaitingOnKey(P1 p1, P2 p2, P3 p3, IndexedTriConsumer<P1, P2, P3> forEach)
+            {
+                waitingOn.reverseForEach(txnIds.size(), keys.size(), p1, p2, p3, txnIds, (pp1, pp2, pp3, pp4, i) -> forEach.accept(pp1, pp2, pp3, i - pp4.size()));
             }
 
             public WaitingOn build()
@@ -1614,9 +1712,25 @@ public abstract class Command implements CommonAttributes
         return validate(new Command.Accepted(attrs, SaveStatus.get(Status.Accepted, command.known()), ballot, executeAt, ballot));
     }
 
+    static Command.Accepted acceptWithoutDefinition(Command command, CommonAttributes attrs, Timestamp executeAt, Ballot ballot, Seekables<?, ?> keysOrRanges)
+    {
+        return validate(new Command.AcceptedWithoutDefinition(attrs, SaveStatus.get(Status.Accepted, command.known()), ballot, executeAt, ballot, keysOrRanges));
+    }
+
     static Command.Accepted acceptInvalidated(Command command, Ballot ballot)
     {
-        return validate(new Command.Accepted(command, SaveStatus.get(Status.AcceptedInvalidate, command.known()), ballot, command.executeAt(), command.partialTxn(), null, ballot));
+        SaveStatus saveStatus = SaveStatus.get(Status.AcceptedInvalidate, command.known());
+        if (saveStatus.known.isDefinitionKnown())
+        {
+            return validate(new Command.Accepted(command, saveStatus, ballot, command.executeAt(), command.partialTxn(), null, ballot));
+        }
+        else
+        {
+            Seekables<?, ?> keysOrRanges = null;
+            if (command instanceof AcceptedWithoutDefinition)
+                keysOrRanges = ((AcceptedWithoutDefinition) command).keysOrRanges;
+            return validate(new Command.AcceptedWithoutDefinition(command, saveStatus, ballot, command.executeAt(), command.partialTxn(), null, ballot, keysOrRanges));
+        }
     }
 
     static Command.Committed commit(Command command, CommonAttributes attrs, Ballot ballot, Timestamp executeAt)
@@ -1631,7 +1745,9 @@ public abstract class Command implements CommonAttributes
 
     static Command precommit(CommonAttributes attrs, Command command, Timestamp executeAt)
     {
-        return validate(new Command.Accepted(attrs, SaveStatus.get(Status.PreCommitted, command.known()), command.promised(), executeAt, command.acceptedOrCommitted()));
+        SaveStatus saveStatus = SaveStatus.get(Status.PreCommitted, command.known());
+        if (saveStatus.known.isDefinitionKnown()) return validate(new Command.Accepted(attrs, saveStatus, command.promised(), executeAt, command.acceptedOrCommitted()));
+        else return validate(new Command.AcceptedWithoutDefinition(attrs, saveStatus, command.promised(), executeAt, command.acceptedOrCommitted(), command.keysOrRanges()));
     }
 
     static Command.Committed readyToExecute(Command.Committed command)

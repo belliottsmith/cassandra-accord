@@ -16,10 +16,10 @@
  * limitations under the License.
  */
 
-package accord.impl;
+package accord.local;
 
 import accord.api.Key;
-import accord.local.Command;
+import accord.impl.SafeState;
 import accord.primitives.TxnId;
 
 public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
@@ -38,16 +38,16 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         return key;
     }
 
-    CommandsForKey update(Command prev, Command update)
+    CommandsForKey update(SafeCommandStore safeStore, Command prev, Command update)
     {
         CommandsForKey current = current();
-        CommandsForKey next = current.update(prev, update);
+        CommandsForKey next = current.update(safeStore, prev, update);
         if (next != current)
             set(next);
         return next;
     }
 
-    CommandsForKey registerHistorical(TxnId txnId)
+    public CommandsForKey registerHistorical(TxnId txnId)
     {
         CommandsForKey current = current();
         CommandsForKey next = current.registerHistorical(txnId);

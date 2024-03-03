@@ -74,9 +74,7 @@ import static accord.local.PreLoadContext.contextFor;
 import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.SaveStatus.Applying;
 import static accord.local.SaveStatus.Erased;
-import static accord.local.SaveStatus.LocalExecution.CleaningUp;
 import static accord.local.SaveStatus.LocalExecution.ReadyToExclude;
-import static accord.local.SaveStatus.LocalExecution.ReadyToExecute;
 import static accord.local.SaveStatus.TruncatedApply;
 import static accord.local.Status.Accepted;
 import static accord.local.Status.AcceptedInvalidate;
@@ -738,11 +736,16 @@ public class Commands
         if (minWaitingOnTxnId != null && commandStore.hasLocallyRedundantDependencies(update.minWaitingOnTxnId(), executeAt, participants))
             safeStore.commandStore().removeRedundantDependencies(participants, waiting.partialDeps(), update);
 
-        update.forEachWaitingOn(safeStore, update, waiting, executeAt, (store, upd, w, exec, i) -> {
+        update.forEachWaitingOnId(safeStore, update, waiting, executeAt, (store, upd, w, exec, i) -> {
             SafeCommand dep = store.ifLoadedAndInitialised(upd.txnIds.get(i));
             if (dep == null || !dep.current().hasBeen(PreCommitted))
                 return;
             updateWaitingOn(store, w, exec, upd, dep);
+        });
+
+        update.forEachWaitingOnKey(safeStore, update, waiting, (store, upd, w, i) -> {
+            SafeCommandsForKey cfk = store.get(upd.keys.get(i));
+            cfk.current().updateWaitingOn(w.txnId(), i, upd);
         });
 
         return update;
@@ -849,20 +852,20 @@ public class Commands
         if (executeAt == null) executeAt = command.executeAtIfKnown();
         if (route == null || executeAt == null)
         {
-            safeCommand.update(safeStore, null, erased(command));
+            safeCommand.update(safeStore, erased(command));
         }
         else
         {
             CommonAttributes attributes = command.mutable().route(route);
             if (!safeCommand.txnId().kind().awaitsOnlyDeps())
             {
-                safeCommand.update(safeStore, null, truncatedApply(attributes, TruncatedApply, executeAt, null, null));
+                safeCommand.update(safeStore, truncatedApply(attributes, TruncatedApply, executeAt, null, null));
             }
             else if (safeCommand.current().saveStatus().hasBeen(Applied))
             {
                 Timestamp executesAtLeast = safeCommand.current().executesAtLeast();
-                if (executesAtLeast == null) safeCommand.update(safeStore, null, erased(command));
-                else safeCommand.update(safeStore, null, truncatedApply(attributes, TruncatedApply, executeAt, null, null, executesAtLeast));
+                if (executesAtLeast == null) safeCommand.update(safeStore, erased(command));
+                else safeCommand.update(safeStore, truncatedApply(attributes, TruncatedApply, executeAt, null, null, executesAtLeast));
             }
         }
     }
@@ -916,7 +919,7 @@ public class Commands
                 break;
         }
 
-        safeCommand.update(safeStore, keysOrRanges, result);
+        safeCommand.update(safeStore, result);
         safeStore.progressLog().clear(safeCommand.txnId());
         if (notifyListeners)
             safeStore.notifyListeners(safeCommand, result, command.durableListeners(), safeCommand.transientListeners());

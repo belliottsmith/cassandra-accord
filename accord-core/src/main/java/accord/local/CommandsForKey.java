@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package accord.impl;
+package accord.local;
 
 import java.util.Arrays;
 import java.util.EnumMap;
@@ -28,31 +28,30 @@ import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.Key;
 
-import accord.local.Command;
+import accord.impl.CommandsSummary;
 import accord.local.Command.WaitingOn;
 import accord.local.SafeCommandStore.CommandFunction;
 import accord.local.SafeCommandStore.TestDep;
 import accord.local.SafeCommandStore.TestStartedAt;
 import accord.local.SafeCommandStore.TestStatus;
-import accord.local.SaveStatus;
-import accord.local.Status;
 import accord.primitives.Ballot;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
-import accord.utils.RelationMultiMap;
-import accord.utils.RelationMultiMap.SortedRelationList;
 import accord.utils.SortedArrays;
 import accord.utils.SortedList;
+import accord.utils.TriPredicate;
+import net.nicoulaj.compilecommand.annotations.Inline;
+import net.openhft.chronicle.wire.TriConsumer;
 
-import static accord.impl.CommandsForKey.InternalStatus.ACCEPTED;
-import static accord.impl.CommandsForKey.InternalStatus.APPLIED;
-import static accord.impl.CommandsForKey.InternalStatus.COMMITTED;
-import static accord.impl.CommandsForKey.InternalStatus.STABLE;
-import static accord.impl.CommandsForKey.InternalStatus.HISTORICAL;
-import static accord.impl.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED;
-import static accord.impl.CommandsForKey.InternalStatus.TRANSITIVELY_KNOWN;
+import static accord.local.CommandsForKey.InternalStatus.ACCEPTED;
+import static accord.local.CommandsForKey.InternalStatus.APPLIED;
+import static accord.local.CommandsForKey.InternalStatus.COMMITTED;
+import static accord.local.CommandsForKey.InternalStatus.STABLE;
+import static accord.local.CommandsForKey.InternalStatus.HISTORICAL;
+import static accord.local.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED;
+import static accord.local.CommandsForKey.InternalStatus.TRANSITIVELY_KNOWN;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.primitives.Txn.Kind.Write;
@@ -103,12 +102,12 @@ import static accord.utils.SortedArrays.linearUnion;
  * will correctly record this transaction as present in any relevant deps of later transactions.
  *
  * TODO (expected): optimisations:
- *    1) we probably can rely only on COMMITTED status rather than STABLE for filtering active, but require STABLE still for filtering on status
- *    2) do we need PREAPPLIED state?
  *    3) consider storing a prefix of TxnId that are all NoInfo PreApplied encoded as a BitStream as only required for computing missing collection
  *    4) consider storing (or caching) an int[] of records with an executeAt that occurs out of order, sorted by executeAt
  *
- *    TODO (required): randomised testing
+ * TODO (expected): track whether a TxnId is a write on this key only for execution (rather than globally)
+ * TODO (expected): merge TimestampsForKey
+ * TODO (required): randomised testing
  */
 public class CommandsForKey implements CommandsSummary
 {
@@ -307,25 +306,108 @@ public class CommandsForKey implements CommandsSummary
         }
     }
 
-    private final Key key;
-    private final TxnId redundantBefore;
-    // any transactions that are durably decided (i.e. STABLE) and execute before this are durably dependent, and can be elided from mapReduceActive
-    private final @Nullable Timestamp maxStableWrite;
-    private final TxnId[] txnIds;
-    private final Info[] infos;
-
-    CommandsForKey(Key key, TxnId redundantBefore, TxnId[] txnIds, Info[] infos)
+    static class Cursor
     {
-        this(key, redundantBefore, maxStableWriteBefore(Timestamp.MAX, txnIds, infos), txnIds, infos);
+        int index()
+        {
+
+        }
+        boolean next()
+        {
+
+        }
     }
 
-    CommandsForKey(Key key, TxnId redundantBefore, @Nullable Timestamp maxStableWrite, TxnId[] txnIds, Info[] infos)
+    private static class Index
+    {
+        static final int[] NO_INTS = new int[0];
+        static final Index EMPTY = new Index(NO_INTS, -1, -1, -1);
+
+        final int[] outOfOrder;
+        // the min/max indexes at which we might find one of these statuses NOT the index of the min/max
+        final int minActive, minUncommitted, minStable, maxStable, maxApplied;
+        final Timestamp maxCommittedWrite;
+
+        private Index(int[] outOfOrder, int minStable, int maxStableOrApplied, int maxApplied)
+        {
+            this.outOfOrder = outOfOrder;
+            this.minStable = minStable;
+            this.maxStableOrApplied = maxStableOrApplied;
+            this.maxApplied = maxApplied;
+        }
+
+        Index update(int updatePos, Info prevInfo, Info newInfo)
+        {
+
+        }
+
+        Index update(int updatePos, Info prevInfo, InfoWithAdditions newInfo)
+        {
+
+        }
+
+        Index removeBefore(int index)
+        {
+
+        }
+
+        <P> void inExecuteAtOrder(TxnId[] txnIds, Info[] infos, P param, TriConsumer<TxnId, Info, P> consume)
+        {
+
+        }
+
+        static Index build(TxnId[] txnIds, Info[] infos)
+        {
+
+        }
+
+        Timestamp maxCommittedWriteBefore(Timestamp before, TxnId[] txnIds, Info[] infos)
+        {
+            Timestamp maxCommitted = this.maxCommittedWrite;
+            if (maxCommitted == null)
+                return null;
+
+            if (maxCommitted.compareTo(before) < 0)
+                return maxCommitted;
+
+            int i = Arrays.binarySearch(txnIds, before);
+            if (i < 0) i = -1 -i;
+            i = maxWriteIndex(txnIds, infos, (id, info, b) -> info.status.hasStableDeps() && info.executeAt(id).compareTo(b) <= 0, before, i);
+            return i < 0 ? null : infos[i].executeAt(txnIds[i]);
+        }
+
+        // find the first command to execute that started on-or-after the provided index
+        public Cursor byExecuteAtStartedOnOrAfter(int startIndex)
+        {
+        }
+
+        public int maxIndexExecutesBefore(int startPos, Timestamp executeAt)
+        {
+        }
+
+        public Cursor executesAfterByExecuteAt(int startIndex)
+        {
+        }
+    }
+
+    private final Key key;
+    private final TxnId redundantBefore;
+    private final TxnId[] txnIds;
+    private final Info[] infos;
+    private final Index index;
+
+    private CommandsForKey(Key key, TxnId redundantBefore, TxnId[] txnIds, Info[] infos)
+    {
+        this(key, redundantBefore, txnIds, infos, Index.build(txnIds, infos));
+    }
+
+    CommandsForKey(Key key, TxnId redundantBefore, TxnId[] txnIds, Info[] infos, Index index)
     {
         this.key = key;
         this.redundantBefore = redundantBefore;
-        this.maxStableWrite = maxStableWrite;
         this.txnIds = txnIds;
         this.infos = infos;
+        this.index = index;
         if (isParanoid()) Invariants.checkArgument(SortedArrays.isSortedUnique(txnIds));
     }
 
@@ -333,9 +415,9 @@ public class CommandsForKey implements CommandsSummary
     {
         this.key = key;
         this.redundantBefore = TxnId.NONE;
-        this.maxStableWrite = null;
         this.txnIds = NO_TXNIDS;
         this.infos = NO_INFOS;
+        this.index = Index.EMPTY;
     }
 
     @Override
@@ -448,8 +530,8 @@ public class CommandsForKey implements CommandsSummary
                                      Kinds testKind,
                                      CommandFunction<P1, T, T> map, P1 p1, T initialValue)
     {
-        Timestamp maxStableWrite = maxStableWriteBefore(startedBefore);
-        int start = 0, end = insertPos(startedBefore);
+        Timestamp maxCommitted = index.maxCommittedWriteBefore(startedBefore, txnIds, infos);
+        int start = index.minActive, end = insertPos(start, startedBefore);
 
         for (int i = start; i < end ; ++i)
         {
@@ -464,7 +546,7 @@ public class CommandsForKey implements CommandsSummary
                 case STABLE:
                 case APPLIED:
                     // TODO (expected): prove the correctness of this approach
-                    if (!PRUNE_TRANSITIVE_DEPENDENCIES || maxStableWrite == null || info.executeAt(txnId).compareTo(maxStableWrite) >= 0)
+                    if (!PRUNE_TRANSITIVE_DEPENDENCIES || maxCommitted == null || info.executeAt(txnId).compareTo(maxCommitted) >= 0)
                         break;
                 case TRANSITIVELY_KNOWN:
                 case INVALID_OR_TRUNCATED:
@@ -476,7 +558,7 @@ public class CommandsForKey implements CommandsSummary
         return initialValue;
     }
 
-    public CommandsForKey update(Command prev, Command next)
+    public CommandsForKey update(SafeCommandStore safeStore, Command prev, Command next)
     {
         InternalStatus newStatus = InternalStatus.from(next.saveStatus());
         if (newStatus == null)
@@ -487,10 +569,8 @@ public class CommandsForKey implements CommandsSummary
         if (pos < 0)
         {
             pos = -1 - pos;
-            if (!newStatus.hasInfo)
-                return insert(pos, txnId, newStatus.asNoInfo);
-
-            return insert(pos, txnId, newStatus, next);
+            if (newStatus.hasInfo) return insert(pos, txnId, newStatus, next);
+            else return insert(pos, txnId, newStatus.asNoInfo);
         }
         else
         {
@@ -540,50 +620,40 @@ public class CommandsForKey implements CommandsSummary
         return updated != prev || (updated != null && updated.hasInfo && !prevAcceptedOrCommitted.equals(updatedAcceptedOrCommitted));
     }
 
-    private Timestamp maxStableWriteBefore(Timestamp before)
+    @Inline
+    private static <P> int maxWriteIndex(TxnId[] txnIds, Info[] infos, TriPredicate<TxnId, Info, P> test, P param, int beforeIndex)
     {
-        if (maxStableWrite == null)
-            return null;
-
-        if (maxStableWrite.compareTo(before) < 0)
-            return maxStableWrite;
-
-        return maxStableWriteBefore(before, txnIds, infos);
-    }
-
-    private static Timestamp maxStableWriteBefore(Timestamp before, TxnId[] txnIds, Info[] infos)
-    {
-        int i = Arrays.binarySearch(txnIds, before);
-        if (i < 0) i = -1 -i;
+        int i = beforeIndex;
         Timestamp max = null;
+        int maxIndex = -1;
         while (--i >= 0)
         {
             TxnId txnId = txnIds[i];
             if (txnId.kind() != Write) continue;
 
             Info info = infos[i];
-            if (!info.status.hasStableDeps()) continue;
+            if (!test.test(txnId, info, param)) continue;
 
-            if (info.executeAt == null) max = txnId;
-            else if (info.executeAt.compareTo(before) < 0) max = info.executeAt;
-            else continue;
-
+            max = info.executeAt(txnId);
+            maxIndex = i;
             break;
         }
 
         while (--i >= 0)
         {
-            Info info = infos[i];
             TxnId txnId = txnIds[i];
-
-            if (info.getClass() == NoInfo.class) continue;
-            if (!info.status.hasStableDeps()) continue;
             if (txnId.kind() != Write) continue;
-            if (info.executeAt.compareTo(max) <= 0 || info.executeAt.compareTo(before) >= 0) continue;
+
+            Info info = infos[i];
+            if (info.getClass() == NoInfo.class) continue;
+            if (info.executeAt == txnId) continue;
+            if (!test.test(txnId, info, param)) continue;
+            if (info.executeAt.compareTo(max) <= 0) continue;
 
             max = info.executeAt;
+            maxIndex = i;
         }
-        return max;
+        return maxIndex;
     }
 
     private CommandsForKey insert(int insertPos, TxnId insertTxnId, InternalStatus newStatus, Command command)
@@ -595,7 +665,7 @@ public class CommandsForKey implements CommandsSummary
         TxnId[] newTxnIds = new TxnId[txnIds.length + newInfo.additionCount + 1];
         Info[] newInfos = new Info[newTxnIds.length];
         insertWithAdditions(insertPos, insertTxnId, newInfo, newTxnIds, newInfos);
-        return update(newTxnIds, newInfos, insertTxnId, newInfo.info);
+        return update(newTxnIds, newInfos, index.update(insertPos, null, newInfo));
     }
 
     private CommandsForKey update(int updatePos, TxnId txnId, Info prevInfo, InternalStatus newStatus, Command command)
@@ -606,11 +676,10 @@ public class CommandsForKey implements CommandsSummary
 
         TxnId[] newTxnIds = new TxnId[txnIds.length + newInfo.additionCount];
         Info[] newInfos = new Info[newTxnIds.length];
-        TxnId updateTxnId = txnIds[updatePos]; // want to reuse the existing TxnId for object identity
         int newPos = updateWithAdditions(updatePos, txnIds[updatePos], newInfo, newTxnIds, newInfos);
         if (prevInfo.status.compareTo(COMMITTED) < 0 && newStatus.compareTo(COMMITTED) >= 0)
             removeMissing(newTxnIds, newInfos, newPos);
-        return update(newTxnIds, newInfos, updateTxnId, newInfo.info);
+        return update(newTxnIds, newInfos, index.update(updatePos, prevInfo, newInfo));
     }
 
     private int updateWithAdditions(int updatePos, TxnId updateTxnId, InfoWithAdditions withInfo, TxnId[] newTxnIds, Info[] newInfos)
@@ -728,7 +797,8 @@ public class CommandsForKey implements CommandsSummary
         newInfos[pos] = newInfo;
         if (curInfo.status.compareTo(COMMITTED) < 0 && newInfo.status.compareTo(COMMITTED) >= 0)
             removeMissing(txnIds, newInfos, pos);
-        return update(txnIds, newInfos, txnIds[pos], newInfo);
+        Index index = this.index.update(pos, curInfo, newInfo);
+        return update(txnIds, newInfos, index);
     }
 
     /**
@@ -752,7 +822,7 @@ public class CommandsForKey implements CommandsSummary
         {
             insertInfoAndOneMissing(pos, newTxnId, newInfo, infos, newInfos, newTxnIds, 1);
         }
-        return update(newTxnIds, newInfos, newTxnId, newInfo);
+        return update(newTxnIds, newInfos, index.update(pos, null, newInfo));
     }
 
     /**
@@ -977,49 +1047,115 @@ public class CommandsForKey implements CommandsSummary
         return new InfoWithAdditions(Info.create(txnId, newStatus, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount)), additions, additionCount);
     }
 
-    private CommandsForKey update(TxnId[] newTxnIds, Info[] newInfos, TxnId updatedTxnId, Info updatedInfo)
+    private CommandsForKey update(TxnId[] newTxnIds, Info[] newInfos, Index index)
     {
-        Timestamp maxStableWrite = maybeUpdateMaxStableWrite(updatedTxnId, updatedInfo, this.maxStableWrite);
-        return new CommandsForKey(key, redundantBefore, maxStableWrite, newTxnIds, newInfos);
+        return new CommandsForKey(key, redundantBefore, newTxnIds, newInfos, index);
     }
 
-    private static Timestamp maybeUpdateMaxStableWrite(TxnId txnId, Info info, Timestamp maxStableWrite)
+    public void updateWaitingOn(TxnId waitingId, int keyIndex, WaitingOn.Update update)
     {
-        if (!info.status.hasStableDeps() || txnId.kind() != Write)
-            return maxStableWrite;
-
-        Timestamp executeAt = info.executeAt(txnId);
-        if (maxStableWrite != null && maxStableWrite.compareTo(executeAt) >= 0)
-            return maxStableWrite;
-
-        return executeAt;
-    }
-
-    public void initialiseWaitingOn(TxnId waitingId, WaitingOn.Update update)
-    {
-
-        SortedRelationList<TxnId> waitingOnIds = update.deps.keyDeps.txnIds(key);
-        int cfkIdx = 0;
-        for (int i = 0 ; i < waitingOnIds.size() ; ++i)
+        // TODO (expected): use Index to save some computation
+        int txnIdx = indexOf(waitingId);
+        Timestamp executeAt = waitingId;
+        int executeIdx = txnIdx;
+        Info waitingInfo = infos[txnIdx];
+        Invariants.checkState(waitingInfo.status == STABLE);
+        if (waitingInfo.executeAt != null)
         {
-            int waitingOnIdx = waitingOnIds.getValueIndex(i);
-            boolean isWaitingOnApply = update.isWaitingOnApply(waitingOnIdx);
-            boolean isWaitingOnCommit = !isWaitingOnApply && update.isWaitingOnCommit(waitingOnIdx);
-            if (!(isWaitingOnApply | isWaitingOnCommit)) continue;
-            cfkIdx = SortedArrays.exponentialSearch(txnIds, cfkIdx, txnIds.length, waitingOnIds.getForValueIndex(waitingOnIdx));
-            Invariants.checkState(cfkIdx >= 0);
-            Info info = infos[cfkIdx];
+            executeAt = waitingInfo.executeAt;
+            executeIdx = SortedArrays.exponentialSearch(txnIds, txnIdx, txnIds.length, executeAt);
+            if (executeIdx < 0) executeIdx = -1 - executeIdx;
+        }
+        for (int i = executeIdx - 1; i >= 0 ; --i)
+        {
+            Info info = infos[i];
+            if (info == APPLIED.asNoInfo) continue;
+            if (info == INVALID_OR_TRUNCATED.asNoInfo) continue;
+
             switch (info.status)
             {
-                case PREACCEPTED:
-                case HISTORICAL:
-                case ACCEPTED:
+                case APPLIED:
+                case INVALID_OR_TRUNCATED:
                     continue;
+
+                case HISTORICAL:
+                case TRANSITIVELY_KNOWN:
+                case PREACCEPTED:
+                case ACCEPTED:
+                    if (waitingInfo.missing == NO_TXNIDS || Arrays.binarySearch(waitingInfo.missing, txnIds[i]) < 0)
+                        return; // still waiting
+
+                case STABLE:
+                case COMMITTED:
+                    if (info.executeAt == null || info.executeAt.compareTo(executeAt) < 0)
+                        return; // must still be waiting
+
             }
         }
-        update.deps.keyDeps.forEach(key, (txnId, txnIdx) -> {
 
-        });
+        update.removeWaitingOnKey(keyIndex);
+    }
+
+    public void notify(int updatedPos, InternalStatus prevStatus, SafeCommandStore safeStore)
+    {
+        // first notify anything that might now be ready to execute
+        TxnId updatedTxnId = txnIds[updatedPos];
+        Info updatedInfo = infos[updatedPos];
+        switch (updatedInfo.status)
+        {
+            case TRANSITIVELY_KNOWN:
+            case PREACCEPTED:
+            case HISTORICAL:
+            case ACCEPTED:
+//                if (index.)
+                break;
+
+            case STABLE:
+            case COMMITTED:
+            {
+                // somebody waiting on us might now be ready to execute, but only if we execute after them and were not previously committed
+                if (prevStatus == COMMITTED || updatedInfo.executeAt == null || updatedInfo.executeAt == updatedTxnId)
+                    break;
+
+                int minIndex = index.minUncommitted;
+                int lastIndex = index.maxIndexExecutesBefore(updatedPos, updatedInfo.executeAt);
+                for (int i = updatedPos + 1; i < lastIndex ; ++i)
+                {
+                    TxnId txnId = txnIds[i];
+                    Info info = infos[i];
+                    if (info.status.compareTo(COMMITTED) < 0) continue;
+                    if (info.executeAt(txnId).compareTo(updatedInfo.executeAt) > 0) continue;
+
+                    if (txnId.kind().witnesses().test(updatedTxnId.kind()))
+                    {
+                        for (int j = info.missing.length - 1; j > 0 ; --j)
+                        {
+                            
+                        }
+                    }
+
+                    // writes are witnessed by everything, so can terminate once we've visited a committed one
+                    // as anything later must depend on this write
+                    if (txnId.kind() == Write)
+                        break;
+                }
+                break;
+            }
+
+            case INVALID_OR_TRUNCATED:
+            case APPLIED:
+            {
+                // somebody might now be ready to execute
+                Cursor cursor = index.executesAfterByExecuteAt(updatedPos);
+                while (cursor.next())
+                {
+                    int i = cursor.index();
+                    Info info = infos[i];
+                    if (info.)
+                    TxnId txnId = txnIds[i];
+                }
+            }
+        }
     }
 
     public CommandsForKey withoutRedundant(TxnId redundantBefore)
@@ -1027,9 +1163,9 @@ public class CommandsForKey implements CommandsSummary
         if (this.redundantBefore.compareTo(redundantBefore) >= 0)
             return this;
 
-        int pos = insertPos(redundantBefore);
+        int pos = insertPos(0, redundantBefore);
         if (pos == 0)
-            return new CommandsForKey(key, redundantBefore, maxStableWrite, txnIds, infos);
+            return new CommandsForKey(key, redundantBefore, txnIds, infos, index);
 
         TxnId[] newTxnIds = Arrays.copyOfRange(txnIds, pos, txnIds.length);
         Info[] newInfos = Arrays.copyOfRange(infos, pos, infos.length);
@@ -1044,7 +1180,7 @@ public class CommandsForKey implements CommandsSummary
             TxnId[] newMissing = j == info.missing.length ? NO_TXNIDS : Arrays.copyOfRange(info.missing, j, info.missing.length);
             newInfos[i] = info.update(txnIds[i], newMissing);
         }
-        return new CommandsForKey(key, redundantBefore, maxStableWrite, newTxnIds, newInfos);
+        return new CommandsForKey(key, redundantBefore, newTxnIds, newInfos, index.removeBefore(pos));
     }
 
     public CommandsForKey registerHistorical(TxnId txnId)
@@ -1056,9 +1192,9 @@ public class CommandsForKey implements CommandsSummary
         return insert(-1 - i, txnId, HISTORICAL.asNoInfo);
     }
 
-    private int insertPos(Timestamp timestamp)
+    private int insertPos(int min, Timestamp timestamp)
     {
-        int i = Arrays.binarySearch(txnIds, timestamp);
+        int i = Arrays.binarySearch(txnIds, min, txnIds.length, timestamp);
         if (i < 0) i = -1 -i;
         return i;
     }

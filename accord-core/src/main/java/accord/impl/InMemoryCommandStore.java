@@ -52,6 +52,7 @@ import accord.api.DataStore;
 import accord.api.Key;
 import accord.api.ProgressLog;
 import accord.local.CommandStores.RangesForEpoch;
+import accord.local.CommandsForKey;
 import accord.primitives.AbstractKeys;
 import accord.primitives.Deps;
 import accord.primitives.PartialDeps;
@@ -253,7 +254,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         return timestampsForKey.get(key);
     }
 
-    private <O> O mapReduceForKey(InMemorySafeStore safeStore, Routables<?> keysOrRanges, Ranges slice, BiFunction<CommandsForKey, O, O> map, O accumulate)
+    private <O> O mapReduceForKey(InMemorySafeStore safeStore, Routables<?> keysOrRanges, Ranges slice, BiFunction<accord.local.CommandsForKey, O, O> map, O accumulate)
     {
         switch (keysOrRanges.domain()) {
             default:
@@ -263,7 +264,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 for (Key key : keys)
                 {
                     if (!slice.contains(key)) continue;
-                    CommandsForKey commands = safeStore.commandsIfLoadedAndInitialised(key).current();
+                    accord.local.CommandsForKey commands = safeStore.ifLoadedAndInitialised(key).current();
                     if (commands == null)
                         continue;
 
@@ -280,7 +281,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     for (Map.Entry<RoutableKey, GlobalCommandsForKey> entry : commandsForKey.subMap(range.start(), range.startInclusive(), range.end(), range.endInclusive()).entrySet())
                     {
                         GlobalCommandsForKey globalCommands = entry.getValue();
-                        CommandsForKey commands = globalCommands.value();
+                        accord.local.CommandsForKey commands = globalCommands.value();
                         if (commands == null)
                             continue;
                         accumulate = map.apply(commands, accumulate);
@@ -655,7 +656,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeTimestampsForKey getTimestampsForKeyInternal(RoutableKey key)
+        protected InMemorySafeTimestampsForKey getTimestampsForKeyInternal(Key key)
         {
             return timestampsForKey.get(key);
         }
@@ -667,7 +668,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeTimestampsForKey getTimestampsForKeyIfLoaded(RoutableKey key)
+        protected InMemorySafeTimestampsForKey getTimestampsForKeyIfLoaded(Key key)
         {
             if (!commandStore.canExposeUnloaded())
                 return null;
@@ -685,7 +686,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeCommandsForKey getCommandsForKeyInternal(RoutableKey key)
+        protected InMemorySafeCommandsForKey getCommandsForKeyInternal(Key key)
         {
             return commandsForKey.get(key);
         }
@@ -697,7 +698,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeCommandsForKey getCommandsForKeyIfLoaded(RoutableKey key)
+        protected InMemorySafeCommandsForKey getCommandsForKeyIfLoaded(Key key)
         {
             if (!commandStore.canExposeUnloaded())
                 return null;
@@ -772,7 +773,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     if (!rangesForEpoch.allAfter(txnId.epoch()).contains(key))
                         return;
 
-                    CommandsForKeys.registerNotWitnessed(this, key, txnId);
+                    get(key).registerHistorical(txnId);
                 });
 
             });
@@ -995,9 +996,10 @@ public abstract class InMemoryCommandStore extends CommandStore
                     else commandStore.commandsByExecuteAt.put(executeAt, commandStore.command(c.txnId()));
                 }
             });
-            commands.values().forEach(SafeState::invalidate);
-            timestampsForKey.values().forEach(SafeState::invalidate);
-            commandsForKey.values().forEach(SafeState::invalidate);
+
+            commands.values().forEach(InMemorySafeCommand::invalidate);
+            timestampsForKey.values().forEach(InMemorySafeTimestampsForKey::invalidate);
+            commandsForKey.values().forEach(InMemorySafeCommandsForKey::invalidate);
         }
     }
 

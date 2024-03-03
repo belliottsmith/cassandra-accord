@@ -390,7 +390,6 @@ public class SimpleBitSet
     {
         int fromIndex = from >>> 6;
         int toIndex = (to + 63) >>> 6;
-        int minCount = getSetBitCount(0, from) + getSetBitCount(to, size());
 
         if (fromIndex == toIndex)
         {
@@ -400,7 +399,7 @@ public class SimpleBitSet
         else
         {
             reverseForEach(fromIndex, -1L << (from & 63), p1, p2, p3, p4, forEach);
-            for (int i = fromIndex + 1; i < toIndex ; ++i)
+            for (int i = fromIndex + 1; i < toIndex; ++i)
                 reverseForEach(fromIndex, -1L, p1, p2, p3, p4, forEach);
             reverseForEach(fromIndex, -1L >>> (64 - (to & 63)), p1, p2, p3, p4, forEach);
         }

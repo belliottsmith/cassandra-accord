@@ -23,13 +23,16 @@ import javax.annotation.Nullable;
 
 import accord.api.Agent;
 import accord.api.DataStore;
+import accord.api.Key;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.impl.ErasedSafeCommand;
 import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
+import accord.primitives.Keys;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
+import accord.primitives.Routables;
 import accord.primitives.Seekable;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
@@ -151,17 +154,62 @@ public abstract class SafeCommandStore
         return maybeTruncate(safeCommand, safeCommand.current(), null, null);
     }
 
+    protected SafeCommandsForKey maybeTruncate(SafeCommandsForKey safeCfk)
+    {
+        RedundantBefore.Entry entry = commandStore().redundantBefore().get(safeCfk.key().toUnseekable());
+        if (entry != null)
+            safeCfk.updateRedundantBefore(entry.shardRedundantBefore());
+        return safeCfk;
+    }
+
+    /**
+     * If the transaction is in memory, return it (and make it visible to future invocations of {@code command}, {@code ifPresent} etc).
+     * Otherwise return null.
+     *
+     * This permits efficient operation when a transaction involved in processing another transaction happens to be in memory.
+     */
+    public final SafeCommandsForKey ifLoadedAndInitialised(Key key)
+    {
+        SafeCommandsForKey safeCfk = getInternalIfLoadedAndInitialised(key);
+        if (safeCfk == null)
+            return null;
+        return maybeTruncate(safeCfk);
+    }
+
+    public SafeCommandsForKey get(Key key)
+    {
+        SafeCommandsForKey safeCfk = getInternal(key);
+        return maybeTruncate(safeCfk);
+    }
+
     protected abstract SafeCommand getInternal(TxnId txnId);
     protected abstract SafeCommand getInternalIfLoadedAndInitialised(TxnId txnId);
+    protected abstract SafeCommandsForKey getInternal(Key key);
+    protected abstract SafeCommandsForKey getInternalIfLoadedAndInitialised(Key key);
     public abstract boolean canExecuteWith(PreLoadContext context);
 
-    protected void update(Command prev, Command updated, @Nullable Seekables<?, ?> keysOrRanges)
+    protected void update(Command prev, Command updated)
+    {
+        Seekables<?, ?> keysOrRanges = updated.keysOrRanges();
+        if (prev != null)
+        {
+            // TODO (required): this logic isn't sufficient to ensure we update keys/ranges that are removed at commit
+            //  but were included for accept (which was for a later epoch); might need to retain the additional
+            //  keysOrRanges as a separate register
+            if (keysOrRanges == null)
+                keysOrRanges = prev.keysOrRanges();
+            else if (prev.executeAt().epoch() != updated.executeAt().epoch())
+                keysOrRanges = ((Seekables)prev.keysOrRanges()).with(keysOrRanges);
+        }
+
+        updateMaxConflicts(prev, updated, keysOrRanges);
+        updateCommandsForKey(prev, updated, keysOrRanges);
+    }
+
+    private void updateMaxConflicts(Command prev, Command updated, Seekables<?, ?> keysOrRanges)
     {
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
-        if (keysOrRanges == null && !newSaveStatus.known.definition.isKnown())
-            return;
-
         if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition.isKnown())
             return;
 
@@ -169,10 +217,42 @@ public abstract class SafeCommandStore
         if (!txnId.kind().isGloballyVisible())
             return;
 
-//        if (keysOrRanges != null)
-//            keysOrRanges = keysOrRanges.slice(ranges().allBetween(updated.txnId(), updated.executeAt()));
         commandStore().updateMaxConflicts(prev, updated, keysOrRanges);
     }
+
+    private void updateCommandsForKey(Command prev, Command updated, Seekables<?, ?> keysOrRanges)
+    {
+        if (!CommandsForKey.needsUpdate(prev, updated))
+            return;
+
+        TxnId txnId = updated.txnId();
+        if (!txnId.kind().isGloballyVisible() || !txnId.domain().isKey())
+            return;
+
+        // TODO (required): we need to register for execution and proposal epochs
+        //      we must consider how to handle the case where the proposal epoch is ahead of the execution epoch
+        //      because if we rely on this store for execution then we need the transaction's decision to be recorded.
+        //      We also have to do a more careful dance for our validation, because for some keys we can expect
+        //      e.g. PreAccept to have been processed and for other keys Committed onwards will
+        //      appear suddenly (and for Accept it could go either way).
+
+        Ranges ranges = ranges().allAt(txnId);
+        PreLoadContext context = PreLoadContext.contextFor(txnId, keysOrRanges);
+        // TODO (expected): execute immediately for any keys we already have loaded, and save only those we haven't for later
+        if (canExecuteWith(context))
+        {
+            Routables.foldl((Keys)keysOrRanges, ranges, (self, p, key, u, i) -> {
+                self.get(key).update(self, p, u);
+                return u;
+            }, this, prev, updated, i->false);
+        }
+        else
+        {
+            commandStore().execute(context, safeStore -> safeStore.updateCommandsForKey(prev, updated, keysOrRanges));
+        }
+    }
+
+
 
     /**
      * Visits keys first and then ranges, both in ascending order.

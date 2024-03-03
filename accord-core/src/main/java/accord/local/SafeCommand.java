@@ -18,8 +18,6 @@
 
 package accord.local;
 
-import javax.annotation.Nullable;
-
 import accord.api.Result;
 import accord.local.Command.TransientListener;
 import accord.local.Command.Truncated;
@@ -46,7 +44,7 @@ public abstract class SafeCommand
     public abstract boolean removeListener(Command.TransientListener listener);
     public abstract Listeners<Command.TransientListener> transientListeners();
 
-    public boolean isEmpty()
+    public boolean isUnset()
     {
         return current() == null;
     }
@@ -62,14 +60,14 @@ public abstract class SafeCommand
     //   1 - remove the special case that permits accept without the definition
     //   2 - store some pseudo transaction with only the keys
     //   3 - just come up with something a bit neater
-    <C extends Command> C update(SafeCommandStore safeStore, @Nullable Seekables<?, ?> keysOrRanges, C update)
+    <C extends Command> C update(SafeCommandStore safeStore, C update)
     {
         Command prev = current();
         if (prev == update)
             return update;
 
         set(update);
-        safeStore.update(prev, update, keysOrRanges);
+        safeStore.update(prev, update);
         return update;
     }
 
@@ -113,12 +111,12 @@ public abstract class SafeCommand
 
     public Command.PreAccepted preaccept(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)
     {
-        return update(safeStore, null, Command.preaccept(current(), attrs, executeAt, ballot));
+        return update(safeStore, Command.preaccept(current(), attrs, executeAt, ballot));
     }
 
     public Command.Accepted markDefined(SafeCommandStore safeStore, CommonAttributes attributes, Ballot promised)
     {
-        return update(safeStore, null, Command.markDefined(current(), attributes, promised));
+        return update(safeStore, Command.markDefined(current(), attributes, promised));
     }
 
     public Command updatePromised(Ballot promised)
@@ -128,22 +126,27 @@ public abstract class SafeCommand
 
     public Command.Accepted accept(SafeCommandStore safeStore, Seekables<?, ?> keysOrRanges, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)
     {
-        return update(safeStore, keysOrRanges, Command.accept(current(), attrs, executeAt, ballot));
+        Command current = current();
+        Command.Accepted updated;
+        if (current.known().isDefinitionKnown()) updated = Command.accept(current, attrs, executeAt, ballot);
+        else updated = Command.acceptWithoutDefinition(current, attrs, executeAt, ballot, keysOrRanges.slice(safeStore.ranges().allBetween(txnId.epoch(), executeAt.epoch())));
+
+        return update(safeStore, updated);
     }
 
     public Command.Accepted acceptInvalidated(SafeCommandStore safeStore, Ballot ballot)
     {
-        return update(safeStore, null, Command.acceptInvalidated(current(), ballot));
+        return update(safeStore, Command.acceptInvalidated(current(), ballot));
     }
 
     public Command.Committed commit(SafeCommandStore safeStore, CommonAttributes attrs, Ballot ballot, Timestamp executeAt)
     {
-        return update(safeStore, null, Command.commit(current(), attrs, ballot, executeAt));
+        return update(safeStore, Command.commit(current(), attrs, ballot, executeAt));
     }
 
     public Command.Committed stable(SafeCommandStore safeStore, CommonAttributes attrs, Ballot ballot, Timestamp executeAt, Command.WaitingOn waitingOn)
     {
-        return update(safeStore, null, Command.stable(current(), attrs, ballot, executeAt, waitingOn));
+        return update(safeStore, Command.stable(current(), attrs, ballot, executeAt, waitingOn));
     }
 
     public Truncated commitInvalidated(SafeCommandStore safeStore)
@@ -152,32 +155,32 @@ public abstract class SafeCommand
         if (current.hasBeen(Status.Truncated))
             return (Truncated) current;
 
-        return update(safeStore, null, Truncated.invalidated(current));
+        return update(safeStore, Truncated.invalidated(current));
     }
 
     public Command precommit(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt)
     {
-        return update(safeStore, null, Command.precommit(attrs, current(), executeAt));
+        return update(safeStore, Command.precommit(attrs, current(), executeAt));
     }
 
     public Command.Committed readyToExecute(SafeCommandStore safeStore)
     {
-        return update(safeStore, null, Command.readyToExecute(current().asCommitted()));
+        return update(safeStore, Command.readyToExecute(current().asCommitted()));
     }
 
     public Command.Executed preapplied(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt, Command.WaitingOn waitingOn, Writes writes, Result result)
     {
-        return update(safeStore, null, Command.preapplied(current(), attrs, executeAt, waitingOn, writes, result));
+        return update(safeStore, Command.preapplied(current(), attrs, executeAt, waitingOn, writes, result));
     }
 
     public Command.Executed applying(SafeCommandStore safeStore)
     {
-        return update(safeStore, null, Command.applying(current().asExecuted()));
+        return update(safeStore, Command.applying(current().asExecuted()));
     }
 
     public Command.Executed applied(SafeCommandStore safeStore)
     {
-        Command.Executed executed = update(safeStore, null, Command.applied(current().asExecuted()));
+        Command.Executed executed = update(safeStore, Command.applied(current().asExecuted()));
         safeStore.progressLog().clear(txnId);
         return executed;
     }
