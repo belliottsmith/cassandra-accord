@@ -864,7 +864,7 @@ public class CommandsForKey implements CommandsSummary
     private CommandsForKey insert(int pos, TxnId insertPlainTxnId, TxnInfo insert)
     {
         TxnInfo[] newTxns = new TxnInfo[txns.length + 1];
-        if (!insert.status.hasDeps())
+        if (insert.status.compareTo(COMMITTED) >= 0)
         {
             System.arraycopy(txns, 0, newTxns, 0, pos);
             newTxns[pos] = insert;
@@ -889,7 +889,7 @@ public class CommandsForKey implements CommandsSummary
             if (txn.status.hasDeps())
             {
                 Timestamp depsKnownBefore = txn.depsKnownBefore();
-                if (depsKnownBefore != null && depsKnownBefore.compareTo(inserted) > 0 && inserted.kind().witnesses(inserted))
+                if (depsKnownBefore != null && depsKnownBefore.compareTo(inserted) > 0 && txn.kind().witnesses(inserted))
                 {
                     TxnId[] missing = txn.missing();
                     if (missing == NO_TXNIDS)
@@ -972,6 +972,7 @@ public class CommandsForKey implements CommandsSummary
     private static TxnId[] mergeAndFilterMissing(TxnId owner, TxnId[] current, TxnId[] additions, int additionCount)
     {
         Kinds kinds = owner.kind().witnesses();
+        int additionLength = additionCount;
         for (int i = additionCount - 1 ; i >= 0 ; --i)
         {
             if (!kinds.test(additions[i].kind()))
@@ -983,7 +984,7 @@ public class CommandsForKey implements CommandsSummary
 
         TxnId[] buffer = cachedTxnIds().get(current.length + additionCount);
         int i = 0, j = 0, count = 0;
-        while (i < additionCount && j < current.length)
+        while (i < additionLength && j < current.length)
         {
             if (kinds.test(additions[i].kind()))
             {
@@ -993,7 +994,7 @@ public class CommandsForKey implements CommandsSummary
             }
             else i++;
         }
-        while (i < additionCount)
+        while (i < additionLength)
         {
             if (kinds.test(additions[i].kind()))
                 buffer[count++] = additions[i];
@@ -1003,7 +1004,7 @@ public class CommandsForKey implements CommandsSummary
         {
             buffer[count++] = current[j++];
         }
-        Invariants.checkState(!owner.isWrite() || count == additionCount + current.length);
+        Invariants.checkState(count == additionCount + current.length);
         return cachedTxnIds().completeAndDiscard(buffer, count);
     }
 
