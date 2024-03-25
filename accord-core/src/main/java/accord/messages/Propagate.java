@@ -85,6 +85,7 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
     public final boolean isShardTruncated;
     @Nullable public final PartialTxn partialTxn;
     @Nullable public final PartialDeps stableDeps;
+    // TODO (expected): toEpoch may only apply to certain local command stores that have "witnessed the future" - confirm it is fine to use globally or else narrow its scope
     public final long toEpoch;
     @Nullable public final Timestamp committedExecuteAt;
     @Nullable public final Writes writes;
