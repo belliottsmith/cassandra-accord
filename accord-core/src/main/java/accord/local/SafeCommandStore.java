@@ -41,6 +41,7 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 
 import static accord.local.Cleanup.NO;
+import static accord.local.KeyHistory.COMMANDS;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.SaveStatus.Erased;
 import static accord.local.SaveStatus.ErasedOrInvalidated;
@@ -222,7 +223,7 @@ public abstract class SafeCommandStore
             if (keys == null)
                 return;
 
-            PreLoadContext context = PreLoadContext.contextFor(txnId, keys);
+            PreLoadContext context = PreLoadContext.contextFor(txnId, keys, COMMANDS);
             // TODO (expected): execute immediately for any keys we already have loaded, and save only those we haven't for later
             if (canExecuteWith(context))
             {
