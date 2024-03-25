@@ -377,14 +377,16 @@ public class SerializerSupport
     {
         Ranges ranges = rangesForEpoch.allBetween(commit.txnId.epoch(), commit.executeAt.epoch());
         PartialDeps partialDeps = commit.partialDeps.slice(ranges);
-        PartialTxn partialTxn = commit.partialTxn.slice(ranges, true);
+        PartialTxn partialTxn = commit.partialTxn == null ? null : commit.partialTxn.slice(ranges, true);
         switch (commit.kind)
         {
             default: throw new AssertionError("Unhandled Commit.Kind: " + commit.kind);
-            case Commit: throw illegalState("Invalid Commit Kind at this step: " + commit.kind);
+            case CommitSlowPath:
             case StableFastPath:
             case StableSlowPath:
-                partialTxn = merge(txnFromPreAcceptOrBeginRecover(rangesForEpoch, witnessed, messageProvider), partialTxn);
+                PartialTxn preAcceptedPartialTxn = txnFromPreAcceptOrBeginRecover(rangesForEpoch, witnessed, messageProvider);
+                if (partialTxn == null || partialTxn.keys().size() == 0) partialTxn = preAcceptedPartialTxn;
+                else partialTxn = merge(preAcceptedPartialTxn, partialTxn);
             case StableWithTxnAndDeps:
             case CommitWithTxn:
         }
