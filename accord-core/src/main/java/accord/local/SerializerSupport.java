@@ -39,6 +39,7 @@ import accord.primitives.PartialTxn;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.Writes;
+import accord.utils.Invariants;
 
 import static accord.messages.MessageType.APPLY_MAXIMAL_REQ;
 import static accord.messages.MessageType.APPLY_MINIMAL_REQ;
@@ -118,6 +119,9 @@ public class SerializerSupport
     }
 
     private static final Set<MessageType> PRE_ACCEPT_COMMIT_TYPES =
+        ImmutableSet.of(PRE_ACCEPT_REQ, BEGIN_RECOVER_REQ, PROPAGATE_PRE_ACCEPT_MSG, COMMIT_SLOW_PATH_REQ, COMMIT_MAXIMAL_REQ);
+
+    private static final Set<MessageType> PRE_ACCEPT_STABLE_TYPES =
         ImmutableSet.of(PRE_ACCEPT_REQ, BEGIN_RECOVER_REQ, PROPAGATE_PRE_ACCEPT_MSG,
                         COMMIT_SLOW_PATH_REQ, COMMIT_MAXIMAL_REQ, STABLE_FAST_PATH_REQ, STABLE_SLOW_PATH_REQ, STABLE_MAXIMAL_REQ, PROPAGATE_STABLE_MSG);
 
@@ -129,7 +133,7 @@ public class SerializerSupport
 
     private static final Set<MessageType> PRE_ACCEPT_COMMIT_APPLY_TYPES =
         ImmutableSet.of(PRE_ACCEPT_REQ, BEGIN_RECOVER_REQ, PROPAGATE_PRE_ACCEPT_MSG,
-                        COMMIT_SLOW_PATH_REQ, COMMIT_MAXIMAL_REQ, PROPAGATE_STABLE_MSG,
+                        COMMIT_SLOW_PATH_REQ, COMMIT_MAXIMAL_REQ, STABLE_MAXIMAL_REQ, STABLE_FAST_PATH_REQ, PROPAGATE_STABLE_MSG,
                         APPLY_MINIMAL_REQ, APPLY_MAXIMAL_REQ, PROPAGATE_APPLY_MSG);
 
     private static Command.Executed executed(RangesForEpoch rangesForEpoch, Mutable attrs, SaveStatus status, Timestamp executeAt, Ballot promised, Ballot accepted, WaitingOnProvider waitingOnProvider, MessageProvider messageProvider)
@@ -245,31 +249,51 @@ public class SerializerSupport
                 return withContents.apply(param, txn, deps, null, null);
 
             case Committed:
+            {
+                witnessed = messageProvider.test(PRE_ACCEPT_COMMIT_TYPES);
+                Commit commit;
+                if (witnessed.contains(COMMIT_MAXIMAL_REQ))
+                {
+                    commit = messageProvider.commitMaximal();
+                }
+                else
+                {
+                    Invariants.checkState(witnessed.contains(COMMIT_SLOW_PATH_REQ));
+                    commit = messageProvider.commitSlowPath();
+                }
+
+                return sliceAndApply(rangesForEpoch, messageProvider, witnessed, commit, withContents, param, null, null);
+            }
+
             case Stable:
             {
-
-                witnessed = messageProvider.test(PRE_ACCEPT_COMMIT_TYPES);
+                // TODO (required): we should piece this back together in the precedence order of arrival
+                witnessed = messageProvider.test(PRE_ACCEPT_STABLE_TYPES);
                 Commit commit;
                 if (witnessed.contains(STABLE_MAXIMAL_REQ))
                 {
                     commit = messageProvider.stableMaximal();
                 }
-                else if (witnessed.contains(COMMIT_MAXIMAL_REQ))
-                {
-                    commit = messageProvider.commitMaximal();
-                }
                 else if (witnessed.contains(PROPAGATE_STABLE_MSG))
                 {
                     return sliceAndApply(rangesForEpoch, messageProvider.propagateStable(), withContents, param, null, null);
                 }
-                else if (witnessed.contains(COMMIT_SLOW_PATH_REQ))
+                else if (witnessed.contains(STABLE_FAST_PATH_REQ))
                 {
-                    commit = messageProvider.commitSlowPath();
+                    commit = messageProvider.stableFastPath();
                 }
                 else
                 {
-                    checkState(witnessed.contains(STABLE_FAST_PATH_REQ));
-                    commit = messageProvider.stableFastPath();
+                    checkState(witnessed.contains(STABLE_SLOW_PATH_REQ));
+                    if (witnessed.contains(COMMIT_SLOW_PATH_REQ))
+                    {
+                        commit = messageProvider.commitSlowPath();
+                    }
+                    else
+                    {
+                        checkState(witnessed.contains(COMMIT_MAXIMAL_REQ));
+                        commit = messageProvider.commitMaximal();
+                    }
                 }
 
                 return sliceAndApply(rangesForEpoch, messageProvider, witnessed, commit, withContents, param, null, null);
@@ -278,7 +302,6 @@ public class SerializerSupport
             case PreApplied:
             case Applied:
             {
-
                 witnessed = messageProvider.test(PRE_ACCEPT_COMMIT_APPLY_TYPES);
                 if (witnessed.contains(APPLY_MAXIMAL_REQ))
                 {
@@ -300,10 +323,6 @@ public class SerializerSupport
                     {
                         commit = messageProvider.stableMaximal();
                     }
-                    else if (witnessed.contains(COMMIT_MAXIMAL_REQ))
-                    {
-                        commit = messageProvider.commitMaximal();
-                    }
                     else if (witnessed.contains(PROPAGATE_STABLE_MSG))
                     {
                         Propagate propagate = messageProvider.propagateStable();
@@ -319,7 +338,7 @@ public class SerializerSupport
                     }
                     else
                     {
-                        throw illegalState("Invalid state: no stable message found to reconstruct PreApplied or greater SaveStatus");
+                        throw illegalState("Invalid state: insufficient stable or commit messages found to reconstruct PreApplied or greater SaveStatus");
                     }
 
                     return sliceAndApply(rangesForEpoch, messageProvider, witnessed, commit, withContents, param, apply.writes, apply.result);
