@@ -662,6 +662,7 @@ public class CommandsForKey implements CommandsSummary
             {
                 if (newStatus.compareTo(cur.status) <= 0)
                 {
+                    // TODO (required): this validation is not safe for replay where we may have to "catch up" commands that are behind CFK
                     // we can redundantly update the same transaction via notifyWaitingOnCommit since updates to CFK may be asynchronous
                     // (particularly for invalidations). So we should expect that we might already represent the latest information for this transaction.
                     // TODO (desired): consider only accepting this for Invalidation
