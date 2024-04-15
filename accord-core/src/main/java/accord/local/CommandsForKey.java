@@ -667,7 +667,7 @@ public class CommandsForKey implements CommandsSummary
                     // TODO (desired): consider only accepting this for Invalidation
                     // TODO (desired): also clean-up special casing for AcceptedInvalidate, which exists because it currently has no effect on the CFK state
                     //    so it could be any of Transitively Known, Historic, PreAccept or Accept
-                    Invariants.checkState(cur.status == newStatus || next.status() == Status.AcceptedInvalidate);
+                    Invariants.checkState(cur.status == newStatus || next.status() == Status.AcceptedInvalidate, "Attempted update to CommandsForKey with %s, implying stale status; found %s", next, cur);
                     if (!newStatus.hasInfo || next.acceptedOrCommitted().equals(prev.acceptedOrCommitted()))
                         return this;
                 }

@@ -270,7 +270,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
      */
     public void forEach(Range range, Consumer<TxnId> forEach)
     {
-        forEach(range, forEach, 0, null);
+        forEach(range, Consumer::accept, forEach, 0, null);
     }
 
     /**
