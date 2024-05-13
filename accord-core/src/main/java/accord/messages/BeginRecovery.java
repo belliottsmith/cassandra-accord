@@ -19,11 +19,19 @@
 package accord.messages;
 
 import java.util.List;
-import javax.annotation.Nullable;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import accord.api.Result;
-import accord.local.*;
+import accord.local.Command;
+import accord.local.Commands;
+import accord.local.KeyHistory;
+import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SafeCommand;
+import accord.local.SafeCommandStore;
+import accord.local.Status;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -38,14 +46,15 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import javax.annotation.Nullable;
 
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.SafeCommandStore.TestDep.WITHOUT;
 import static accord.local.SafeCommandStore.TestStartedAt.ANY;
-import static accord.local.SafeCommandStore.TestStatus.IS_STABLE;
-import static accord.local.SafeCommandStore.TestStatus.IS_PROPOSED;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_AFTER;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
+import static accord.local.SafeCommandStore.TestStatus.IS_PROPOSED;
+import static accord.local.SafeCommandStore.TestStatus.IS_STABLE;
 import static accord.local.Status.Phase;
 import static accord.local.Status.PreAccepted;
 import static accord.local.Status.PreCommitted;
@@ -54,6 +63,8 @@ import static accord.utils.Invariants.illegalState;
 
 public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
 {
+    private static final Logger logger = LoggerFactory.getLogger(BeginRecovery.class);
+
     public static class SerializationSupport
     {
         public static BeginRecovery create(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route)
@@ -66,11 +77,13 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
     public final Ballot ballot;
     public final FullRoute<?> route;
 
-    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot)
+    public BeginRecovery(Node node, Id to, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot)
     {
         super(to, topologies, route, txnId);
         // TODO (expected): only scope.contains(route.homeKey); this affects state eviction and is low priority given size in C*
         this.partialTxn = txn.slice(scope.covering(), true);
+        if (txnId.toString().equals("TxnId.debugTransactionId"))
+            logger.info("Node {} to {} BeginRecovery covering {} partialTxnRanges {}", node, to, scope.covering(), partialTxn.covering());
         this.ballot = ballot;
         this.route = route;
     }
@@ -94,6 +107,9 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
     public RecoverReply apply(SafeCommandStore safeStore)
     {
         SafeCommand safeCommand = safeStore.get(txnId, txnId, route);
+        if (txnId.toString().equals("TxnId.debugTransactionId"))
+            logger.info("Node {} CommandStore {} BeginRecovery apply txnId {} partialTxnRanges {}, safeStoreRangesAtEpoch {}", node, safeStore.commandStore().id(), txnId, partialTxn.covering(), safeStore.ranges().allAt(txnId.epoch()));
+
         switch (Commands.recover(safeStore, safeCommand, txnId, partialTxn, route, progressKey, ballot))
         {
             default:

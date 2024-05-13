@@ -18,19 +18,18 @@
 
 package accord.coordinate;
 
-import java.util.function.BiFunction;
-import javax.annotation.Nonnull;
-
-import accord.local.*;
-import com.google.common.annotations.VisibleForTesting;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.BarrierType;
 import accord.api.Key;
 import accord.api.RoutingKey;
+import accord.local.Command;
+import accord.local.KeyHistory;
+import accord.local.Node;
+import accord.local.PreLoadContext;
+import accord.local.SafeCommand;
+import accord.local.SafeCommandStore;
 import accord.local.SafeCommandStore.TestDep;
 import accord.local.SafeCommandStore.TestStartedAt;
+import accord.local.Status;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Seekables;
 import accord.primitives.SyncPoint;
@@ -39,13 +38,20 @@ import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nonnull;
+import java.util.function.BiFunction;
 
 import static accord.local.PreLoadContext.contextFor;
-import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.local.SafeCommandStore.TestStatus.IS_STABLE;
+import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.checkState;
 import static accord.utils.Invariants.illegalState;
+import static java.lang.String.format;
 
 /**
  * Local or global barriers that return a result once all transactions have their side effects visible.
@@ -160,13 +166,22 @@ public class Barrier<S extends Seekables<?, ?>> extends AsyncResults.AbstractRes
 
     private void createSyncPoint()
     {
+        logger.info("Node {} barrier creating sync point, seekables {}", node, seekables);
         coordinateSyncPoint = syncPoint.apply(node, seekables);
         coordinateSyncPoint.addCallback((syncPoint, syncPointFailure) -> {
             if (syncPointFailure != null)
             {
+                String message = syncPointFailure.getMessage();;
+                if (message == null)
+                    message = syncPointFailure.getClass().getName();
+                TxnId txnId = null;
+                if (syncPointFailure instanceof CoordinationFailed)
+                    txnId = ((CoordinationFailed)syncPointFailure).txnId();
+                logger.error(format("Node %s barrier failed, txnId %s, seekables %s, failure %s", node, txnId, seekables, message));
                 Barrier.this.tryFailure(syncPointFailure);
                 return;
             }
+            logger.info("Node {} barrier succeeded sync point, seekables {}, txnId {}", node, seekables, syncPoint.syncId);
 
             // Need to wait for the local transaction to finish since coordinate sync point won't wait on anything
             // if async was requested or there were no deps found

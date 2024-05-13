@@ -18,17 +18,23 @@
 
 package accord.primitives;
 
-import accord.api.Key;
-import accord.utils.Invariants;
-
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
+
+import accord.api.Key;
+import accord.utils.Invariants;
 import javax.annotation.Nullable;
+
+import static accord.primitives.Timestamp.min;
 
 /**
  * A collection of transaction dependencies, keyed by the key or range on which they were adopted
@@ -172,7 +178,7 @@ public class Deps
             throw new IndexOutOfBoundsException();
         if (keyDeps.isEmpty()) return rangeDeps.txnId(0);
         if (rangeDeps.isEmpty()) return keyDeps.txnId(0);
-        return TxnId.min(keyDeps.txnId(0), rangeDeps.txnId(0));
+        return min(keyDeps.txnId(0), rangeDeps.txnId(0));
     }
 
     public List<TxnId> txnIds()
@@ -287,5 +293,24 @@ public class Deps
     public int hashCode()
     {
         throw new UnsupportedOperationException();
+    }
+
+    public TxnId oldestDep()
+    {
+        TxnId oldestKey = keyDeps.txnIds.length > 0 ? Collections.min(Arrays.asList(keyDeps.txnIds)) : null;
+        TxnId oldestRange = rangeDeps.txnIds.length > 0 ? Collections.min(Arrays.asList(rangeDeps.txnIds)) : null;
+        if (oldestKey == null)
+            return oldestRange;
+        if (oldestRange == null)
+            return oldestKey;
+        return min(oldestKey, oldestRange);
+    }
+
+    public Set<TxnId> randomDeps(int limit)
+    {
+        Set<TxnId> allIds = new HashSet<>();
+        allIds.addAll(Arrays.asList(keyDeps.txnIds));
+        allIds.addAll(Arrays.asList(rangeDeps.txnIds));
+        return allIds.stream().limit(limit).collect(Collectors.toSet());
     }
 }

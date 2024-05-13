@@ -18,18 +18,6 @@
 
 package accord.coordinate;
 
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiConsumer;
-
-import com.google.common.collect.ImmutableSet;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.Agent;
 import accord.api.BarrierType;
 import accord.api.Result;
@@ -62,6 +50,17 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
+import com.google.common.collect.ImmutableSet;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 import static accord.Utils.id;
 import static accord.Utils.ids;
@@ -275,7 +274,7 @@ public class CoordinateTransactionTest
                     PartialDeps.Builder depsBuilder = PartialDeps.builder(store.ranges().currentRanges());
                     depsBuilder.add(key, blockingTxnId);
                     PartialDeps partialDeps = depsBuilder.build();
-                    Commands.commit(store, safeCommand, SaveStatus.Stable, Ballot.ZERO, txnId, route, null, command.partialTxn(), txnId, partialDeps);
+                    Commands.commit(n, store, safeCommand, SaveStatus.Stable, Ballot.ZERO, txnId, route, null, command.partialTxn(), txnId, partialDeps);
                     Commands.apply(store, safeCommand, txnId, route, null, txnId, partialDeps, command.partialTxn(), txn.execute(txnId, txnId, null), txn.query().compute(txnId, txnId, keys, null, null, null));
                 }));
 

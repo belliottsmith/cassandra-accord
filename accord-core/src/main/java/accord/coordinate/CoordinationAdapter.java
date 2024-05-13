@@ -18,10 +18,6 @@
 
 package accord.coordinate;
 
-import java.util.function.BiConsumer;
-
-import javax.annotation.Nullable;
-
 import accord.api.Result;
 import accord.coordinate.ExecuteSyncPoint.ExecuteBlocking;
 import accord.local.Node;
@@ -30,7 +26,6 @@ import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
-import accord.primitives.Ranges;
 import accord.primitives.Seekables;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
@@ -39,15 +34,21 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Faults;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+import java.util.function.BiConsumer;
 
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.SLOW;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.messages.Apply.Kind.Minimal;
-import static accord.primitives.Routable.Domain.Range;
 
 public interface CoordinationAdapter<R>
 {
+    Logger logger = LoggerFactory.getLogger(CoordinationAdapter.class);
+
     interface Factory
     {
         enum Step { Continue, InitiateRecovery }
@@ -210,8 +211,6 @@ public interface CoordinationAdapter<R>
         {
             void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, BiConsumer<? super SyncPoint<S>, Throwable> callback)
             {
-                if (txn.keys().domain() == Range)
-                    node.configService().reportEpochClosed((Ranges)txn.keys(), txnId.epoch());
                 callback.accept(new SyncPoint<>(txnId, deps, (S)txn.keys(), route), null);
             }
 

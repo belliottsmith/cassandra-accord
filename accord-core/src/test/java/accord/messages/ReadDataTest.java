@@ -18,18 +18,6 @@
 
 package accord.messages;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutionException;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-
-import org.junit.jupiter.api.Test;
-
 import accord.Utils;
 import accord.api.Data;
 import accord.api.Key;
@@ -69,9 +57,20 @@ import accord.topology.Topology;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResults;
 import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static accord.Utils.createNode;
 import static accord.Utils.id;
@@ -272,7 +271,7 @@ class ReadDataTest
             check(store.execute(PreLoadContext.contextFor(txnId, keys), safe -> {
                 CheckedCommands.preaccept(safe, txnId, partialTxn, route, progressKey);
                 CheckedCommands.accept(safe, txnId, Ballot.ZERO, partialRoute, partialTxn.keys(), progressKey, executeAt, deps);
-                CheckedCommands.commit(safe, SaveStatus.Stable, Ballot.ZERO, txnId, route, progressKey, partialTxn, executeAt, deps);
+                CheckedCommands.commit(node, safe, SaveStatus.Stable, Ballot.ZERO, txnId, route, progressKey, partialTxn, executeAt, deps);
             }));
         }
 

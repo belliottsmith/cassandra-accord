@@ -20,13 +20,21 @@ package accord.impl.basic;
 
 import accord.impl.mock.Network;
 import accord.local.Node.Id;
+import accord.messages.AbstractEpochRequest;
+import accord.messages.Commit;
 import accord.messages.Message;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
+import accord.messages.TxnRequest;
+import accord.primitives.TxnId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class Packet implements Pending, ReplyContext
 {
+    private static final Logger logger = LoggerFactory.getLogger(Packet.class);
+
     static final int SENTINEL_MESSAGE_ID = Integer.MIN_VALUE;
 
     public final Id src;
@@ -42,6 +50,26 @@ public class Packet implements Pending, ReplyContext
         this.requestId = requestId;
         this.replyId = SENTINEL_MESSAGE_ID;
         this.message = request;
+        if (request instanceof AbstractEpochRequest)
+        {
+            TxnId txnId = ((AbstractEpochRequest)request).txnId;
+            if (txnId != null && txnId.toString().equals(TxnId.debugTransactionId))
+            {
+                logger.info(this.toString());
+                if (request instanceof Commit)
+                    System.out.println("oops");
+            }
+        }
+        if (request instanceof TxnRequest)
+        {
+            TxnId txnId = ((TxnRequest)request).txnId;
+            if (txnId != null && txnId.toString().equals(TxnId.debugTransactionId))
+            {
+                logger.info(this.toString());
+                if (request instanceof Commit)
+                    System.out.println("oops");
+            }
+        }
     }
 
     public Packet(Id src, Id dst, long replyId, Reply reply)

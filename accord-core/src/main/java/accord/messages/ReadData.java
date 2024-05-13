@@ -18,13 +18,8 @@
 
 package accord.messages;
 
-import java.util.BitSet;
-import javax.annotation.Nullable;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.Data;
+import accord.impl.AbstractFetchCoordinator.FetchRequest;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Node;
@@ -41,6 +36,11 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+import java.util.BitSet;
 
 import static accord.messages.MessageType.READ_RSP;
 import static accord.messages.ReadData.CommitOrReadNack.Insufficient;
@@ -192,10 +192,14 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
                 ++waitingOnCount;
                 safeCommand.addListener(this);
                 safeStore.progressLog().waiting(safeCommand, executeOn().min.execution, null, readScope);
+                if (this instanceof FetchRequest)
+                    logger.info("Node " + node + " CommandStore " + safeStore.commandStore().id() + " fetch request " + txnId + " waiting and returning " + (status.compareTo(SaveStatus.Stable) >= 0 ? null : Insufficient));
                 return status.compareTo(SaveStatus.Stable) >= 0 ? null : Insufficient;
 
             case OBSOLETE:
                 state = State.OBSOLETE;
+                if (this instanceof FetchRequest)
+                    logger.info("Node " + node + " CommandStore " + safeStore.commandStore().id() + " fetch request " + txnId + " waiting and returning Redundant");
                 return Redundant;
 
             case EXECUTE:
@@ -203,6 +207,8 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
                 reading.set(safeStore.commandStore().id());
                 ++waitingOnCount;
                 safeCommand.addListener(this);
+                if (this instanceof FetchRequest)
+                    logger.info("Node " + node + " CommandStore " + safeStore.commandStore().id() + " fetch request " + txnId + " ready to execute Redundant");
                 read(safeStore, safeCommand.current());
                 return null;
         }

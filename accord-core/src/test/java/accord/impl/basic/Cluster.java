@@ -67,8 +67,8 @@ import accord.impl.TopologyFactory;
 import accord.impl.list.ListStore;
 import accord.local.AgentExecutor;
 import accord.local.Command;
-import accord.local.Node.Id;
 import accord.local.Node;
+import accord.local.Node.Id;
 import accord.local.NodeTimeService;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
@@ -95,6 +95,7 @@ import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
 import static accord.impl.basic.NodeSink.Action.DELIVER;
 import static accord.impl.basic.NodeSink.Action.DROP;
 import static accord.utils.AccordGens.keysInsideRanges;
+import static java.lang.String.format;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonMap;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -196,6 +197,8 @@ public class Cluster implements Scheduler
             processNext(next);
     }
 
+    long startSimTime = System.currentTimeMillis();
+
     public boolean processPending()
     {
         checkFailures.run();
@@ -217,6 +220,12 @@ public class Cluster implements Scheduler
         {
             Packet deliver = (Packet) next;
             Node on = lookup.apply(deliver.dst);
+
+            long now = System.currentTimeMillis();
+            long startDebug = startSimTime + 40_000;
+            long delta = (now - startDebug) % 10_000;
+//            if (now > startDebug && delta < 1_000)
+//                trace.info("{} RECV[{}] {}", clock++, on.epoch(), deliver);
 
             if (trace.isTraceEnabled())
                 trace.trace("{} RECV[{}] {}", clock++, on.epoch(), deliver);
@@ -342,6 +351,7 @@ public class Cluster implements Scheduler
                     int f = frequencySeconds.getAsInt();
                     int s = shardCycleTimeSeconds.getAsInt();
                     int g = globalCycleTimeSeconds.getAsInt();
+                    trace.info("Updating durability scheduling frequency {}, shard cycle time {}, global cycle time {}", f, s, g);
                     durabilityScheduling.forEach(d -> {
                         d.setFrequency(f, SECONDS);
                         d.setShardCycleTime(s, SECONDS);
@@ -457,6 +467,7 @@ public class Cluster implements Scheduler
         @Override
         public void close()
         {
+            trace.info("Closing barrier scheduler");
             if (scheduled != null)
             {
                 scheduled.cancel();
@@ -490,13 +501,19 @@ public class Cluster implements Scheduler
 
         private <S extends Seekables<?, ?>> void run(Node node, S keysOrRanges, long epoch, BarrierType type)
         {
+            trace.info("Node {} Issuing barrier keysOrRanges {} epoch {} type {}", node, keysOrRanges, epoch, type);
             Barrier.barrier(node, keysOrRanges, epoch, type).begin((s, f) -> {
                 if (f != null)
                 {
+                    trace.error(format("Node %s barrier failed keysOrRanges %s epoch %d type %s", node, keysOrRanges, epoch, type));
                     // ignore specific errors
                     if (f instanceof Invalidated || f instanceof Timeout || f instanceof Preempted || f instanceof Exhausted)
                         return;
                     node.agent().onUncaughtException(f);
+                }
+                else
+                {
+                    trace.info("Node {} barrier succeeded keysOrRanges {} epoch {} type {}", node, keysOrRanges, epoch, type);
                 }
             });
         }

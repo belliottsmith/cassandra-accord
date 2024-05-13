@@ -18,8 +18,6 @@
 
 package accord.local;
 
-import javax.annotation.Nullable;
-
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.primitives.Ballot;
@@ -32,6 +30,8 @@ import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
+
+import javax.annotation.Nullable;
 
 import static accord.utils.Invariants.illegalState;
 
@@ -50,10 +50,10 @@ public class CheckedCommands
         if (result != Commands.AcceptOutcome.Success) throw illegalState("Command mutation rejected: " + result);
     }
 
-    public static void commit(SafeCommandStore safeStore, SaveStatus saveStatus, Ballot ballot, TxnId txnId, Route<?> route, @Nullable RoutingKey progressKey, @Nullable PartialTxn partialTxn, Timestamp executeAt, PartialDeps partialDeps)
+    public static void commit(Node node, SafeCommandStore safeStore, SaveStatus saveStatus, Ballot ballot, TxnId txnId, Route<?> route, @Nullable RoutingKey progressKey, @Nullable PartialTxn partialTxn, Timestamp executeAt, PartialDeps partialDeps)
     {
         SafeCommand safeCommand = safeStore.get(txnId, txnId, route);
-        Commands.CommitOutcome result = Commands.commit(safeStore, safeCommand, saveStatus, ballot, txnId, route, progressKey, partialTxn, executeAt, partialDeps);
+        Commands.CommitOutcome result = Commands.commit(node, safeStore, safeCommand, saveStatus, ballot, txnId, route, progressKey, partialTxn, executeAt, partialDeps);
         if (result != Commands.CommitOutcome.Success) throw illegalState("Command mutation rejected: " + result);
     }
 

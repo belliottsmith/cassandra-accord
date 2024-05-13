@@ -18,15 +18,6 @@
 
 package accord.coordinate;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-
 import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Invoke;
 import accord.coordinate.tracking.QuorumTracker;
@@ -56,6 +47,17 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static accord.coordinate.CoordinationAdapter.Factory.Step.InitiateRecovery;
 import static accord.coordinate.CoordinationAdapter.Invoke.execute;
@@ -75,6 +77,8 @@ import static accord.utils.Invariants.illegalState;
 // TODO (expected): separate out recovery of sync points from standard transactions
 public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
+    private static final Logger logger = LoggerFactory.getLogger(Recover.class);
+
     class AwaitCommit extends AsyncResults.SettableResult<Timestamp> implements Callback<WaitOnCommitOk>
     {
         // TODO (desired, efficiency): this should collect the executeAt of any commit, and terminate as soon as one is found
@@ -170,11 +174,16 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         isDone = true;
         if (failure == null)
         {
+            logger.info("Node {} recover succeeded for txn {}", node, txnId);
             callback.accept(ProgressToken.APPLIED, null);
             node.agent().metricsEventsListener().onRecover(txnId, ballot);
         }
         else
         {
+            String message = failure.getMessage();
+            if (message == null)
+                message = failure.getClass().getName();
+            logger.info("Node {} recover failed for txn {} failure {}", node, txnId, message);
             callback.accept(null, failure);
             if (failure instanceof Preempted)
                 node.agent().metricsEventsListener().onPreempted(txnId);
@@ -205,6 +214,9 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<Outcome, Throwable> callback, Topologies topologies)
     {
+        logger.info("Node {} recovering txnId {} ballot {} txnKind {} route {}", node, txnId, ballot, txn.kind(), route);
+        if (txnId.toString().equals("TxnId.debugTransactionId"))
+            System.out.println("oops");
         Recover recover = new Recover(node, ballot, txnId, txn, route, callback, topologies);
         recover.start(topologies.nodes());
         return recover;
@@ -212,7 +224,9 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     void start(Set<Id> nodes)
     {
-        node.send(nodes, to -> new BeginRecovery(to, tracker.topologies(), txnId, txn, route, ballot), this);
+        node.send(nodes, to -> {
+            return new BeginRecovery(node, to, tracker.topologies(), txnId, txn, route, ballot);
+        }, this);
     }
 
     @Override

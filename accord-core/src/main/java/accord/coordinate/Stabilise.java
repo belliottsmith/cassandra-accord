@@ -18,10 +18,6 @@
 
 package accord.coordinate;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.function.BiConsumer;
-
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
@@ -37,6 +33,10 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.BiConsumer;
 
 import static accord.coordinate.CoordinationAdapter.Invoke.execute;
 import static accord.coordinate.ExecutePath.SLOW;
@@ -108,7 +108,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
                     callback.accept(null, new Preempted(txnId, route.homeKey()));
                     break;
                 case Insufficient:
-                    node.send(from, new Commit(CommitWithTxn, from, allTopologies.forEpoch(txnId.epoch()), allTopologies,
+                    node.send(from, new Commit(node, CommitWithTxn, from, allTopologies.forEpoch(txnId.epoch()), allTopologies,
                                                txnId, txn, route, ballot, executeAt, stabiliseDeps, (ReadTxnData) null));
                     break;
             }

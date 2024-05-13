@@ -18,10 +18,6 @@
 
 package accord.coordinate;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
-
 import accord.api.Result;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.CommandStore;
@@ -37,6 +33,12 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
@@ -56,6 +58,8 @@ import static accord.coordinate.tracking.RequestStatus.Success;
  */
 public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result, GetEphemeralReadDepsOk>
 {
+    private static final Logger logger = LoggerFactory.getLogger(CoordinateEphemeralRead.class);
+
     public static AsyncResult<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
     {
         TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), txn.keys());
@@ -65,6 +69,12 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
         Topologies topologies = node.topology().withUnsyncedEpochs(route, txnId, txnId);
         CoordinateEphemeralRead coordinate = new CoordinateEphemeralRead(node, topologies, route, txnId, txn);
         coordinate.start();
+//        coordinate.addCallback((success, failure) -> {
+//            if (failure != null)
+//                logger.error(format("CoordinateEphemeralRead %s failed", txnId), failure);
+//            else
+//                logger.info("CoordinateEphemeralRead {} succeeded", txnId);
+//        });
         return coordinate;
     }
 
@@ -109,6 +119,11 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
         oks.add(ok);
         if (ok.latestEpoch > executeAtEpoch)
             executeAtEpoch = ok.latestEpoch;
+
+        Deps deps = Deps.merge(oks, o -> o.deps);
+        long count = deps.txnIdCount();
+        if (count > 50)
+            logger.info("CoordinateEphemeralRead({}) has {} deps, oldest dep {}: {}", this.getClass().getName(), count, deps.oldestDep(), deps.randomDeps(5));
 
         if (tracker.recordSuccess(from) == Success)
             onPreAcceptedOrNewEpoch();

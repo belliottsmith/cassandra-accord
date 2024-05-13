@@ -18,13 +18,6 @@
 
 package accord.coordinate;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Set;
-import java.util.function.BiConsumer;
-
-import javax.annotation.Nullable;
-
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -35,6 +28,14 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncResults.SettableResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.BiConsumer;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
@@ -45,6 +46,8 @@ import static accord.coordinate.tracking.RequestStatus.Success;
  */
 abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> implements Callback<R>, BiConsumer<T, Throwable>
 {
+    private static final Logger logger = LoggerFactory.getLogger(AbstractCoordinatePreAccept.class);
+
     class ExtraEpochs implements Callback<R>
     {
         final QuorumTracker tracker;

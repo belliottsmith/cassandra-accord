@@ -18,18 +18,13 @@
 
 package accord.local;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
-import java.util.function.BiConsumer;
-
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.DataStore.FetchRanges;
 import accord.api.DataStore.FetchResult;
 import accord.api.DataStore.StartingRangeFetch;
-import accord.coordinate.FetchMaxConflict;
 import accord.coordinate.CoordinateSyncPoint;
+import accord.coordinate.FetchMaxConflict;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
 import accord.primitives.Timestamp;
@@ -38,7 +33,14 @@ import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.function.BiConsumer;
 
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.PreLoadContext.empty;
@@ -80,6 +82,8 @@ import static accord.utils.Invariants.illegalState;
  */
 class Bootstrap
 {
+    private static final Logger logger = LoggerFactory.getLogger(Bootstrap.class);
+
     static class SafeToRead
     {
         final Ranges ranges;
@@ -132,11 +136,14 @@ class Bootstrap
             // of these ranges as part of this attempt
             Ranges commitRanges = valid;
             store.markBootstrapping(safeStore0, globalSyncId, valid);
+            logger.info("Node " + node + " coordinating exclusive sync point for bootstrap attempt " + System.identityHashCode(Bootstrap.this) + " ranges " + commitRanges);
             CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges)
                // TODO (required, correcness) : PreLoadContext only works with Seekables, which doesn't allow mixing Keys and Ranges... But Deps has both Keys AND Ranges!
                // TODO (required): is localSyncId even being used anymore
                // ATM all known implementations store ranges in-memory, but this will not be true soon, so this will need to be addressed
                .flatMap(syncPoint -> node.withEpoch(epoch, () -> store.submit(contextFor(localSyncId, syncPoint.waitFor.keyDeps.keys(), KeyHistory.COMMANDS), safeStore1 -> {
+                   node.configService().reportEpochClosed((Ranges)syncPoint.keysOrRanges, syncPoint.syncId.epoch());
+
                    if (valid.isEmpty()) // we've lost ownership of the range
                        return AsyncResults.success(Ranges.EMPTY);
 
@@ -371,6 +378,16 @@ class Bootstrap
         @Override
         public void accept(Void success, Throwable failure)
         {
+            if (failure != null)
+            {
+                String message = failure.getMessage();
+                if (message == null)
+                    message = failure.getClass().getName();
+                logger.error("Node " + node + " bootstrap, fetchCompleted(" + fetchCompleted + ") attempt failed for " + System.identityHashCode(Bootstrap.this) + " with failure " + message);
+            }
+            else
+                logger.info("Node " + node + " bootstrap, fetchCompleted(" + fetchCompleted + ") attempt succeeded for " + System.identityHashCode(Bootstrap.this));
+
             if (completed)
                 return;
 
@@ -382,6 +399,7 @@ class Bootstrap
                 fetchCompleted = true;
                 if (failure != null)
                 {
+//                    logger.error("Bootstrap had failure " + failure);
                     if (fetchOutcome == null) fetchOutcome = failure;
                     else fetchOutcome.addSuppressed(failure);
                 }
@@ -454,6 +472,7 @@ class Bootstrap
 
         Attempt attempt = new Attempt(ranges);
         inProgress.add(attempt);
+        logger.info("Node {} retrying bootstrap {} for ranges {}", node, System.identityHashCode(this), ranges);
         attempt.start(safeStore);
     }
 

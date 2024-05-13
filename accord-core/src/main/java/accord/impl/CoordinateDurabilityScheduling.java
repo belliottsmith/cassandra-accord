@@ -18,17 +18,6 @@
 
 package accord.impl;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-
-import com.google.common.primitives.Ints;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.Scheduler;
 import accord.coordinate.CoordinateGloballyDurable;
 import accord.coordinate.CoordinateShardDurable;
@@ -46,6 +35,16 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
+import com.google.common.primitives.Ints;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -169,6 +168,7 @@ public class CoordinateDurabilityScheduling
 
     public void stop()
     {
+        logger.info("Stopping CoordinateDurabilityScheduling {}, node {}", System.identityHashCode(this), node);
         if (scheduled != null)
             scheduled.cancel();
         stop = true;
@@ -215,6 +215,7 @@ public class CoordinateDurabilityScheduling
     {
         TxnId at = node.nextTxnId(ExclusiveSyncPoint, Domain.Range);
         node.scheduler().once(() -> node.withEpoch(at.epoch(), () -> {
+//            logger.info("Coordinating exclusive sync point for shard sync");
                            CoordinateSyncPoint.exclusive(node, at, ranges)
                                .addCallback((success, fail) -> {
                                    if (fail != null) logger.trace("Exception coordinating exclusive sync point for local shard durability of {}", ranges, fail);
@@ -227,6 +228,7 @@ public class CoordinateDurabilityScheduling
     {
         node.scheduler().once(() -> {
             node.commandStores().any().execute(() -> {
+//                logger.info("Coordinating exclusive sync point coordinateShardDurableAfterExclusiveSyncPoint");
                 CoordinateShardDurable.coordinate(node, exclusiveSyncPoint)
                                       .addCallback((success, fail) -> {
                                           if (fail != null && fail.getClass() != SyncPointErased.class)

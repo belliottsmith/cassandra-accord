@@ -19,8 +19,6 @@ package accord.local;
 
 import java.util.Set;
 
-import javax.annotation.Nullable;
-
 import com.google.common.collect.ImmutableSet;
 
 import accord.api.Result;
@@ -44,6 +42,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
+import javax.annotation.Nullable;
 
 import static accord.messages.MessageType.APPLY_MAXIMAL_REQ;
 import static accord.messages.MessageType.APPLY_MINIMAL_REQ;

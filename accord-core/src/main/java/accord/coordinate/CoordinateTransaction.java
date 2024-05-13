@@ -18,13 +18,10 @@
 
 package accord.coordinate;
 
-import java.util.List;
-
 import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Adapters;
-import accord.messages.PreAccept;
-import accord.topology.Topologies;
 import accord.local.Node;
+import accord.messages.PreAccept;
 import accord.messages.PreAccept.PreAcceptOk;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -32,8 +29,14 @@ import accord.primitives.FullRoute;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.Topologies;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static accord.coordinate.CoordinationAdapter.Factory.Step.Continue;
 import static accord.coordinate.CoordinationAdapter.Invoke.execute;
@@ -49,6 +52,8 @@ import static accord.coordinate.Propose.Invalidate.proposeAndCommitInvalidate;
  */
 public class CoordinateTransaction extends CoordinatePreAccept<Result>
 {
+    private static final Logger logger = LoggerFactory.getLogger(CoordinateTransaction.class);
+
     final Txn txn;
 
     private CoordinateTransaction(Node node, TxnId txnId, Txn txn, FullRoute<?> route)
@@ -57,6 +62,9 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         this.txn = txn;
     }
 
+    private static final AtomicLong completedTxns = new AtomicLong();
+    private static final AtomicLong successfulTxns = new AtomicLong();
+    private static final AtomicLong failedTxns = new AtomicLong();
     public static AsyncResult<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
     {
         TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), txn.keys());
@@ -64,6 +72,19 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             return AsyncResults.failure(mismatch);
         CoordinateTransaction coordinate = new CoordinateTransaction(node, txnId, txn, route);
         coordinate.start();
+//        coordinate.addCallback((success, failure) -> {
+//            completedTxns.incrementAndGet();
+//            if (failure != null)
+//            {
+//                failedTxns.incrementAndGet();
+//                logger.error(format("CoordinateTransaction %s failed - completed %d, succeeded %d, failed %d", txnId, completedTxns.get(), successfulTxns.get(), failedTxns.get()), failure);
+//            }
+//            else
+//            {
+//                successfulTxns.incrementAndGet();
+//                logger.info("CoordinateTransaction {} succeeded - completed {}, succeeded {}, failed {}", txnId, completedTxns.get(), successfulTxns.get(), failedTxns.get());
+//            }
+//        });
         return coordinate;
     }
 

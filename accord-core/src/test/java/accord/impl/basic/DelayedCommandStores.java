@@ -18,16 +18,6 @@
 
 package accord.impl.basic;
 
-import java.util.LinkedList;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Queue;
-import java.util.concurrent.Callable;
-import java.util.function.BooleanSupplier;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-import java.util.function.Function;
-
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.ProgressLog;
@@ -58,6 +48,16 @@ import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Queue;
+import java.util.concurrent.Callable;
+import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 {
@@ -146,14 +146,14 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             }
             catch (IllegalStateException t)
             {
-                //TODO (correctness): journal doesn’t guarantee we pick the same records we used to state transition
+                //TODO (correctness): journal doesn't guarantee we pick the same records we used to state transition
                 // Journal stores a list of messages it saw in some order it defines, but when reconstructing a command we don't actually know what messages were used, this could
                 // lead to a case where deps mismatch, so ignoring this for now
                 if (t.getMessage() != null && t.getMessage().startsWith("Deps do not match; expected"))
                     return;
                 throw t;
             }
-            //TODO (correctness): journal doesn’t guarantee we pick the same records we used to state transition
+            //TODO (correctness): journal doesn't guarantee we pick the same records we used to state transition
             if (current.partialDeps() != null && !current.partialDeps().rangeDeps.equals(reconstructed.partialDeps().rangeDeps))
                 return;
             // for some reasons scope doesn't alaways match, this might be due to journal... what sucks is that this can also be a bug in the extract, so its

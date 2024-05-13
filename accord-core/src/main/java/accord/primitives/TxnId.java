@@ -18,12 +18,12 @@
 
 package accord.primitives;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 import accord.local.Node.Id;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Txn.Kind;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
@@ -31,6 +31,7 @@ import static accord.utils.Invariants.illegalArgument;
 
 public class TxnId extends Timestamp
 {
+    public static volatile String debugTransactionId = "[4,14008,7(RS),10]";
     public static final TxnId NONE = new TxnId(0, 0, Id.NONE);
     public static final TxnId MAX = new TxnId(Long.MAX_VALUE, Long.MAX_VALUE, Id.MAX);
 

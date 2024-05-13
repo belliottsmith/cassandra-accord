@@ -17,6 +17,8 @@
  */
 package accord.messages;
 
+import java.util.function.BiConsumer;
+
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.coordinate.Infer;
@@ -43,9 +45,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
-
 import javax.annotation.Nullable;
-import java.util.function.BiConsumer;
 
 import static accord.coordinate.Infer.InvalidIfNot.NotKnownToBeInvalid;
 import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
@@ -53,7 +53,6 @@ import static accord.local.SaveStatus.Stable;
 import static accord.local.SaveStatus.Uninitialised;
 import static accord.local.Status.NotDefined;
 import static accord.local.Status.Phase.Cleanup;
-import static accord.local.Status.PreAccepted;
 import static accord.local.Status.PreApplied;
 import static accord.messages.CheckStatus.WithQuorum.HasQuorum;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -66,7 +65,7 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
     {
         public static Propagate create(TxnId txnId, Route<?> route, SaveStatus maxKnowledgeSaveStatus, SaveStatus maxSaveStatus, Ballot ballot, Status.Durability durability, RoutingKey homeKey, RoutingKey progressKey, Status.Known achieved, FoundKnownMap known, boolean isTruncated, PartialTxn partialTxn, PartialDeps committedDeps, long toEpoch, Timestamp executeAt, Writes writes, Result result)
         {
-            return new Propagate(txnId, route, maxKnowledgeSaveStatus, maxSaveStatus, ballot, durability, homeKey, progressKey, achieved, known, isTruncated, partialTxn, committedDeps, toEpoch, executeAt, writes, result, null);
+            return new Propagate(null, txnId, route, maxKnowledgeSaveStatus, maxSaveStatus, ballot, durability, homeKey, progressKey, achieved, known, isTruncated, partialTxn, committedDeps, toEpoch, executeAt, writes, result, null);
         }
     }
 
@@ -90,6 +89,7 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
     @Nullable public final Timestamp committedExecuteAt;
     @Nullable public final Writes writes;
     @Nullable public final Result result;
+    private final Node node;
 
     protected transient BiConsumer<Status.Known, Throwable> callback;
 
@@ -100,6 +100,7 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
     }
 
     Propagate(
+            Node node,
         TxnId txnId,
         Route<?> route,
         SaveStatus maxKnowledgeSaveStatus,
@@ -119,6 +120,7 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
         @Nullable Result result,
         BiConsumer<Status.Known, Throwable> callback)
     {
+        this.node = node;
         this.txnId = txnId;
         this.route = route;
         this.maxKnowledgeSaveStatus = maxKnowledgeSaveStatus;
@@ -214,7 +216,7 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
             stableDeps = full.stableDeps.slice(sliceRanges).reconstitutePartial(covering);
 
         Propagate propagate =
-            new Propagate(txnId, route, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.acceptedOrCommitted, full.durability, full.homeKey, progressKey, achieved, full.map, isShardTruncated, partialTxn, stableDeps, toEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
+            new Propagate(node, txnId, route, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.acceptedOrCommitted, full.durability, full.homeKey, progressKey, achieved, full.map, isShardTruncated, partialTxn, stableDeps, toEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
 
         node.localRequest(propagate);
     }
@@ -337,7 +339,7 @@ public class Propagate implements EpochSupplier, LocalRequest<Status.Known>
                 }
 
             case Stable:
-                confirm(Commands.commit(safeStore, safeCommand, Stable, ballot, txnId, route, progressKey, partialTxn, executeAtIfKnown, stableDeps));
+                confirm(Commands.commit(node, safeStore, safeCommand, Stable, ballot, txnId, route, progressKey, partialTxn, executeAtIfKnown, stableDeps));
                 break;
 
             case Committed:

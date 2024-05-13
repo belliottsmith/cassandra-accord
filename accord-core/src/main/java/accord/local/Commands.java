@@ -21,7 +21,6 @@ package accord.local;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.function.Consumer;
-import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,6 +40,7 @@ import accord.primitives.PartialDeps;
 import accord.primitives.PartialRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
+import accord.primitives.RangeRoute;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Seekables;
@@ -53,6 +53,7 @@ import accord.primitives.Writes;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import javax.annotation.Nullable;
 
 import static accord.api.ProgressLog.ProgressShard.Home;
 import static accord.api.ProgressLog.ProgressShard.Local;
@@ -172,7 +173,7 @@ public class Commands
         Invariants.checkState(validate(command.status(), command, Ranges.EMPTY, preacceptRanges, shard, route, Set, partialTxn, Set, null, Ignore));
 
         // FIXME: this should go into a consumer method
-        CommonAttributes attrs = set(command, Ranges.EMPTY, preacceptRanges, shard, route, partialTxn, Set, null, Ignore);
+        CommonAttributes attrs = set(safeStore, command, Ranges.EMPTY, preacceptRanges, shard, route, partialTxn, Set, null, Ignore);
         if (command.executeAt() == null)
         {
             // unlike in the Accord paper, we partition shards within a node, so that to ensure a total order we must either:
@@ -254,7 +255,7 @@ public class Commands
         // TODO (desired, clarity/efficiency): we don't need to set the route here, and perhaps we don't even need to
         //  distributed partialDeps at all, since all we gain is not waiting for these transactions to commit during
         //  recovery. We probably don't want to directly persist a Route in any other circumstances, either, to ease persistence.
-        CommonAttributes attrs = set(command, coordinateRanges, acceptRanges, shard, route, null, Ignore, partialDeps, Set);
+        CommonAttributes attrs = set(safeStore, command, coordinateRanges, acceptRanges, shard, route, null, Ignore, partialDeps, Set);
 
         keysOrRanges = keysOrRanges.slice(acceptRanges);
         command = safeCommand.accept(safeStore, keysOrRanges, attrs, executeAt, ballot);
@@ -303,7 +304,7 @@ public class Commands
 
 
     // relies on mutual exclusion for each key
-    public static CommitOutcome commit(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus newStatus, Ballot ballot, TxnId txnId, Route<?> route, @Nullable RoutingKey progressKey, @Nullable PartialTxn partialTxn, Timestamp executeAt, PartialDeps partialDeps)
+    public static CommitOutcome commit(Node node, SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus newStatus, Ballot ballot, TxnId txnId, Route<?> route, @Nullable RoutingKey progressKey, @Nullable PartialTxn partialTxn, Timestamp executeAt, PartialDeps partialDeps)
     {
         Command command = safeCommand.current();
         SaveStatus curStatus = command.saveStatus();
@@ -339,11 +340,24 @@ public class Commands
         Ranges acceptRanges = acceptRanges(safeStore, txnId, executeAt, coordinateRanges);
         ProgressShard shard = progressShard(route, progressKey, coordinateRanges);
 
-        if (!validate(command.status(), command, coordinateRanges, acceptRanges, shard, route, Add, partialTxn, Add, partialDeps, Set))
-            return CommitOutcome.Insufficient;
+        if (txnId.toString().equals("[4,14008,7(RS),10]") && node.id().id == 1 && safeStore.commandStore().id() == 32)
+        {
+            System.out.println("oops");
+        }
+        try
+        {
+            if (!validate(command.status(), command, coordinateRanges, acceptRanges, shard, route, Add, partialTxn, Add, partialDeps, Set))
+                return CommitOutcome.Insufficient;
+        }
+        catch (IllegalStateException e)
+        {
+            IllegalStateException e2 = new IllegalStateException("Node " + node + " CommandStore " + safeStore.commandStore().id() + " txnId " + txnId + " " + e.getMessage());
+            e2.setStackTrace(e.getStackTrace());
+            throw e2;
+        }
 
         // FIXME: split up set
-        CommonAttributes attrs = set(command, coordinateRanges, acceptRanges, shard, route, partialTxn, Add, partialDeps, Set);
+        CommonAttributes attrs = set(safeStore, command, coordinateRanges, acceptRanges, shard, route, partialTxn, Add, partialDeps, Set);
 
         logger.trace("{}: committed with executeAt: {}, deps: {}", txnId, executeAt, partialDeps);
         if (newStatus == SaveStatus.Stable)
@@ -390,7 +404,7 @@ public class Commands
 
         CommonAttributes attrs = command;
         if (command.route() == null || !command.route().kind().isFullRoute())
-            attrs = updateRoute(command, route);
+            attrs = updateRoute(safeStore, command, route);
 
         safeCommand.precommit(safeStore, attrs, executeAt);
         safeStore.progressLog().precommitted(command);
@@ -421,7 +435,7 @@ public class Commands
         PartialDeps none = Deps.NONE.slice(coordinateRanges);
         PartialTxn partialTxn = emptyTxn.slice(coordinateRanges, true);
         Invariants.checkState(validate(command.status(), command, Ranges.EMPTY, coordinateRanges, progressShard, route, Set, partialTxn, Set, none, Set));
-        CommonAttributes newAttributes = set(command, Ranges.EMPTY, coordinateRanges, progressShard, route, partialTxn, Set, none, Set);
+        CommonAttributes newAttributes = set(safeStore, command, Ranges.EMPTY, coordinateRanges, progressShard, route, partialTxn, Set, none, Set);
         safeCommand.stable(safeStore, newAttributes, Ballot.ZERO, localSyncId, WaitingOn.EMPTY);
         safeStore.notifyListeners(safeCommand);
     }
@@ -441,7 +455,7 @@ public class Commands
         // TODO (desired, consider): in the case of sync points, the coordinator is unlikely to be a home shard, do we mind this? should document at least
         ProgressShard progressShard = No;
         Invariants.checkState(validate(command.status(), command, Ranges.EMPTY, coordinateRanges, progressShard, route, Set, partialTxn, Set, partialDeps, Set));
-        CommonAttributes attrs = set(command, Ranges.EMPTY, coordinateRanges, progressShard, route, partialTxn, Set, partialDeps, Set);
+        CommonAttributes attrs = set(safeStore, command, Ranges.EMPTY, coordinateRanges, progressShard, route, partialTxn, Set, partialDeps, Set);
         safeCommand.stable(safeStore, attrs, Ballot.ZERO, txnId, initialiseWaitingOn(safeStore, txnId, attrs, txnId, route));
         maybeExecute(safeStore, safeCommand, false, true);
     }
@@ -511,7 +525,7 @@ public class Commands
         if (!validate(command.status(), command, coordinateRanges, acceptRanges, shard, route, TryAdd, partialTxn, Add, partialDeps, command.hasBeen(Committed) ? TryAdd : TrySet, safeStore))
             return ApplyOutcome.Insufficient; // TODO (expected, consider): this should probably be an assertion failure if !TrySet
 
-        CommonAttributes attrs = set(command, coordinateRanges, acceptRanges, shard, route, partialTxn, Add, partialDeps, command.hasBeen(Committed) ? TryAdd : TrySet);
+        CommonAttributes attrs = set(safeStore, command, coordinateRanges, acceptRanges, shard, route, partialTxn, Add, partialDeps, command.hasBeen(Committed) ? TryAdd : TrySet);
 
         WaitingOn waitingOn = !command.hasBeen(Stable) ? initialiseWaitingOn(safeStore, txnId, attrs, executeAt, attrs.route()) : command.asCommitted().waitingOn();
         safeCommand.preapplied(safeStore, attrs, executeAt, waitingOn, writes, result);
@@ -894,6 +908,11 @@ public class Commands
         }
         else
         {
+            if (command.txnId().toString().equals("[4,14008,7(RS),10]") && safeStore.commandStore().id() == 32)
+            {
+                //(382#0,382#5206]
+                logger.info("Ariel truncatedApply route with ranges " + ((RangeRoute)route).toRanges());
+            }
             CommonAttributes attributes = command.mutable().route(route);
             if (!safeCommand.txnId().kind().awaitsOnlyDeps())
             {
@@ -989,7 +1008,7 @@ public class Commands
         if (command.durability().compareTo(durability) >= 0)
             return command;
 
-        CommonAttributes attrs = route == null ? command : updateRoute(command, route);
+        CommonAttributes attrs = route == null ? command : updateRoute(safeStore, command, route);
         if (executeAt != null && command.status().hasBeen(Committed) && !command.executeAt().equals(executeAt))
             safeStore.agent().onInconsistentTimestamp(command, command.asCommitted().executeAt(), executeAt);
         attrs = attrs.mutable().durability(durability);
@@ -1215,6 +1234,12 @@ public class Commands
         if (command.hasBeen(PreAccepted))
             return command;
 
+        if (command.txnId().toString().equals("[4,14008,7(RS),10]") && safeStore.commandStore().id() == 32)
+        {
+            //(382#0,382#5206]
+            logger.info("Ariel informHome route with ranges " + ((RangeRoute)someRoute).toRanges());
+        }
+
         Command result = safeCommand.updateAttributes(command.mutable().route(Route.merge((Route)someRoute, command.route())));
         safeStore.progressLog().unwitnessed(safeCommand.txnId(), Home);
         return result;
@@ -1230,10 +1255,17 @@ public class Commands
      * For recovery purposes the "home shard" is as of txnId.epoch until Committed, and executeAt.epoch once Executed
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public static CommonAttributes updateRoute(Command command, Route<?> route)
+    public static CommonAttributes updateRoute(SafeCommandStore store, Command command, Route<?> route)
     {
         if (command.route() == null || !command.route().containsAll(route))
-            return command.mutable().route(Route.merge((Route)route, command.route()));
+        {
+            if (command.txnId().toString().equals("[4,14008,7(RS),10]") && store.commandStore().id() == 32)
+            {
+                //(382#0,382#5206]
+                logger.info("Ariel updating route with ranges " + ((RangeRoute)route).toRanges());
+            }
+            return command.mutable().route(Route.merge((Route) route, command.route()));
+        }
 
         return command;
     }
@@ -1265,12 +1297,17 @@ public class Commands
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static CommonAttributes set(CommonAttributes attrs,
+    private static CommonAttributes set(SafeCommandStore store, CommonAttributes attrs,
                                         Ranges existingRanges, Ranges additionalRanges,
                                         ProgressShard shard, Route<?> route,
                                         @Nullable PartialTxn partialTxn, EnsureAction ensurePartialTxn,
                                         @Nullable PartialDeps partialDeps, EnsureAction ensurePartialDeps)
     {
+        if (attrs.txnId().toString().equals("[4,14008,7(RS),10]") && store.commandStore().id() == 32)
+        {
+            //(382#0,382#5206]
+            logger.info("Ariel adding ranges " + additionalRanges);
+        }
         Invariants.checkState(shard != Unsure);
         Ranges allRanges = existingRanges.with(additionalRanges);
         attrs = attrs.mutable().route(Route.merge(attrs.route(), (Route)route));
@@ -1390,7 +1427,7 @@ public class Commands
                     return true;
 
                 if (action == Set)
-                    illegalState("Incomplete " + kind + " (" + obj + ") provided; does not cover " + requiredRanges.subtract(adding));
+                    illegalState("Incomplete " + kind + " (" + obj + ") provided; does not cover " + requiredRanges.subtract(adding) + " required " + requiredRanges + " and adding " + adding);
 
                 return false;
 

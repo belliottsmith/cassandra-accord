@@ -18,7 +18,9 @@
 package accord.messages;
 
 import java.util.function.BiPredicate;
-import javax.annotation.Nullable;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import accord.local.Commands;
 import accord.local.KeyHistory;
@@ -48,6 +50,7 @@ import accord.topology.Topologies;
 import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.TriFunction;
+import javax.annotation.Nullable;
 import org.agrona.collections.IntHashSet;
 
 import static accord.local.SaveStatus.Committed;
@@ -60,6 +63,8 @@ import static accord.messages.Commit.WithTxn.NoTxn;
 
 public class Commit extends TxnRequest<CommitOrReadNack>
 {
+    private static final Logger logger = LoggerFactory.getLogger(Commit.class);
+
     public static class SerializerSupport
     {
         public static Commit create(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, Kind kind, Ballot ballot, Timestamp executeAt, Seekables<?, ?> keys, @Nullable PartialTxn partialTxn, PartialDeps partialDeps, @Nullable FullRoute<?> fullRoute, @Nullable ReadData readData)
@@ -105,17 +110,17 @@ public class Commit extends TxnRequest<CommitOrReadNack>
     // TODO (low priority, clarity): cleanup passing of topologies here - maybe fetch them afresh from Node?
     //                               Or perhaps introduce well-named classes to represent different topology combinations
 
-    public Commit(Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, ReadData read)
+    public Commit(Node node, Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, ReadData read)
     {
-        this(kind, to, coordinateTopology, topologies, txnId, txn, route, ballot, executeAt, deps, read == null ? null : (u1, u2, u3) -> read);
+        this(node, kind, to, coordinateTopology, topologies, txnId, txn, route, ballot, executeAt, deps, read == null ? null : (u1, u2, u3) -> read);
     }
 
-    public Commit(Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, @Nullable Participants<?> readScope)
+    public Commit(Node node, Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, @Nullable Participants<?> readScope)
     {
-        this(kind, to, coordinateTopology, topologies, txnId, txn, route, ballot, executeAt, deps, readScope != null ? new ReadTxnData(to, topologies, txnId, readScope, executeAt.epoch()) : null);
+        this(node, kind, to, coordinateTopology, topologies, txnId, txn, route, ballot, executeAt, deps, readScope != null ? new ReadTxnData(to, topologies, txnId, readScope, executeAt.epoch()) : null);
     }
 
-    public Commit(Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, TriFunction<Txn, PartialRoute<?>, PartialDeps, ReadData> toExecuteFactory)
+    public Commit(Node node, Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, TriFunction<Txn, PartialRoute<?>, PartialDeps, ReadData> toExecuteFactory)
     {
         super(to, topologies, route, txnId);
         this.ballot = ballot;
@@ -133,6 +138,11 @@ public class Commit extends TxnRequest<CommitOrReadNack>
             Ranges coordinateRanges = coordinateTopology.rangesForNode(to);
             Ranges executeRanges = topologies.computeRangesForNode(to);
             Ranges extraRanges = executeRanges.subtract(coordinateRanges);
+            //(382#0,382#5206]
+            if (txnId.toString().equals("[4,14008,7(RS),10]") && to.id == 1)
+            {
+                System.out.println("oops");
+            }
             if (!extraRanges.isEmpty())
                 partialTxn = txn.slice(extraRanges, coordinateRanges.contains(route.homeKey()));
         }
@@ -144,6 +154,8 @@ public class Commit extends TxnRequest<CommitOrReadNack>
         this.partialDeps = deps.slice(scope.covering());
         this.route = sendRoute;
         this.readData = toExecuteFactory == null ? null : toExecuteFactory.apply(partialTxn != null ? partialTxn : txn, scope, partialDeps);
+        if (txnId.toString().equals("TxnId.debugTransactionId"))
+            logger.info("Node {} to {} Commit txn {} covering {} partialTxnRanges {}", node != null ? node : null, to, txnId, scope.covering(), partialTxn != null ? partialTxn.covering() : null);
     }
 
     protected Commit(Kind kind, TxnId txnId, PartialRoute<?> scope, long waitForEpoch, Ballot ballot, Timestamp executeAt, Seekables<?, ?> keys, @Nullable PartialTxn partialTxn, PartialDeps partialDeps, @Nullable FullRoute<?> fullRoute, @Nullable ReadData readData)
@@ -192,10 +204,14 @@ public class Commit extends TxnRequest<CommitOrReadNack>
     {
         for (Node.Id to : primary.nodes())
         {
+            if (txnId.toString().equals("[4,14008,7(RS),10]") && to.id == 1)
+            {
+                System.out.println("oops");
+            }
             boolean registerCallback = shouldRegisterCallback.test(param, to);
             // if we register a callback, supply the provided readScope (which may be null)
             Participants<?> readScope = registerCallback ? readScopeIfCallback : null;
-            Commit send = new Commit(kind, to, coordinates, all, txnId, txn, route, ballot, executeAt, deps, readScope);
+            Commit send = new Commit(node, kind, to, coordinates, all, txnId, txn, route, ballot, executeAt, deps, readScope);
             if (registerCallback) node.send(to, send, callback);
             else node.send(to, send);
         }
@@ -205,8 +221,12 @@ public class Commit extends TxnRequest<CommitOrReadNack>
             {
                 if (!primary.contains(to))
                 {
+                    if (txnId.toString().equals("[4,14008,7(RS),10]") && to.id == 1)
+                    {
+                        System.out.println("oops");
+                    }
                     boolean registerCallback = shouldRegisterCallback.test(param, to);
-                    Commit send = new Commit(kind, to, coordinates, all, txnId, txn, route, ballot, executeAt, deps, (ReadTxnData) null);
+                    Commit send = new Commit(node, kind, to, coordinates, all, txnId, txn, route, ballot, executeAt, deps, (ReadTxnData) null);
                     if (registerCallback) node.send(to, send, callback);
                     else node.send(to, send);
                 }
@@ -219,7 +239,7 @@ public class Commit extends TxnRequest<CommitOrReadNack>
         // the replica may be missing the original commit, or the additional commit, so send everything
         Topologies topologies = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
         Topology coordinates = topologies.forEpoch(txnId.epoch());
-        node.send(to, new Commit(StableWithTxnAndDeps, to, coordinates, topologies, txnId, txn, route, Ballot.ZERO, executeAt, deps, (ReadTxnData) null));
+        node.send(to, new Commit(node, StableWithTxnAndDeps, to, coordinates, topologies, txnId, txn, route, Ballot.ZERO, executeAt, deps, (ReadTxnData) null));
     }
 
     @Override
@@ -253,7 +273,10 @@ public class Commit extends TxnRequest<CommitOrReadNack>
         Route<?> route = this.route != null ? this.route : scope;
         SafeCommand safeCommand = safeStore.get(txnId, executeAt, route);
 
-        switch (Commands.commit(safeStore, safeCommand, kind.saveStatus, ballot, txnId, route, progressKey, partialTxn, executeAt, partialDeps))
+        if (txnId.toString().equals("TxnId.debugTransactionId"))
+            logger.info("Node {} CommandStore {} Commit apply txnId {} partialTxnRanges {}, safeStoreRangesAtEpoch {}", node, safeStore.commandStore().id(), txnId, partialTxn != null ? partialTxn.covering() : null, safeStore.ranges().allAt(txnId.epoch()));
+
+        switch (Commands.commit(node, safeStore, safeCommand, kind.saveStatus, ballot, txnId, route, progressKey, partialTxn, executeAt, partialDeps))
         {
             default:
             case Success:

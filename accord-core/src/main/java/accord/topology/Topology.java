@@ -36,6 +36,7 @@ import java.util.stream.IntStream;
 import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.RoutingKey;
+import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -48,9 +49,8 @@ import accord.utils.IndexedConsumer;
 import accord.utils.IndexedIntFunction;
 import accord.utils.IndexedTriFunction;
 import accord.utils.Utils;
-import org.agrona.collections.IntArrayList;
-
 import javax.annotation.Nullable;
+import org.agrona.collections.IntArrayList;
 
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.SortedArrays.Search.FLOOR;
@@ -92,7 +92,7 @@ public class Topology
             this.supersetIndexes = supersetIndexes;
         }
 
-        private NodeInfo forSubset(int[] newSubset)
+        private NodeInfo forSubset(Node.Id id, long epoch, int[] newSubset)
         {
             IntArrayList matches = new IntArrayList();
             List<Range> matchedRanges = new ArrayList<>(newSubset.length);
@@ -106,6 +106,15 @@ public class Topology
             }
             Ranges ranges = Ranges.ofSortedAndDeoverlapped(Utils.toArray(matchedRanges, Range[]::new));
             int[] supersetIndexes = matches.toIntArray();
+            if (id.equals(new Node.Id(1)) && epoch == 5)
+            {
+                System.out.println("Ariel forSubset weird ranges " + ranges);
+                NodeInfo ni = new NodeInfo(ranges, supersetIndexes);
+                if (ni.toString().equals("[(0#16383,0#21844], (0#21844,0#27305], (0#27305,0#32766], (0#32766,0#38227], (0#38227,0#43688], (0#43688,0#54610], (360#11914,360#17871], (360#41699,360#47656], (361#29785,361#41699], (362#23828,362#29785], (362#35742,362#41699], (362#41699,362#47656], (362#53613,362#65536], (366#5957,366#11914]]"))
+                    System.out.println("Had ranges bad forSubset");
+                else
+                    System.out.println("Had ranges good forSubset");
+            }
             return new NodeInfo(ranges, supersetIndexes);
         }
 
@@ -135,6 +144,15 @@ public class Topology
         {
             int[] supersetIndexes = e.getValue().toIntArray();
             Ranges ranges = this.ranges.select(supersetIndexes);
+            if (e.getKey().equals(new Node.Id(1)) && epoch == 5)
+            {
+                System.out.println("Ariel weird ranges " + ranges);
+                NodeInfo ni = new NodeInfo(ranges, supersetIndexes);
+                if (ni.toString().equals("[(0#16383,0#21844], (0#21844,0#27305], (0#27305,0#32766], (0#32766,0#38227], (0#38227,0#43688], (0#43688,0#54610], (360#11914,360#17871], (360#41699,360#47656], (361#29785,361#41699], (362#23828,362#29785], (362#35742,362#41699], (362#41699,362#47656], (362#53613,362#65536], (366#5957,366#11914]]"))
+                    System.out.println("Had ranges bad");
+                else
+                    System.out.println("Had ranges good");
+            }
             nodeLookup.put(e.getKey(), new NodeInfo(ranges, supersetIndexes));
         }
     }
@@ -267,7 +285,7 @@ public class Topology
         {
             Shard shard = shards[shardIndex];
             for (Id id : shard.nodes)
-                nodeLookup.putIfAbsent(id, this.nodeLookup.get(id).forSubset(newSubset));
+                nodeLookup.putIfAbsent(id, this.nodeLookup.get(id).forSubset(id, epoch, newSubset));
         }
         return new Topology(global(), epoch, shards, ranges, nodeLookup, rangeSubset, newSubset);
     }
@@ -279,7 +297,7 @@ public class Topology
         Map<Id, NodeInfo> nodeLookup = new HashMap<>();
         for (Id id : nodes)
         {
-            NodeInfo info = this.nodeLookup.get(id).forSubset(newSubset);
+            NodeInfo info = this.nodeLookup.get(id).forSubset(id, epoch, newSubset);
             if (info.ranges.isEmpty()) continue;
             nodeLookup.put(id, info);
         }

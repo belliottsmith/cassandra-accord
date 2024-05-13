@@ -46,26 +46,15 @@ import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.zip.CRC32;
 
-import accord.burn.random.FrequentLargeRange;
-import accord.impl.MessageListener;
-import accord.utils.Gen;
-import accord.utils.Gens;
-import accord.utils.Utils;
-import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults;
-import accord.verify.CompositeVerifier;
-import accord.verify.ElleVerifier;
-import accord.verify.StrictSerializabilityVerifier;
-import accord.verify.Verifier;
-
-import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Key;
-import accord.impl.TopologyFactory;
+import accord.burn.random.FrequentLargeRange;
+import accord.impl.MessageListener;
 import accord.impl.PrefixedIntHashKey;
+import accord.impl.TopologyFactory;
 import accord.impl.basic.Cluster;
 import accord.impl.basic.Cluster.Stats;
 import accord.impl.basic.Packet;
@@ -93,8 +82,18 @@ import accord.primitives.Txn;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.utils.DefaultRandom;
+import accord.utils.Gen;
+import accord.utils.Gens;
 import accord.utils.RandomSource;
+import accord.utils.Utils;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncExecutor;
+import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
+import accord.verify.CompositeVerifier;
+import accord.verify.ElleVerifier;
+import accord.verify.StrictSerializabilityVerifier;
+import accord.verify.Verifier;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
 
@@ -469,11 +468,11 @@ public class BurnTest
         }
         catch (Throwable t)
         {
-            for (int i = 0 ; i < requests.length ; ++i)
-            {
-                logger.info("{}", requests[i]);
-                logger.info("\t\t" + replies[i]);
-            }
+//            for (int i = 0 ; i < requests.length ; ++i)
+//            {
+//                logger.info("{}", requests[i]);
+//                logger.info("\t\t" + replies[i]);
+//            }
             throw t;
         }
 
@@ -544,10 +543,10 @@ public class BurnTest
     }
 
 //    @Test
-    @RepeatedTest(Integer.MAX_VALUE)
-    public void testOne()
-    {
-        run(System.nanoTime());
+//    @RepeatedTest(Integer.MAX_VALUE)
+//    public void testOne()
+//    {
+//        run(System.nanoTime());
 //        run(320860822860166L); // Incomplete txn ({read:[]}) provided; does not cover [(542#7281,542#10920]] // In debugging the txn was a historic txn
 //        run(321378044901625L); // Incomplete txn ({read:[]}) provided; does not cover [(849#4681,849#9362], (849#9362,849#10854]]
 //        run(321814000189583L); // Incomplete txn ({read:[]}) provided; does not cover [(36#13106,36#14320]]
@@ -561,11 +560,20 @@ public class BurnTest
 //        run(325076065173541L); // Invalid state: waiting for execution of command that is not owned at the execution time
 
 //        run(325459494008416L); // Writes is null
+    @Test
+//    @Timeout(value = 3, unit = TimeUnit.MINUTES)
+//    @RepeatedTest(Integer.MAX_VALUE)
+    public void testOne()
+    {
+//        run(System.nanoTime());
+run(726805565455833L);
+//        run(296358152117833L); // Unable to find messages that lead to PreApplied state; witnessed [PRE_ACCEPT_REQ, ACCEPT_REQ, COMMIT_SLOW_PATH_REQ, APPLY_THEN_WAIT_UNTIL_APPLIED_REQ]
+//        run(296520943500625L); // Unable to find messages that lead to PreApplied state; witnessed [PRE_ACCEPT_REQ, ACCEPT_REQ, COMMIT_SLOW_PATH_REQ, APPLY_THEN_WAIT_UNTIL_APPLIED_REQ]
     }
 
     private static void run(long seed)
     {
-        Duration timeout = Duration.ofMinutes(2);
+        Duration timeout = Duration.ofMinutes(99999);
         Runnable fn = () -> run(seed, 1000);
         AsyncResult.Settable<?> promise = AsyncResults.settable();
         Thread t = new Thread(() -> {

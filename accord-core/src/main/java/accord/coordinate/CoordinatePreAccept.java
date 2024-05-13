@@ -22,6 +22,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.coordinate.tracking.FastPathTracker;
 import accord.local.CommandStore;
 import accord.local.Node;
@@ -50,6 +53,8 @@ import static accord.utils.Functions.foldl;
  */
 abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, PreAcceptReply>
 {
+    private static final Logger logger = LoggerFactory.getLogger(CoordinatePreAccept.class);
+
     final FastPathTracker tracker;
     private final List<PreAcceptOk> oks; // TODO (expected): this can be cleared after preaccept
     final Txn txn;
@@ -62,6 +67,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies)
     {
         super(node, route, txnId);
+//        logger.info("CoordinatingPreAccept({}) of txnId {}", this.getClass().getName(), txnId);
         this.tracker = new FastPathTracker(topologies);
         this.oks = new ArrayList<>(topologies.estimateUniqueNodes());
         this.txn = txn;
@@ -118,6 +124,10 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
             oks.add(ok);
 
             boolean fastPath = ok.witnessedAt.compareTo(txnId) == 0;
+//            Deps deps = Deps.merge(oks, o -> o.deps);
+//            long count = deps.txnIdCount();
+//            if (count > 50)
+//                logger.info("CoordinatePreAccept({}) has {} deps, oldest dep {}: {}", this.getClass().getName(), count, deps.oldestDep(), deps.randomDeps(5));
             if (tracker.recordSuccess(from, fastPath) == Success)
                 onPreAcceptedOrNewEpoch();
         }

@@ -18,25 +18,16 @@
 
 package accord.impl;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import accord.local.SafeCommandStore;
-import accord.messages.ReadData;
-import accord.utils.async.AsyncChain;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.Data;
 import accord.api.DataStore;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.coordinate.FetchCoordinator;
 import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.SafeCommandStore;
 import accord.messages.Callback;
 import accord.messages.MessageType;
+import accord.messages.ReadData;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
@@ -47,10 +38,18 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
+import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static accord.local.SaveStatus.Applied;
 import static accord.messages.ReadData.CommitOrReadNack.Insufficient;
@@ -193,6 +192,10 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
             @Override
             public void onFailure(Node.Id from, Throwable failure)
             {
+                String message = failure.getMessage();
+                if (message == null)
+                    message = failure.getClass().getName();
+                logger.info("Node {} fetch request to {} for ranges {} failed due to {}", node, from, ranges, message);
                 inflight.remove(key).cancel();
                 fail(from, failure);
             }

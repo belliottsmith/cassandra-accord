@@ -18,11 +18,6 @@
 
 package accord.coordinate;
 
-import java.util.List;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.local.Node;
 import accord.messages.Apply;
@@ -39,6 +34,10 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
 
 import static accord.coordinate.CoordinationAdapter.Invoke.execute;
 import static accord.coordinate.CoordinationAdapter.Invoke.propose;
@@ -48,6 +47,7 @@ import static accord.primitives.Timestamp.mergeMax;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Functions.foldl;
 import static accord.utils.Invariants.checkArgument;
+import static java.lang.String.format;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
@@ -75,6 +75,7 @@ public class CoordinateSyncPoint<S extends Seekables<?, ?>> extends CoordinatePr
 
     public static <S extends Seekables<?, ?>> AsyncResult<SyncPoint<S>> exclusive(Node node, TxnId txnId, S keysOrRanges)
     {
+        logger.info("Node {} coordinating exclusive sync point txnid {} keysOrRanges {}", node, txnId, keysOrRanges);
         return coordinate(node, txnId, keysOrRanges, Adapters.exclusiveSyncPoint());
     }
 
@@ -98,12 +99,26 @@ public class CoordinateSyncPoint<S extends Seekables<?, ?>> extends CoordinatePr
     private static <S extends Seekables<?, ?>> AsyncResult<SyncPoint<S>> coordinate(Node node, TxnId txnId, S keysOrRanges, CoordinationAdapter<SyncPoint<S>> adapter)
     {
         checkArgument(txnId.kind() == Kind.SyncPoint || txnId.kind() == ExclusiveSyncPoint);
+        logger.info("Node {} Coordinating {} txnId {}", node, adapter.getClass().getSimpleName(), txnId);
+
         FullRoute<?> route = node.computeRoute(txnId, keysOrRanges);
         TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), keysOrRanges);
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
         CoordinateSyncPoint<S> coordinate = new CoordinateSyncPoint<>(node, txnId, node.agent().emptyTxn(txnId.kind(), keysOrRanges), route, adapter);
         coordinate.start();
+        if (adapter.getClass() == Adapters.exclusiveSyncPoint().getClass())
+            coordinate.addCallback((success, failure) -> {
+                if (failure != null)
+                {
+                    String message = failure.getMessage();
+                    if (message == null)
+                        message = failure.getClass().getName();
+                    logger.error(format("Node %s coordinateSyncPoint %s txnId %s failed %s", node, adapter.getClass().getName(), txnId, message));
+                }
+                else
+                    logger.info("Node {} coordinateSyncPoint {} txnId {} succeeded", node, adapter.getClass().getName(), txnId);
+            });
         return coordinate;
     }
 

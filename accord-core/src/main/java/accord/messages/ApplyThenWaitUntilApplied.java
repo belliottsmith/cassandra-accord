@@ -18,11 +18,6 @@
 
 package accord.messages;
 
-import javax.annotation.Nullable;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.Data;
 import accord.api.Result;
 import accord.api.RoutingKey;
@@ -43,6 +38,10 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import static accord.messages.TxnRequest.computeScope;
 import static accord.utils.Invariants.illegalState;
@@ -55,7 +54,7 @@ import static accord.utils.Invariants.illegalState;
  */
 public class ApplyThenWaitUntilApplied extends WaitUntilApplied
 {
-    private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
+    private static final Logger logger = LoggerFactory.getLogger(ApplyThenWaitUntilApplied.class);
 
     @SuppressWarnings("unused")
     public static class SerializerSupport
