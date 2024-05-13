@@ -144,7 +144,7 @@ public class Commit extends TxnRequest<CommitOrReadNack>
                 System.out.println("oops");
             }
             if (!extraRanges.isEmpty())
-                partialTxn = txn.slice(extraRanges, coordinateRanges.contains(route.homeKey()));
+                partialTxn = txn.slice(scope.covering().subtract(coordinateRanges), coordinateRanges.contains(route.homeKey()));
         }
 
         this.kind = kind;
