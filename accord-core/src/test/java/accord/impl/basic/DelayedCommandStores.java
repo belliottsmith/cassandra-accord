@@ -169,6 +169,9 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         public void validateRead(Command current)
         {
+            if (Invariants.paranoia() < 3)
+                return;
+
             // "loading" the command doesn't make sense as we don't "store" the command...
             if (current.txnId().kind() == Txn.Kind.EphemeralRead)
                 return;
@@ -232,7 +235,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         public <T> AsyncChain<T> submit(Callable<T> fn)
         {
             Task<T> task = new DelayedTask<>(fn);
-            if (Invariants.isParanoid())
+            if (Invariants.paranoia() >= 3)
             {
                 return AsyncChains.detectLeak(agent::onUncaughtException, () -> {
                     boolean wasEmpty = pending.isEmpty();

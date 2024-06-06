@@ -1030,9 +1030,21 @@ public abstract class InMemoryCommandStore extends CommandStore
                 }
             });
 
-            commands.values().forEach(InMemorySafeCommand::invalidate);
-            timestampsForKey.values().forEach(InMemorySafeTimestampsForKey::invalidate);
-            commandsForKey.values().forEach(InMemorySafeCommandsForKey::invalidate);
+            commands.values().forEach(c -> {
+                if (c.isUnset())
+                    commandStore.commands.remove(c.txnId());
+                c.invalidate();
+            });
+            timestampsForKey.values().forEach(tfk -> {
+                if (tfk.isUnset())
+                    commandStore.timestampsForKey.remove(tfk.key());
+                tfk.invalidate();
+            });
+            commandsForKey.values().forEach(cfk -> {
+                if (cfk.isUnset())
+                    commandStore.commandsForKey.remove(cfk.key());
+                cfk.invalidate();
+            });
         }
     }
 

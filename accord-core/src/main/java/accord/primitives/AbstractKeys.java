@@ -29,6 +29,7 @@ import java.util.stream.Stream;
 
 import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers.ObjectBuffers;
+import accord.utils.IndexedBiConsumer;
 import accord.utils.IndexedFold;
 import accord.utils.IndexedFoldToLong;
 import accord.utils.IndexedTriFold;
@@ -256,6 +257,15 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     public final void forEach(Ranges rs, Consumer<? super K> forEach)
     {
         Routables.foldl(this, rs, (k, consumer, i) -> { consumer.accept(k); return consumer; }, forEach);
+    }
+
+    @Inline
+    public final <P1> void forEach(Ranges rs, IndexedBiConsumer<P1, ? super K> forEach, P1 p1)
+    {
+        Routables.foldl(this, rs, (p, ignore, k, consumer, i) -> {
+            consumer.accept(p, k, i);
+            return consumer;
+        }, p1, null, forEach, i -> false);
     }
 
     @Inline
