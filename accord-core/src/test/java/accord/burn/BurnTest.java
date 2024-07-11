@@ -46,7 +46,7 @@ import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.zip.CRC32;
 
-import org.junit.jupiter.api.Test;
+import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -510,7 +510,7 @@ public class BurnTest
     {
         int count = 1;
         int operations = 1000;
-        Long overrideSeed = null;
+        Long overrideSeed = 1696943352130493L;
         LongSupplier seedGenerator = ThreadLocalRandom.current()::nextLong;
         boolean hasOverriddenSeed = false;
         for (int i = 0 ; i < args.length ; i += 2)

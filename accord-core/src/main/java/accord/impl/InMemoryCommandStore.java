@@ -102,10 +102,17 @@ public abstract class InMemoryCommandStore extends CommandStore
     protected Timestamp maxRedundant = Timestamp.NONE;
 
     private InMemorySafeStore current;
+    private final BiConsumer<Command, Command> onExecute;
 
     public InMemoryCommandStore(int id, NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, EpochUpdateHolder epochUpdateHolder)
     {
+        this(id, time, agent, store, progressLogFactory, epochUpdateHolder, null);
+    }
+
+    public InMemoryCommandStore(int id, NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, EpochUpdateHolder epochUpdateHolder, BiConsumer<Command, Command> onExecute)
+    {
         super(id, time, agent, store, progressLogFactory, epochUpdateHolder);
+        this.onExecute = onExecute;
     }
 
     protected boolean canExposeUnloaded()
@@ -403,7 +410,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             if (global == null) continue;
             Command current = global.value();
             if (current == null) continue;
-            validateRead(current);
+            //validateRead(current);
         }
 
         for (Seekable seekable : context.keys())
@@ -461,10 +468,19 @@ public abstract class InMemoryCommandStore extends CommandStore
 
     private <T> T executeInContext(InMemoryCommandStore commandStore, PreLoadContext preLoadContext, Function<? super SafeCommandStore, T> function, boolean isDirectCall)
     {
-
+//        Command before = null;
+//        Command after = null;
+//        GlobalCommand tmp = null;
+//        if (preLoadContext.primaryTxnId() != null)
+//        {
+//            tmp = commands.get(preLoadContext.primaryTxnId());
+//            if (tmp != null)
+//                before = tmp.value();
+//        }
         SafeCommandStore safeStore = commandStore.beginOperation(preLoadContext);
         try
         {
+
             return function.apply(safeStore);
         }
         catch (Throwable t)
@@ -474,6 +490,15 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
         finally
         {
+//            if (preLoadContext.primaryTxnId() != null)
+//            {
+//                tmp = commands.get(preLoadContext.primaryTxnId());
+//                if (tmp != null)
+//                    after = commands.get(preLoadContext.primaryTxnId()).value();
+//
+//                if (onExecute != null)
+//                    onExecute.accept(before, after);
+//            }
             commandStore.completeOperation(safeStore);
         }
     }

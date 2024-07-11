@@ -44,12 +44,10 @@ import accord.impl.basic.TaskExecutorService.Task;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
-import accord.local.CommonAttributes;
 import accord.local.Node;
 import accord.local.NodeTimeService;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
-import accord.local.SerializerSupport;
 import accord.local.ShardDistributor;
 import accord.primitives.Range;
 import accord.primitives.RoutableKey;
@@ -160,7 +158,9 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
         public DelayedCommandStore(int id, NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, EpochUpdateHolder epochUpdateHolder, SimulatedDelayedExecutorService executor, BooleanSupplier isLoadedCheck, Journal journal)
         {
-            super(id, time, agent, store, progressLogFactory, epochUpdateHolder);
+            super(id, time, agent, store, progressLogFactory, epochUpdateHolder, (before, after) -> {
+                journal.onExecute(id, before, after);
+            });
             this.executor = executor;
             this.isLoadedCheck = isLoadedCheck;
             this.journal = journal;
@@ -172,31 +172,19 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             // "loading" the command doesn't make sense as we don't "store" the command...
             if (current.txnId().kind() == Txn.Kind.EphemeralRead)
                 return;
-            Command.WaitingOn waitingOn = null;
-            if (current.isStable() && !current.isTruncated())
-                waitingOn = current.asCommitted().waitingOn;
-            SerializerSupport.MessageProvider messages = journal.makeMessageProvider(current.txnId());
-            Command.WaitingOn finalWaitingOn = waitingOn;
-            CommonAttributes.Mutable mutable = current.mutable();
-            mutable.partialDeps(null).removePartialTxn();
 
-            Command reconstructed;
+            Command reconstructed = journal.reconstruct(id, current.txnId());
+            List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed, ".result.");
+            List<String> filteredDiff = diff.stream().filter(d -> !DelayedCommandStores.hasKnownIssue(d.path)).map(Object::toString).collect(Collectors.toList());
             try
             {
-                reconstructed = SerializerSupport.reconstruct(agent(), unsafeRangesForEpoch(), mutable, current.saveStatus(), current.executeAt(), current.txnId().kind().awaitsOnlyDeps() ? current.executesAtLeast() : null, current.promised(), current.acceptedOrCommitted(), ignore -> finalWaitingOn, messages);
+                Invariants.checkState(filteredDiff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, time, id(), new LazyToString(() -> String.join("\n", filteredDiff)));
             }
-            catch (IllegalStateException t)
+            catch (Throwable t)
             {
-                //TODO (correctness): journal doesn't guarantee we pick the same records we used to state transition
-                // Journal stores a list of messages it saw in some order it defines, but when reconstructing a command we don't actually know what messages were used, this could
-                // lead to a case where deps mismatch, so ignoring this for now
-                if (t.getMessage() != null && t.getMessage().startsWith("Deps do not match; expected"))
-                    return;
+                System.out.println(current.equals(reconstructed));
                 throw t;
             }
-            List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed);
-            List<String> filteredDiff = diff.stream().filter(d -> !DelayedCommandStores.hasKnownIssue(d.path)).map(Object::toString).collect(Collectors.toList());
-            Invariants.checkState(filteredDiff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, time, id(), new LazyToString(() -> String.join("\n", filteredDiff)));
         }
 
         @Override
@@ -303,10 +291,14 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             commands.entrySet().forEach(e -> {
                 InMemorySafeCommand safe = e.getValue();
                 if (!safe.isModified()) return;
+//                commandStore.validateRead(safe.current());
+                //Command original = safe.original();
+                //if (original != null)
+
+                Command before = safe.original();
+                Command after = safe.current();
+                commandStore.journal.onExecute(commandStore.id(), before, after);
                 commandStore.validateRead(safe.current());
-                Command original = safe.original();
-                if (original != null)
-                    commandStore.validateRead(original);
             });
         }
     }

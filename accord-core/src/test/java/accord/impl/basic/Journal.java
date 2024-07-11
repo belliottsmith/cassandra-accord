@@ -20,102 +20,45 @@ package accord.impl.basic;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Queue;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
-
+import accord.api.Result;
 import accord.impl.MessageListener;
+import accord.local.Command;
+import accord.local.CommonAttributes;
+import accord.local.Listeners;
 import accord.local.Node;
-import accord.local.SerializerSupport;
-import accord.messages.AbstractEpochRequest;
-import accord.messages.Accept;
-import accord.messages.Apply;
-import accord.messages.ApplyThenWaitUntilApplied;
-import accord.messages.BeginRecovery;
-import accord.messages.Commit;
+import accord.local.SaveStatus;
+import accord.local.Status;
 import accord.messages.LocalRequest;
 import accord.messages.Message;
-import accord.messages.MessageType;
-import accord.messages.PreAccept;
-import accord.messages.Propagate;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
-import accord.messages.TxnRequest;
-import accord.primitives.Ballot;
-import accord.primitives.TxnId;
+import accord.primitives.*;
 import accord.utils.Invariants;
 import org.agrona.collections.Long2ObjectHashMap;
 import org.agrona.collections.LongArrayList;
+import org.apache.cassandra.service.accord.serializers.CommandSerializers;
 
-import static accord.messages.MessageType.ACCEPT_INVALIDATE_REQ;
-import static accord.messages.MessageType.ACCEPT_REQ;
-import static accord.messages.MessageType.APPLY_MAXIMAL_REQ;
-import static accord.messages.MessageType.APPLY_MINIMAL_REQ;
-import static accord.messages.MessageType.APPLY_THEN_WAIT_UNTIL_APPLIED_REQ;
-import static accord.messages.MessageType.BEGIN_INVALIDATE_REQ;
-import static accord.messages.MessageType.BEGIN_RECOVER_REQ;
-import static accord.messages.MessageType.COMMIT_INVALIDATE_REQ;
-import static accord.messages.MessageType.COMMIT_MAXIMAL_REQ;
-import static accord.messages.MessageType.COMMIT_SLOW_PATH_REQ;
-import static accord.messages.MessageType.INFORM_DURABLE_REQ;
-import static accord.messages.MessageType.INFORM_OF_TXN_REQ;
-import static accord.messages.MessageType.PRE_ACCEPT_REQ;
-import static accord.messages.MessageType.PROPAGATE_APPLY_MSG;
-import static accord.messages.MessageType.PROPAGATE_OTHER_MSG;
-import static accord.messages.MessageType.PROPAGATE_PRE_ACCEPT_MSG;
-import static accord.messages.MessageType.PROPAGATE_STABLE_MSG;
-import static accord.messages.MessageType.SET_GLOBALLY_DURABLE_REQ;
-import static accord.messages.MessageType.SET_SHARD_DURABLE_REQ;
-import static accord.messages.MessageType.STABLE_FAST_PATH_REQ;
-import static accord.messages.MessageType.STABLE_MAXIMAL_REQ;
-import static accord.messages.MessageType.STABLE_SLOW_PATH_REQ;
+import static accord.local.Status.Durability.Local;
+import static accord.utils.Invariants.checkState;
+import static accord.utils.Invariants.illegalState;
+
 
 public class Journal implements LocalRequest.Handler, Runnable
 {
-    private static final TxnIdProvider EPOCH = msg -> ((AbstractEpochRequest<?>) msg).txnId;
-    private static final TxnIdProvider TXN   = msg -> ((TxnRequest<?>) msg).txnId;
-    private static final TxnIdProvider LOCAL = msg -> ((LocalRequest<?>) msg).primaryTxnId();
-    private static final TxnIdProvider INVL  = msg -> ((Commit.Invalidate) msg).primaryTxnId();
-    private static final Map<MessageType, TxnIdProvider> typeToProvider = ImmutableMap.<MessageType, TxnIdProvider>builder()
-                                                                                      .put(PRE_ACCEPT_REQ, TXN)
-                                                                                      .put(ACCEPT_REQ, TXN)
-                                                                                      .put(ACCEPT_INVALIDATE_REQ, EPOCH)
-                                                                                      .put(COMMIT_SLOW_PATH_REQ, TXN)
-                                                                                      .put(COMMIT_MAXIMAL_REQ, TXN)
-                                                                                      .put(STABLE_FAST_PATH_REQ, TXN)
-                                                                                      .put(STABLE_SLOW_PATH_REQ, TXN)
-                                                                                      .put(STABLE_MAXIMAL_REQ, TXN)
-                                                                                      .put(COMMIT_INVALIDATE_REQ, INVL)
-                                                                                      .put(APPLY_MINIMAL_REQ, TXN)
-                                                                                      .put(APPLY_MAXIMAL_REQ, TXN)
-                                                                                      .put(APPLY_THEN_WAIT_UNTIL_APPLIED_REQ, EPOCH)
-                                                                                      .put(BEGIN_RECOVER_REQ, TXN)
-                                                                                      .put(BEGIN_INVALIDATE_REQ, EPOCH)
-                                                                                      .put(INFORM_OF_TXN_REQ, EPOCH)
-                                                                                      .put(INFORM_DURABLE_REQ, TXN)
-                                                                                      .put(SET_SHARD_DURABLE_REQ, EPOCH)
-                                                                                      .put(SET_GLOBALLY_DURABLE_REQ, EPOCH)
-                                                                                      .put(PROPAGATE_PRE_ACCEPT_MSG, LOCAL)
-                                                                                      .put(PROPAGATE_STABLE_MSG, LOCAL)
-                                                                                      .put(PROPAGATE_APPLY_MSG, LOCAL)
-                                                                                      .put(PROPAGATE_OTHER_MSG, LOCAL)
-                                                                                      .build();
-
     private final Queue<RequestContext> unframedRequests = new ArrayDeque<>();
     private final LongArrayList waitForEpochs = new LongArrayList();
     private final Long2ObjectHashMap<ArrayList<RequestContext>> delayedRequests = new Long2ObjectHashMap<>();
-    private final Map<TxnId, Map<MessageType, Message>> writes = new HashMap<>();
     private final MessageListener messageListener;
+    private final Map<Key, List<Diff>> diffs = new HashMap<>();
     private Node node;
 
     public Journal(MessageListener messageListener)
@@ -158,66 +101,6 @@ public class Journal implements LocalRequest.Handler, Runnable
         node.receive(request, from, replyContext);
     }
 
-    private void save(Message request)
-    {
-        MessageType type = request.type();
-        TxnIdProvider provider = typeToProvider.get(type);
-        Invariants.nonNull(provider, "Unknown type %s: %s", type, request);
-        TxnId txnId = provider.txnId(request);
-        writes.computeIfAbsent(txnId, ignore -> new Testing()).put(type, request);
-    }
-
-    public SerializerSupport.MessageProvider makeMessageProvider(TxnId txnId)
-    {
-        return new MessageProvider(txnId, writes.getOrDefault(txnId, Map.of()));
-    }
-
-    private static class Testing extends LinkedHashMap<MessageType, Message>
-    {
-        public Map<MessageType, List<Message>> history()
-        {
-            LinkedHashMap<MessageType, List<Message>> history = new LinkedHashMap<>();
-            for (MessageType k : keySet())
-            {
-                Object current = super.get(k);
-                history.put(k, current instanceof List ? (List<Message>) current : Collections.singletonList((Message) current));
-            }
-            return history;
-        }
-
-        @Override
-        public Message get(Object key)
-        {
-            Object current = super.get(key);
-            if (current == null || current instanceof Message)
-                return (Message) current;
-            List<Message> messages = (List<Message>) current;
-            return messages.get(messages.size() - 1);
-        }
-
-        @Override
-        public Message put(MessageType key, Message value)
-        {
-            Object current = super.get(key);
-            if (current == null)
-                return super.put(key, value);
-            else if (current instanceof List)
-            {
-                List<Message> list = (List<Message>) current;
-                list.add(value);
-                return list.get(list.size() - 2);
-            }
-            else
-            {
-                List<Message> messages = new ArrayList<>();
-                messages.add((Message) current);
-                messages.add(value);
-                super.put(key, value);
-                return (Message) current;
-            }
-        }
-    }
-
     @Override
     public void run()
     {
@@ -248,7 +131,7 @@ public class Journal implements LocalRequest.Handler, Runnable
             requests.addAll(delayed);
         }
         waitForEpochs.removeIfLong(epoch -> !delayedRequests.containsKey(epoch));
-        
+
         // for anything queued, put into the pending epochs or schedule
         RequestContext request;
         while (null != (request = unframedRequests.poll()))
@@ -266,19 +149,166 @@ public class Journal implements LocalRequest.Handler, Runnable
                 requests.add(request);
             }
         }
-        
+
         // schedule
         if (requests != null)
         {
-            requests.forEach(r -> save(r.message)); // save in batches to simulate journal more...
             requests.forEach(Runnable::run);
         }
     }
 
-    @FunctionalInterface
-    interface TxnIdProvider
+    public Command reconstruct(int commandStoreId, TxnId txnId)
     {
-        TxnId txnId(Message message);
+        Key key = new Key(txnId, commandStoreId);
+        List<Diff> diffs = this.diffs.get(key);
+        if (diffs == null || diffs.isEmpty())
+            return null;
+
+        Timestamp executeAt = null;
+        Timestamp executesAtLeast = null;
+        SaveStatus saveStatus = null;
+        Status.Durability durability = null;
+
+        Ballot acceptedOrCommitted = Ballot.ZERO;
+        Ballot promised = null;
+
+        Route<?> route = null;
+        PartialTxn partialTxn = null;
+        PartialDeps partialDeps = null;
+
+        Command.WaitingOn waitingOn = null;
+
+        Writes writes = null;
+        Seekables<?, ?> additionalKeysOrRanges = null;
+        Listeners.Immutable<Command.DurableAndIdempotentListener> listeners = null;
+        for (Diff diff : diffs)
+        {
+            if (diff.txnId != null)
+                txnId = diff.txnId;
+
+            if (diff.executeAt != null)
+                executeAt = diff.executeAt;
+
+            if (diff.executesAtLeast != null)
+                executesAtLeast = diff.executesAtLeast;
+
+            if (diff.saveStatus != null)
+                saveStatus = diff.saveStatus;
+
+            if (diff.durability != null)
+                durability = diff.durability;
+
+            if (diff.acceptedOrCommitted != null)
+                acceptedOrCommitted = diff.acceptedOrCommitted;
+
+            if (diff.promised != null)
+                promised = diff.promised;
+
+            if (diff.route != null)
+                route = diff.route;
+
+            if (diff.partialTxn != null)
+                partialTxn = diff.partialTxn;
+
+            if (diff.partialDeps != null)
+                partialDeps = diff.partialDeps;
+
+            if (diff.waitingOn != null)
+                waitingOn = diff.waitingOn;
+
+            if (diff.writes != null)
+                writes = diff.writes;
+
+            if (diff.additionalKeysOrRanges != null)
+                additionalKeysOrRanges = diff.additionalKeysOrRanges;
+
+            if (diff.listeners != null)
+                listeners = diff.listeners;
+        }
+
+        CommonAttributes.Mutable attrs = new CommonAttributes.Mutable(txnId);
+        if (partialTxn != null)
+            attrs.partialTxn(partialTxn);
+        if (durability != null)
+            attrs.durability(durability);
+        if (route != null)
+            attrs.route(route);
+        if (partialDeps != null &&
+            (saveStatus.known.deps != Status.KnownDeps.NoDeps &&
+             saveStatus.known.deps != Status.KnownDeps.DepsErased &&
+             saveStatus.known.deps != Status.KnownDeps.DepsUnknown))
+            attrs.partialDeps(partialDeps);
+        if (additionalKeysOrRanges != null)
+            attrs.additionalKeysOrRanges(additionalKeysOrRanges);
+        if (listeners != null)
+            attrs.setListeners(listeners);
+        Invariants.checkState(saveStatus != null,
+                              "Save status is null after applying %s", diffs);
+        switch (saveStatus.status)
+        {
+            case NotDefined:
+                return saveStatus == SaveStatus.Uninitialised ? Command.NotDefined.uninitialised(attrs.txnId())
+                                                              : Command.NotDefined.notDefined(attrs, promised);
+            case PreAccepted:
+                return Command.PreAccepted.preAccepted(attrs, executeAt, promised);
+            case AcceptedInvalidate:
+            case Accepted:
+            case PreCommitted:
+                return Command.Accepted.accepted(attrs, saveStatus, executeAt, promised, acceptedOrCommitted);
+            case Committed:
+            case Stable:
+                return Command.Committed.committed(attrs, saveStatus, executeAt, promised, acceptedOrCommitted, waitingOn);
+            case PreApplied:
+            case Applied:
+                Result result = CommandSerializers.APPLIED;
+                return Command.Executed.executed(attrs, saveStatus, executeAt, promised, acceptedOrCommitted, waitingOn, writes, result);
+            case Invalidated:
+            case Truncated:
+                return truncated(attrs, saveStatus, executeAt, executesAtLeast, writes, CommandSerializers.APPLIED);
+            default:
+                throw new IllegalStateException("Do not know " + saveStatus.status + " " + saveStatus);
+        }
+    }
+
+    private static Command.Truncated truncated(CommonAttributes.Mutable attrs, SaveStatus status, Timestamp executeAt, Timestamp executesAtLeast, Writes writes, Result result)
+    {
+        switch (status)
+        {
+            default:
+                throw illegalState("Unhandled SaveStatus: " + status);
+            case TruncatedApplyWithOutcome:
+            case TruncatedApplyWithDeps:
+            case TruncatedApply:
+                if (!attrs.txnId().kind().awaitsOnlyDeps())
+                    executesAtLeast = null;
+                switch (status.known.outcome)
+                {
+                    case Erased:
+                    case WasApply:
+                        writes = null;
+                        result = null; // TODO
+                        break;
+                }
+                return Command.Truncated.truncatedApply(attrs, status, executeAt, writes, result, executesAtLeast);
+            case ErasedOrInvalidated:
+                return Command.Truncated.erasedOrInvalidated(attrs.txnId(), attrs.durability(), attrs.route());
+            case Erased:
+                return Command.Truncated.erased(attrs.txnId(), attrs.durability(), attrs.route());
+            case Invalidated:
+                return Command.Truncated.invalidated(attrs.txnId(), attrs.durableListeners());
+        }
+    }
+
+    public void onExecute(int commandStoreId, Command before, Command after)
+    {
+        if (before == null && after == null)
+            return;
+        Diff diff = diff(before, after);
+        if (diff != null)
+        {
+            Key key = new Key(after.txnId(), commandStoreId);
+            diffs.computeIfAbsent(key, (k_) -> new ArrayList<>()).add(diff);
+        }
     }
 
     private static class RequestContext implements Runnable
@@ -301,137 +331,160 @@ public class Journal implements LocalRequest.Handler, Runnable
         }
     }
 
-    public static class MessageProvider implements SerializerSupport.MessageProvider
+    private static class Diff
     {
         public final TxnId txnId;
-        private final Map<MessageType, Message> writes;
 
-        public MessageProvider(TxnId txnId, Map<MessageType, Message> writes)
+        public final Timestamp executeAt;
+        public final Timestamp executesAtLeast;
+        public final SaveStatus saveStatus;
+        public final Status.Durability durability;
+
+        public final Ballot acceptedOrCommitted;
+        public final Ballot promised;
+
+        public final Route<?> route;
+        public final PartialTxn partialTxn;
+        public final PartialDeps partialDeps;
+
+        public final Writes writes;
+        public final Command.WaitingOn waitingOn;
+        public final Seekables<?, ?> additionalKeysOrRanges;
+        public final Listeners.Immutable<Command.DurableAndIdempotentListener> listeners;
+
+        public Diff(TxnId txnId,
+                    Timestamp executeAt,
+                    Timestamp executesAtLeast,
+                    SaveStatus saveStatus,
+                    Status.Durability durability,
+
+                    Ballot acceptedOrCommitted,
+                    Ballot promised,
+
+                    Route<?> route,
+                    PartialTxn partialTxn,
+                    PartialDeps partialDeps,
+                    Command.WaitingOn waitingOn,
+
+                    Writes writes,
+                    Seekables<?, ?> additionalKeysOrRanges,
+                    Listeners.Immutable<Command.DurableAndIdempotentListener> listeners)
         {
             this.txnId = txnId;
+            this.executeAt = executeAt;
+            this.executesAtLeast = executesAtLeast;
+            this.saveStatus = saveStatus;
+            this.durability = durability;
+
+            this.acceptedOrCommitted = acceptedOrCommitted;
+            this.promised = promised;
+
+            this.route = route;
+            this.partialTxn = partialTxn;
+            this.partialDeps = partialDeps;
+
             this.writes = writes;
+            this.waitingOn = waitingOn;
+            this.additionalKeysOrRanges = additionalKeysOrRanges;
+            this.listeners = listeners;
         }
 
         @Override
-        public TxnId txnId()
+        public String toString()
         {
-            return txnId;
+            return "SavedDiff{" +
+                   " txnId=" + txnId +
+                   ", executeAt=" + executeAt +
+                   ", saveStatus=" + saveStatus +
+                   ", durability=" + durability +
+                   ", acceptedOrCommitted=" + acceptedOrCommitted +
+                   ", promised=" + promised +
+                   ", route=" + route +
+                   ", partialTxn=" + partialTxn +
+                   ", partialDeps=" + partialDeps +
+                   ", writes=" + writes +
+                   ", waitingOn=" + waitingOn +
+                   ", additionalKeysOrRanges=" + additionalKeysOrRanges +
+                   '}';
+        }
+    }
+
+    static Diff diff(Command before, Command after)
+    {
+        if (Objects.equals(before, after))
+            return null;
+
+        // TODO: we do not need to save `waitingOn` _every_ time.
+        Command.WaitingOn waitingOn = getWaitingOn(after);
+        return new Diff(after.txnId(),
+                        ifNotEqual(before, after, Command::executeAt, true),
+                        ifNotEqual(before, after, Command::executesAtLeast, true),
+                        ifNotEqual(before, after, Command::saveStatus, false),
+
+                        ifNotEqual(before, after, Command::durability, false),
+                        ifNotEqual(before, after, Command::acceptedOrCommitted, false),
+                        ifNotEqual(before, after, Command::promised, false),
+
+                        ifNotEqual(before, after, Command::route, true),
+                        ifNotEqual(before, after, Command::partialTxn, false),
+                        ifNotEqual(before, after, Command::partialDeps, false),
+                        waitingOn,
+                        ifNotEqual(before, after, Command::writes, false),
+                        // TODO (required): reflect in Cassandra
+                        ifNotEqual(before, after, Command::additionalKeysOrRanges, false),
+                        // TODO (required)^; reflect in Cassandra
+                        ifNotEqual(before, after, Command::durableListeners, false));
+    }
+
+    static Command.WaitingOn getWaitingOn(Command command)
+    {
+        if (command instanceof Command.Committed)
+            return command.asCommitted().waitingOn();
+
+        return null;
+    }
+
+    private static <OBJ, VAL> VAL ifNotEqual(OBJ lo, OBJ ro, Function<OBJ, VAL> convert, boolean allowClassMismatch)
+    {
+        VAL l = null;
+        VAL r = null;
+        if (lo != null) l = convert.apply(lo);
+        if (ro != null) r = convert.apply(ro);
+
+        if (l == r)
+            return null;
+        if (l == null || r == null)
+            return r;
+        assert allowClassMismatch || l.getClass() == r.getClass() : String.format("%s != %s", l.getClass(), r.getClass());
+
+        if (l.equals(r))
+            return null;
+
+        return r;
+    }
+
+    public static class Key
+    {
+        final TxnId timestamp;
+        final int commandStoreId;
+
+        public Key(TxnId timestamp, int commandStoreId)
+        {
+            this.timestamp = timestamp;
+            this.commandStoreId = commandStoreId;
         }
 
-        @Override
-        public Set<MessageType> test(Set<MessageType> messages)
+        public boolean equals(Object o)
         {
-            return Sets.intersection(writes.keySet(), messages);
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Key key = (Key) o;
+            return commandStoreId == key.commandStoreId && Objects.equals(timestamp, key.timestamp);
         }
 
-        @Override
-        public Set<MessageType> all()
+        public int hashCode()
         {
-            return writes.keySet();
-        }
-
-        public Map<MessageType, Message> allMessages()
-        {
-            var all = all();
-            Map<MessageType, Message> map = Maps.newHashMapWithExpectedSize(all.size());
-            for (MessageType messageType : all)
-                map.put(messageType, get(messageType));
-            return map;
-        }
-
-        public  <T extends Message> T get(MessageType type)
-        {
-            return (T) writes.get(type);
-        }
-
-        @Override
-        public PreAccept preAccept()
-        {
-            return get(PRE_ACCEPT_REQ);
-        }
-
-        @Override
-        public BeginRecovery beginRecover()
-        {
-            return get(BEGIN_RECOVER_REQ);
-        }
-
-        @Override
-        public Propagate propagatePreAccept()
-        {
-            return get(PROPAGATE_PRE_ACCEPT_MSG);
-        }
-
-        @Override
-        public Accept accept(Ballot ballot)
-        {
-            return get(ACCEPT_REQ);
-        }
-
-        @Override
-        public Commit commitSlowPath()
-        {
-            return get(COMMIT_SLOW_PATH_REQ);
-        }
-
-        @Override
-        public Commit commitMaximal()
-        {
-            return get(COMMIT_MAXIMAL_REQ);
-        }
-
-        @Override
-        public Commit stableFastPath()
-        {
-            return get(STABLE_FAST_PATH_REQ);
-        }
-
-        @Override
-        public Commit stableSlowPath()
-        {
-            return get(STABLE_SLOW_PATH_REQ);
-        }
-
-        @Override
-        public Commit stableMaximal()
-        {
-            return get(STABLE_MAXIMAL_REQ);
-        }
-
-        @Override
-        public Propagate propagateStable()
-        {
-            return get(PROPAGATE_STABLE_MSG);
-        }
-
-        @Override
-        public Apply applyMinimal()
-        {
-            return get(APPLY_MINIMAL_REQ);
-        }
-
-        @Override
-        public Apply applyMaximal()
-        {
-            return get(APPLY_MAXIMAL_REQ);
-        }
-
-        @Override
-        public Propagate propagateApply()
-        {
-            return get(PROPAGATE_APPLY_MSG);
-        }
-
-        @Override
-        public Propagate propagateOther()
-        {
-            return get(PROPAGATE_OTHER_MSG);
-        }
-
-        @Override
-        public ApplyThenWaitUntilApplied applyThenWaitUntilApplied()
-        {
-            return get(APPLY_THEN_WAIT_UNTIL_APPLIED_REQ);
+            return Objects.hash(timestamp, commandStoreId);
         }
     }
 }

@@ -23,6 +23,7 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -78,19 +79,28 @@ public class ReflectionUtils
         throw new UnsupportedOperationException("Unknown array type: " + o.getClass());
     }
 
-    public static List<Difference<?>> recursiveEquals(Object lhs, Object rhs)
+    public static List<Difference<?>> recursiveEquals(Object lhs, Object rhs, String... skipPaths)
     {
         if (Objects.equals(lhs, rhs)) return Collections.emptyList();
+        Set<String> skip;
+        if (skipPaths == null || skipPaths.length == 0)
+            skip = Collections.emptySet();
+        else
+        {
+            skip = new HashSet<>();
+            Collections.addAll(skip, skipPaths);
+        }
         // there is a difference... find it...
         List<Difference<?>> accum = new ArrayList<>();
         DeterministicIdentitySet<Object> seenLhs = new DeterministicIdentitySet<>();
         DeterministicIdentitySet<Object> seenRhs = new DeterministicIdentitySet<>();
-        recursiveEquals(".", seenLhs, lhs, seenRhs, rhs, accum);
+        recursiveEquals(".", seenLhs, lhs, seenRhs, rhs, accum, skip);
         return accum;
     }
 
-    private static void recursiveEquals(String path, DeterministicIdentitySet<Object> seenLhs, Object lhs, DeterministicIdentitySet<Object> seenRhs, Object rhs, List<Difference<?>> accum)
+    private static void recursiveEquals(String path, DeterministicIdentitySet<Object> seenLhs, Object lhs, DeterministicIdentitySet<Object> seenRhs, Object rhs, List<Difference<?>> accum, Set<String> skip)
     {
+        if (skip.contains(path)) return;
         if (Objects.equals(lhs, rhs)) return;
         if (lhs == null || rhs == null)
         {
@@ -116,9 +126,9 @@ public class ReflectionUtils
             f.setAccessible(true);
             try
             {
-                recursiveEquals(path + f.getName() + '.', seenLhs, f.get(lhs), seenRhs, f.get(rhs), accum);
+                recursiveEquals(path + f.getName() + '.', seenLhs, f.get(lhs), seenRhs, f.get(rhs), accum, skip);
             }
-            catch (IllegalAccessException e)
+            catch (IllegalAccessException | IllegalArgumentException e)
             {
                 throw new AssertionError(e);
             }
