@@ -165,7 +165,10 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             if (current.txnId().kind() == Txn.Kind.EphemeralRead)
                 return;
 
-            Command reconstructed = journal.reconstruct(id, current.txnId());
+            Command reconstructed = journal.reconstruct(id, current.txnId(),
+                                                        // TODO (required): Journal will _not_ have result persisted. This part is here for test purposes and ensuring that
+                                                        // we have strict object equality.
+                                                        current.result());
             List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed, ".result.");
             List<String> filteredDiff = diff.stream().filter(d -> !DelayedCommandStores.hasKnownIssue(d.path)).map(Object::toString).collect(Collectors.toList());
             Invariants.checkState(filteredDiff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, time, id(), new LazyToString(() -> String.join("\n", filteredDiff)));

@@ -791,7 +791,7 @@ public abstract class Command implements CommonAttributes
             Truncated that = (Truncated) o;
             return Objects.equals(executeAt, that.executeAt)
                 && Objects.equals(writes, that.writes)
-            //    && Objects.equals(result, that.result)
+                && Objects.equals(result, that.result)
             ;
         }
 
@@ -1252,7 +1252,7 @@ public abstract class Command implements CommonAttributes
             if (!super.equals(o)) return false;
             Executed executed = (Executed) o;
             return Objects.equals(writes, executed.writes)
-            //    && Objects.equals(result, executed.result)
+                && Objects.equals(result, executed.result)
             ;
         }
 

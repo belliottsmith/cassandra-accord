@@ -52,7 +52,6 @@ import accord.primitives.Writes;
 import accord.utils.Invariants;
 import org.agrona.collections.Long2ObjectHashMap;
 import org.agrona.collections.LongArrayList;
-import org.apache.cassandra.service.accord.serializers.CommandSerializers;
 
 import static accord.utils.Invariants.illegalState;
 
@@ -162,7 +161,7 @@ public class Journal implements LocalRequest.Handler, Runnable
         }
     }
 
-    public Command reconstruct(int commandStoreId, TxnId txnId)
+    public Command reconstruct(int commandStoreId, TxnId txnId, Result result)
     {
         Key key = new Key(txnId, commandStoreId);
         List<Diff> diffs = this.diffs.get(key);
@@ -185,8 +184,8 @@ public class Journal implements LocalRequest.Handler, Runnable
 
         Writes writes = null;
         Seekables<?, ?> additionalKeysOrRanges = null;
+        // TODO (required): we should _not_ rely on passing the listener object through the diff, and instead should reconstruct listeners.
         Listeners.Immutable<Command.DurableAndIdempotentListener> listeners = null;
-        Result result = CommandSerializers.APPLIED;
 
         for (Diff diff : diffs)
         {
