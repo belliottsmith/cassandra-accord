@@ -46,7 +46,7 @@ import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.zip.CRC32;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
