@@ -34,6 +34,7 @@ import java.util.stream.Collectors;
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.ProgressLog;
+import accord.api.Result;
 import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.InMemorySafeCommand;
@@ -61,6 +62,7 @@ import accord.utils.ReflectionUtils;
 import accord.utils.ReflectionUtils.Difference;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import org.apache.cassandra.service.accord.serializers.CommandSerializers;
 
 public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 {
@@ -165,10 +167,13 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             if (current.txnId().kind() == Txn.Kind.EphemeralRead)
                 return;
 
+            Result result = current.result();
+            if (result == null)
+                result = CommandSerializers.APPLIED;
             Command reconstructed = journal.reconstruct(id, current.txnId(),
                                                         // TODO (required): Journal will _not_ have result persisted. This part is here for test purposes and ensuring that
                                                         // we have strict object equality.
-                                                        current.result());
+                                                        result);
             List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed, ".result.");
             List<String> filteredDiff = diff.stream().filter(d -> !DelayedCommandStores.hasKnownIssue(d.path)).map(Object::toString).collect(Collectors.toList());
             Invariants.checkState(filteredDiff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, time, id(), new LazyToString(() -> String.join("\n", filteredDiff)));
