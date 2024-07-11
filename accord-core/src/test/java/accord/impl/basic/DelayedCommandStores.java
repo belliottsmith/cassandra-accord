@@ -75,18 +75,12 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             return Pattern.compile(path);
         }
 
-        private static final List<Pattern> KNOWN_ISSUES = List.of(field(".partialTxn.keys."),
-                                                                  field(".partialTxn.read.keys."),
-                                                                  field(".partialTxn.read.userReadKeys."),
-                                                                  field(".partialTxn.covering."),
-                                                                  field(".partialDeps.keyDeps."),
-                                                                  field(".partialDeps.rangeDeps."),
-                                                                  field(".partialDeps.covering."),
-                                                                  field(".additionalKeysOrRanges."),
+        private static final List<Pattern> KNOWN_ISSUES = List.of(
                                                                   // when a new epoch is detected and the execute ranges have more than the coordinating ranges,
                                                                   // and the coordinating ranges doesn't include the home key... we drop the query...
                                                                   // The logic to stitch messages together is not able to handle this as it doesn't know the original Topologies
-                                                                  field(".partialTxn.query."),
+                                                                  // TODO (required): test int if this is still true
+//                                                                  field(".partialTxn.query."),
                                                                   // cmd.mutable().build() != cmd.  This is due to Command.durability changing NotDurable to Local depending on the status
                                                                   field(".durability."));
     }
@@ -158,9 +152,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
         public DelayedCommandStore(int id, NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, EpochUpdateHolder epochUpdateHolder, SimulatedDelayedExecutorService executor, BooleanSupplier isLoadedCheck, Journal journal)
         {
-            super(id, time, agent, store, progressLogFactory, epochUpdateHolder, (before, after) -> {
-                journal.onExecute(id, before, after);
-            });
+            super(id, time, agent, store, progressLogFactory, epochUpdateHolder);
             this.executor = executor;
             this.isLoadedCheck = isLoadedCheck;
             this.journal = journal;
@@ -176,15 +168,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             Command reconstructed = journal.reconstruct(id, current.txnId());
             List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed, ".result.");
             List<String> filteredDiff = diff.stream().filter(d -> !DelayedCommandStores.hasKnownIssue(d.path)).map(Object::toString).collect(Collectors.toList());
-            try
-            {
-                Invariants.checkState(filteredDiff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, time, id(), new LazyToString(() -> String.join("\n", filteredDiff)));
-            }
-            catch (Throwable t)
-            {
-                System.out.println(current.equals(reconstructed));
-                throw t;
-            }
+            Invariants.checkState(filteredDiff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, time, id(), new LazyToString(() -> String.join("\n", filteredDiff)));
         }
 
         @Override
@@ -291,13 +275,10 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             commands.entrySet().forEach(e -> {
                 InMemorySafeCommand safe = e.getValue();
                 if (!safe.isModified()) return;
-//                commandStore.validateRead(safe.current());
-                //Command original = safe.original();
-                //if (original != null)
 
                 Command before = safe.original();
                 Command after = safe.current();
-                commandStore.journal.onExecute(commandStore.id(), before, after);
+                commandStore.journal.onExecute(commandStore.id(), before, after, context.primaryTxnId().equals(after.txnId()));
                 commandStore.validateRead(safe.current());
             });
         }

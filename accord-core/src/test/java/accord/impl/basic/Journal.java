@@ -41,14 +41,19 @@ import accord.messages.LocalRequest;
 import accord.messages.Message;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
-import accord.primitives.*;
+import accord.primitives.Ballot;
+import accord.primitives.PartialDeps;
+import accord.primitives.PartialTxn;
+import accord.primitives.Route;
+import accord.primitives.Seekables;
+import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
+import accord.primitives.Writes;
 import accord.utils.Invariants;
 import org.agrona.collections.Long2ObjectHashMap;
 import org.agrona.collections.LongArrayList;
 import org.apache.cassandra.service.accord.serializers.CommandSerializers;
 
-import static accord.local.Status.Durability.Local;
-import static accord.utils.Invariants.checkState;
 import static accord.utils.Invariants.illegalState;
 
 
@@ -170,7 +175,7 @@ public class Journal implements LocalRequest.Handler, Runnable
         Status.Durability durability = null;
 
         Ballot acceptedOrCommitted = Ballot.ZERO;
-        Ballot promised = null;
+        Ballot promised = Ballot.ZERO;
 
         Route<?> route = null;
         PartialTxn partialTxn = null;
@@ -181,6 +186,8 @@ public class Journal implements LocalRequest.Handler, Runnable
         Writes writes = null;
         Seekables<?, ?> additionalKeysOrRanges = null;
         Listeners.Immutable<Command.DurableAndIdempotentListener> listeners = null;
+        Result result = CommandSerializers.APPLIED;
+
         for (Diff diff : diffs)
         {
             if (diff.txnId != null)
@@ -226,6 +233,17 @@ public class Journal implements LocalRequest.Handler, Runnable
                 listeners = diff.listeners;
         }
 
+        if (!txnId.kind().awaitsOnlyDeps())
+            executesAtLeast = null;
+        switch (saveStatus.known.outcome)
+        {
+            case Erased:
+            case WasApply:
+                writes = null;
+                result = null;
+                break;
+        }
+
         CommonAttributes.Mutable attrs = new CommonAttributes.Mutable(txnId);
         if (partialTxn != null)
             attrs.partialTxn(partialTxn);
@@ -260,11 +278,10 @@ public class Journal implements LocalRequest.Handler, Runnable
                 return Command.Committed.committed(attrs, saveStatus, executeAt, promised, acceptedOrCommitted, waitingOn);
             case PreApplied:
             case Applied:
-                Result result = CommandSerializers.APPLIED;
                 return Command.Executed.executed(attrs, saveStatus, executeAt, promised, acceptedOrCommitted, waitingOn, writes, result);
             case Invalidated:
             case Truncated:
-                return truncated(attrs, saveStatus, executeAt, executesAtLeast, writes, CommandSerializers.APPLIED);
+                return truncated(attrs, saveStatus, executeAt, executesAtLeast, writes, result);
             default:
                 throw new IllegalStateException("Do not know " + saveStatus.status + " " + saveStatus);
         }
@@ -279,16 +296,6 @@ public class Journal implements LocalRequest.Handler, Runnable
             case TruncatedApplyWithOutcome:
             case TruncatedApplyWithDeps:
             case TruncatedApply:
-                if (!attrs.txnId().kind().awaitsOnlyDeps())
-                    executesAtLeast = null;
-                switch (status.known.outcome)
-                {
-                    case Erased:
-                    case WasApply:
-                        writes = null;
-                        result = null; // TODO
-                        break;
-                }
                 return Command.Truncated.truncatedApply(attrs, status, executeAt, writes, result, executesAtLeast);
             case ErasedOrInvalidated:
                 return Command.Truncated.erasedOrInvalidated(attrs.txnId(), attrs.durability(), attrs.route());
@@ -299,11 +306,14 @@ public class Journal implements LocalRequest.Handler, Runnable
         }
     }
 
-    public void onExecute(int commandStoreId, Command before, Command after)
+    public void onExecute(int commandStoreId, Command before, Command after, boolean isPrimary)
     {
         if (before == null && after == null)
             return;
         Diff diff = diff(before, after);
+        if (!isPrimary)
+            diff = diff.asNonprimary();
+
         if (diff != null)
         {
             Key key = new Key(after.txnId(), commandStoreId);
@@ -389,23 +399,65 @@ public class Journal implements LocalRequest.Handler, Runnable
             this.listeners = listeners;
         }
 
+        // We allow only save status, waitingOn, and listeners to be updated by non-primary transactions
+        public Diff asNonprimary()
+        {
+            return new Diff(null, null, null, saveStatus, null, null, null, null, null, null, waitingOn, null, null, listeners);
+        }
+
+        public boolean allNulls()
+        {
+            if (txnId != null) return false;
+            if (executeAt != null) return false;
+            if (executesAtLeast != null) return false;
+            if (saveStatus != null) return false;
+            if (durability != null) return false;
+            if (acceptedOrCommitted != null) return false;
+            if (promised != null) return false;
+            if (route != null) return false;
+            if (partialTxn != null) return false;
+            if (partialDeps != null) return false;
+            if (writes != null) return false;
+            if (waitingOn != null) return false;
+            if (additionalKeysOrRanges != null) return false;
+            if (listeners != null) return false;
+            return true;
+        }
+
         @Override
         public String toString()
         {
-            return "SavedDiff{" +
-                   " txnId=" + txnId +
-                   ", executeAt=" + executeAt +
-                   ", saveStatus=" + saveStatus +
-                   ", durability=" + durability +
-                   ", acceptedOrCommitted=" + acceptedOrCommitted +
-                   ", promised=" + promised +
-                   ", route=" + route +
-                   ", partialTxn=" + partialTxn +
-                   ", partialDeps=" + partialDeps +
-                   ", writes=" + writes +
-                   ", waitingOn=" + waitingOn +
-                   ", additionalKeysOrRanges=" + additionalKeysOrRanges +
-                   '}';
+            StringBuilder builder = new StringBuilder("SavedDiff{");
+            if (txnId != null)
+                builder.append("txnId = ").append(txnId).append(" ");
+            if (executeAt != null)
+                builder.append("executeAt = ").append(executeAt).append(" ");
+            if (executesAtLeast != null)
+                builder.append("executesAtLeast = ").append(executesAtLeast).append(" ");
+            if (saveStatus != null)
+                builder.append("saveStatus = ").append(saveStatus).append(" ");
+            if (durability != null)
+                builder.append("durability = ").append(durability).append(" ");
+            if (acceptedOrCommitted != null)
+                builder.append("acceptedOrCommitted = ").append(acceptedOrCommitted).append(" ");
+            if (promised != null)
+                builder.append("promised = ").append(promised).append(" ");
+            if (route != null)
+                builder.append("route = ").append(route).append(" ");
+            if (partialTxn != null)
+                builder.append("partialTxn = ").append(partialTxn).append(" ");
+            if (partialDeps != null)
+                builder.append("partialDeps = ").append(partialDeps).append(" ");
+            if (writes != null)
+                builder.append("writes = ").append(writes).append(" ");
+            if (waitingOn != null)
+                builder.append("waitingOn = ").append(waitingOn).append(" ");
+            if (additionalKeysOrRanges != null)
+                builder.append("additionalKeysOrRanges = ").append(additionalKeysOrRanges).append(" ");
+            if (listeners != null)
+                builder.append("listeners = ").append(listeners).append(" ");
+            builder.append("}");
+            return builder.toString();
         }
     }
 
@@ -414,26 +466,28 @@ public class Journal implements LocalRequest.Handler, Runnable
         if (Objects.equals(before, after))
             return null;
 
-        // TODO: we do not need to save `waitingOn` _every_ time.
-        Command.WaitingOn waitingOn = getWaitingOn(after);
-        return new Diff(after.txnId(),
-                        ifNotEqual(before, after, Command::executeAt, true),
-                        ifNotEqual(before, after, Command::executesAtLeast, true),
-                        ifNotEqual(before, after, Command::saveStatus, false),
+        Diff diff = new Diff(ifNotEqual(before, after, Command::txnId, false),
+                             ifNotEqual(before, after, Command::executeAt, true),
+                             ifNotEqual(before, after, Command::executesAtLeast, true),
+                             ifNotEqual(before, after, Command::saveStatus, false),
 
-                        ifNotEqual(before, after, Command::durability, false),
-                        ifNotEqual(before, after, Command::acceptedOrCommitted, false),
-                        ifNotEqual(before, after, Command::promised, false),
+                             ifNotEqual(before, after, Command::durability, false),
+                             ifNotEqual(before, after, Command::acceptedOrCommitted, false),
+                             ifNotEqual(before, after, Command::promised, false),
 
-                        ifNotEqual(before, after, Command::route, true),
-                        ifNotEqual(before, after, Command::partialTxn, false),
-                        ifNotEqual(before, after, Command::partialDeps, false),
-                        waitingOn,
-                        ifNotEqual(before, after, Command::writes, false),
-                        // TODO (required): reflect in Cassandra
-                        ifNotEqual(before, after, Command::additionalKeysOrRanges, false),
-                        // TODO (required)^; reflect in Cassandra
-                        ifNotEqual(before, after, Command::durableListeners, false));
+                             ifNotEqual(before, after, Command::route, true),
+                             ifNotEqual(before, after, Command::partialTxn, false),
+                             ifNotEqual(before, after, Command::partialDeps, false),
+                             ifNotEqual(before, after, Journal::getWaitingOn, true),
+                             ifNotEqual(before, after, Command::writes, false),
+                             // TODO (required): reflect in Cassandra
+                             ifNotEqual(before, after, Command::additionalKeysOrRanges, false),
+                             // TODO (required); reflect in Cassandra
+                             ifNotEqual(before, after, Command::durableListeners, false));
+        if (diff.allNulls())
+            return null;
+
+        return diff;
     }
 
     static Command.WaitingOn getWaitingOn(Command command)

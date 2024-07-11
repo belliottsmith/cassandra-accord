@@ -510,7 +510,7 @@ public class BurnTest
     {
         int count = 1;
         int operations = 1000;
-        Long overrideSeed = 1696943352130493L;
+        Long overrideSeed = null;
         LongSupplier seedGenerator = ThreadLocalRandom.current()::nextLong;
         boolean hasOverriddenSeed = false;
         for (int i = 0 ; i < args.length ; i += 2)

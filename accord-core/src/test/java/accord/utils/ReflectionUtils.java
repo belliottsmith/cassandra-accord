@@ -128,7 +128,7 @@ public class ReflectionUtils
             {
                 recursiveEquals(path + f.getName() + '.', seenLhs, f.get(lhs), seenRhs, f.get(rhs), accum, skip);
             }
-            catch (IllegalAccessException | IllegalArgumentException e)
+            catch (IllegalAccessException e)
             {
                 throw new AssertionError(e);
             }
