@@ -42,6 +42,7 @@ import accord.impl.InMemorySafeCommandsForKey;
 import accord.impl.InMemorySafeTimestampsForKey;
 import accord.impl.PrefixedIntHashKey;
 import accord.impl.basic.TaskExecutorService.Task;
+import accord.impl.mock.MockStore;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
@@ -62,7 +63,6 @@ import accord.utils.ReflectionUtils;
 import accord.utils.ReflectionUtils.Difference;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
-import org.apache.cassandra.service.accord.serializers.CommandSerializers;
 
 public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 {
@@ -169,7 +169,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
             Result result = current.result();
             if (result == null)
-                result = CommandSerializers.APPLIED;
+                result = MockStore.RESULT;
             Command reconstructed = journal.reconstruct(id, current.txnId(),
                                                         // TODO (required): Journal will _not_ have result persisted. This part is here for test purposes and ensuring that
                                                         // we have strict object equality.
