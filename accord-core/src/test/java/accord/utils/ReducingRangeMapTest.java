@@ -53,6 +53,7 @@ import static java.lang.Integer.MIN_VALUE;
 // TODO (desired): test start inclusive ranges
 public class ReducingRangeMapTest
 {
+    static final boolean ENABLE_LOGGING = false;
     static final Logger logger = LoggerFactory.getLogger(ReducingRangeMapTest.class);
     static final ReducingRangeMap<Timestamp> EMPTY = new ReducingRangeMap<>();
     static final RoutingKey MINIMUM_EXCL = new IntKey.Routing(MIN_VALUE);
@@ -214,7 +215,8 @@ public class ReducingRangeMapTest
         try
         {
             Random random = new Random(seed);
-            logger.info(id);
+            if (ENABLE_LOGGING)
+                logger.info(id);
             List<RandomWithCanonical> merge = new ArrayList<>();
             while (numberOfMerges-- > 0)
             {
