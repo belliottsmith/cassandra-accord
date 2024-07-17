@@ -69,7 +69,7 @@ import static java.lang.String.format;
 
 public abstract class Command implements CommonAttributes
 {
-    interface Listener
+    public interface Listener
     {
         void onChange(SafeCommandStore safeStore, SafeCommand safeCommand);
 
