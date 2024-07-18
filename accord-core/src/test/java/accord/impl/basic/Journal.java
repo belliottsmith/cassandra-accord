@@ -184,7 +184,6 @@ public class Journal implements LocalRequest.Handler, Runnable
 
         Writes writes = null;
         Seekables<?, ?> additionalKeysOrRanges = null;
-        // TODO (required): we should _not_ rely on passing the listener object through the diff, and instead should reconstruct listeners.
         Listeners.Immutable<Command.DurableAndIdempotentListener> listeners = null;
 
         for (Diff diff : diffs)
@@ -479,9 +478,7 @@ public class Journal implements LocalRequest.Handler, Runnable
                              ifNotEqual(before, after, Command::partialDeps, false),
                              ifNotEqual(before, after, Journal::getWaitingOn, true),
                              ifNotEqual(before, after, Command::writes, false),
-                             // TODO (required): reflect in Cassandra
                              ifNotEqual(before, after, Command::additionalKeysOrRanges, false),
-                             // TODO (required); reflect in Cassandra
                              ifNotEqual(before, after, Command::durableListeners, false));
         if (diff.allNulls())
             return null;
