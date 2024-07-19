@@ -444,9 +444,10 @@ public abstract class InMemoryCommandStore extends CommandStore
     {
         if (store != current)
             throw illegalState("This operation has already been cleared");
+
         try
         {
-            current.complete();
+            current.postExecute();
         }
         catch (Throwable t)
         {
@@ -1016,7 +1017,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected void invalidateSafeState()
+        public void postExecute()
         {
             commands.values().forEach(c -> {
                 if (c != null && c.current() != null)

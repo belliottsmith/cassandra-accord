@@ -148,7 +148,7 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
     @Override
     public PreLoadContext listenerPreLoadContext(TxnId caller)
     {
-        return PreLoadContext.contextFor(txnId, caller, keys());
+        return PreLoadContext.contextFor(txnId, keys());
     }
 
     @Override

@@ -303,6 +303,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         public void postExecute()
         {
+            super.postExecute();
             commands.entrySet().forEach(e -> {
                 InMemorySafeCommand safe = e.getValue();
                 if (!safe.isModified()) return;

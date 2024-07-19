@@ -27,6 +27,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers.ObjectBuffers;
 import accord.utils.IndexedBiConsumer;
@@ -284,6 +285,12 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
                 return initialValue;
         }
         return initialValue;
+    }
+
+    public void forEach(Consumer<? super K> forEach)
+    {
+        for (K key : keys)
+            forEach.accept(key);
     }
 
     public final FullKeyRoute toRoute(RoutingKey homeKey)
