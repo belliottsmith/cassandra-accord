@@ -236,11 +236,6 @@ public abstract class Command implements CommonAttributes
         }
     }
 
-    public boolean isEquivalent(Command o)
-    {
-        return equals(o);
-    }
-
     /**
      * @return true if this command is equivalent to {@code other}; it could also be fuller - have some of its
      *      registers be not sliced, whereas {@code other} may have them sliced
@@ -280,18 +275,6 @@ public abstract class Command implements CommonAttributes
             this.listeners = common.durableListeners();
         }
 
-        @Override
-        public boolean isEquivalent(Command o)
-        {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            return txnId().equals(o.txnId())
-                   && saveStatus() == o.saveStatus()
-                   && durability() == o.durability()
-                   && Objects.equals(route(), o.route())
-                   && Objects.equals(additionalKeysOrRanges, o.additionalKeysOrRanges())
-                   && Objects.equals(promised(), o.promised());
-        }
 
         @Override
         public boolean equals(Object o)
@@ -1022,19 +1005,6 @@ public abstract class Command implements CommonAttributes
         }
 
         @Override
-        public boolean isEquivalent(Command o)
-        {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            if (!super.isEquivalent(o)) return false;
-            PreAccepted that = (PreAccepted) o;
-            return Objects.equals(executeAt, that.executeAt)
-                   && Objects.equals(partialTxn, that.partialTxn)
-                   && Objects.equals(partialDeps, that.partialDeps);
-        }
-
-
-        @Override
         public boolean equals(Object o)
         {
             if (this == o) return true;
@@ -1125,16 +1095,6 @@ public abstract class Command implements CommonAttributes
         public Command updateAttributes(CommonAttributes attrs, Ballot promised)
         {
             return validate(new Accepted(attrs, saveStatus(), promised, executeAt(), acceptedOrCommitted()));
-        }
-
-        @Override
-        public boolean isEquivalent(Command o)
-        {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            if (!super.isEquivalent(o)) return false;
-            Accepted that = (Accepted) o;
-            return Objects.equals(acceptedOrCommitted, that.acceptedOrCommitted);
         }
 
         @Override
@@ -1282,16 +1242,6 @@ public abstract class Command implements CommonAttributes
         public Command updateAttributes(CommonAttributes attrs, Ballot promised)
         {
             return validate(new Executed(attrs, saveStatus(), executeAt(), promised, acceptedOrCommitted(), waitingOn(), writes, result));
-        }
-
-        @Override
-        public boolean isEquivalent(Command command)
-        {
-            if (this == command) return true;
-            if (command == null || getClass() != command.getClass()) return false;
-            if (!super.isEquivalent(command)) return false;
-            Executed executed = (Executed) command;
-            return Objects.equals(writes, executed.writes);
         }
 
         @Override

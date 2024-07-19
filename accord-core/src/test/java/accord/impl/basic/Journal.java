@@ -179,60 +179,50 @@ public class Journal implements LocalRequest.Handler, Runnable
         Route<?> route = null;
         PartialTxn partialTxn = null;
         PartialDeps partialDeps = null;
+        Seekables<?, ?> additionalKeysOrRanges = null;
 
         Command.WaitingOn waitingOn = null;
-
         Writes writes = null;
-        Seekables<?, ?> additionalKeysOrRanges = null;
         Listeners.Immutable<Command.DurableAndIdempotentListener> listeners = null;
 
         for (Diff diff : diffs)
         {
             if (diff.txnId != null)
                 txnId = diff.txnId;
-
             if (diff.executeAt != null)
                 executeAt = diff.executeAt;
-
             if (diff.executesAtLeast != null)
                 executesAtLeast = diff.executesAtLeast;
-
             if (diff.saveStatus != null)
                 saveStatus = diff.saveStatus;
-
             if (diff.durability != null)
                 durability = diff.durability;
 
             if (diff.acceptedOrCommitted != null)
                 acceptedOrCommitted = diff.acceptedOrCommitted;
-
             if (diff.promised != null)
                 promised = diff.promised;
 
             if (diff.route != null)
                 route = diff.route;
-
             if (diff.partialTxn != null)
                 partialTxn = diff.partialTxn;
-
             if (diff.partialDeps != null)
                 partialDeps = diff.partialDeps;
-
-            if (diff.waitingOn != null)
-                waitingOn = diff.waitingOn;
-
-            if (diff.writes != null)
-                writes = diff.writes;
-
             if (diff.additionalKeysOrRanges != null)
                 additionalKeysOrRanges = diff.additionalKeysOrRanges;
 
+            if (diff.waitingOn != null)
+                waitingOn = diff.waitingOn;
+            if (diff.writes != null)
+                writes = diff.writes;
             if (diff.listeners != null)
                 listeners = diff.listeners;
         }
 
         if (!txnId.kind().awaitsOnlyDeps())
             executesAtLeast = null;
+
         switch (saveStatus.known.outcome)
         {
             case Erased:
@@ -249,6 +239,8 @@ public class Journal implements LocalRequest.Handler, Runnable
             attrs.durability(durability);
         if (route != null)
             attrs.route(route);
+
+        // TODO (desired): we can simplify this logic if, instead of diffing, we will infer the diff from the status
         if (partialDeps != null &&
             (saveStatus.known.deps != Status.KnownDeps.NoDeps &&
              saveStatus.known.deps != Status.KnownDeps.DepsErased &&
@@ -260,6 +252,7 @@ public class Journal implements LocalRequest.Handler, Runnable
             attrs.setListeners(listeners);
         Invariants.checkState(saveStatus != null,
                               "Save status is null after applying %s", diffs);
+
         switch (saveStatus.status)
         {
             case NotDefined:

@@ -170,11 +170,9 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             Result result = current.result();
             if (result == null)
                 result = MockStore.RESULT;
-            Command reconstructed = journal.reconstruct(id, current.txnId(),
-                                                        // TODO (required): Journal will _not_ have result persisted. This part is here for test purposes and ensuring that
-                                                        // we have strict object equality.
-                                                        result);
-            List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed, ".result.");
+            // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
+            Command reconstructed = journal.reconstruct(id, current.txnId(), result);
+            List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed);
             List<String> filteredDiff = diff.stream().filter(d -> !DelayedCommandStores.hasKnownIssue(d.path)).map(Object::toString).collect(Collectors.toList());
             Invariants.checkState(filteredDiff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, time, id(), new LazyToString(() -> String.join("\n", filteredDiff)));
         }
