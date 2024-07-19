@@ -390,9 +390,8 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
         public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, Command command)
         {
-            Timestamp executeAt;
-            if (!status.hasExecuteAt()) executeAt = txnId;
-            else executeAt = txnId;
+            Timestamp executeAt = txnId;
+            if (status.hasExecuteAt()) executeAt = command.executeAt();
             Ballot ballot;
             if (!status.hasBallot || (ballot = command.acceptedOrCommitted()).equals(Ballot.ZERO))
                 return new TxnInfo(txnId, status, executeAt);
@@ -930,7 +929,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         if (newStatus == null)
             return this;
 
-        return update(newStatus, next);
+        return update(newStatus, next, false);
     }
 
     CommandsForKeyUpdate updatePruned(Command next)
@@ -939,10 +938,10 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         if (newStatus == null)
             newStatus = TRANSITIVELY_KNOWN;
 
-        return update(newStatus, next);
+        return update(newStatus, next, true);
     }
 
-    private CommandsForKeyUpdate update(InternalStatus newStatus, Command next)
+    private CommandsForKeyUpdate update(InternalStatus newStatus, Command next, boolean wasPruned)
     {
         TxnId txnId = next.txnId();
         Invariants.checkArgument(manages(txnId));
@@ -951,7 +950,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         if (pos < 0)
         {
             pos = -1 - pos;
-            if (newStatus.hasExecuteAtOrDeps) result = insert(pos, txnId, newStatus, next);
+            if (newStatus.hasExecuteAtOrDeps && !wasPruned) result = insert(pos, txnId, newStatus, next);
             else result = insert(pos, txnId, TxnInfo.create(txnId, newStatus, next));
         }
         else
@@ -980,7 +979,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 }
             }
 
-            if (newStatus.hasExecuteAtOrDeps) result = update(pos, txnId, cur, newStatus, next);
+            if (newStatus.hasExecuteAtOrDeps && !wasPruned) result = update(pos, txnId, cur, newStatus, next);
             else result = update(pos, txnId, cur, TxnInfo.create(txnId, newStatus, next));
         }
 
@@ -1387,7 +1386,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 if (txn == newInfo) continue;
                 if (!txn.status.hasExecuteAtOrDeps) continue;
                 if (!txn.kind().witnesses(insertTxnId)) continue;
-                if (managesKeyExecution(txn) && txn.status != ACCEPTED) continue;
+                if (txn.status != ACCEPTED) continue;
                 if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
                 {
                     ++minDoNotInsertSearchIndex;
@@ -1407,7 +1406,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             if (txn == newInfo) continue;
             if (!txn.status.hasExecuteAtOrDeps) continue;
             if (!txn.kind().witnesses(insertTxnId)) continue;
-            if (managesKeyExecution(txn) && txn.status != ACCEPTED) continue;
+            if (txn.status != ACCEPTED) continue;
             if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
             {
                 ++minDoNotInsertSearchIndex;
