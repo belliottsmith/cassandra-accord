@@ -397,7 +397,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 boolean done = command.hasBeen(Truncated);
                 if (!done)
                 {
-                    if (redundantBefore().status(txnId, command.route()) == RedundantStatus.PRE_BOOTSTRAP_OR_STALE)
+                    if (unsafeGetRedundantBefore().status(txnId, command.route()) == RedundantStatus.PRE_BOOTSTRAP_OR_STALE)
                         return;
 
                     Route<?> route = command.route().slice(allRanges);
@@ -759,7 +759,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return;
 
             Ranges slice = ranges(txnId, updated.executeAtOrTxnId());
-            slice = commandStore.redundantBefore().removeShardRedundant(txnId, updated.executeAtOrTxnId(), slice);
+            slice = commandStore.unsafeGetRedundantBefore().removeShardRedundant(txnId, updated.executeAtOrTxnId(), slice);
             commandStore.rangeCommands.computeIfAbsent(txnId, ignore -> new RangeCommand(commandStore.commands.get(txnId)))
                          .update(((AbstractRanges)updated.participants().touches()).toRanges().slice(slice, Minimal));
         }

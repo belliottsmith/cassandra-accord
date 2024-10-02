@@ -76,18 +76,19 @@ public enum Cleanup
 
     public static Cleanup shouldCleanup(SafeCommandStore safeStore, Command command)
     {
-        return shouldCleanup(safeStore.commandStore(), command, command.participants());
+        return shouldCleanup(safeStore, command, command.participants());
     }
 
     public static Cleanup shouldCleanup(SafeCommandStore safeStore, Command command, @Nonnull StoreParticipants participants)
     {
-        return shouldCleanup(safeStore.commandStore(), command, participants);
+        return shouldCleanup(command.txnId(), command.saveStatus(), command.durability(), participants,
+                             safeStore.redundantBefore(), safeStore.durableBefore());
     }
 
-    public static Cleanup shouldCleanup(CommandStore commandStore, Command command, @Nonnull StoreParticipants participants)
+    public static Cleanup shouldCleanup(Command command, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        return shouldCleanup(command.txnId(), command.saveStatus(), command.durability(), participants,
-                               commandStore.redundantBefore(), commandStore.durableBefore());
+        return shouldCleanup(command.txnId(), command.saveStatus(), command.durability(), command.participants(),
+                             redundantBefore, durableBefore);
     }
 
     public static Cleanup shouldCleanup(TxnId txnId, SaveStatus status, Durability durability, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)

@@ -153,7 +153,7 @@ public abstract class SafeCommandStore
 
     protected SafeCommandsForKey maybeCleanup(SafeCommandsForKey safeCfk)
     {
-        RedundantBefore.Entry entry = commandStore().redundantBefore().get(safeCfk.key().toUnseekable());
+        RedundantBefore.Entry entry = redundantBefore().get(safeCfk.key().toUnseekable());
         if (entry != null)
             safeCfk.updateRedundantBefore(this, entry);
         return safeCfk;
@@ -356,6 +356,26 @@ public abstract class SafeCommandStore
     public abstract NodeTimeService time();
     public abstract CommandStores.RangesForEpoch ranges();
 
+    protected NavigableMap<TxnId, Ranges> bootstrapBeganAt()
+    {
+        return commandStore().unsafeGetBootstrapBeganAt();
+    }
+
+    protected NavigableMap<Timestamp, Ranges> safeToReadAt()
+    {
+        return commandStore().unsafeGetSafeToRead();
+    }
+
+    public RedundantBefore redundantBefore()
+    {
+        return commandStore().unsafeGetRedundantBefore();
+    }
+
+    public DurableBefore durableBefore()
+    {
+        return commandStore().unsafeGetDurableBefore();
+    }
+
     public Ranges futureRanges(TxnId txnId)
     {
         return ranges().allBefore(txnId.epoch());
@@ -376,11 +396,21 @@ public abstract class SafeCommandStore
         return ranges().allBetween(txnId.epoch(), untilLocalEpoch);
     }
 
+    public final Ranges safeToReadAt(Timestamp at)
+    {
+        return safeToReadAt().lowerEntry(at).getValue();
+    }
+
+    public @Nonnull Ranges unsafeToReadAt(Timestamp at)
+    {
+        return ranges().allAt(at).without(safeToReadAt(at));
+    }
+
     // if we have to re-bootstrap (due to failed bootstrap or catching up on a range) then we may
     // have dangling redundant commands; these can safely be executed locally because we are a timestamp store
     final boolean isFullyPreBootstrapOrStale(Command command, Participants<?> forKeys)
     {
-        return commandStore().redundantBefore().preBootstrapOrStale(command.txnId(), forKeys) == FULLY;
+        return redundantBefore().preBootstrapOrStale(command.txnId(), forKeys) == FULLY;
     }
 
     public void registerListener(SafeCommand listeningTo, SaveStatus await, TxnId waiting)
