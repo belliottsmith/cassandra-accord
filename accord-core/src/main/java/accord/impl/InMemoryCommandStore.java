@@ -59,10 +59,12 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.Commands;
+import accord.local.DurableBefore;
 import accord.local.KeyHistory;
 import accord.local.Node;
 import accord.local.NodeTimeService;
 import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.RedundantStatus;
 import accord.local.RejectBefore;
 import accord.local.SafeCommand;
@@ -799,6 +801,22 @@ public abstract class InMemoryCommandStore extends CommandStore
         {
             super.setRangesForEpoch(rangesForEpoch);
             ranges = rangesForEpoch;
+        }
+
+        @Override
+        public void upsertRedundantBefore(RedundantBefore addRedundantBefore)
+        {
+            RedundantBefore redundantBefore = commandStore().unsafeGetRedundantBefore();
+            redundantBefore = RedundantBefore.merge(redundantBefore, addRedundantBefore);
+            unsafeSetRedundantBefore(redundantBefore);
+        }
+
+        @Override
+        public void upsertDurableBefore(DurableBefore addDurableBefore)
+        {
+            DurableBefore durableBefore = commandStore().unsafeGetDurableBefore();
+            durableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
+            unsafeSetDurableBefore(durableBefore);
         }
 
         @Override

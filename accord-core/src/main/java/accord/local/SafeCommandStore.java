@@ -237,14 +237,17 @@ public abstract class SafeCommandStore
      * Methods that implementors can use to capture changes to auxiliary collections:
      */
 
-    public void upsertRedundantBefore(RedundantBefore addRedundantBefore)
+    public abstract void upsertRedundantBefore(RedundantBefore addRedundantBefore);
+    public abstract void upsertDurableBefore(DurableBefore addDurableBefore);
+
+    protected void unsafeSetRedundantBefore(RedundantBefore newRedundantBefore)
     {
-        commandStore().upsertRedundantBefore(addRedundantBefore);
+        commandStore().unsafeSetRedundantBefore(newRedundantBefore);
     }
 
-    public void upsertDurableBefore(DurableBefore addDurableBefore)
+    protected void unsafeSetDurableBefore(DurableBefore newDurableBefore)
     {
-        commandStore().upsertDurableBefore(addDurableBefore);
+        commandStore().unsafeSetDurableBefore(newDurableBefore);
     }
 
     public void setBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)

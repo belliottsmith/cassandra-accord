@@ -242,20 +242,9 @@ public abstract class CommandStore implements AgentExecutor
 
     protected abstract void registerHistoricalTransactions(Deps deps, SafeCommandStore safeStore);
 
-    protected void upsertDurableBefore(DurableBefore addDurableBefore)
-    {
-        durableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
-    }
-
     protected void unsafeSetRejectBefore(RejectBefore newRejectBefore)
     {
         this.rejectBefore = newRejectBefore;
-    }
-
-    // Should be called _only_ via safe command store
-    protected void upsertRedundantBefore(RedundantBefore addRedundantBefore)
-    {
-        redundantBefore = RedundantBefore.merge(redundantBefore, addRedundantBefore);
     }
 
     protected void unsafeSetDurableBefore(DurableBefore newDurableBefore)
