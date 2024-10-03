@@ -20,7 +20,6 @@ package accord.impl;
 
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
-import accord.local.CommandStore;
 import accord.local.SafeCommandStore;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
