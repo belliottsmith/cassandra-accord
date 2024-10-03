@@ -239,13 +239,12 @@ public abstract class SafeCommandStore
 
     public void upsertRedundantBefore(RedundantBefore addRedundantBefore)
     {
-        RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore(), addRedundantBefore);
-        unsafeSetRedundantBefore(newRedundantBefore);
+        commandStore().upsertRedundantBefore(addRedundantBefore);
     }
 
-    protected void unsafeSetRedundantBefore(RedundantBefore newRedundantBefore)
+    public void upsertDurableBefore(DurableBefore addDurableBefore)
     {
-        commandStore().unsafeSetRedundantBefore(newRedundantBefore);
+        commandStore().upsertDurableBefore(addDurableBefore);
     }
 
     public void setBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)
