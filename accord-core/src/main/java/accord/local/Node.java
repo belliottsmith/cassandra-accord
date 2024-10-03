@@ -88,6 +88,7 @@ import accord.utils.DeterministicSet;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 import accord.utils.PersistentField;
+import accord.utils.PersistentField.Persister;
 import accord.utils.RandomSource;
 import accord.utils.SortedList;
 import accord.utils.SortedListMap;
@@ -181,7 +182,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
                 Supplier<DataStore> dataSupplier, ShardDistributor shardDistributor, Agent agent, RandomSource random, Scheduler scheduler, TopologySorter.Supplier topologySorter,
                 Function<Node, RemoteListeners> remoteListenersFactory, Function<Node, RequestTimeouts> requestTimeoutsFactory, Function<Node, ProgressLog.Factory> progressLogFactory,
                 Function<Node, LocalListeners.Factory> localListenersFactory, CommandStores.Factory factory, CoordinationAdapter.Factory coordinationAdapters,
-                BiFunction<DurableBefore, DurableBefore, AsyncResult<Void>> persistDurableBefore,
+                Persister<DurableBefore, DurableBefore> durableBeforePersister,
                 LocalConfig localConfig)
     {
         this.id = id;
@@ -199,10 +200,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         this.now = new AtomicReference<>(Timestamp.fromValues(topology.epoch(), nowSupplier.getAsLong(), id));
         this.agent = agent;
         this.random = random;
-        this.persistDurableBefore = new PersistentField<>(() -> durableBefore, DurableBefore::merge, persistDurableBefore, newDurableBefore -> durableBefore = newDurableBefore);
+        this.persistDurableBefore = new PersistentField<>(() -> durableBefore, DurableBefore::merge, durableBeforePersister, newDurableBefore -> durableBefore = newDurableBefore);
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         // TODO review these leak a reference to an object that hasn't finished construction, possibly to other threads
         configService.registerListener(this);
+        this.persistDurableBefore.load();
     }
 
     public LocalConfig localConfig()

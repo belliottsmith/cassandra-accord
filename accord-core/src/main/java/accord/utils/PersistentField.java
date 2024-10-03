@@ -34,6 +34,12 @@ import accord.utils.async.AsyncResults;
 // need to be merged and ordered
 public class PersistentField<Input, Saved>
 {
+    public interface Persister<Input, Saved>
+    {
+        AsyncResult<?> persist(Input addValue, Saved newValue);
+        Saved load();
+    }
+
     private static class Pending<Saved>
     {
         final int id;
@@ -51,7 +57,7 @@ public class PersistentField<Input, Saved>
     @Nonnull
     private final BiFunction<Input, Saved, Saved> merge;
     @Nonnull
-    private final BiFunction<Input, Saved, AsyncResult<Void>> persist;
+    private final Persister<Input, Saved> persister;
     @Nonnull
     private final Consumer<Saved> set;
 
@@ -60,15 +66,20 @@ public class PersistentField<Input, Saved>
     private final ArrayDeque<Pending<Saved>> pending = new ArrayDeque<>();
     private final TreeSet<Integer> complete = new TreeSet<>();
 
-    public PersistentField(@Nonnull Supplier<Saved> currentValue, @Nonnull BiFunction<Input, Saved, Saved> merge, @Nonnull BiFunction<Input, Saved, AsyncResult<Void>> persist, @Nullable Consumer<Saved> set)
+    public PersistentField(@Nonnull Supplier<Saved> currentValue, @Nonnull BiFunction<Input, Saved, Saved> merge, @Nonnull Persister<Input, Saved> persister, @Nullable Consumer<Saved> set)
     {
         Invariants.nonNull(currentValue, "currentValue cannot be null");
-        Invariants.nonNull(persist, "persist cannot be null");
+        Invariants.nonNull(persister, "persist cannot be null");
         Invariants.nonNull(set, "set cannot be null");
         this.currentValue = currentValue;
         this.merge = merge;
-        this.persist = persist;
+        this.persister = persister;
         this.set = set;
+    }
+
+    public void load()
+    {
+        set.accept(persister.load());
     }
 
     public synchronized AsyncResult<?> mergeAndUpdate(@Nonnull Input inputValue)
@@ -93,7 +104,7 @@ public class PersistentField<Input, Saved>
         int id = ++nextId;
         pending.add(new Pending<>(id, newValue));
 
-        AsyncResult<Void> pendingWrite = persist.apply(inputValue, newValue);
+        AsyncResult<?> pendingWrite = persister.persist(inputValue, newValue);
         pendingWrite.addCallback((success, fail) -> {
             synchronized (this)
             {

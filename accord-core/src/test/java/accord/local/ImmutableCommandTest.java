@@ -110,7 +110,7 @@ public class ImmutableCommandTest
                              SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultRequestTimeouts::new, ignore -> ignore2 -> new NoOpProgressLog(), DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
-                             (addDurableBefore, newDurableBefore) -> AsyncResults.success(null),
+                             DurableBefore.NOOP_PERSISTER,
                              localConfig);
         awaitUninterruptibly(node.unsafeStart());
         node.onTopologyUpdate(storeSupport.local.get(), true);

@@ -45,6 +45,7 @@ import accord.impl.DefaultRemoteListeners;
 import accord.impl.SizeOfIntersectionSorter;
 import accord.impl.TestAgent;
 import accord.local.AgentExecutor;
+import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.ShardDistributor;
@@ -142,7 +143,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                              DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.SingleThread::new,
                              new CoordinationAdapter.DefaultFactory(),
-                             (addDurableBefore, newDurableBefore) -> AsyncResults.success(null),
+                             DurableBefore.NOOP_PERSISTER,
                              localConfig);
         awaitUninterruptibly(node.unsafeStart());
         node.onTopologyUpdate(topology, true);

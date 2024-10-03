@@ -79,6 +79,7 @@ import accord.impl.progresslog.DefaultProgressLogs;
 import accord.local.AgentExecutor;
 import accord.local.Command;
 import accord.local.CommandStore;
+import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.SaveStatus;
@@ -474,7 +475,7 @@ public class Cluster implements Scheduler
                                      nodeExecutor.agent(),
                                      randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultRequestTimeouts::new,
                                      DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, isLoadedCheck, journal), new CoordinationAdapter.DefaultFactory(),
-                                     (addDurableBefore, newDurableBefore) -> AsyncResults.success(null), localConfig);
+                                     DurableBefore.NOOP_PERSISTER, localConfig);
                 CoordinateDurabilityScheduling durability = new CoordinateDurabilityScheduling(node);
                 // TODO (desired): randomise
                 durability.setFrequency(60, SECONDS);

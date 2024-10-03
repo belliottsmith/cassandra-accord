@@ -50,6 +50,7 @@ import accord.impl.list.ListUpdate;
 import accord.impl.mock.MockCluster;
 import accord.impl.mock.MockConfigurationService;
 import accord.impl.mock.MockStore;
+import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.ShardDistributor;
@@ -198,7 +199,7 @@ public class Utils
                              DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
-                             (addDurableBefore, newDurableBefore) -> AsyncResults.success(null),
+                             DurableBefore.NOOP_PERSISTER,
                              localConfig);
         awaitUninterruptibly(node.unsafeStart());
         return node;
