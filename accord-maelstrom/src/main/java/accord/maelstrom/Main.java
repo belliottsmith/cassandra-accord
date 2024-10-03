@@ -44,7 +44,7 @@ import accord.impl.SizeOfIntersectionSorter;
 import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.NodeTimeService;
+import accord.local.NodeCommandStoreService;
 import accord.local.ShardDistributor;
 import accord.maelstrom.Packet.Type;
 import accord.messages.Callback;
@@ -55,7 +55,9 @@ import accord.messages.Request;
 import accord.topology.Topology;
 import accord.utils.DefaultRandom;
 import accord.utils.ThreadPoolScheduler;
+import accord.utils.async.AsyncResults;
 
+import static accord.local.NodeTimeService.elapsedWrapperFromNonMonotonicSource;
 import static accord.utils.async.AsyncChains.awaitUninterruptibly;
 
 public class Main
@@ -179,12 +181,12 @@ public class Main
             sink = new StdoutSink(System::currentTimeMillis, scheduler, start, init.self, out, err);
             LocalConfig localConfig = LocalConfig.DEFAULT;
             on = new Node(init.self, sink, new SimpleConfigService(topology),
-                          System::currentTimeMillis, NodeTimeService.elapsedWrapperFromNonMonotonicSource(TimeUnit.MILLISECONDS, System::currentTimeMillis),
+                          System::currentTimeMillis, elapsedWrapperFromNonMonotonicSource(TimeUnit.MILLISECONDS, System::currentTimeMillis),
                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                           MaelstromAgent.INSTANCE, new DefaultRandom(), scheduler, SizeOfIntersectionSorter.SUPPLIER,
                           DefaultRemoteListeners::new, DefaultRequestTimeouts::new, DefaultProgressLogs::new, DefaultLocalListeners.Factory::new,
                           InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
-                          localConfig);
+                          (addDurableBefore, newDurableBefore) -> AsyncResults.success(null), localConfig);
             awaitUninterruptibly(on.unsafeStart());
             err.println("Initialized node " + init.self);
             err.flush();

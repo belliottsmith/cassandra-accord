@@ -52,7 +52,6 @@ import accord.impl.mock.MockConfigurationService;
 import accord.impl.mock.MockStore;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.NodeTimeService;
 import accord.local.ShardDistributor;
 import accord.primitives.Keys;
 import accord.primitives.Range;
@@ -67,9 +66,11 @@ import accord.utils.EpochFunction;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.ThreadPoolScheduler;
+import accord.utils.async.AsyncResults;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ThrowingRunnable;
 
+import static accord.local.NodeTimeService.elapsedWrapperFromNonMonotonicSource;
 import static accord.utils.async.AsyncChains.awaitUninterruptibly;
 
 public class Utils
@@ -184,7 +185,7 @@ public class Utils
                              messageSink,
                              new MockConfigurationService(messageSink, EpochFunction.noop(), topology),
                              clock,
-                             NodeTimeService.elapsedWrapperFromNonMonotonicSource(TimeUnit.MICROSECONDS, clock),
+                             elapsedWrapperFromNonMonotonicSource(TimeUnit.MICROSECONDS, clock),
                              () -> store,
                              new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()),
                              agent,
@@ -197,6 +198,7 @@ public class Utils
                              DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
+                             (addDurableBefore, newDurableBefore) -> AsyncResults.success(null),
                              localConfig);
         awaitUninterruptibly(node.unsafeStart());
         return node;
@@ -219,6 +221,6 @@ public class Utils
 
     public static TopologyManager testTopologyManager(TopologySorter.Supplier sorter, Id node)
     {
-        return new TopologyManager(sorter, new TestAgent.RethrowAgent(), node, Scheduler.NEVER_RUN_SCHEDULED, NodeTimeService.elapsedWrapperFromNonMonotonicSource(TimeUnit.MILLISECONDS, () -> 0), LocalConfig.DEFAULT);
+        return new TopologyManager(sorter, new TestAgent.RethrowAgent(), node, Scheduler.NEVER_RUN_SCHEDULED, elapsedWrapperFromNonMonotonicSource(TimeUnit.MILLISECONDS, () -> 0), LocalConfig.DEFAULT);
     }
 }

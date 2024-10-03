@@ -427,12 +427,6 @@ public class RemoteListenersTest
             unsafeUpsertRedundantBefore(addRedundantBefore);
         }
 
-        @Override
-        public void upsertDurableBefore(DurableBefore addDurableBefore)
-        {
-            unsafeUpsertDurableBefore(addDurableBefore);
-        }
-
         @Override public <P1, T> T mapReduceActive(Unseekables<?> keys, @Nullable Timestamp withLowerTxnId, Txn.Kind.Kinds kinds, CommandFunction<P1, T, T> map, P1 p1, T initialValue) { return null; }
         @Override public <P1, T> T mapReduceFull(Unseekables<?> keys, TxnId testTxnId, Txn.Kind.Kinds testKind, TestStartedAt testStartedAt, TestDep testDep, TestStatus testStatus, CommandFunction<P1, T, T> map, P1 p1, T initialValue) { return null; }
         @Override public DataStore dataStore() { return null; }

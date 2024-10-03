@@ -775,12 +775,6 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void upsertDurableBefore(DurableBefore addDurableBefore)
-        {
-            unsafeUpsertDurableBefore(addDurableBefore);
-        }
-
-        @Override
         protected SafeCommandsForKey getInternalIfLoadedAndInitialised(RoutingKey key)
         {
             if (key.equals(cfk.key()))
