@@ -806,17 +806,13 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         public void upsertRedundantBefore(RedundantBefore addRedundantBefore)
         {
-            RedundantBefore redundantBefore = commandStore().unsafeGetRedundantBefore();
-            redundantBefore = RedundantBefore.merge(redundantBefore, addRedundantBefore);
-            unsafeSetRedundantBefore(redundantBefore);
+            unsafeUpsertRedundantBefore(addRedundantBefore);
         }
 
         @Override
         public void upsertDurableBefore(DurableBefore addDurableBefore)
         {
-            DurableBefore durableBefore = commandStore().unsafeGetDurableBefore();
-            durableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
-            unsafeSetDurableBefore(durableBefore);
+            unsafeUpsertDurableBefore(addDurableBefore);
         }
 
         @Override

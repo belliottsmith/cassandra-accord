@@ -257,6 +257,16 @@ public abstract class CommandStore implements AgentExecutor
         redundantBefore = newRedundantBefore;
     }
 
+    protected void unsafeUpsertDurableBefore(DurableBefore addDurableBefore)
+    {
+        durableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
+    }
+
+    protected void unsafeUpsertRedundantBefore(RedundantBefore addRedundantBefore)
+    {
+        redundantBefore = RedundantBefore.merge(redundantBefore, addRedundantBefore);
+    }
+
     /**
      * This method may be invoked on a non-CommandStore thread
      */

@@ -245,9 +245,19 @@ public abstract class SafeCommandStore
         commandStore().unsafeSetRedundantBefore(newRedundantBefore);
     }
 
+    protected void unsafeUpsertRedundantBefore(RedundantBefore addRedundantBefore)
+    {
+        commandStore().unsafeUpsertRedundantBefore(addRedundantBefore);
+    }
+
     protected void unsafeSetDurableBefore(DurableBefore newDurableBefore)
     {
         commandStore().unsafeSetDurableBefore(newDurableBefore);
+    }
+
+    protected void unsafeUpsertDurableBefore(DurableBefore addDurableBefore)
+    {
+        commandStore().unsafeUpsertDurableBefore(addDurableBefore);
     }
 
     public void setBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)
