@@ -587,7 +587,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
     public TxnId minGcBefore(Routables<?> participants)
     {
-        return foldl(participants, Entry::minGcBefore, null, ignore -> false);
+        return TxnId.nonNullOrMax(TxnId.NONE, foldl(participants, Entry::minGcBefore, null, ignore -> false));
     }
 
     /**
