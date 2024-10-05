@@ -798,6 +798,16 @@ public class ArrayBuffers
         }
 
         @Override
+        public E set(int index, E value)
+        {
+            if (index >= size)
+                throw new IndexOutOfBoundsException();
+            E prev = (E) buffer[index];
+            buffer[index] = value;
+            return prev;
+        }
+
+        @Override
         public int size()
         {
             return size;
