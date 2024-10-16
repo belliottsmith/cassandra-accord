@@ -62,6 +62,7 @@ import accord.coordinate.CoordinationFailed;
 import accord.coordinate.MaybeRecover;
 import accord.coordinate.Outcome;
 import accord.coordinate.RecoverWithRoute;
+import accord.impl.DurabilityScheduling;
 import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
@@ -170,6 +171,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     // TODO (expected, consider): this really needs to be thought through some more, as it needs to be per-instance in some cases, and per-node in others
     private final Scheduler scheduler;
+    private final DurabilityScheduling durabilityScheduling;
 
     // TODO (expected, liveness): monitor the contents of this collection for stalled coordination, and excise them
     private final Map<TxnId, AsyncResult<? extends Outcome>> coordinating = new ConcurrentHashMap<>();
@@ -202,6 +204,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         this.random = random;
         this.persistDurableBefore = new PersistentField<>(() -> durableBefore, DurableBefore::merge, durableBeforePersister, this::setPersistedDurableBefore);
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
+        this.durabilityScheduling = new DurabilityScheduling(this);
         // TODO (desired): make frequency configurable
         scheduler.recurring(() -> commandStores.forEachCommandStore(store -> store.progressLog.maybeNotify()), 1, SECONDS);
         scheduler.recurring(timeouts::maybeNotify, 100, MILLISECONDS);
@@ -223,6 +226,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         persistDurableBefore.load();
     }
 
+    public DurabilityScheduling durabilityScheduling()
+    {
+        return durabilityScheduling;
+    }
+
     /**
      * This starts the node for tests and makes sure that the provided topology is acknowledged correctly.  This method is not
      * safe for production systems as it doesn't handle restarts and partially acknowledged histories
@@ -232,6 +240,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public AsyncResult<Void> unsafeStart()
     {
         EpochReady ready = onTopologyUpdateInternal(configService.currentTopology(), false, false);
+        durabilityScheduling.updateTopology();
         ready.coordination.addCallback(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
         configService.acknowledgeEpoch(ready, false);
         return ready.metadata;

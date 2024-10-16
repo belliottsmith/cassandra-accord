@@ -21,6 +21,7 @@ package accord.local;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -152,6 +153,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             Invariants.checkArgument(locallyDecidedAndAppliedOrInvalidatedBefore.equals(TxnId.NONE) || locallyDecidedAndAppliedOrInvalidatedBefore.domain().isRange());
             Invariants.checkArgument(shardAppliedOrInvalidatedBefore.equals(TxnId.NONE) || shardAppliedOrInvalidatedBefore.domain().isRange());
             Invariants.checkArgument(gcBefore.equals(TxnId.NONE) || gcBefore.domain().isRange());
+            Invariants.checkArgument(locallyDecidedAndAppliedOrInvalidatedBefore.compareTo(locallyAppliedOrInvalidatedBefore) <= 0);
+            Invariants.checkArgument(shardAppliedOrInvalidatedBefore.compareTo(shardOnlyAppliedOrInvalidatedBefore) <= 0);
             Invariants.checkArgument(gcBefore.compareTo(shardAppliedOrInvalidatedBefore) <= 0);
         }
 
@@ -215,6 +218,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
             TxnId locallyAppliedOrInvalidatedBefore = TxnId.nonNullOrMax(this.locallyAppliedOrInvalidatedBefore, newGcBefore);
             TxnId shardAppliedOrInvalidatedBefore = TxnId.nonNullOrMax(this.shardAppliedOrInvalidatedBefore, newGcBefore);
+            TxnId shardOnlyAppliedOrInvalidatedBefore = TxnId.nonNullOrMax(this.shardOnlyAppliedOrInvalidatedBefore, newGcBefore);
             return new Entry(range, startOwnershipEpoch, endOwnershipEpoch, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore, shardAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore, newGcBefore, bootstrappedAt, staleUntilAtLeast);
         }
 
@@ -299,26 +303,20 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return safeToRead;
         }
 
-        static TxnId minGcBefore(Entry entry, @Nullable TxnId minGcBefore)
+        static TxnId min(Entry entry, @Nullable TxnId min, Function<Entry, TxnId> get)
         {
             if (entry == null)
-                return minGcBefore;
+                return min;
 
-            if (minGcBefore == null)
-                return entry.gcBefore;
-
-            return TxnId.min(minGcBefore, entry.gcBefore);
+            return TxnId.nonNullOrMin(min, get.apply(entry));
         }
 
-        static TxnId minLocallyAppliedOrInvalidatedBefore(Entry entry, @Nullable TxnId minLocallyAppliedOrInvalidatedBefore)
+        static TxnId max(Entry entry, @Nullable TxnId max, Function<Entry, TxnId> get)
         {
             if (entry == null)
-                return minLocallyAppliedOrInvalidatedBefore;
+                return max;
 
-            if (minLocallyAppliedOrInvalidatedBefore == null)
-                return entry.locallyAppliedOrInvalidatedBefore;
-
-            return TxnId.min(minLocallyAppliedOrInvalidatedBefore, entry.locallyAppliedOrInvalidatedBefore);
+            return TxnId.nonNullOrMax(max, get.apply(entry));
         }
 
         static Ranges expectToExecute(Entry entry, @Nonnull Ranges executeRanges, TxnId txnId, @Nullable Timestamp executeAt)
@@ -596,14 +594,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         return foldl(ranges, Entry::validateSafeToRead, ranges, forBootstrapAt, null, r -> false);
     }
 
-    public TxnId minGcBefore(Routables<?> participants)
+    public TxnId min(Routables<?> participants, Function<Entry, TxnId> get)
     {
-        return TxnId.nonNullOrMax(TxnId.NONE, foldl(participants, Entry::minGcBefore, null, ignore -> false));
+        return TxnId.nonNullOrMax(TxnId.NONE, foldl(participants, Entry::min, null, get, ignore -> false));
     }
 
-    public TxnId minLocallyAppliedOrInvalidatedBefore(Routables<?> participants)
+    public TxnId max(Routables<?> participants, Function<Entry, TxnId> get)
     {
-        return TxnId.nonNullOrMax(TxnId.NONE, foldl(participants, Entry::minLocallyAppliedOrInvalidatedBefore, null, ignore -> false));
+        return foldl(participants, Entry::max, TxnId.NONE, get, ignore -> false);
     }
 
     /**
@@ -681,7 +679,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return new Entry(a.range.newRange(
                 a.range.start().compareTo(b.range.start()) <= 0 ? a.range.start() : b.range.start(),
                 a.range.end().compareTo(b.range.end()) >= 0 ? a.range.end() : b.range.end()
-            ), a.startOwnershipEpoch, a.endOwnershipEpoch, a.locallyDecidedAndAppliedOrInvalidatedBefore, a.locallyAppliedOrInvalidatedBefore, a.shardAppliedOrInvalidatedBefore, a.shardOnlyAppliedOrInvalidatedBefore, a.gcBefore, a.bootstrappedAt, a.staleUntilAtLeast);
+            ), a.startOwnershipEpoch, a.endOwnershipEpoch, a.locallyAppliedOrInvalidatedBefore, a.locallyDecidedAndAppliedOrInvalidatedBefore, a.shardAppliedOrInvalidatedBefore, a.shardOnlyAppliedOrInvalidatedBefore, a.gcBefore, a.bootstrappedAt, a.staleUntilAtLeast);
         }
 
         @Override

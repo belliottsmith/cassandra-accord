@@ -29,12 +29,10 @@ import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
+import accord.local.cfk.UpdateUnmanagedMode;
 import accord.primitives.AbstractUnseekableKeys;
-import accord.primitives.Deps;
 import accord.primitives.Participants;
-import accord.primitives.Range;
 import accord.primitives.Ranges;
-import accord.primitives.Routable.Domain;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -48,6 +46,8 @@ import accord.utils.Invariants;
 
 import static accord.local.KeyHistory.COMMANDS;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
+import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
+import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applied;
 
@@ -200,7 +200,7 @@ public abstract class SafeCommandStore
 
     public void updateExclusiveSyncPoint(Command prev, Command updated)
     {
-        if (updated.txnId().kind() != Kind.ExclusiveSyncPoint || updated.txnId().domain() != Domain.Range) return;
+        if (updated.txnId().kind() != Kind.ExclusiveSyncPoint || updated.txnId().domain() != Range) return;
         if (updated.route() == null) return;
 
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
@@ -265,11 +265,6 @@ public abstract class SafeCommandStore
         commandStore().unsafeSetRangesForEpoch(rangesForEpoch);
     }
 
-    public void registerHistoricalTransactions(long epoch, Range range, Deps deps)
-    {
-        commandStore().registerHistoricalTransactions(range, deps, this);
-    }
-
     public void updateCommandsForKey(Command prev, Command next)
     {
         if (!CommandsForKey.needsUpdate(prev, next))
@@ -278,7 +273,10 @@ public abstract class SafeCommandStore
         TxnId txnId = next.txnId();
         if (CommandsForKey.manages(txnId)) updateManagedCommandsForKey(this, prev, next);
         if (!CommandsForKey.managesExecution(txnId) && next.hasBeen(Status.Stable) && !next.hasBeen(Status.Truncated) && !prev.hasBeen(Status.Stable))
-            updateUnmanagedExecutionCommandsForKey(this, next);
+            updateUnmanagedCommandsForKey(this, next, REGISTER);
+        // TODO (expected): register deps during Accept phase to more quickly sync epochs
+//        else if (txnId.is(Range) && next.known().deps.hasProposedOrDecidedDeps())
+//            updateUnmanagedCommandsForKey(this, next, REGISTER_DEPS_ONLY);
     }
 
     private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command prev, Command next)
@@ -305,7 +303,7 @@ public abstract class SafeCommandStore
         }
     }
 
-    private static void updateUnmanagedExecutionCommandsForKey(SafeCommandStore safeStore, Command next)
+    private static void updateUnmanagedCommandsForKey(SafeCommandStore safeStore, Command next, UpdateUnmanagedMode mode)
     {
         TxnId txnId = next.txnId();
         // TODO (required): use StoreParticipants.executes()
@@ -320,18 +318,24 @@ public abstract class SafeCommandStore
             for (RoutingKey key : keys)
             {
                 if (!waitingOn.isWaitingOnKey(index++)) continue;
-                safeStore.get(key).registerUnmanaged(safeStore, safeStore.get(txnId));
+                safeStore.get(key).registerUnmanaged(safeStore, safeStore.get(txnId), mode);
+            }
+
+            if (next.txnId().is(Range))
+            {
+                CommandStore commandStore = safeStore.commandStore();
+                Ranges ranges = next.participants().touches.toRanges();
+                commandStore.registerTransitive(safeStore, next.partialDeps().rangeDeps)
+                            .accept(success -> commandStore.markSynced(txnId, ranges));
             }
         }
         else
         {
             safeStore = safeStore;
-            safeStore.commandStore().execute(context, safeStore0 -> updateUnmanagedExecutionCommandsForKey(safeStore0, next))
+            safeStore.commandStore().execute(context, safeStore0 -> updateUnmanagedCommandsForKey(safeStore0, next, mode))
                           .begin(safeStore.commandStore().agent);
         }
     }
-
-
 
     /**
      * Visits keys first and then ranges, both in ascending order.

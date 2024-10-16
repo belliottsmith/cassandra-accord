@@ -93,6 +93,7 @@ public enum RedundantStatus
         NOT_OWNED.merge.put(SHARD_REDUNDANT, SHARD_REDUNDANT);
         WAS_OWNED.merge = new EnumMap<>(RedundantStatus.class);
         WAS_OWNED.merge.put(NOT_OWNED, NOT_OWNED);
+        WAS_OWNED.merge.put(WAS_OWNED, WAS_OWNED);
         WAS_OWNED.merge.put(LIVE, LIVE);
         WAS_OWNED.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
         WAS_OWNED.merge.put(PRE_BOOTSTRAP_OR_STALE, PRE_BOOTSTRAP_OR_STALE);

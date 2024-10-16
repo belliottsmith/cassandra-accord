@@ -63,7 +63,7 @@ import accord.coordinate.Invalidated;
 import accord.coordinate.Preempted;
 import accord.coordinate.Timeout;
 import accord.coordinate.Truncated;
-import accord.impl.CoordinateDurabilityScheduling;
+import accord.impl.DurabilityScheduling;
 import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.DefaultRequestTimeouts;
@@ -317,14 +317,22 @@ public class Cluster implements Scheduler
     @Override
     public Scheduled once(Runnable run, long delay, TimeUnit units)
     {
-        RecurringPendingRunnable result = new RecurringPendingRunnable(null, run, () -> delay, units);
+        RecurringPendingRunnable result = new RecurringPendingRunnable(null, run, () -> delay, units, false);
+        pending.add(result, delay, units);
+        return result;
+    }
+
+    @Override
+    public Scheduled selfRecurring(Runnable run, long delay, TimeUnit units)
+    {
+        RecurringPendingRunnable result = new RecurringPendingRunnable(null, run, () -> delay, units, true);
         pending.add(result, delay, units);
         return result;
     }
 
     public Scheduled recurring(Runnable run, LongSupplier delay, TimeUnit units)
     {
-        RecurringPendingRunnable result = new RecurringPendingRunnable(pending, run, delay, units);
+        RecurringPendingRunnable result = new RecurringPendingRunnable(pending, run, delay, units, true);
         ++recurring;
         result.onCancellation(() -> --recurring);
         pending.add(result, delay.getAsLong(), units);
@@ -455,7 +463,7 @@ public class Cluster implements Scheduler
                 messageListener.onTopologyChange(t);
             };
             TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, topology, topologyUpdates, nodeMap::get, schemaApply);
-            List<CoordinateDurabilityScheduling> durabilityScheduling = new ArrayList<>();
+            List<DurabilityScheduling> durabilityScheduling = new ArrayList<>();
             List<Service> services = new ArrayList<>();
             for (Id id : nodes)
             {
@@ -475,24 +483,24 @@ public class Cluster implements Scheduler
                                      randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultRequestTimeouts::new,
                                      DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, isLoadedCheck, journal), new CoordinationAdapter.DefaultFactory(),
                                      DurableBefore.NOOP_PERSISTER, localConfig);
-                CoordinateDurabilityScheduling durability = new CoordinateDurabilityScheduling(node);
+                DurabilityScheduling durability = node.durabilityScheduling();
                 // TODO (desired): randomise
                 durability.setShardCycleTime(30, SECONDS);
                 durability.setGlobalCycleTime(180, SECONDS);
                 durabilityScheduling.add(durability);
                 nodeMap.put(id, node);
-                durabilityScheduling.add(new CoordinateDurabilityScheduling(node));
+                durabilityScheduling.add(new DurabilityScheduling(node));
                 services.add(new BarrierService(node, randomSupplier.get()));
             }
 
             Runnable updateDurabilityRate;
             {
                 IntSupplier targetSplits           = random.biasedUniformIntsSupplier(1, 16,  2,  4, 4, 16).get();
-                IntSupplier shardCycleTimeSeconds  = random.biasedUniformIntsSupplier(5, 60, 10, 30, 1, 30).get();
+                IntSupplier shardCycleTimeSeconds  = random.biasedUniformIntsSupplier(5, 60, 10, 60, 1, 30).get();
                 IntSupplier globalCycleTimeSeconds = random.biasedUniformIntsSupplier(1, 90, 10, 30,10, 60).get();
                 updateDurabilityRate = () -> {
                     int c = targetSplits.getAsInt();
-                    int s = shardCycleTimeSeconds.getAsInt();
+                    int s = shardCycleTimeSeconds.getAsInt() * topologyFactory.rf;
                     int g = globalCycleTimeSeconds.getAsInt();
                     durabilityScheduling.forEach(d -> {
                         d.setTargetShardSplits(c);
@@ -551,7 +559,6 @@ public class Cluster implements Scheduler
                         DelayedCommandStores.DelayedCommandStore store = (DelayedCommandStores.DelayedCommandStore) s;
                         store.clearForTesting();
                         journal.reconstructAll(store.loader(), store.id());
-                        journal.loadHistoricalTransactions(store::load, store.id());
                     }
                     while (sinks.drain(pred));
                     CommandsForKey.enableLinearizabilityViolationsReporting();
@@ -559,16 +566,17 @@ public class Cluster implements Scheduler
                 });
             }, () -> random.nextInt(1, 10), SECONDS);
 
-            durabilityScheduling.forEach(CoordinateDurabilityScheduling::start);
+            durabilityScheduling.forEach(DurabilityScheduling::start);
             services.forEach(Service::start);
 
-            noMoreWorkSignal.accept(() -> {
+            Runnable stop = () -> {
                 reconfigure.cancel();
                 purge.cancel();
                 restart.cancel();
-                durabilityScheduling.forEach(CoordinateDurabilityScheduling::stop);
+                durabilityScheduling.forEach(DurabilityScheduling::stop);
                 services.forEach(Service::close);
-            });
+            };
+            noMoreWorkSignal.accept(stop);
             readySignal.accept(nodeMap);
 
             Packet next;
@@ -577,10 +585,7 @@ public class Cluster implements Scheduler
 
             while (sinks.processPending());
 
-            chaos.cancel();
-            reconfigure.cancel();
-            durabilityScheduling.forEach(CoordinateDurabilityScheduling::stop);
-            services.forEach(Service::close);
+            stop.run();
             sinks.links = sinks.linkConfig.defaultLinks;
 
             // give progress log et al a chance to finish

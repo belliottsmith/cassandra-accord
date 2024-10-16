@@ -25,9 +25,8 @@ import accord.api.DataStore;
 import javax.annotation.Nullable;
 import accord.api.Agent;
 
-import accord.impl.MajorityDepsFetcher;
 import accord.local.CommandStores.RangesForEpoch;
-import accord.primitives.Range;
+import accord.primitives.RangeDeps;
 import accord.primitives.Routables;
 import accord.primitives.Unseekables;
 import accord.utils.async.AsyncChain;
@@ -35,13 +34,10 @@ import accord.utils.async.AsyncChain;
 import accord.api.ConfigurationService.EpochReady;
 import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
-import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 
 import java.util.AbstractMap.SimpleImmutableEntry;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Set;
@@ -57,11 +53,11 @@ import com.google.common.collect.ImmutableSortedMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.primitives.Deps;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.async.AsyncResults;
+import org.agrona.collections.LongHashSet;
 
 import static accord.api.ConfigurationService.EpochReady.DONE;
 import static accord.local.PreLoadContext.empty;
@@ -174,6 +170,20 @@ public abstract class CommandStore implements AgentExecutor
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
     @Nullable private RejectBefore rejectBefore;
 
+    static class WaitingOnSync
+    {
+        final AsyncResults.SettableResult<Void> whenDone;
+        final Ranges allRanges;
+        Ranges ranges;
+
+        WaitingOnSync(AsyncResults.SettableResult<Void> whenDone, Ranges ranges)
+        {
+            this.whenDone = whenDone;
+            this.allRanges = this.ranges = ranges;
+        }
+    }
+    private final TreeMap<Long, WaitingOnSync> waitingOnSync = new TreeMap<>();
+
     protected CommandStore(int id,
                            NodeCommandStoreService node,
                            Agent agent,
@@ -238,7 +248,7 @@ public abstract class CommandStore implements AgentExecutor
     public abstract <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
     public abstract void shutdown();
 
-    protected abstract void registerHistoricalTransactions(Range range, Deps deps, SafeCommandStore safeStore);
+    protected abstract AsyncResult<Void> registerTransitive(SafeCommandStore safeStore, RangeDeps deps);
 
     protected void unsafeSetRejectBefore(RejectBefore newRejectBefore)
     {
@@ -470,34 +480,11 @@ public abstract class CommandStore implements AgentExecutor
      */
     protected Supplier<EpochReady> sync(Node node, Ranges ranges, long epoch, boolean isLoad)
     {
-        return () -> syncInternal(node, ranges, epoch, isLoad);
-    }
-
-    protected EpochReady syncInternal(Node node, Ranges ranges, long epoch, boolean isLoad)
-    {
-        AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
-        fetchMajorityDeps(whenDone, node, epoch, ranges);
-        return new EpochReady(epoch, DONE, whenDone, whenDone, whenDone);
-    }
-
-    private MajorityDepsFetcher fetcher;
-    protected void cancelFetch(Range range, long epoch)
-    {
-        if (fetcher != null)
-            fetcher.cancel(range, epoch);
-    }
-    // TODO (required, correctness): replace with a simple wait on suitable exclusive sync point(s)
-    private void fetchMajorityDeps(AsyncResult.Settable<Void> coordination, Node node, long epoch, Ranges ranges)
-    {
-        if (fetcher == null) fetcher = new MajorityDepsFetcher(node);
-        List<AsyncResult.Settable<Void>> waiting = new ArrayList<>();
-        for (Range range : ranges)
-        {
-            AsyncResult.Settable<Void> rangeComplete = AsyncResults.settable();
-            fetcher.fetchMajorityDeps(this, range, epoch, rangeComplete);
-            waiting.add(rangeComplete);
-        }
-        AsyncChains.reduce(waiting, (a, b) -> null).begin(coordination.settingCallback());
+        return () -> {
+            AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
+            waitingOnSync.put(epoch, new WaitingOnSync(whenDone, ranges));
+            return new EpochReady(epoch, DONE, whenDone, whenDone, whenDone);
+        };
     }
 
     Supplier<EpochReady> unbootstrap(long epoch, Ranges removedRanges)
@@ -534,7 +521,7 @@ public abstract class CommandStore implements AgentExecutor
     public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges)
     {
         final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
-        TxnId locallyRedundantBefore = safeStore.redundantBefore().minLocallyAppliedOrInvalidatedBefore(slicedRanges);
+        TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, e -> e.locallyAppliedOrInvalidatedBefore);
         RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, globalSyncId, TxnId.NONE, TxnId.NONE);
         safeStore.upsertRedundantBefore(addShardRedundant);
         updatedRedundantBefore(safeStore, globalSyncId, slicedRanges);
@@ -542,7 +529,12 @@ public abstract class CommandStore implements AgentExecutor
 
         if (locallyRedundantBefore.compareTo(globalSyncId) < 0)
         {
-            logger.warn("Trying to markShardDurable we have not yet caught-up to locally. Local: {}, Global: {}, Ranges: {}", locallyRedundantBefore, globalSyncId, slicedRanges);
+            // TODO (expected): if bootstrapping only part of the range, mark the rest for GC; or relax this as can safely GC behind bootstrap
+            TxnId maxBootstrap = safeStore.redundantBefore().max(slicedRanges, e -> e.bootstrappedAt);
+            if (maxBootstrap.compareTo(globalSyncId) >= 0)
+                logger.info("Ignoring markShardDurable for a point we are bootstrapping. Bootstrapping: {}, Global: {}, Ranges: {}", maxBootstrap, globalSyncId, slicedRanges);
+            else
+                logger.warn("Trying to markShardDurable a point we have not yet caught-up to locally. Local: {}, Global: {}, Ranges: {}", locallyRedundantBefore, globalSyncId, slicedRanges);
             return;
         }
 
@@ -562,6 +554,37 @@ public abstract class CommandStore implements AgentExecutor
 
     protected void updatedRedundantBefore(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
+    }
+
+    protected void markSynced(TxnId syncId, Ranges ranges)
+    {
+        if (waitingOnSync.isEmpty())
+            return;
+
+        LongHashSet remove = null;
+        for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+        {
+            if (e.getKey() > syncId.epoch())
+                break;
+
+            Ranges remaining = e.getValue().ranges;
+            Ranges synced = remaining.slice(ranges, Minimal);
+            e.getValue().ranges = remaining = remaining.without(ranges);
+            if (e.getValue().ranges.isEmpty())
+            {
+                logger.info("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), syncId);
+                e.getValue().whenDone.trySuccess(null);
+                if (remove == null)
+                    remove = new LongHashSet();
+                remove.add(e.getKey());
+            }
+            else
+            {
+                logger.info("Completed partial sync for {} on epoch {} using {}; {} still to sync", synced, e.getKey(), syncId, remaining);
+            }
+        }
+        if (remove != null)
+            remove.forEach(waitingOnSync::remove);
     }
 
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard

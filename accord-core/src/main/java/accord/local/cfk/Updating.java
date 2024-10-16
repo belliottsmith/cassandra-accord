@@ -49,15 +49,15 @@ import accord.utils.SortedCursor;
 import static accord.local.KeyHistory.COMMANDS;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
-import static accord.local.cfk.CommandsForKey.InternalStatus.HISTORICAL;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_PRUNED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVELY_KNOWN;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
 import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.CommandsForKey.mayExecute;
-import static accord.local.cfk.Pruning.loadPruned;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
+import static accord.local.cfk.UpdateUnmanagedMode.REGISTER_DEPS_ONLY;
+import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Utils.insertMissing;
 import static accord.local.cfk.Utils.mergeAndFilterMissing;
 import static accord.local.cfk.Utils.missingTo;
@@ -721,18 +721,25 @@ class Updating
 
     static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand)
     {
-        return Updating.updateUnmanaged(cfk, safeCommand, false, null);
+        return Updating.updateUnmanaged(cfk, safeCommand, UPDATE, null);
+    }
+
+    static CommandsForKeyUpdate registerDependencies(CommandsForKey cfk, SafeCommand safeCommand)
+    {
+        return Updating.updateUnmanaged(cfk, safeCommand, REGISTER_DEPS_ONLY, null);
     }
 
     /**
-     * Three modes of operation:
-     *  - {@code register}: inserts any missing dependencies from safeCommand into the collection; may return CommandsForKeyUpdate
-     *  - {@code !register, update == null}: fails if any dependencies are missing; always returns a CommandsForKey
-     *  - {@code !register && update != null}: fails if any dependencies are missing; always returns the original CommandsForKey, and maybe adds a new Unmanaged to {@code update}
+     * Four modes of operation:
+     *  - {@code REGISTER_DEPS_ONLY}: inserts any missing dependencies into the collection; may return CommandsForKeyUpdate for loading pruned commands
+     *  - {@code REGISTER}: inserts any missing dependencies into the collection and inserts the unmanaged command; may return CommandsForKeyUpdate
+     *  - {@code UPDATE, update == null}: fails if any dependencies are missing; always returns a CommandsForKey
+     *  - {@code UPDATE && update != null}: fails if any dependencies are missing; always returns the original CommandsForKey, and maybe adds a new Unmanaged to {@code update}
      */
-    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand, boolean register, @Nullable List<CommandsForKey.Unmanaged> update)
+    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand, UpdateUnmanagedMode mode, @Nullable List<CommandsForKey.Unmanaged> update)
     {
-        Invariants.checkArgument(!register || update == null);
+        boolean register = mode != UPDATE;
+        Invariants.checkArgument(mode == UPDATE || update == null);
         if (safeCommand.current().hasBeen(Status.Truncated))
             return cfk;
 
@@ -851,33 +858,37 @@ class Updating
                 }
                 cachedTxnIds().discard(missing, clearMissingCount);
 
-                CommandsForKey.Unmanaged newPendingRecord;
-                if (waitingToApply)
+                CommandsForKey.Unmanaged[] newUnmanaged = cfk.unmanageds;
+                if (mode != REGISTER_DEPS_ONLY)
                 {
-                    if (executesAt instanceof TxnInfo)
-                        executesAt = ((TxnInfo) executesAt).plainExecuteAt();
-
-                    if (waitingTxnId.awaitsOnlyDeps() && executesAt != null)
+                    CommandsForKey.Unmanaged newPendingRecord;
+                    if (waitingToApply)
                     {
-                        if (executesAt.compareTo(command.waitingOn.executeAtLeast(Timestamp.NONE)) > 0)
+                        if (executesAt instanceof TxnInfo)
+                            executesAt = ((TxnInfo) executesAt).plainExecuteAt();
+
+                        if (waitingTxnId.awaitsOnlyDeps() && executesAt != null)
                         {
-                            Command.WaitingOn.Update waitingOn = new Command.WaitingOn.Update(command.waitingOn);
-                            waitingOn.updateExecuteAtLeast(executesAt);
-                            safeCommand.updateWaitingOn(waitingOn);
+                            if (executesAt.compareTo(command.waitingOn.executeAtLeast(Timestamp.NONE)) > 0)
+                            {
+                                Command.WaitingOn.Update waitingOn = new Command.WaitingOn.Update(command.waitingOn);
+                                waitingOn.updateExecuteAtLeast(executesAt);
+                                safeCommand.updateWaitingOn(waitingOn);
+                            }
                         }
+
+                        newPendingRecord = new CommandsForKey.Unmanaged(APPLY, command.txnId(), executesAt);
+                    }
+                    else newPendingRecord = new CommandsForKey.Unmanaged(COMMIT, command.txnId(), txnIds.get(txnIds.size() - 1));
+
+                    if (update != null)
+                    {
+                        update.add(newPendingRecord);
+                        return cfk;
                     }
 
-                    newPendingRecord = new CommandsForKey.Unmanaged(APPLY, command.txnId(), executesAt);
+                    newUnmanaged = SortedArrays.insert(cfk.unmanageds, newPendingRecord, CommandsForKey.Unmanaged[]::new);
                 }
-                else newPendingRecord = new CommandsForKey.Unmanaged(COMMIT, command.txnId(), txnIds.get(txnIds.size() - 1));
-
-                if (update != null)
-                {
-                    update.add(newPendingRecord);
-                    return cfk;
-                }
-
-                CommandsForKey.Unmanaged[] newUnmanaged = SortedArrays.insert(cfk.unmanageds, newPendingRecord, CommandsForKey.Unmanaged[]::new);
 
                 CommandsForKey result;
                 if (newById == byId) result = new CommandsForKey(cfk, newLoadingPruned, newUnmanaged);
@@ -896,37 +907,5 @@ class Updating
         }
 
         return new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(cfk, new PostProcess.NotifyNotWaiting(null, new TxnId[] { safeCommand.txnId() }));
-    }
-
-    static CommandsForKeyUpdate registerHistorical(CommandsForKey cfk, TxnId txnId)
-    {
-        if (txnId.compareTo(cfk.redundantBefore()) < 0)
-            return cfk;
-
-        int i = Arrays.binarySearch(cfk.byId, txnId);
-        if (i >= 0)
-        {
-            if (cfk.byId[i].status().compareTo(HISTORICAL) >= 0)
-                return cfk;
-            return cfk.update(i, txnId, cfk.byId[i], TxnInfo.create(txnId, HISTORICAL, cfk.mayExecute(txnId), txnId, Ballot.ZERO), false, null);
-        }
-        else if (txnId.compareTo(cfk.prunedBefore()) >= 0)
-        {
-            return cfk.insert(-1 - i, txnId, TxnInfo.create(txnId, HISTORICAL, cfk.mayExecute(txnId), txnId, Ballot.ZERO), false, null);
-        }
-        else if (txnId.compareTo(cfk.safelyPrunedBefore()) < 0)
-        {
-            return cfk;
-        }
-        else
-        {
-            TxnId[] loadingPrunedFor = loadingPrunedFor(cfk.loadingPruned, txnId, null);
-            if (loadingPrunedFor != null && Arrays.binarySearch(loadingPrunedFor, txnId) >= 0)
-                return cfk;
-
-            TxnId[] txnIdArray = new TxnId[] { txnId };
-            Object[] newLoadingPruned = loadPruned(cfk.loadingPruned, txnIdArray, NO_TXNIDS);
-            return PostProcess.LoadPruned.load(txnIdArray, cfk.update(newLoadingPruned));
-        }
     }
 }

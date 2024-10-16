@@ -242,14 +242,16 @@ public class Cluster implements Scheduler
     class CancellableRunnable implements Runnable, Scheduled
     {
         final boolean recurring;
+        final boolean selfRecurring;
         final long delay;
         final TimeUnit units;
         Runnable run;
 
-        CancellableRunnable(Runnable run, boolean recurring, long delay, TimeUnit units)
+        CancellableRunnable(Runnable run, boolean recurring, boolean selfRecurring, long delay, TimeUnit units)
         {
             this.run = run;
             this.recurring = recurring;
+            this.selfRecurring = selfRecurring;
             this.delay = delay;
             this.units = units;
         }
@@ -260,7 +262,7 @@ public class Cluster implements Scheduler
             if (run != null)
             {
                 run.run();
-                if (recurring) pending.add(this, delay, units);
+                if (recurring && !selfRecurring) pending.add(this, delay, units);
                 else run = null;
             }
         }
@@ -281,7 +283,7 @@ public class Cluster implements Scheduler
     @Override
     public Scheduled recurring(Runnable run, long delay, TimeUnit units)
     {
-        CancellableRunnable result = new CancellableRunnable(run, true, delay, units);
+        CancellableRunnable result = new CancellableRunnable(run, true, false, delay, units);
         ++recurring;
         pending.add(result, delay, units);
         return result;
@@ -290,7 +292,16 @@ public class Cluster implements Scheduler
     @Override
     public Scheduled once(Runnable run, long delay, TimeUnit units)
     {
-        CancellableRunnable result = new CancellableRunnable(run, false, delay, units);
+        CancellableRunnable result = new CancellableRunnable(run, false, false, delay, units);
+        pending.add(result, delay, units);
+        return result;
+    }
+
+    @Override
+    public Scheduled selfRecurring(Runnable run, long delay, TimeUnit units)
+    {
+        CancellableRunnable result = new CancellableRunnable(run, true, true, delay, units);
+        ++recurring;
         pending.add(result, delay, units);
         return result;
     }

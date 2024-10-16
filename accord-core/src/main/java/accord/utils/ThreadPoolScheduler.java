@@ -88,6 +88,12 @@ public class ThreadPoolScheduler implements Scheduler
     }
 
     @Override
+    public Scheduled selfRecurring(Runnable run, long delay, TimeUnit units)
+    {
+        return once(run, delay, units);
+    }
+
+    @Override
     public void now(Runnable run)
     {
         exec.execute(wrap(run));

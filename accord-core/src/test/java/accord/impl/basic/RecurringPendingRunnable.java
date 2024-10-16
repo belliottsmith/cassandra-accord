@@ -28,15 +28,17 @@ class RecurringPendingRunnable implements PendingRunnable, Scheduled
     final PendingQueue requeue;
     final LongSupplier delay;
     final TimeUnit units;
+    final boolean isRecurring;
     Runnable run;
     Runnable onCancellation;
 
-    RecurringPendingRunnable(PendingQueue requeue, Runnable run, LongSupplier delay, TimeUnit units)
+    RecurringPendingRunnable(PendingQueue requeue, Runnable run, LongSupplier delay, TimeUnit units, boolean isRecurring)
     {
         this.requeue = requeue;
         this.run = run;
         this.delay = delay;
         this.units = units;
+        this.isRecurring = isRecurring;
     }
 
     @Override

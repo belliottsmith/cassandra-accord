@@ -71,10 +71,10 @@ import accord.local.SafeCommandStore;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.AbstractRanges;
 import accord.primitives.AbstractUnseekableKeys;
-import accord.primitives.Deps;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Range;
+import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.RoutableKey;
@@ -91,6 +91,8 @@ import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
+import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
 
 import static accord.local.KeyHistory.COMMANDS;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
@@ -1435,52 +1437,19 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
     }
 
-    @VisibleForTesting
-    public void load(Deps loading)
-    {
-        registerHistoricalTransactions(loading,
-                                       ((key, txnId) -> {
-                                           executeInContext(InMemoryCommandStore.this,
-                                                            PreLoadContext.contextFor(key, COMMANDS),
-                                                            safeStore -> {
-                                                                safeStore.get(key).registerHistorical(safeStore, txnId);
-                                                                return null;
-                                                            });
-                                       }));
-    }
-
     @Override
-    protected void registerHistoricalTransactions(Range range, Deps deps, SafeCommandStore safeStore)
-    {
-        registerHistoricalTransactions(deps, (key, txnId) -> safeStore.get(key).registerHistorical(safeStore, txnId));
-    }
-
-    private void registerHistoricalTransactions(Deps deps, BiConsumer<RoutingKey, TxnId> registerHistorical)
+    protected AsyncResult<Void> registerTransitive(SafeCommandStore safeStore, RangeDeps rangeDeps)
     {
         RangesForEpoch rangesForEpoch = this.rangesForEpoch;
         Ranges allRanges = rangesForEpoch.all();
-        deps.keyDeps.keys().forEach(allRanges, key -> {
-            deps.keyDeps.forEach(key, (txnId, txnIdx) -> {
-                // TODO (desired, efficiency): this can be made more efficient by batching by epoch
-                if (rangesForEpoch.coordinates(txnId).contains(key))
-                    return; // already coordinates, no need to replicate
-                // TODO (required): check this logic, esp. next line, matches C*
-                if (!rangesForEpoch.allSince(txnId.epoch()).contains(key))
-                    return;
-
-                registerHistorical.accept(key, txnId);
-            });
-
-        });
 
         TreeMap<TxnId, RangeCommand> rangeCommands = this.rangeCommands;
         TreeMap<TxnId, Ranges> historicalRangeCommands = historicalRangeCommands();
-        deps.rangeDeps.forEachUniqueTxnId(allRanges, null, (ignore, txnId) -> {
-
+        rangeDeps.forEachUniqueTxnId(allRanges, null, (ignore, txnId) -> {
             if (rangeCommands.containsKey(txnId))
                 return;
 
-            Ranges ranges = deps.rangeDeps.ranges(txnId);
+            Ranges ranges = rangeDeps.ranges(txnId);
             if (rangesForEpoch.coordinates(txnId).intersects(ranges))
                 return; // already coordinates, no need to replicate
             // TODO (required): check this logic, esp. next line, matches C*
@@ -1489,5 +1458,6 @@ public abstract class InMemoryCommandStore extends CommandStore
 
             historicalRangeCommands.merge(txnId, ranges.slice(allRanges), Ranges::with);
         });
+        return AsyncResults.success(null);
     }
 }

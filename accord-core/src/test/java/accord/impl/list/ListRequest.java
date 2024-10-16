@@ -18,6 +18,7 @@
 
 package accord.impl.list;
 
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
@@ -30,7 +31,6 @@ import accord.coordinate.Invalidated;
 import accord.coordinate.Truncated;
 import accord.coordinate.Timeout;
 import accord.impl.MessageListener;
-import accord.impl.basic.Cluster;
 import accord.impl.basic.Packet;
 import accord.impl.basic.SimulatedFault;
 import accord.local.Node;
@@ -166,12 +166,12 @@ public class ListRequest implements Request
                     }
 
                     node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
-                    ((Cluster) node.scheduler()).onDone(() -> checkOnResult(homeKey, id, 0, null));
+                    node.scheduler().once(() -> checkOnResult(homeKey, id, 0, null), 5L, TimeUnit.MINUTES);
                 }
                 else if (fail instanceof SimulatedFault)
                 {
                     node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
-                    ((Cluster) node.scheduler()).onDone(() -> checkOnResult(null, id, 0, null));
+                    node.scheduler().once(() -> checkOnResult(null, id, 0, null), 5L, TimeUnit.MINUTES);
                 }
                 else
                 {

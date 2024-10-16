@@ -28,7 +28,6 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Status;
-import accord.primitives.TxnId;
 
 public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
 {
@@ -88,16 +87,10 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         updateCfk.postProcess(safeStore, prevCfk, command, notifySink);
     }
 
-    public void registerUnmanaged(SafeCommandStore safeStore, SafeCommand unmanaged)
+    public void registerUnmanaged(SafeCommandStore safeStore, SafeCommand unmanaged, UpdateUnmanagedMode mode)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, null, prevCfk, prevCfk.registerUnmanaged(unmanaged));
-    }
-
-    public void registerHistorical(SafeCommandStore safeStore, TxnId txnId)
-    {
-        CommandsForKey prevCfk = current();
-        update(safeStore, null, prevCfk, prevCfk.registerHistorical(txnId));
+        update(safeStore, null, prevCfk, prevCfk.registerUnmanaged(unmanaged, mode));
     }
 
     public void updateRedundantBefore(SafeCommandStore safeStore, RedundantBefore.Entry redundantBefore)

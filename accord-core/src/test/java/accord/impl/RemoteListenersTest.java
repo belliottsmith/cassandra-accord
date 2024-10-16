@@ -51,11 +51,10 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.Range;
+import accord.primitives.RangeDeps;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.local.cfk.SafeCommandsForKey;
-import accord.primitives.Deps;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -65,6 +64,8 @@ import accord.utils.AccordGens;
 import accord.utils.RandomSource;
 import accord.utils.RandomTestRunner;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
 import org.agrona.collections.IntHashSet;
 import org.agrona.collections.ObjectHashSet;
 
@@ -399,8 +400,7 @@ public class RemoteListenersTest
         @Override public AsyncChain<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
         @Override public <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
         @Override public void shutdown() {}
-        @Override protected void registerHistoricalTransactions(Range range, Deps deps, SafeCommandStore safeStore) {}
-
+        @Override protected AsyncResult<Void> registerTransitive(SafeCommandStore safeStore, RangeDeps deps) { return AsyncResults.success(null); }
         @Override public <T> AsyncChain<T> submit(Callable<T> task) { return null; }
     }
 
@@ -434,6 +434,5 @@ public class RemoteListenersTest
         @Override public ProgressLog progressLog() { return null; }
         @Override public NodeCommandStoreService node() { return null; }
         @Override public CommandStores.RangesForEpoch ranges() { return null; }
-        @Override public void registerHistoricalTransactions(long epoch, Range range, Deps deps) { }
     }
 }
