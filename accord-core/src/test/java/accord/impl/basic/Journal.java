@@ -28,7 +28,6 @@ import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
@@ -46,7 +45,6 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
-import accord.primitives.Deps;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Timestamp;
@@ -63,7 +61,6 @@ import static accord.utils.Invariants.illegalState;
 public class Journal
 {
     private final Long2ObjectHashMap<NavigableMap<TxnId, List<Diff>>> diffsPerCommandStore = new Long2ObjectHashMap<>();
-    private final Map<Integer, List<Deps>> historicalTransactions = new HashMap<>();
 
     private final Node.Id id;
 
@@ -153,15 +150,6 @@ public class Journal
     {
         Each,
         Last
-    }
-
-    public void loadHistoricalTransactions(Consumer<Deps> consumer, int commandStoreId)
-    {
-        List<Deps> depsList = historicalTransactions.get(commandStoreId);
-        if (depsList == null)
-            return;
-        for (Deps deps : depsList)
-            consumer.accept(deps);
     }
 
     public Command reconstruct(int commandStoreId, TxnId txnId)
@@ -337,11 +325,6 @@ public class Journal
             case Invalidated:
                 return Command.Truncated.invalidated(attrs.txnId());
         }
-    }
-
-    public void registerHistoricalTransactions(int commandStoreId, Deps deps)
-    {
-        this.historicalTransactions.computeIfAbsent(commandStoreId, (k) -> new ArrayList<>()).add(deps);
     }
 
     public void onExecute(int commandStoreId, Command before, Command after, boolean isPrimary)

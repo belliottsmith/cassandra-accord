@@ -55,7 +55,6 @@ import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.local.ShardDistributor;
-import accord.primitives.Deps;
 import accord.primitives.Range;
 import accord.primitives.RoutableKey;
 import accord.primitives.Txn;
@@ -285,13 +284,6 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         protected InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
         {
             return new DelayedSafeStore(this, ranges, context, commands, timestampsForKey, commandsForKeys);
-        }
-
-        @Override
-        protected void registerHistoricalTransactions(Range range, Deps deps, SafeCommandStore safeStore)
-        {
-            journal.registerHistoricalTransactions(id(), deps);
-            super.registerHistoricalTransactions(range, deps, safeStore);
         }
 
         @Override

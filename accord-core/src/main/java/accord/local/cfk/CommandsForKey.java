@@ -69,6 +69,7 @@ import static accord.local.cfk.Pruning.isWaitingOnPruned;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
 import static accord.local.cfk.Pruning.pruneById;
 import static accord.local.cfk.Pruning.prunedBeforeId;
+import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Updating.insertOrUpdate;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
@@ -1414,9 +1415,10 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return new CommandsForKey(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, newLoadingPruned, prunedBeforeById, unmanageds);
     }
 
-    CommandsForKeyUpdate registerUnmanaged(SafeCommand safeCommand)
+    CommandsForKeyUpdate registerUnmanaged(SafeCommand safeCommand, UpdateUnmanagedMode mode)
     {
-        return Updating.updateUnmanaged(this, safeCommand, true, null);
+        Invariants.checkState(mode != UPDATE);
+        return Updating.updateUnmanaged(this, safeCommand, mode, null);
     }
 
     void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command command, NotifySink notifySink)
@@ -1698,11 +1700,6 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     public CommandsForKey maybePrune(int pruneInterval, long minHlcDelta)
     {
         return Pruning.maybePrune(this, pruneInterval, minHlcDelta);
-    }
-
-    CommandsForKeyUpdate registerHistorical(TxnId txnId)
-    {
-        return Updating.registerHistorical(this, txnId);
     }
 
     int insertPos(Timestamp timestamp)

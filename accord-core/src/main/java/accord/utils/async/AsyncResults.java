@@ -33,7 +33,7 @@ import static accord.utils.Invariants.illegalState;
 
 public class AsyncResults
 {
-    public static final AsyncResult<Void> SUCCESS_VOID = success(null);
+    public static final AsyncResult SUCCESS_NULL = new Immediate<>(null);
 
     private AsyncResults() {}
 
@@ -340,6 +340,9 @@ public class AsyncResults
 
     public static <V> AsyncResult<V> success(V value)
     {
+        if (value == null)
+            return SUCCESS_NULL;
+
         return new Immediate<>(value);
     }
 

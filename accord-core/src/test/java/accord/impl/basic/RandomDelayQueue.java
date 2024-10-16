@@ -123,7 +123,7 @@ public class RandomDelayQueue implements PendingQueue
     public void addNoDelay(Pending item)
     {
         queue.add(new Item(now, seq++, item));
-        if (item instanceof RecurringPendingRunnable)
+        if (isRecurring(item))
             ++recurring;
     }
 
@@ -133,16 +133,16 @@ public class RandomDelayQueue implements PendingQueue
         if (delay < 0)
             throw illegalArgument("Delay must be positive or 0, but given " + delay);
         queue.add(new Item(now + units.toMillis(delay) + jitterMillis.getAsLong(), seq++, item));
-        if (item instanceof RecurringPendingRunnable)
+        if (isRecurring(item))
             ++recurring;
     }
 
     @Override
     public boolean remove(Pending item)
     {
-        if (item instanceof RecurringPendingRunnable)
+        if (isRecurring(item))
             --recurring;
-        return queue.remove(item);
+        return queue.removeIf(i -> i.item == item);
     }
 
     @Override
@@ -152,7 +152,7 @@ public class RandomDelayQueue implements PendingQueue
         if (item == null)
             return null;
 
-        if (item.item instanceof RecurringPendingRunnable)
+        if (isRecurring(item.item))
             --recurring;
 
         now = item.time;
@@ -173,7 +173,7 @@ public class RandomDelayQueue implements PendingQueue
             else
             {
                 queue.add(item);
-                if (item.item instanceof RecurringPendingRunnable)
+                if (isRecurring(item.item))
                     ++recurring;
             }
         }
@@ -300,5 +300,10 @@ public class RandomDelayQueue implements PendingQueue
         {
             this.seed = seed;
         }
+    }
+
+    private static boolean isRecurring(Pending pending)
+    {
+        return pending instanceof RecurringPendingRunnable && ((RecurringPendingRunnable) pending).isRecurring;
     }
 }

@@ -46,6 +46,7 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATE
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.maxContiguousManagedAppliedIndex;
+import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Updating.updateUnmanaged;
 import static accord.local.cfk.Updating.updateUnmanagedAsync;
 import static accord.local.cfk.Utils.findApply;
@@ -198,7 +199,7 @@ abstract class PostProcess
                 SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
                 if (safeCommand != null)
                 {
-                    CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, false, addUnmanageds);
+                    CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, UPDATE, addUnmanageds);
                     if (update != cfk)
                     {
                         Invariants.checkState(update.cfk() == cfk);

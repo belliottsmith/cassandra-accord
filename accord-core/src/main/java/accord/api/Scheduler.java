@@ -54,6 +54,12 @@ public interface Scheduler
         }
 
         @Override
+        public Scheduled selfRecurring(Runnable run, long delay, TimeUnit units)
+        {
+            return CANCELLED;
+        }
+
+        @Override
         public void now(Runnable run)
         {
             run.run();
@@ -70,5 +76,6 @@ public interface Scheduler
     Scheduled recurring(Runnable run, long delay, TimeUnit units);
 
     Scheduled once(Runnable run, long delay, TimeUnit units);
+    Scheduled selfRecurring(Runnable run, long delay, TimeUnit units);
     void now(Runnable run);
 }

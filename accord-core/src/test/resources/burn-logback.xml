@@ -36,6 +36,8 @@
         </filter>
     </appender>
 
+    <logger name="accord.impl.DurabilityScheduling" level="ERROR"/>
+
     <root level="INFO">
         <appender-ref ref="FILE"/>
         <appender-ref ref="STDOUT"/>

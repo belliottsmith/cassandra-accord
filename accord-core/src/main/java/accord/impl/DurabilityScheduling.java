@@ -29,6 +29,7 @@ import com.google.common.primitives.Ints;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.ConfigurationService;
 import accord.api.Scheduler;
 import accord.coordinate.CoordinateGloballyDurable;
 import accord.coordinate.CoordinationFailed;
@@ -46,12 +47,13 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
+import org.agrona.BitUtil;
 
 import static accord.coordinate.CoordinateShardDurable.coordinate;
 import static accord.coordinate.CoordinateSyncPoint.exclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
-import static java.util.concurrent.TimeUnit.MINUTES;
 
 /**
  * Helper methods and classes to invoke coordination to propagate information about durability.
@@ -78,9 +80,9 @@ import static java.util.concurrent.TimeUnit.MINUTES;
  * TODO (expected): do not start new ExclusiveSyncPoint if we have more than X already agreed and not yet applied
  * Didn't go with recurring because it doesn't play well with async execution of these tasks
  */
-public class CoordinateDurabilityScheduling
+public class DurabilityScheduling implements ConfigurationService.Listener
 {
-    private static final Logger logger = LoggerFactory.getLogger(CoordinateDurabilityScheduling.class);
+    private static final Logger logger = LoggerFactory.getLogger(DurabilityScheduling.class);
 
     private final Node node;
     private Scheduler.Scheduled scheduled;
@@ -129,8 +131,15 @@ public class CoordinateDurabilityScheduling
     private final Map<Range, ShardScheduler> shardSchedulers = new HashMap<>();
     private int globalIndex;
 
-    private long nextGlobalSyncTimeMicros;
+    boolean started;
     volatile boolean stop;
+
+    @Override
+    public AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync)
+    {
+        updateTopology(topology);
+        return AsyncResults.success(null);
+    }
 
     private class ShardScheduler
     {
@@ -196,6 +205,7 @@ public class CoordinateDurabilityScheduling
             if (defunct)
                 return;
 
+            Invariants.checkState(index < numberOfSplits);
             long nowMicros = node.elapsed(MICROSECONDS);
             long microsOffset = (index * shardCycleTimeMicros) / numberOfSplits;
             long scheduleAt = cycleStartedAtMicros + microsOffset;
@@ -206,7 +216,7 @@ public class CoordinateDurabilityScheduling
             if (numberOfSplits > targetShardSplits && index % 4 == 0)
             {
                 index /= 4;
-                numberOfSplits /=4;
+                numberOfSplits /= 4;
             }
             scheduleAt(nowMicros, scheduleAt);
         }
@@ -232,6 +242,7 @@ public class CoordinateDurabilityScheduling
             Range range;
             int nextIndex;
             {
+                Invariants.checkState(index < numberOfSplits);
                 int i = index;
                 Range selectRange = null;
                 while (selectRange == null)
@@ -241,12 +252,12 @@ public class CoordinateDurabilityScheduling
             }
 
             Runnable schedule = () -> {
-                // TODO (required): allocate stale HLC from a reservation of HLCs for this purpose
+                // TODO (expected): allocate stale HLC from a reservation of HLCs for this purpose
                 TxnId syncId = node.nextTxnId(ExclusiveSyncPoint, Domain.Range);
                 startShardSync(syncId, Ranges.of(range), nextIndex);
             };
             if (scheduleAt <= nowMicros) schedule.run();
-            else scheduled = node.scheduler().once(schedule, scheduleAt - nowMicros, MICROSECONDS);
+            else scheduled = node.scheduler().selfRecurring(schedule, scheduleAt - nowMicros, MICROSECONDS);
         }
 
         /**
@@ -255,7 +266,7 @@ public class CoordinateDurabilityScheduling
          */
         private void startShardSync(TxnId syncId, Ranges ranges, int nextIndex)
         {
-            scheduled = node.scheduler().once(() -> node.withEpoch(syncId.epoch(), (ignored, withEpochFailure) -> {
+            scheduled = node.scheduler().selfRecurring(() -> node.withEpoch(syncId.epoch(), (ignored, withEpochFailure) -> {
                 if (withEpochFailure != null)
                 {
                     // don't wait on epoch failure - we aren't the cause of any problems
@@ -295,7 +306,7 @@ public class CoordinateDurabilityScheduling
 
         private void coordinateShardDurableAfterExclusiveSyncPoint(Node node, SyncPoint<Range> exclusiveSyncPoint, int nextIndex)
         {
-            scheduled = node.scheduler().once(() -> {
+            scheduled = node.scheduler().selfRecurring(() -> {
                 scheduled = null;
                 node.commandStores().any().execute(() -> {
                     coordinate(node, exclusiveSyncPoint)
@@ -353,14 +364,14 @@ public class CoordinateDurabilityScheduling
         }
     }
 
-    public CoordinateDurabilityScheduling(Node node)
+    public DurabilityScheduling(Node node)
     {
         this.node = node;
     }
 
     public void setTargetShardSplits(int targetShardSplits)
     {
-        this.targetShardSplits = targetShardSplits;
+        this.targetShardSplits = BitUtil.findNextPositivePowerOfTwo(targetShardSplits);
     }
 
     public void setDefaultRetryDelay(long retryDelay, TimeUnit units)
@@ -399,16 +410,21 @@ public class CoordinateDurabilityScheduling
     public synchronized void start()
     {
         Invariants.checkState(!stop); // cannot currently restart safely
+        started = true;
+        updateTopology();
         long nowMicros = node.elapsed(MICROSECONDS);
-        setNextGlobalSyncTime(nowMicros);
-        scheduled = node.scheduler().recurring(this::run, 1L, MINUTES);
+        long scheduleAt = computeNextGlobalSyncTime(nowMicros);
+        scheduled = node.scheduler().selfRecurring(this::run, scheduleAt - nowMicros, MICROSECONDS);
     }
 
-    public void stop()
+    public synchronized void stop()
     {
         if (scheduled != null)
             scheduled.cancel();
         stop = true;
+        for (ShardScheduler scheduler : shardSchedulers.values())
+            scheduler.markDefunct();
+        shardSchedulers.clear();
     }
 
     /**
@@ -419,17 +435,18 @@ public class CoordinateDurabilityScheduling
         if (stop)
             return;
 
-        // TODO (expected): invoke this as soon as topology is updated in topology manager
-        updateTopology();
-        if (currentGlobalTopology == null || currentGlobalTopology.size() == 0)
-            return;
-
-        // TODO (expected): schedule this directly based on the global sync frequency - this is an artefact of previously scheduling shard syncs as well
         long nowMicros = node.elapsed(MICROSECONDS);
-        if (nextGlobalSyncTimeMicros <= nowMicros)
+        try
         {
+            if (currentGlobalTopology == null || currentGlobalTopology.size() == 0)
+                return;
+
             startGlobalSync();
-            setNextGlobalSyncTime(nowMicros);
+        }
+        finally
+        {
+            long scheduleAt = computeNextGlobalSyncTime(nowMicros);
+            node.scheduler().selfRecurring(this::run, scheduleAt - nowMicros, MICROSECONDS);
         }
     }
 
@@ -453,7 +470,15 @@ public class CoordinateDurabilityScheduling
     public synchronized void updateTopology()
     {
         Topology latestGlobal = node.topology().current();
-        if (latestGlobal == currentGlobalTopology)
+        updateTopology(latestGlobal);
+    }
+
+    private synchronized void updateTopology(Topology latestGlobal)
+    {
+        if (!started)
+            return;
+
+        if (latestGlobal == currentGlobalTopology || (currentGlobalTopology != null && latestGlobal.epoch() < currentGlobalTopology.epoch()))
             return;
 
         Topology latestLocal = latestGlobal.forNode(node.id());
@@ -495,13 +520,10 @@ public class CoordinateDurabilityScheduling
      * It's assumed it is fine if nodes overlap or reorder or skip for whatever activity we are picking turns for as long as it is approximately
      * the right pacing.
      */
-    private void setNextGlobalSyncTime(long nowMicros)
+    private long computeNextGlobalSyncTime(long nowMicros)
     {
         if (currentGlobalTopology == null)
-        {
-            nextGlobalSyncTimeMicros = nowMicros;
-            return;
-        }
+            return nowMicros + globalCycleTimeMicros;
 
         // How long it takes for all nodes to go once
         long totalRoundDuration = currentGlobalTopology.nodes().size() * globalCycleTimeMicros;
@@ -516,6 +538,26 @@ public class CoordinateDurabilityScheduling
         if (targetTimeInCurrentRound < nowMicros)
             targetTime += totalRoundDuration;
 
-        nextGlobalSyncTimeMicros = targetTime;
+        return targetTime;
+    }
+
+    @Override
+    public void onRemoteSyncComplete(Node.Id node, long epoch)
+    {
+    }
+
+    @Override
+    public void truncateTopologyUntil(long epoch)
+    {
+    }
+
+    @Override
+    public void onEpochClosed(Ranges ranges, long epoch)
+    {
+    }
+
+    @Override
+    public void onEpochRedundant(Ranges ranges, long epoch)
+    {
     }
 }
