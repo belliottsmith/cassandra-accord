@@ -122,8 +122,6 @@ public interface Agent extends UncaughtExceptionListener
      */
     default Topologies selectPreferred(Node.Id from, Topologies to) { return to; }
 
-    long replyTimeout(ReplyContext replyContext, TimeUnit units);
-
     /**
      *  This method permits implementations to configure the time at which a local home shard will attempt
      *  to coordinate a transaction to completion.

@@ -1045,12 +1045,6 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public long replyTimeout(ReplyContext replyContext, TimeUnit units)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
         {
             return 0;

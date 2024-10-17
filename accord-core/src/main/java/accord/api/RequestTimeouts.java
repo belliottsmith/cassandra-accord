@@ -35,6 +35,7 @@ public interface RequestTimeouts
         int stripe();
     }
 
-    RegisteredTimeout register(Timeout timeout, long delay, TimeUnit units);
+    RegisteredTimeout registerWithDelay(Timeout timeout, long delay, TimeUnit units);
+    RegisteredTimeout registerAt(Timeout timeout, long deadline, TimeUnit units);
     void maybeNotify();
 }

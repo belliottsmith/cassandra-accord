@@ -167,7 +167,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         reading = new BitSet();
         Cancellable cancel = node.mapReduceConsumeLocal(this, readScope, executeAtEpoch, executeAtEpoch, this);
         long expiresAt = node.agent().expiresAt(replyContext, MICROSECONDS);
-        RegisteredTimeout timeout = node.requestTimeouts().register(this, expiresAt, MICROSECONDS);
+        RegisteredTimeout timeout = node.requestTimeouts().registerWithDelay(this, expiresAt, MICROSECONDS);
         synchronized (this)
         {
             switch (state)

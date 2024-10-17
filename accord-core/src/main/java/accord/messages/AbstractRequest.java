@@ -80,7 +80,7 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
         if (cancel != null)
         {
             long expiresAt = node.agent().expiresAt(replyContext, MICROSECONDS);
-            RegisteredTimeout timeout = node.requestTimeouts().register(this, expiresAt, MICROSECONDS);
+            RegisteredTimeout timeout = node.requestTimeouts().registerWithDelay(this, expiresAt, MICROSECONDS);
             Cancellation cancellation = new Cancellation(timeout, cancel);
             if (!cancellationUpdater.compareAndSet(this, null, cancellation))
                 cancellation.cancel();
