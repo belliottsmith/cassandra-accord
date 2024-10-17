@@ -75,6 +75,24 @@ public class SearchableRangeListBuilder extends CheckpointIntervalArrayBuilder<R
         }
 
         @Override
+        public int compareEndTo(Range range, RoutableKey key)
+        {
+            return range.compareEndTo(key);
+        }
+
+        @Override
+        public int compareStartTo(Range range, RoutableKey key)
+        {
+            return range.compareStartTo(key);
+        }
+
+        @Override
+        public boolean endInclusive(Range[] ranges)
+        {
+            return ranges[0].endInclusive();
+        }
+
+        @Override
         public int binarySearch(Range[] ranges, int from, int to, RoutableKey find, AsymmetricComparator<RoutableKey, Range> comparator, SortedArrays.Search op)
         {
             return SortedArrays.binarySearch(ranges, from, to, find, comparator, op);

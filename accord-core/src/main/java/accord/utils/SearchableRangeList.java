@@ -22,11 +22,9 @@ import accord.primitives.Range;
 import accord.primitives.RoutableKey;
 import accord.utils.CheckpointIntervalArrayBuilder.Links;
 import accord.utils.CheckpointIntervalArrayBuilder.Strategy;
-import net.nicoulaj.compilecommand.annotations.Inline;
 
 import static accord.utils.CheckpointIntervalArrayBuilder.Links.LINKS;
 import static accord.utils.CheckpointIntervalArrayBuilder.Strategy.ACCURATE;
-import static accord.utils.SortedArrays.Search.*;
 
 /**
  * Based on CINTIA, the Checkpoint INTerval Array
@@ -83,36 +81,6 @@ public class SearchableRangeList extends CheckpointIntervalArray<Range[], Range,
     public SearchableRangeList(Range[] ranges, int[] lowerBounds, int[] headers, int[] checkpointLists, int maxScanAndCheckpointMatches)
     {
         super(SearchableRangeListBuilder.RANGE_ACCESSOR, ranges, lowerBounds, headers, checkpointLists, maxScanAndCheckpointMatches);
-    }
-
-    @Inline
-    public <P1, P2, P3, P4> int forEachKey(RoutableKey key, IndexedQuadConsumer<P1, P2, P3, P4> forEachScanOrCheckpoint, IndexedRangeQuadConsumer<P1, P2, P3, P4> forEachRange, P1 p1, P2 p2, P3 p3, P4 p4, int minIndex)
-    {
-        if (ranges.length == 0 || minIndex == ranges.length)
-            return minIndex;
-
-        int end = SortedArrays.binarySearch(ranges, minIndex, ranges.length, key, (a, b) -> -b.compareStartTo(a), FLOOR);
-        if (end < 0) end = -1 - end;
-        if (end <= minIndex) return minIndex;
-
-        int floor = SortedArrays.binarySearch(ranges, minIndex, ranges.length, key, (a, b) -> -b.compareStartTo(a), CEIL);
-        int start = floor;
-        if (floor < 0)
-        {
-            // if there's no precise match on start, step backwards;
-            // if this range does not overlap us, step forwards again for start
-            // but retain the floor index for performing scan and checkpoint searches from
-            // as this contains all ranges that might overlap us (whereas those that end
-            // after us but before the next range's start would be missed by the next range index)
-            start = floor = -2 - floor;
-            if (start < 0)
-                start = floor = 0;
-            else if (ranges[start].compareEndTo(key) < 0)
-                ++start;
-        }
-
-        int bound = ranges[0].endInclusive() ? -1 : 0;
-        return forEach(start, end, floor, key, bound, forEachScanOrCheckpoint, forEachRange, p1, p2, p3, p4, minIndex);
     }
 
     public static SearchableRangeList build(Range[] ranges)
