@@ -48,6 +48,7 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.TriFunction;
+import accord.utils.async.Cancellable;
 import org.agrona.collections.IntHashSet;
 
 import static accord.primitives.SaveStatus.Committed;
@@ -235,9 +236,9 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     }
 
     @Override
-    public void process()
+    public Cancellable submit()
     {
-        node.mapReduceConsumeLocal(this, txnId.epoch(), executeAt.epoch(), this);
+        return node.mapReduceConsumeLocal(this, txnId.epoch(), executeAt.epoch(), this);
     }
 
     // TODO (expected, efficiency, clarity): do not guard with synchronized; let mapReduceLocal decide how to enforce mutual exclusivity
@@ -268,7 +269,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     }
 
     @Override
-    public synchronized void accept(CommitOrReadNack reply, Throwable failure)
+    protected void acceptInternal(CommitOrReadNack reply, Throwable failure)
     {
         if (reply != null || failure != null)
             node.reply(replyTo, replyContext, reply, failure);

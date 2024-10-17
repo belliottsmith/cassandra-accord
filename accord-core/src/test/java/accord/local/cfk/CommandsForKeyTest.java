@@ -1067,5 +1067,11 @@ public class CommandsForKeyTest
         {
             return 0;
         }
+
+        @Override
+        public long expiresAt(ReplyContext replyContext, TimeUnit unit)
+        {
+            return 0;
+        }
     }
 }

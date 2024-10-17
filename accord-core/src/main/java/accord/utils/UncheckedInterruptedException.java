@@ -16,25 +16,32 @@
  * limitations under the License.
  */
 
-package accord.api;
+package accord.utils;
 
-import java.util.concurrent.TimeUnit;
-
-import accord.utils.async.Cancellable;
-
-public interface RequestTimeouts
+public class UncheckedInterruptedException extends RuntimeException
 {
-    interface RegisteredTimeout extends Cancellable
+    public UncheckedInterruptedException()
     {
-        void cancel();
+        super();
     }
 
-    interface Timeout
+    public UncheckedInterruptedException(String message)
     {
-        void timeout();
-        int stripe();
+        super(message);
     }
 
-    RegisteredTimeout register(Timeout timeout, long delay, TimeUnit units);
-    void maybeNotify();
+    public UncheckedInterruptedException(String message, InterruptedException cause)
+    {
+        super(message, cause);
+    }
+
+    public UncheckedInterruptedException(InterruptedException cause)
+    {
+        super(cause);
+    }
+
+    protected UncheckedInterruptedException(String message, InterruptedException cause, boolean enableSuppression, boolean writableStackTrace)
+    {
+        super(message, cause, enableSuppression, writableStackTrace);
+    }
 }

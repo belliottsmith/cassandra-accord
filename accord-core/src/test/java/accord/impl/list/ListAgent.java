@@ -175,6 +175,13 @@ public class ListAgent implements Agent
         return units.convert(retryDelay, SECONDS);
     }
 
+    @Override
+    public long expiresAt(ReplyContext replyContext, TimeUnit unit)
+    {
+        // TODO (required): implement this (add it to the replyContext)
+        return 0;
+    }
+
     public boolean collectMaxApplied()
     {
         // TODO (expected): randomise this to exercise both code paths

@@ -95,6 +95,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncExecutor;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
 import static accord.utils.Invariants.illegalState;
@@ -511,29 +512,29 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return commandStores.ifLocal(context, key, epoch, epoch, ifLocal);
     }
 
-    public <T> void mapReduceConsumeLocal(TxnRequest<?> request, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(TxnRequest<?> request, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        commandStores.mapReduceConsume(request, request.scope(), minEpoch, maxEpoch, mapReduceConsume);
+        return commandStores.mapReduceConsume(request, request.scope(), minEpoch, maxEpoch, mapReduceConsume);
     }
 
-    public <T> void mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long atEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long atEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        mapReduceConsumeLocal(context, key, atEpoch, atEpoch, mapReduceConsume);
+        return mapReduceConsumeLocal(context, key, atEpoch, atEpoch, mapReduceConsume);
     }
 
-    public <T> void mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        commandStores.mapReduceConsume(context, key, minEpoch, maxEpoch, mapReduceConsume);
+        return commandStores.mapReduceConsume(context, key, minEpoch, maxEpoch, mapReduceConsume);
     }
 
-    public <T> void mapReduceConsumeLocal(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        commandStores.mapReduceConsume(context, keys, minEpoch, maxEpoch, mapReduceConsume);
+        return commandStores.mapReduceConsume(context, keys, minEpoch, maxEpoch, mapReduceConsume);
     }
 
-    public <T> void mapReduceConsumeAllLocal(PreLoadContext context, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeAllLocal(PreLoadContext context, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        commandStores.mapReduceConsume(context, mapReduceConsume);
+        return commandStores.mapReduceConsume(context, mapReduceConsume);
     }
 
     // send to every node besides ourselves

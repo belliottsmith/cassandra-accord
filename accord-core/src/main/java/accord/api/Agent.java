@@ -148,4 +148,6 @@ public interface Agent extends UncaughtExceptionListener
      * and re-query the local state.
      */
     long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units);
+
+    long expiresAt(ReplyContext replyContext, TimeUnit unit);
 }

@@ -171,4 +171,10 @@ public class TestAgent implements Agent
     {
         return units.convert(1L, SECONDS);
     }
+
+    @Override
+    public long expiresAt(ReplyContext replyContext, TimeUnit unit)
+    {
+        return 0;
+    }
 }
