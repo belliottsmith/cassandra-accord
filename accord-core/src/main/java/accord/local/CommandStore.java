@@ -230,7 +230,7 @@ public abstract class CommandStore implements AgentExecutor
         return rangesForEpoch;
     }
 
-    protected void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
+    public void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
         rangesForEpoch = nonNull(newRangesForEpoch);
     }
@@ -721,5 +721,11 @@ public abstract class CommandStore implements AgentExecutor
         if (without == in.getValue())
             return in;
         return new SimpleImmutableEntry<>(in.getKey(), without);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return id;
     }
 }

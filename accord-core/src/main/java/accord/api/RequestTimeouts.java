@@ -20,9 +20,11 @@ package accord.api;
 
 import java.util.concurrent.TimeUnit;
 
+import accord.utils.async.Cancellable;
+
 public interface RequestTimeouts
 {
-    interface RegisteredTimeout
+    interface RegisteredTimeout extends Cancellable
     {
         void cancel();
     }
@@ -33,6 +35,7 @@ public interface RequestTimeouts
         int stripe();
     }
 
-    RegisteredTimeout register(Timeout timeout, long delay, TimeUnit units);
+    RegisteredTimeout registerWithDelay(Timeout timeout, long delay, TimeUnit units);
+    RegisteredTimeout registerAt(Timeout timeout, long deadline, TimeUnit units);
     void maybeNotify();
 }

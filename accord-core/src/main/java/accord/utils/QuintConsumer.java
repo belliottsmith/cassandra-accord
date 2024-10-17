@@ -15,14 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package accord.utils;
 
-package accord.messages;
-
-import accord.local.Node;
-import accord.local.Node.Id;
-
-public interface Request extends Message
+public interface QuintConsumer<P1, P2, P3, P4, P5>
 {
-    default long waitForEpoch() { return 0; }
-    void process(Node on, Id from, ReplyContext replyContext);
+    void accept(P1 p1, P2 p2, P3 p3, P4 p4, P5 p5);
 }

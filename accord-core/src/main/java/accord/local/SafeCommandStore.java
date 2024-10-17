@@ -44,7 +44,7 @@ import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 
-import static accord.local.KeyHistory.COMMANDS;
+import static accord.local.KeyHistory.INCR;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Range;
@@ -135,7 +135,7 @@ public abstract class SafeCommandStore
      */
     public SafeCommand ifLoadedAndInitialised(TxnId txnId)
     {
-        SafeCommand safeCommand = getInternalIfLoadedAndInitialised(txnId);
+        SafeCommand safeCommand = getIfLoadedAndInitialisedUnsafe(txnId);
         if (safeCommand == null)
             return null;
         return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
@@ -143,7 +143,7 @@ public abstract class SafeCommandStore
 
     protected SafeCommand get(TxnId txnId)
     {
-        SafeCommand safeCommand = getInternal(txnId);
+        SafeCommand safeCommand = getUnsafeInternal(txnId);
         return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
     }
 
@@ -168,7 +168,7 @@ public abstract class SafeCommandStore
      */
     public final SafeCommandsForKey ifLoadedAndInitialised(RoutingKey key)
     {
-        SafeCommandsForKey safeCfk = getInternalIfLoadedAndInitialised(key);
+        SafeCommandsForKey safeCfk = getIfLoadedAndInitialisedUnsafe(key);
         if (safeCfk == null)
             return null;
         return maybeCleanup(safeCfk);
@@ -176,7 +176,7 @@ public abstract class SafeCommandStore
 
     public SafeCommandsForKey get(RoutingKey key)
     {
-        SafeCommandsForKey safeCfk = getInternal(key);
+        SafeCommandsForKey safeCfk = getUnsafeInternal(key);
         return maybeCleanup(safeCfk);
     }
 
@@ -185,11 +185,23 @@ public abstract class SafeCommandStore
         return agent().preAcceptTimeout();
     }
 
-    protected abstract SafeCommand getInternal(TxnId txnId);
-    protected abstract SafeCommand getInternalIfLoadedAndInitialised(TxnId txnId);
-    protected abstract SafeCommandsForKey getInternal(RoutingKey key);
-    protected abstract SafeCommandsForKey getInternalIfLoadedAndInitialised(RoutingKey key);
-    public abstract boolean canExecuteWith(PreLoadContext context);
+    protected abstract SafeCommand getUnsafeInternal(TxnId txnId);
+    protected abstract SafeCommand getIfLoadedAndInitialisedUnsafe(TxnId txnId);
+    protected abstract SafeCommandsForKey getUnsafeInternal(RoutingKey key);
+    protected abstract SafeCommandsForKey getIfLoadedAndInitialisedUnsafe(RoutingKey key);
+
+    public final boolean canExecuteWith(PreLoadContext context) { return canExecute(context) == context; }
+
+    /**
+     * Attempt to ready the provided PreLoadContext; if this can only be achieved partially, a new PreLoadContext
+     * will be returned containing the readily available data. If nothing is available, null will be returned.
+     */
+    public abstract @Nullable PreLoadContext canExecute(PreLoadContext context);
+
+    /**
+     * The current PreLoadContext, excluding any upgrade.
+     */
+    public abstract PreLoadContext context();
 
     protected void update(Command prev, Command updated)
     {
@@ -271,7 +283,7 @@ public abstract class SafeCommandStore
             return;
 
         TxnId txnId = next.txnId();
-        if (CommandsForKey.manages(txnId)) updateManagedCommandsForKey(this, prev, next);
+        if (CommandsForKey.manages(txnId)) updateManagedCommandsForKey(this, next);
         if (!CommandsForKey.managesExecution(txnId) && next.hasBeen(Status.Stable) && !next.hasBeen(Status.Truncated) && !prev.hasBeen(Status.Stable))
             updateUnmanagedCommandsForKey(this, next, REGISTER);
         // TODO (expected): register deps during Accept phase to more quickly sync epochs
@@ -279,27 +291,35 @@ public abstract class SafeCommandStore
 //            updateUnmanagedCommandsForKey(this, next, REGISTER_DEPS_ONLY);
     }
 
-    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command prev, Command next)
+    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command next)
     {
-        TxnId txnId = next.txnId();
-        StoreParticipants participants = next.participants().supplement(prev.participants());
+        StoreParticipants participants = next.participants();
         Participants<?> update = next.hasBeen(Status.Committed) ? participants.hasTouched : participants.touches;
-
         // TODO (expected): we don't want to insert any dependencies for those we only touch; we just need to record them as decided/applied for execution
-        PreLoadContext context = PreLoadContext.contextFor(txnId, update, COMMANDS);
-        // TODO (expected): execute immediately for any keys we already have loaded, and save only those we haven't for later
-        if (safeStore.canExecuteWith(context))
+        PreLoadContext context = PreLoadContext.contextFor(update, INCR);
+        PreLoadContext execute = safeStore.canExecute(context);
+        if (execute != null)
         {
-            for (RoutingKey key : (AbstractUnseekableKeys)update)
-            {
-                safeStore.get(key).update(safeStore, next, update != participants.touches && !participants.touches(key));
-            }
+            updateManagedCommandsForKey(safeStore, execute.keys(), next);
         }
-        else
+        if (execute != context)
         {
+            if (execute != null)
+                context = PreLoadContext.contextFor(update.without(execute.keys()), INCR);
+
+            Invariants.checkState(!context.keys().isEmpty());
             safeStore = safeStore; // prevent accidental usage inside lambda
-            safeStore.commandStore().execute(context, safeStore0 -> updateManagedCommandsForKey(safeStore0, prev, next))
-                          .begin(safeStore.commandStore().agent);
+            safeStore.commandStore().execute(context, safeStore0 -> updateManagedCommandsForKey(safeStore0, safeStore0.context().keys(), next))
+                     .begin(safeStore.commandStore().agent);
+        }
+    }
+
+    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, Command next)
+    {
+        StoreParticipants participants = next.participants();
+        for (RoutingKey key : (AbstractUnseekableKeys)update)
+        {
+            safeStore.get(key).update(safeStore, next, update != participants.touches && !participants.touches(key));
         }
     }
 
@@ -308,33 +328,46 @@ public abstract class SafeCommandStore
         TxnId txnId = next.txnId();
         // TODO (required): use StoreParticipants.executes()
         Command.WaitingOn waitingOn = next.asCommitted().waitingOn();
-        RoutingKeys keys = waitingOn.keys;
+        RoutingKeys keys = waitingOn.waitingOnKeys();
         // TODO (required): consider how execution works for transactions that await future deps and where the command store inherits additional keys in execution epoch
-        PreLoadContext context = PreLoadContext.contextFor(txnId, keys, COMMANDS);
+        PreLoadContext context = PreLoadContext.contextFor(txnId, keys, INCR);
+        PreLoadContext execute = safeStore.canExecute(context);
         // TODO (expected): execute immediately for any keys we already have loaded, and save only those we haven't for later
-        if (safeStore.canExecuteWith(context))
+        if (execute != null)
         {
-            int index = 0;
-            for (RoutingKey key : keys)
-            {
-                if (!waitingOn.isWaitingOnKey(index++)) continue;
-                safeStore.get(key).registerUnmanaged(safeStore, safeStore.get(txnId), mode);
-            }
-
+            updateUnmanagedCommandsForKey(safeStore, execute.keys(), txnId, mode);
+        }
+        if (execute == context)
+        {
             if (next.txnId().is(Range))
-            {
-                CommandStore commandStore = safeStore.commandStore();
-                Ranges ranges = next.participants().touches.toRanges();
-                commandStore.registerTransitive(safeStore, next.partialDeps().rangeDeps);
-                commandStore.markSynced(txnId, ranges);
-            }
+                registerTransitive(safeStore, txnId, next);
         }
         else
         {
+            if (execute != null)
+                context = PreLoadContext.contextFor(txnId, keys.without(execute.keys()), INCR);
+
             safeStore = safeStore;
-            safeStore.commandStore().execute(context, safeStore0 -> updateUnmanagedCommandsForKey(safeStore0, next, mode))
+            safeStore.commandStore().execute(context, safeStore0 -> updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys(), txnId, mode))
                           .begin(safeStore.commandStore().agent);
         }
+    }
+
+    private static void updateUnmanagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, TxnId txnId, UpdateUnmanagedMode mode)
+    {
+        SafeCommand safeCommand = safeStore.get(txnId);
+        for (RoutingKey key : (AbstractUnseekableKeys)update)
+        {
+            safeStore.get(key).registerUnmanaged(safeStore, safeCommand, mode);
+        }
+    }
+
+    private static void registerTransitive(SafeCommandStore safeStore, TxnId txnId, Command next)
+    {
+        CommandStore commandStore = safeStore.commandStore();
+        Ranges ranges = next.participants().touches.toRanges();
+        commandStore.registerTransitive(safeStore, next.partialDeps().rangeDeps);
+        commandStore.markSynced(txnId, ranges);
     }
 
     /**

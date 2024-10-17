@@ -66,7 +66,7 @@ public class SimpleBitSet
 
     public SimpleBitSet(SimpleBitSet copy, boolean share)
     {
-        bits = copy.bits.clone();
+        bits = share ? copy.bits : copy.bits.clone();
         count = copy.count;
     }
 
@@ -142,7 +142,8 @@ public class SimpleBitSet
                 count += 64 - Long.bitCount(bits[i]);
                 bits[i] = -1L;
             }
-            count += Long.bitCount(bits[toIndex] & -1L >>> (64 - (to & 63)));
+            if ((to & 63) != 0)
+                count += Long.bitCount(bits[toIndex] & -1L >>> (64 - (to & 63)));
             return count;
         }
     }

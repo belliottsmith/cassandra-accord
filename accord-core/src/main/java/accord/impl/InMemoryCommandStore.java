@@ -92,7 +92,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
-import static accord.local.KeyHistory.COMMANDS;
+import static accord.local.KeyHistory.ASYNC;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
@@ -464,8 +464,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                     {
                         case NONE:
                             continue;
-                        case COMMANDS:
-                        case RECOVERY:
+                        case SYNC:
+                        case ASYNC:
+                        case RECOVER:
                             commandsForKey.put(key, commandsForKey((RoutingKey) key).createSafeReference());
                             break;
                         case TIMESTAMPS:
@@ -686,31 +687,31 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeCommand getCommandInternal(TxnId txnId)
+        protected InMemorySafeCommand getCommandUnsafe(TxnId txnId)
         {
             return commands.get(txnId);
         }
 
         @Override
-        protected void addCommandInternal(InMemorySafeCommand command)
+        protected void addCommandUnsafe(InMemorySafeCommand command)
         {
             commands.put(command.txnId(), command);
         }
 
         @Override
-        protected InMemorySafeTimestampsForKey getTimestampsForKeyInternal(RoutingKey key)
+        protected InMemorySafeTimestampsForKey getTimestampsForKeyUnsafe(RoutingKey key)
         {
             return timestampsForKey.get(key);
         }
 
         @Override
-        protected void addTimestampsForKeyInternal(InMemorySafeTimestampsForKey tfk)
+        protected void addTimestampsForKeyUnsafe(InMemorySafeTimestampsForKey tfk)
         {
             timestampsForKey.put(tfk.key(), tfk);
         }
 
         @Override
-        protected InMemorySafeTimestampsForKey getTimestampsForKeyIfLoaded(RoutingKey key)
+        protected InMemorySafeTimestampsForKey getTimestampsForKeyIfUnsafe(RoutingKey key)
         {
             if (!commandStore.canExposeUnloaded())
                 return null;
@@ -719,7 +720,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeCommand getIfLoaded(TxnId txnId)
+        protected InMemorySafeCommand getIfLoadedUnsafe(TxnId txnId)
         {
             if (!commandStore.canExposeUnloaded())
                 return null;
@@ -728,19 +729,19 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeCommandsForKey getCommandsForKeyInternal(RoutingKey key)
+        protected InMemorySafeCommandsForKey getCommandsForKeyUnsafe(RoutingKey key)
         {
             return commandsForKey.get(key);
         }
 
         @Override
-        protected void addCommandsForKeyInternal(InMemorySafeCommandsForKey cfk)
+        protected void addCommandsForKeyUnsafe(InMemorySafeCommandsForKey cfk)
         {
             commandsForKey.put(cfk.key(), cfk);
         }
 
         @Override
-        protected InMemorySafeCommandsForKey getCommandsForKeyIfLoaded(RoutingKey key)
+        protected InMemorySafeCommandsForKey getCommandsForKeyIfUnsafe(RoutingKey key)
         {
             if (!commandStore.canExposeUnloaded())
                 return null;
@@ -1197,17 +1198,17 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
 
             @Override
-            public InMemorySafeCommand getInternalIfLoadedAndInitialised(TxnId txnId)
+            public InMemorySafeCommand getIfLoadedAndInitialisedUnsafe(TxnId txnId)
             {
                 assertThread();
-                return super.getInternalIfLoadedAndInitialised(txnId);
+                return super.getIfLoadedAndInitialisedUnsafe(txnId);
             }
 
             @Override
-            public InMemorySafeCommand getInternal(TxnId txnId)
+            public InMemorySafeCommand getUnsafeInternal(TxnId txnId)
             {
                 assertThread();
-                return super.getInternal(txnId);
+                return super.getUnsafeInternal(txnId);
             }
         }
 
@@ -1372,7 +1373,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 TxnId txnId = command.txnId();
 
                 executeInContext(InMemoryCommandStore.this,
-                                 context(command, COMMANDS),
+                                 context(command, ASYNC),
                                  safeStore -> {
                                      Command local = command;
                                      if (local.status() != Truncated && local.status() != Invalidated)

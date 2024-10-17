@@ -16,13 +16,32 @@
  * limitations under the License.
  */
 
-package accord.messages;
+package accord.utils;
 
-import accord.local.Node;
-import accord.local.Node.Id;
-
-public interface Request extends Message
+public class UncheckedInterruptedException extends RuntimeException
 {
-    default long waitForEpoch() { return 0; }
-    void process(Node on, Id from, ReplyContext replyContext);
+    public UncheckedInterruptedException()
+    {
+        super();
+    }
+
+    public UncheckedInterruptedException(String message)
+    {
+        super(message);
+    }
+
+    public UncheckedInterruptedException(String message, InterruptedException cause)
+    {
+        super(message, cause);
+    }
+
+    public UncheckedInterruptedException(InterruptedException cause)
+    {
+        super(cause);
+    }
+
+    protected UncheckedInterruptedException(String message, InterruptedException cause, boolean enableSuppression, boolean writableStackTrace)
+    {
+        super(message, cause, enableSuppression, writableStackTrace);
+    }
 }

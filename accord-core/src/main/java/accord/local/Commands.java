@@ -18,8 +18,6 @@
 
 package accord.local;
 
-import java.util.Collection;
-import java.util.Collections;
 import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import javax.annotation.Nonnull;
@@ -1094,9 +1092,9 @@ public class Commands
         }
 
         @Override
-        public Collection<TxnId> additionalTxnIds()
+        public TxnId additionalTxnId()
         {
-            return loadDepId == null ? Collections.emptyList() : Collections.singletonList(loadDepId);
+            return loadDepId;
         }
     }
 

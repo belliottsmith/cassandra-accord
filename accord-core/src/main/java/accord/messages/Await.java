@@ -49,7 +49,7 @@ import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 
 import static accord.messages.TxnRequest.computeScope;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 /**
  * Contact a replica to perform a synchronous or asynchronous wait on some condition for a transaction + some keys.
@@ -194,8 +194,8 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             int waitingOn = synchronouslyWaitingOnUpdater.decrementAndGet(this);
             if (waitingOn >= 0)
             {
-                long replyTimeout = node.agent().replyTimeout(replyContext, MILLISECONDS);
-                timeout = node.requestTimeouts().register(this, replyTimeout, MILLISECONDS);
+                long expiresAtMicros = node.agent().expiresAt(replyContext, MICROSECONDS);
+                timeout = node.requestTimeouts().registerAt(this, expiresAtMicros, MICROSECONDS);
                 if (-1 == synchronouslyWaitingOn)
                     timeout.cancel(); // we could leave a dangling timeout in this rare race condition
             }

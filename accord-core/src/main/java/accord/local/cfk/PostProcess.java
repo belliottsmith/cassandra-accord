@@ -40,7 +40,7 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.btree.BTree;
 
-import static accord.local.KeyHistory.COMMANDS;
+import static accord.local.KeyHistory.SYNC;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_PRUNED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
@@ -94,7 +94,7 @@ abstract class PostProcess
                 SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
                 if (safeCommand != null) load(safeStore, safeCommand, safeCfk, notifySink);
                 else
-                    safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, RoutingKeys.of(key), COMMANDS), safeStore0 -> {
+                    safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, RoutingKeys.of(key), SYNC), safeStore0 -> {
                         load(safeStore0, safeStore0.unsafeGet(txnId), safeStore0.get(key), notifySink);
                     }).begin(safeStore.agent());
             }

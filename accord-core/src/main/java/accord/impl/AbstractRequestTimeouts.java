@@ -209,14 +209,27 @@ public class AbstractRequestTimeouts<S extends AbstractRequestTimeouts.Stripe> i
     }
 
     @Override
-    public RegisteredTimeout register(Timeout timeout, long delay, TimeUnit units)
+    public RegisteredTimeout registerWithDelay(Timeout timeout, long delay, TimeUnit units)
     {
         long now = time.elapsed(MICROSECONDS);
         long deadline = now + Math.max(1, units.toMicros(delay));
+        return registerAt(timeout, now, deadline);
+    }
+
+    @Override
+    public RegisteredTimeout registerAt(Timeout timeout, long deadline, TimeUnit units)
+    {
+        long now = time.elapsed(MICROSECONDS);
+        deadline = units.toMicros(deadline);
+        return registerAt(timeout, now, deadline);
+    }
+
+    private RegisteredTimeout registerAt(Timeout timeout, long nowMicros, long deadlineMicros)
+    {
         int i = timeout.stripe() & (stripes.length - 1);
         while (true)
         {
-            RegisteredTimeout result = stripes[i].tryRegister(timeout, now, deadline);
+            RegisteredTimeout result = stripes[i].tryRegister(timeout, nowMicros, deadlineMicros);
             if (result != null)
                 return result;
             i = (i + 1) & (stripes.length - 1);
