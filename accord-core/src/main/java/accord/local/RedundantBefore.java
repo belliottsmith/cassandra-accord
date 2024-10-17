@@ -469,16 +469,30 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     public static RedundantBefore EMPTY = new RedundantBefore();
 
     private final Ranges staleRanges;
+    private final Timestamp maxBootstrap, maxGcBefore;
 
     private RedundantBefore()
     {
         staleRanges = Ranges.EMPTY;
+        maxBootstrap = Timestamp.NONE;
+        maxGcBefore = Timestamp.NONE;
     }
 
     RedundantBefore(boolean inclusiveEnds, RoutingKey[] starts, Entry[] values)
     {
         super(inclusiveEnds, starts, values);
         staleRanges = extractStaleRanges(values);
+        Timestamp maxBootstrap = Timestamp.NONE, maxGcBefore = Timestamp.NONE;
+        for (Entry entry : values)
+        {
+            if (entry == null) continue;
+            if (entry.bootstrappedAt.compareTo(maxBootstrap) > 0)
+                maxBootstrap = entry.bootstrappedAt;
+            if (entry.gcBefore.compareTo(maxGcBefore) > 0)
+                maxGcBefore = entry.gcBefore;
+        }
+        this.maxBootstrap = maxBootstrap;
+        this.maxGcBefore = maxGcBefore;
         checkParanoid(starts, values);
     }
 
@@ -610,6 +624,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     public Ranges removeShardRedundant(TxnId txnId, @Nonnull Timestamp executeAt, Ranges ranges)
     {
         Invariants.checkArgument(executeAt != null, "executeAt must not be null");
+        if (txnId.compareTo(maxGcBefore) >= 0)
+            return ranges;
         return foldl(ranges, Entry::removeShardRedundant, ranges, txnId, executeAt, r -> false);
     }
 
@@ -618,6 +634,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
      */
     public Ranges removePreBootstrap(TxnId txnId, Ranges ranges)
     {
+        if (maxBootstrap.compareTo(txnId) <= 0)
+            return ranges;
         return foldl(ranges, Entry::removePreBootstrap, ranges, txnId, null, r -> false);
     }
 
@@ -627,6 +645,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     public Ranges expectToExecute(TxnId txnId, @Nonnull Timestamp executeAt, Ranges ranges)
     {
         Invariants.checkArgument(executeAt != null, "executeAt must not be null");
+        if (maxBootstrap.compareTo(txnId) <= 0 && (staleRanges == null || !staleRanges.intersects(ranges)))
+            return ranges;
         return foldl(ranges, Entry::expectToExecute, ranges, txnId, executeAt, r -> false);
     }
 
@@ -635,6 +655,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
      */
     public Ranges everExpectToExecute(TxnId txnId, Ranges ranges)
     {
+        if (maxBootstrap.compareTo(txnId) <= 0 && (staleRanges == null || !staleRanges.intersects(ranges)))
+            return ranges;
         return foldl(ranges, Entry::expectToExecute, ranges, txnId, null, r -> false);
     }
 

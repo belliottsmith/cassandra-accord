@@ -48,8 +48,8 @@ import accord.api.LocalConfig;
 import accord.api.LocalListeners;
 import accord.api.MessageSink;
 import accord.api.ProgressLog;
+import accord.api.Timeouts;
 import accord.api.RemoteListeners;
-import accord.api.RequestTimeouts;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
@@ -95,6 +95,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncExecutor;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
 import static accord.utils.Invariants.illegalState;
@@ -159,7 +160,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private final ConfigurationService configService;
     private final TopologyManager topology;
     private final RemoteListeners listeners;
-    private final RequestTimeouts timeouts;
+    private final Timeouts timeouts;
     private final CommandStores commandStores;
     private final CoordinationAdapter.Factory coordinationAdapters;
 
@@ -183,7 +184,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public Node(Id id, MessageSink messageSink,
                 ConfigurationService configService, TimeService time,
                 Supplier<DataStore> dataSupplier, ShardDistributor shardDistributor, Agent agent, RandomSource random, Scheduler scheduler, TopologySorter.Supplier topologySorter,
-                Function<Node, RemoteListeners> remoteListenersFactory, Function<Node, RequestTimeouts> requestTimeoutsFactory, Function<Node, ProgressLog.Factory> progressLogFactory,
+                Function<Node, RemoteListeners> remoteListenersFactory, Function<Node, Timeouts> requestTimeoutsFactory, Function<Node, ProgressLog.Factory> progressLogFactory,
                 Function<Node, LocalListeners.Factory> localListenersFactory, CommandStores.Factory factory, CoordinationAdapter.Factory coordinationAdapters,
                 Persister<DurableBefore, DurableBefore> durableBeforePersister,
                 LocalConfig localConfig)
@@ -512,29 +513,29 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return commandStores.ifLocal(context, key, epoch, epoch, ifLocal);
     }
 
-    public <T> void mapReduceConsumeLocal(TxnRequest<?> request, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(TxnRequest<?> request, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        commandStores.mapReduceConsume(request, request.scope(), minEpoch, maxEpoch, mapReduceConsume);
+        return commandStores.mapReduceConsume(request, request.scope(), minEpoch, maxEpoch, mapReduceConsume);
     }
 
-    public <T> void mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long atEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long atEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        mapReduceConsumeLocal(context, key, atEpoch, atEpoch, mapReduceConsume);
+        return mapReduceConsumeLocal(context, key, atEpoch, atEpoch, mapReduceConsume);
     }
 
-    public <T> void mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        commandStores.mapReduceConsume(context, key, minEpoch, maxEpoch, mapReduceConsume);
+        return commandStores.mapReduceConsume(context, key, minEpoch, maxEpoch, mapReduceConsume);
     }
 
-    public <T> void mapReduceConsumeLocal(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        commandStores.mapReduceConsume(context, keys, minEpoch, maxEpoch, mapReduceConsume);
+        return commandStores.mapReduceConsume(context, keys, minEpoch, maxEpoch, mapReduceConsume);
     }
 
-    public <T> void mapReduceConsumeAllLocal(PreLoadContext context, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeAllLocal(PreLoadContext context, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
-        commandStores.mapReduceConsume(context, mapReduceConsume);
+        return commandStores.mapReduceConsume(context, mapReduceConsume);
     }
 
     // send to every node besides ourselves
@@ -814,7 +815,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return listeners;
     }
 
-    public RequestTimeouts requestTimeouts()
+    @Override
+    public Timeouts timeouts()
     {
         return timeouts;
     }

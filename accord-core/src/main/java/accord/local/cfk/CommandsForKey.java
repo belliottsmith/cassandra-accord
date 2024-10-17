@@ -33,7 +33,6 @@ import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
 import accord.impl.CommandsSummary;
 import accord.local.Command;
-import accord.local.CommandStore;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -1665,9 +1664,6 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             return new CommandsForKeyUpdateWithPostProcess(newCfk, newPostProcess);
         }
 
-        if (CommandStore.current().toString().equals("DelayedCommandStore{id=33,node=5}") && key.toString().equals("393#12078"))
-            System.out.println();
-
         TxnInfo[] newById = pruneById(byId, boundsInfo, newBoundsInfo);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBoundsInfo));
         Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBoundsInfo));
@@ -1700,6 +1696,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     public CommandsForKey maybePrune(int pruneInterval, long minHlcDelta)
     {
         return Pruning.maybePrune(this, pruneInterval, minHlcDelta);
+    }
+
+    public CommandsForKey maximalPrune()
+    {
+        return Pruning.maybePrune(this, 0, 0);
     }
 
     int insertPos(Timestamp timestamp)
@@ -1916,6 +1917,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 }
             }
         }
+    }
+
+    public boolean isEmpty()
+    {
+        return byId.length == 0 && unmanageds.length == 0;
     }
 
     public static boolean reportLinearizabilityViolations()

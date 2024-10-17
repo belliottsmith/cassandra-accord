@@ -60,6 +60,7 @@ import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.Cancellable;
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Int2ObjectHashMap;
 
@@ -591,9 +592,9 @@ public abstract class CommandStores
     /**
      * See {@link #mapReduceConsume(PreLoadContext, Routables, long, long, MapReduceConsume)}
      */
-    public <O> void mapReduceConsume(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    public <O> Cancellable mapReduceConsume(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
     {
-        mapReduceConsume(context, RoutingKeys.of(key), minEpoch, maxEpoch, mapReduceConsume);
+        return mapReduceConsume(context, RoutingKeys.of(key), minEpoch, maxEpoch, mapReduceConsume);
     }
 
     /**
@@ -605,16 +606,16 @@ public abstract class CommandStores
      *
      * Implementations are expected to invoke {@link #mapReduceConsume(PreLoadContext, Routables, long, long, MapReduceConsume)}
      */
-    protected <O> void mapReduceConsume(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    protected <O> Cancellable mapReduceConsume(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
     {
         AsyncChain<O> reduced = mapReduce(context, keys, minEpoch, maxEpoch, mapReduceConsume);
-        reduced.begin(mapReduceConsume);
+        return reduced.begin(mapReduceConsume);
     }
 
-    public  <O> void mapReduceConsume(PreLoadContext context, IntStream commandStoreIds, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    public  <O> Cancellable mapReduceConsume(PreLoadContext context, IntStream commandStoreIds, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
     {
         AsyncChain<O> reduced = mapReduce(context, commandStoreIds, mapReduceConsume);
-        reduced.begin(mapReduceConsume);
+        return reduced.begin(mapReduceConsume);
     }
 
     public <O> AsyncChain<O> mapReduce(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
@@ -667,10 +668,10 @@ public abstract class CommandStores
         return chain == null ? AsyncChains.success(null) : chain;
     }
 
-    public <O> void mapReduceConsume(PreLoadContext context, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    public <O> Cancellable mapReduceConsume(PreLoadContext context, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
     {
         AsyncChain<O> reduced = mapReduce(context, mapReduceConsume);
-        reduced.begin(mapReduceConsume);
+        return reduced.begin(mapReduceConsume);
     }
 
     protected <O> AsyncChain<O> mapReduce(PreLoadContext context, MapReduce<? super SafeCommandStore, O> mapReduce)

@@ -225,12 +225,25 @@ public abstract class CommandStore implements AgentExecutor
             safeStore.setRangesForEpoch(update.newRangesForEpoch);
     }
 
+    @VisibleForTesting
+    public void unsafeUpdateRangesForEpoch()
+    {
+        EpochUpdate update = epochUpdateHolder.getAndSet(null);
+        if (update == null)
+            return;
+
+        if (update.addRedundantBefore.size() > 0)
+            unsafeUpsertRedundantBefore(update.addRedundantBefore);
+        if (update.newRangesForEpoch != null)
+            unsafeSetRangesForEpoch(update.newRangesForEpoch);
+    }
+
     public RangesForEpoch unsafeRangesForEpoch()
     {
         return rangesForEpoch;
     }
 
-    protected void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
+    public void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
         rangesForEpoch = nonNull(newRangesForEpoch);
     }
@@ -626,6 +639,7 @@ public abstract class CommandStore implements AgentExecutor
                 // TODO (review): Convoluted check to not overwrite existing bootstraps with TxnId.NONE
                 // If loading from disk didn't finish before this then we might initialize the range at TxnId.NONE?
                 // Does CommandStores.topology ensure that doesn't happen? Is it fine if it does because it will get superseded?
+
                 Ranges newBootstrapRanges = ranges;
                 for (Ranges existing : bootstrapBeganAt.values())
                     newBootstrapRanges = newBootstrapRanges.without(existing);
@@ -721,5 +735,11 @@ public abstract class CommandStore implements AgentExecutor
         if (without == in.getValue())
             return in;
         return new SimpleImmutableEntry<>(in.getKey(), without);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return id;
     }
 }

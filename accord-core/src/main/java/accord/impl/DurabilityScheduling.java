@@ -149,7 +149,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
         int nodeOffset;
 
         int index;
-        int numberOfSplits;
+        int numberOfSplits, maxNumberOfSplits;
         Scheduler.Scheduled scheduled;
         long rangeStartedAtMicros, cycleStartedAtMicros;
         long retryDelayMicros = defaultRetryDelayMicros;
@@ -193,9 +193,14 @@ public class DurabilityScheduling implements ConfigurationService.Listener
             if (nowMicros > scheduleAt + (shardCycleTimeMicros / numberOfSplits))
                 scheduleAt += shardCycleTimeMicros;
 
-            if (numberOfSplits < targetShardSplits)
-                numberOfSplits = targetShardSplits;
+            maxNumberOfSplits = Math.max(1, Math.min(DurabilityScheduling.this.maxNumberOfSplits, node.commandStores().shardDistributor().numberOfSplitsPossible(shard.range)));
+            int target = Math.min(targetShardSplits, maxNumberOfSplits);
+            if (numberOfSplits < target)
+                numberOfSplits = target;
+            if (numberOfSplits > maxNumberOfSplits)
+                numberOfSplits = maxNumberOfSplits;
 
+            index = 0;
             cycleStartedAtMicros = scheduleAt;
             scheduleAt(nowMicros, scheduleAt);
         }
@@ -245,9 +250,15 @@ public class DurabilityScheduling implements ConfigurationService.Listener
                 Invariants.checkState(index < numberOfSplits);
                 int i = index;
                 Range selectRange = null;
-                while (selectRange == null)
-                    selectRange = distributor.splitRange(shard.range, index, ++i, numberOfSplits);
+                while (selectRange == null && ++i < numberOfSplits)
+                    selectRange = distributor.splitRange(shard.range, index, i, numberOfSplits);
                 range = selectRange;
+                if (selectRange == null)
+                {
+                    if (index == 0) logger.error("Range {} appears to be impossible to split. DurabilityScheduler aborting.", shard.range);
+                    else restart();
+                    return;
+                }
                 nextIndex = i;
             }
 
@@ -326,7 +337,6 @@ public class DurabilityScheduling implements ConfigurationService.Listener
                                     index = nextIndex;
                                     if (index >= numberOfSplits)
                                     {
-                                        index = 0;
                                         long nowMicros = node.elapsed(MICROSECONDS);
                                         long timeTakenSeconds = MICROSECONDS.toSeconds(nowMicros - cycleStartedAtMicros);
                                         long targetTimeSeconds = MICROSECONDS.toSeconds(shardCycleTimeMicros);
