@@ -76,6 +76,9 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
         RoutingKey end(Ranges ranges, int index);
         RoutingKey end(Range range);
         Comparator<RoutingKey> keyComparator();
+        int compareEndTo(Range range, RoutingKey key);
+        int compareStartTo(Range range, RoutingKey key);
+        boolean endInclusive(Ranges ranges);
         int binarySearch(Ranges ranges, int from, int to, RoutingKey find, AsymmetricComparator<RoutingKey, Range> comparator, SortedArrays.Search op);
     }
 
