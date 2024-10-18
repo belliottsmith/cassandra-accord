@@ -94,7 +94,7 @@ import accord.utils.async.Cancellable;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import static accord.local.KeyHistory.COMMANDS;
+import static accord.local.KeyHistory.ASYNC;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
@@ -466,8 +466,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                     {
                         case NONE:
                             continue;
-                        case COMMANDS:
-                        case RECOVERY:
+                        case SYNC:
+                        case ASYNC:
+                        case RECOVER:
                             commandsForKey.put(key, commandsForKey((RoutingKey) key).createSafeReference());
                             break;
                         case TIMESTAMPS:
@@ -1374,7 +1375,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 TxnId txnId = command.txnId();
 
                 executeInContext(InMemoryCommandStore.this,
-                                 context(command, COMMANDS),
+                                 context(command, ASYNC),
                                  safeStore -> {
                                      Command local = command;
                                      if (local.status() != Truncated && local.status() != Invalidated)

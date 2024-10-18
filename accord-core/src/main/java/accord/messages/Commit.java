@@ -232,7 +232,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.COMMANDS;
+        return KeyHistory.ASYNC;
     }
 
     @Override

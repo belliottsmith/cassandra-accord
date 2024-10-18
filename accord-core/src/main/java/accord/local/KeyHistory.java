@@ -24,9 +24,12 @@ package accord.local;
  */
 public enum KeyHistory
 {
+    // TODO (required): deprecate
     TIMESTAMPS,
-    COMMANDS,
-    RECOVERY,
+    SYNC,
+    INCR,
+    ASYNC,
+    RECOVER,
     NONE;
 
     public boolean isNone()

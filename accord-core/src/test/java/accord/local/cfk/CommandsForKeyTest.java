@@ -785,9 +785,15 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public boolean canExecuteWith(PreLoadContext context)
+        public PreLoadContext canExecute(PreLoadContext context)
         {
-            return true;
+            return context;
+        }
+
+        @Override
+        public PreLoadContext context()
+        {
+            return null;
         }
 
         @Override

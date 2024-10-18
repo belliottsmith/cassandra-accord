@@ -34,7 +34,7 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
-import static accord.local.KeyHistory.COMMANDS;
+import static accord.local.KeyHistory.SYNC;
 
 interface NotifySink
 {
@@ -122,7 +122,7 @@ interface NotifySink
                 RoutingKeys keys = RoutingKeys.of(key);
                 //noinspection ConstantConditions,SillyAssignment
                 safeStore = safeStore; // prevent use in lambda
-                safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, keys, COMMANDS), safeStore0 -> {
+                safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, keys, SYNC), safeStore0 -> {
                     doNotifyAlreadyReady(safeStore0, txnId, key);
                 }).begin(safeStore.agent());
             }

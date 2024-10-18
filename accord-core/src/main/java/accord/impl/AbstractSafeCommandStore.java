@@ -155,10 +155,15 @@ public abstract class AbstractSafeCommandStore<CommandType extends SafeCommand,
     }
 
     @Override
-    public boolean canExecuteWith(PreLoadContext context)
+    public PreLoadContext context()
     {
-        // TODO (required): check if data is in cache, and if so simply add it to our context
-        return context.isSubsetOf(this.context);
+        return this.context;
+    }
+
+    @Override
+    public PreLoadContext canExecute(PreLoadContext context)
+    {
+        return context.isSubsetOf(this.context) ? context : null;
     }
 
     public void postExecute()

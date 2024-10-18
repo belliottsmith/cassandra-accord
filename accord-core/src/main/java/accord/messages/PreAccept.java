@@ -99,7 +99,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.COMMANDS;
+        return KeyHistory.SYNC;
     }
 
     @Override

@@ -209,7 +209,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.RECOVERY;
+        return KeyHistory.RECOVER;
     }
 
     @Override

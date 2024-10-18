@@ -211,7 +211,7 @@ public class Apply extends TxnRequest<ApplyReply>
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.COMMANDS;
+        return KeyHistory.ASYNC;
     }
 
     @Override

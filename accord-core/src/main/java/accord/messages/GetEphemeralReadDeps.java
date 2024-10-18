@@ -112,7 +112,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.COMMANDS;
+        return KeyHistory.SYNC;
     }
 
     public static class GetEphemeralReadDepsOk implements Reply

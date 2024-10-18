@@ -111,7 +111,7 @@ public class CalculateDeps extends TxnRequest.WithUnsynced<CalculateDeps.Calcula
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.COMMANDS;
+        return KeyHistory.SYNC;
     }
 
     public static class CalculateDepsOk implements Reply

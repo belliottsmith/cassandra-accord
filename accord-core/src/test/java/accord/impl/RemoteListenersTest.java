@@ -419,7 +419,8 @@ public class RemoteListenersTest
         @Override protected SafeCommand getInternalIfLoadedAndInitialised(TxnId txnId) { return null; }
         @Override protected SafeCommandsForKey getInternal(RoutingKey key) { return null;}
         @Override protected SafeCommandsForKey getInternalIfLoadedAndInitialised(RoutingKey key) { return null;}
-        @Override public boolean canExecuteWith(PreLoadContext context) { return false;}
+        @Override public PreLoadContext canExecute(PreLoadContext context) { return null;}
+        @Override public PreLoadContext context() { return null; }
 
         @Override
         public void upsertRedundantBefore(RedundantBefore addRedundantBefore)
