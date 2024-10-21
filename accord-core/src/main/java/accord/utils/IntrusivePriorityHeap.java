@@ -57,6 +57,7 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
      */
     protected void append(N node)
     {
+        Invariants.checkState(node.heapIndex < 0);
         if (size == heap.length)
             heap = Arrays.copyOf(heap, Math.max(size * 2, 8));
 
@@ -76,6 +77,12 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
 
         if (index == 0 || compare((N)heap[(index-1)/2], node) <= 0) siftDown(node, index);
         else siftUp(node, index);
+    }
+
+    protected boolean contains(N node)
+    {
+        int i = node.heapIndex;
+        return i >= 0 && i < size && heap[i] == node;
     }
 
     /**
@@ -142,7 +149,10 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
         --size;
         --heapifiedSize;
         if (size == 0)
+        {
+            heap[0] = null;
             return;
+        }
 
         N siftDown = (N) heap[size];
         heap[size] = null;

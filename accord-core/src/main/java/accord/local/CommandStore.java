@@ -230,7 +230,7 @@ public abstract class CommandStore implements AgentExecutor
         return rangesForEpoch;
     }
 
-    protected void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
+    public void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
         rangesForEpoch = nonNull(newRangesForEpoch);
     }

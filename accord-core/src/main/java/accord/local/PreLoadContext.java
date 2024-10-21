@@ -29,7 +29,6 @@ import net.nicoulaj.compilecommand.annotations.Inline;
 
 import java.util.AbstractList;
 import java.util.List;
-import java.util.Objects;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
@@ -121,7 +120,7 @@ public interface PreLoadContext
 
     static PreLoadContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, KeyHistory keyHistory)
     {
-        Invariants.checkState(!Objects.equals(additional, primary));
+        Invariants.checkState(primary == null ? additional == null : !primary.equals(additional));
         return new Standard(primary, additional, keys, keyHistory);
     }
 
