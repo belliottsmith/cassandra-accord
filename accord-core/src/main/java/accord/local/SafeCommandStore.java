@@ -282,7 +282,7 @@ public abstract class SafeCommandStore
             return;
 
         TxnId txnId = next.txnId();
-        if (CommandsForKey.manages(txnId)) updateManagedCommandsForKey(this, prev, next);
+        if (CommandsForKey.manages(txnId)) updateManagedCommandsForKey(this, next);
         if (!CommandsForKey.managesExecution(txnId) && next.hasBeen(Status.Stable) && !next.hasBeen(Status.Truncated) && !prev.hasBeen(Status.Stable))
             updateUnmanagedCommandsForKey(this, next, REGISTER);
         // TODO (expected): register deps during Accept phase to more quickly sync epochs
@@ -290,16 +290,16 @@ public abstract class SafeCommandStore
 //            updateUnmanagedCommandsForKey(this, next, REGISTER_DEPS_ONLY);
     }
 
-    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command prev, Command next)
+    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command next)
     {
-        StoreParticipants participants = next.participants().supplement(prev.participants());
+        StoreParticipants participants = next.participants();
         Participants<?> update = next.hasBeen(Status.Committed) ? participants.hasTouched : participants.touches;
         // TODO (expected): we don't want to insert any dependencies for those we only touch; we just need to record them as decided/applied for execution
         PreLoadContext context = PreLoadContext.contextFor(update, INCR);
         PreLoadContext execute = safeStore.canExecute(context);
         if (execute != null)
         {
-            updateManagedCommandsForKey(safeStore, participants, execute.keys(), next);
+            updateManagedCommandsForKey(safeStore, execute.keys(), next);
         }
         if (execute != context)
         {
@@ -308,13 +308,14 @@ public abstract class SafeCommandStore
 
             Invariants.checkState(!context.keys().isEmpty());
             safeStore = safeStore; // prevent accidental usage inside lambda
-            safeStore.commandStore().execute(context, safeStore0 -> updateManagedCommandsForKey(safeStore0, participants, safeStore0.context().keys(), next))
+            safeStore.commandStore().execute(context, safeStore0 -> updateManagedCommandsForKey(safeStore0, safeStore0.context().keys(), next))
                      .begin(safeStore.commandStore().agent);
         }
     }
 
-    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, StoreParticipants participants, Unseekables<?> update, Command next)
+    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, Command next)
     {
+        StoreParticipants participants = next.participants();
         for (RoutingKey key : (AbstractUnseekableKeys)update)
         {
             safeStore.get(key).update(safeStore, next, update != participants.touches && !participants.touches(key));

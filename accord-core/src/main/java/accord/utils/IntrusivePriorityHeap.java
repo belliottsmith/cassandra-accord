@@ -91,7 +91,7 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
     protected void remove(N node)
     {
         int i = node.heapIndex;
-        Invariants.checkArgument(heap[i] == node);
+        Invariants.checkArgument(i >= 0 && i < heap.length && heap[i] == node);
         if (size > 1)
         {
             N tail = (N) heap[--size];
