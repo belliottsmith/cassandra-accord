@@ -135,7 +135,7 @@ public abstract class SafeCommandStore
      */
     public SafeCommand ifLoadedAndInitialised(TxnId txnId)
     {
-        SafeCommand safeCommand = getInternalIfLoadedAndInitialised(txnId);
+        SafeCommand safeCommand = getIfLoadedAndInitialisedUnsafe(txnId);
         if (safeCommand == null)
             return null;
         return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
@@ -143,7 +143,7 @@ public abstract class SafeCommandStore
 
     protected SafeCommand get(TxnId txnId)
     {
-        SafeCommand safeCommand = getInternal(txnId);
+        SafeCommand safeCommand = getUnsafeInternal(txnId);
         return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
     }
 
@@ -168,7 +168,7 @@ public abstract class SafeCommandStore
      */
     public final SafeCommandsForKey ifLoadedAndInitialised(RoutingKey key)
     {
-        SafeCommandsForKey safeCfk = getInternalIfLoadedAndInitialised(key);
+        SafeCommandsForKey safeCfk = getIfLoadedAndInitialisedUnsafe(key);
         if (safeCfk == null)
             return null;
         return maybeCleanup(safeCfk);
@@ -176,7 +176,7 @@ public abstract class SafeCommandStore
 
     public SafeCommandsForKey get(RoutingKey key)
     {
-        SafeCommandsForKey safeCfk = getInternal(key);
+        SafeCommandsForKey safeCfk = getUnsafeInternal(key);
         return maybeCleanup(safeCfk);
     }
 
@@ -185,10 +185,11 @@ public abstract class SafeCommandStore
         return agent().preAcceptTimeout();
     }
 
-    protected abstract SafeCommand getInternal(TxnId txnId);
-    protected abstract SafeCommand getInternalIfLoadedAndInitialised(TxnId txnId);
-    protected abstract SafeCommandsForKey getInternal(RoutingKey key);
-    protected abstract SafeCommandsForKey getInternalIfLoadedAndInitialised(RoutingKey key);
+    protected abstract SafeCommand getUnsafeInternal(TxnId txnId);
+    protected abstract SafeCommand getIfLoadedAndInitialisedUnsafe(TxnId txnId);
+    protected abstract SafeCommandsForKey getUnsafeInternal(RoutingKey key);
+    protected abstract SafeCommandsForKey getIfLoadedAndInitialisedUnsafe(RoutingKey key);
+
     public final boolean canExecuteWith(PreLoadContext context) { return canExecute(context) == context; }
 
     /**

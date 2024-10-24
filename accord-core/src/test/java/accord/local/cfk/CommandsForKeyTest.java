@@ -713,19 +713,19 @@ public class CommandsForKeyTest
         }
 
         @Override
-        protected SafeCommand getInternal(TxnId txnId)
+        protected SafeCommand getUnsafeInternal(TxnId txnId)
         {
             return new TestSafeCommand(txnId, canon, canon.byId.get(txnId));
         }
 
         @Override
-        protected SafeCommand getInternalIfLoadedAndInitialised(TxnId txnId)
+        protected SafeCommand getIfLoadedAndInitialisedUnsafe(TxnId txnId)
         {
-            return getInternal(txnId);
+            return getUnsafeInternal(txnId);
         }
 
         @Override
-        protected SafeCommandsForKey getInternal(RoutingKey key)
+        protected SafeCommandsForKey getUnsafeInternal(RoutingKey key)
         {
             Invariants.checkArgument(key.equals(cfk.key()));
             return cfk;
@@ -734,26 +734,26 @@ public class CommandsForKeyTest
         @Override
         public SafeCommand get(TxnId txnId)
         {
-            return getInternal(txnId);
+            return getUnsafeInternal(txnId);
         }
 
         @Override
         public SafeCommandsForKey get(RoutingKey key)
         {
-            return getInternal(key);
+            return getUnsafeInternal(key);
         }
 
         @Override
         public SafeCommand get(TxnId txnId, StoreParticipants participants)
         {
-            return getInternal(txnId);
+            return getUnsafeInternal(txnId);
         }
 
         @Nullable
         @Override
         public SafeCommand ifInitialised(TxnId txnId)
         {
-            return getInternal(txnId);
+            return getUnsafeInternal(txnId);
         }
 
         @Override
@@ -762,7 +762,7 @@ public class CommandsForKeyTest
             if (txnId.compareTo(cfk.current.prunedBefore()) < 0)
                 return null;
 
-            return getInternal(txnId);
+            return getUnsafeInternal(txnId);
         }
 
         @Override
@@ -777,7 +777,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        protected SafeCommandsForKey getInternalIfLoadedAndInitialised(RoutingKey key)
+        protected SafeCommandsForKey getIfLoadedAndInitialisedUnsafe(RoutingKey key)
         {
             if (key.equals(cfk.key()))
                 return cfk;
