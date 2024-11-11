@@ -862,7 +862,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         public <P1, T> T mapReduceActive(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, CommandFunction<P1, T, T> map, P1 p1, T accumulate)
         {
             accumulate = commandStore.mapReduceForKey(this, keysOrRanges, (commands, prev) -> {
-                return commands.mapReduceActive(startedBefore, testKind, map, p1, prev);
+                return commands.mapReduceActive(keysOrRanges, startedBefore, testKind, map, p1, prev);
             }, accumulate);
 
             return mapReduceRangesInternal(keysOrRanges, startedBefore, null, testKind, STARTED_BEFORE, ANY_DEPS, ANY_STATUS, map, p1, accumulate);
@@ -873,7 +873,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         public <P1, T> T mapReduceFull(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, TestStartedAt testStartedAt, TestDep testDep, TestStatus testStatus, CommandFunction<P1, T, T> map, P1 p1, T accumulate)
         {
             accumulate = commandStore.mapReduceForKey(this, keysOrRanges, (commands, prev) -> {
-                return commands.mapReduceFull(testTxnId, testKind, testStartedAt, testDep, testStatus, map, p1, prev);
+                return commands.mapReduceFull(keysOrRanges, testTxnId, testKind, testStartedAt, testDep, testStatus, map, p1, prev);
             }, accumulate);
 
             return mapReduceRangesInternal(keysOrRanges, testTxnId, testTxnId, testKind, testStartedAt, testDep, testStatus, map, p1, accumulate);

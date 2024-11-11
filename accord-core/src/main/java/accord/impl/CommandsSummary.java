@@ -22,20 +22,23 @@ import accord.local.SafeCommandStore.CommandFunction;
 import accord.local.SafeCommandStore.TestDep;
 import accord.local.SafeCommandStore.TestStartedAt;
 import accord.local.SafeCommandStore.TestStatus;
+import accord.primitives.Routables;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 
 public interface CommandsSummary
 {
-    <P1, T> T mapReduceFull(TxnId testTxnId,
+    <P1, T> T mapReduceFull(Routables<?> keysOrRanges,
+                            TxnId testTxnId,
                             Kinds testKind,
                             TestStartedAt testStartedAt,
                             TestDep testDep,
                             TestStatus testStatus,
                             CommandFunction<P1, T, T> map, P1 p1, T initialValue);
 
-    <P1, T> T mapReduceActive(Timestamp startedBefore,
+    <P1, T> T mapReduceActive(Routables<?> keysOrRanges,
+                              Timestamp startedBefore,
                               Kinds testKind,
                               CommandFunction<P1, T, T> map, P1 p1, T initialValue);
 }

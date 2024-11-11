@@ -35,6 +35,7 @@ import accord.primitives.Participants;
 import accord.primitives.Range;
 import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
+import accord.primitives.RoutableKey;
 import accord.primitives.Routables;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
@@ -625,6 +626,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     public TxnId min(Routables<?> participants, Function<Entry, TxnId> get)
     {
         return TxnId.nonNullOrMax(TxnId.NONE, foldl(participants, Entry::min, null, get, ignore -> false));
+    }
+
+    public TxnId get(RoutableKey participant, Function<Entry, TxnId> get, TxnId ifNull)
+    {
+        Entry entry = get(participant);
+        if (entry == null)
+            return ifNull;
+        TxnId result = get.apply(entry);
+        return result == null ? ifNull : result;
     }
 
     public TxnId max(Routables<?> participants, Function<Entry, TxnId> get)

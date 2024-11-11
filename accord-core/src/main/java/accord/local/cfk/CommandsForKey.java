@@ -40,6 +40,7 @@ import accord.local.SafeCommandStore.CommandFunction;
 import accord.local.SafeCommandStore.TestDep;
 import accord.local.SafeCommandStore.TestStartedAt;
 import accord.local.SafeCommandStore.TestStatus;
+import accord.primitives.Routables;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.cfk.PostProcess.NotifyUnmanagedResult;
@@ -1052,13 +1053,15 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
      * commands that do not know any deps will be ignored, as will any with an executeAt prior to the txnId.
      * <p>
      */
-    public <P1, T> T mapReduceFull(TxnId testTxnId,
+    public <P1, T> T mapReduceFull(Routables<?> keysOrRanges,
+                                   TxnId testTxnId,
                                    Kinds testKind,
                                    TestStartedAt testStartedAt,
                                    TestDep testDep,
                                    TestStatus testStatus,
                                    CommandFunction<P1, T, T> map, P1 p1, T initialValue)
     {
+        Invariants.paranoid(keysOrRanges.contains(key));
         int start, end, loadingIndex = 0;
         // if this is null the TxnId is known in byId
         // otherwise, it must be non-null and represents the transactions (if any) that have requested it be loaded due to being pruned
@@ -1141,10 +1144,12 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return initialValue;
     }
 
-    public <P1, T> T mapReduceActive(Timestamp startedBefore,
+    public <P1, T> T mapReduceActive(Routables<?> keysOrRanges,
+                                     Timestamp startedBefore,
                                      Kinds testKind,
                                      CommandFunction<P1, T, T> map, P1 p1, T initialValue)
     {
+        Invariants.paranoid(keysOrRanges.contains(key));
         TxnId prunedBefore = prunedBefore();
         int end = insertPos(startedBefore);
         Timestamp maxCommittedWriteBefore;
