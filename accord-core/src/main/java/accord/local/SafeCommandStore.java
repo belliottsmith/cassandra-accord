@@ -74,8 +74,8 @@ public abstract class SafeCommandStore
         STARTED_AFTER,
         ANY
     }
-    public enum TestDep { WITH, WITHOUT, ANY_DEPS }
-    public enum TestStatus { ANY_STATUS, IS_PROPOSED, IS_STABLE }
+    public enum TestDep { WITH_OR_INVALIDATED, WITHOUT, ANY_DEPS }
+    public enum TestStatus { ANY_STATUS, IS_PROPOSED, IS_STABLE, IS_STABLE_OR_INVALIDATED }
 
     /**
      * If the transaction exists (with some associated data) in the CommandStore, return it. Otherwise return null.
@@ -164,17 +164,18 @@ public abstract class SafeCommandStore
      *
      * This permits efficient operation when a transaction involved in processing another transaction happens to be in memory.
      */
-    public SafeCommand ifLoadedAndInitialisedAndNotErased(TxnId txnId)
+    public SafeCommand ifLoadedAndInitialised(TxnId txnId)
     {
         SafeCommand safeCommand = getInternal(txnId);
-        if (safeCommand != null)
-            return safeCommand.current().saveStatus().isUninitialised() ? null : safeCommand;
+        if (safeCommand == null)
+        {
+            safeCommand = ifLoadedInternal(txnId);
+            if (safeCommand == null)
+                return null;
+        }
 
-        safeCommand = ifLoadedAndInitialisedAndNotErasedInternal(txnId);
-        if (safeCommand == null || safeCommand.current().saveStatus().isUninitialised())
-            return null;
-
-        return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
+        safeCommand = maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
+        return safeCommand.isUnset() ? null : safeCommand;
     }
 
     protected SafeCommandsForKey maybeCleanup(SafeCommandsForKey safeCfk)
@@ -220,8 +221,8 @@ public abstract class SafeCommandStore
 
     /** Get anything already referenced (should include anything in PreLoadContext). If returned, should be initialised. */
     protected abstract SafeCommand getInternal(TxnId txnId);
-    /** Get if available and initialised */
-    protected abstract SafeCommand ifLoadedAndInitialisedAndNotErasedInternal(TxnId txnId);
+    /** Get if available */
+    protected abstract SafeCommand ifLoadedInternal(TxnId txnId);
     /** Get anything already referenced (should include anything in PreLoadContext) */
     protected abstract SafeCommandsForKey getInternal(RoutingKey key);
     /** Get if available */
@@ -412,7 +413,8 @@ public abstract class SafeCommandStore
         CommandStore commandStore = safeStore.commandStore();
         Ranges ranges = next.participants().touches.toRanges();
         commandStore.registerTransitive(safeStore, next.partialDeps().rangeDeps);
-        commandStore.markSynced(safeStore, txnId, ranges);
+        if (txnId.is(Kind.ExclusiveSyncPoint))
+            commandStore.markSynced(safeStore, txnId, ranges);
     }
 
     /**

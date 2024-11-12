@@ -154,4 +154,9 @@ final class TxnState extends HomeState
     {
         return txnId + ": " + toStateString();
     }
+
+    public boolean isDone(TxnStateKind runKind)
+    {
+        return runKind == TxnStateKind.Home ? isHomeDone() : isWaitingDone();
+    }
 }

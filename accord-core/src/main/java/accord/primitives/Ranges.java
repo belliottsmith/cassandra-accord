@@ -19,6 +19,7 @@
 package accord.primitives;
 
 import accord.api.RoutingKey;
+import accord.utils.Invariants;
 
 import javax.annotation.Nonnull;
 import java.util.ArrayList;
@@ -73,6 +74,12 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
 
     public Ranges select(int[] indexes)
     {
+        if (indexes.length == size())
+        {
+            for (int i = 0 ; i < indexes.length ; ++i)
+                Invariants.checkState(i == indexes[i]);
+            return this;
+        }
         Range[] selection = new Range[indexes.length];
         for (int i=0; i<indexes.length; i++)
             selection[i] = ranges[indexes[i]];
@@ -173,6 +180,21 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
             return this;
 
         return with(Ranges.of(withKey.asRange()));
+    }
+
+    public Ranges without(Unseekables<?> keysOrRanges)
+    {
+        if (keysOrRanges.domain() == Routable.Domain.Key)
+            keysOrRanges = ((AbstractUnseekableKeys)keysOrRanges).toRanges();
+        return ofSortedAndDeoverlappedUnchecked(withoutInternal((AbstractRanges) keysOrRanges));
+    }
+
+    /**
+     * Subtracts the given set of ranges from this
+     */
+    public Ranges without(Ranges that)
+    {
+        return ofSortedAndDeoverlappedUnchecked(withoutInternal(that));
     }
 
     @Override

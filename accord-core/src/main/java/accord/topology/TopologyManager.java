@@ -638,7 +638,7 @@ public class TopologyManager
         return new Single(sorter, epochs.get(epoch).global);
     }
 
-    // TODO (required): test all of these methods when asking for epochs that have been cleaned up (and other code paths)
+    // TODO (testing): test all of these methods when asking for epochs that have been cleaned up (and other code paths)
     public Topologies withUnsyncedEpochs(Unseekables<?> select, Timestamp min, Timestamp max)
     {
         return withUnsyncedEpochs(select, min.epoch(), max.epoch());
@@ -721,7 +721,7 @@ public class TopologyManager
 
         EpochState maxEpochState = nonNull(snapshot.get(maxEpoch));
         if (minEpoch == maxEpoch && isSufficientFor.apply(maxEpochState).containsAll(select))
-            return new Single(sorter, maxEpochState.global.forSelection(select, false));
+            return new Single(sorter, maxEpochState.global.select(select, false));
 
         int i = (int)(snapshot.currentEpoch - maxEpoch);
         int maxi = (int)(Math.min(1 + snapshot.currentEpoch - minEpoch, snapshot.epochs.length));
@@ -734,7 +734,7 @@ public class TopologyManager
         while (i < maxi)
         {
             EpochState epochState = snapshot.epochs[i++];
-            topologies.add(epochState.global.forSelection(select, false));
+            topologies.add(epochState.global.select(select, false));
             select = select.without(epochState.addedRanges);
         }
 
@@ -764,7 +764,7 @@ public class TopologyManager
                 return topologies.build(sorter);
 
             EpochState next = snapshot.epochs[i++];
-            topologies.add(next.global.forSelection(select, false));
+            topologies.add(next.global.select(select, false));
             prev = next;
         } while (i < snapshot.epochs.length);
         // needd to remove sufficent / added else remaining may not be empty when the final matches are the last epoch
@@ -794,7 +794,7 @@ public class TopologyManager
         {
             EpochState prev = minEpoch == snapshot.minEpoch() ? null : nonNull(snapshot.get(minEpoch - 1));
             if (prev == null || isSufficientFor.apply(prev, cur).containsAll(select))
-                return new Single(sorter, cur.global.forSelection(select, true));
+                return new Single(sorter, cur.global.select(select, true));
         }
 
         int i = (int)(snapshot.currentEpoch - maxEpoch);
@@ -803,7 +803,7 @@ public class TopologyManager
 
         while (!select.isEmpty())
         {
-            Topology topology = cur.global.forSelection(select, true);
+            Topology topology = cur.global.select(select, true);
             if (!topology.isEmpty())
                 topologies.add(topology);
             select = select.without(cur.addedRanges);
@@ -830,14 +830,14 @@ public class TopologyManager
             throw tm;
 
         if (minEpoch == maxEpoch)
-            return new Single(sorter, snapshot.get(minEpoch).global.forSelection(select));
+            return new Single(sorter, snapshot.get(minEpoch).global.select(select));
 
         int count = (int)(1 + maxEpoch - minEpoch);
         Topologies.Builder topologies = new Topologies.Builder(count);
         for (int i = count - 1 ; i >= 0 ; --i)
         {
             EpochState epochState = snapshot.get(minEpoch + i);
-            topologies.add(epochState.global.forSelection(select));
+            topologies.add(epochState.global.select(select));
             select = select.without(epochState.addedRanges);
         }
         checkState(!topologies.isEmpty(), "Unable to find an epoch that contained %s", select);
@@ -848,7 +848,7 @@ public class TopologyManager
     public Topologies forEpoch(Unseekables<?> select, long epoch)
     {
         EpochState state = epochs.get(epoch);
-        return new Single(sorter, state.global.forSelection(select));
+        return new Single(sorter, state.global.select(select));
     }
 
     public Shard forEpochIfKnown(RoutingKey key, long epoch)
@@ -904,6 +904,14 @@ public class TopologyManager
         EpochState epochState = epochs.get(epoch);
         if (epochState == null)
             throw new IllegalArgumentException("Unknown epoch: " + epoch);
+        return epochState.global();
+    }
+
+    public Topology maybeGlobalForEpoch(long epoch)
+    {
+        EpochState epochState = epochs.get(epoch);
+        if (epochState == null)
+            return null;
         return epochState.global();
     }
 }

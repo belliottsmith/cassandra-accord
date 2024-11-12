@@ -25,6 +25,7 @@ import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.local.StoreParticipants;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.primitives.Participants;
@@ -177,8 +178,9 @@ public interface ProgressLog
      * @param blockedBy             is the transaction id that is blocking progress
      * @param blockedOnRoute        the route (if any) we are blocked on execution for
      * @param blockedOnParticipants the participating keys on which we are blocked for execution
+     * @param participants
      */
-    void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, @Nullable Route<?> blockedOnRoute, @Nullable Participants<?> blockedOnParticipants);
+    void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, @Nullable Route<?> blockedOnRoute, @Nullable Participants<?> blockedOnParticipants, @Nullable StoreParticipants participants);
 
     /**
      * We have finished processing this transaction; ensure its state is cleared
@@ -196,7 +198,7 @@ public interface ProgressLog
     {
         @Override public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after) {}
         @Override public void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from) {}
-        @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants) {}
+        @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants participants) {}
         @Override public void clear(TxnId txnId) {}
         @Override public void clear() {}
     }

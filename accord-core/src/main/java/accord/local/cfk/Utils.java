@@ -56,7 +56,7 @@ class Utils
                 if (shouldNotHaveMissing != NO_TXNIDS && Arrays.binarySearch(shouldNotHaveMissing, txn) >= 0) Invariants.checkState(j < 0);
                 else Invariants.checkState(j >= 0);
             }
-            if (curInfo == null && newInfo.status().compareTo(COMMITTED) < 0 && txn.kind().witnesses(newInfo) && txn.depsKnownBefore().compareTo(newInfo) > 0 && (shouldNotHaveMissing == NO_TXNIDS || Arrays.binarySearch(shouldNotHaveMissing, txn) < 0))
+            if (curInfo == null && newInfo.compareTo(COMMITTED) < 0 && txn.kind().witnesses(newInfo) && txn.depsKnownBefore().compareTo(newInfo) > 0 && (shouldNotHaveMissing == NO_TXNIDS || Arrays.binarySearch(shouldNotHaveMissing, txn) < 0))
                 Invariants.checkState(Arrays.binarySearch(missing, newInfo) >= 0);
         }
     }
@@ -107,7 +107,7 @@ class Utils
             if (txn.getClass() == TxnInfo.class) continue;
             if (!txn.hasDeps()) continue;
             if (!txn.kind().witnesses(removeTxnId)) continue;
-            if (txn.status() != ACCEPTED && txn.mayExecute()) continue;
+            if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
 
             TxnId[] missing = txn.missing();
             TxnId[] newMissing = removeOneMissing(missing, removeTxnId);
@@ -188,7 +188,7 @@ class Utils
                 if (txn == newInfo) continue;
                 if (!txn.hasDeps()) continue;
                 if (!txn.kind().witnesses(insertTxnId)) continue;
-                if (txn.status() != ACCEPTED && txn.mayExecute()) continue;
+                if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
                 if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
                 {
                     ++minDoNotInsertSearchIndex;
@@ -209,7 +209,7 @@ class Utils
             // TODO (expected): optimise this with flag bits
             if (!txn.hasDeps()) continue;
             if (!txn.kind().witnesses(insertTxnId)) continue;
-            if (txn.status() != ACCEPTED && txn.mayExecute()) continue;
+            if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
             if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
             {
                 ++minDoNotInsertSearchIndex;

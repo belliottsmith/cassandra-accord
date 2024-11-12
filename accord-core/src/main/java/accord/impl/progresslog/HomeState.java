@@ -41,7 +41,7 @@ import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 
 /**
- * TODO (required): describe state machine
+ * TODO (documentation): describe state machine
  *
  * TODO (expected): do not attempt recovery every run; simply check the coordinator is still active
  * TODO (expected): do not attempt execution until all shards are ready; use the WaitingState to achieve this
@@ -52,11 +52,11 @@ abstract class HomeState extends WaitingState
     private static final long PROGRESS_MASK = 0x3;
     private static final int STATUS_SHIFT = PROGRESS_SHIFT + 2;
     private static final long STATUS_MASK = 0x7;
-    private static final int RETRY_COUNTER_SHIFT = PROGRESS_SHIFT + 3;
+    private static final int RETRY_COUNTER_SHIFT = STATUS_SHIFT + 3;
     private static final long RETRY_COUNTER_MASK = 0x7;
     private static final long SET_MASK = ~((PROGRESS_MASK << PROGRESS_SHIFT)
                                            | (STATUS_MASK << STATUS_SHIFT));
-    final int HOME_STATE_END_SHIFT = RETRY_COUNTER_SHIFT + 3;
+    static final int HOME_STATE_END_SHIFT = RETRY_COUNTER_SHIFT + 3;
 
     HomeState(TxnId txnId)
     {
@@ -141,7 +141,7 @@ abstract class HomeState extends WaitingState
 
         Invariants.checkState(command.durability() != null);
         // TODO (expected): when invalidated, safer to maintain HomeState until known to be globally invalidated
-        // TODO (now): validate that we clear HomeState when we receive a Durable reply, to replace the token check logic
+        // TODO (expected): validate that we clear HomeState when we receive a Durable reply, to replace the token check logic
         Invariants.checkState(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog");
 
         ProgressToken maxProgressToken = instance.savedProgressToken(txnId).merge(command);

@@ -73,4 +73,9 @@ public class Timestamped<T>
     {
         return toString.apply(data);
     }
+
+    public boolean equals(Timestamped<T> that, BiPredicate<T, T> equality)
+    {
+        return this.timestamp.equals(that.timestamp) && equality.test(this.data, that.data);
+    }
 }

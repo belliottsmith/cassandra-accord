@@ -79,11 +79,11 @@ class CommandsTest
             Topology initialTopology = TopologyUtils.topology(1, nodes, Ranges.of(allRanges), rf);
             Topology updatedTopology = TopologyUtils.topology(2, nodes, Ranges.of(prefix0), rf); // drop prefix1
 
-            Cluster.run(rs::fork, nodes, initialTopology, nodeMap -> new Request()
+            Cluster.run(rs::fork, new int[] {0, 1}, nodes, initialTopology, nodeMap -> new Request()
             {
                 {
                     // the node selected does not matter and should not impact determinism, they all share the same scheduler
-                    ((Cluster) nodeMap.values().stream().findFirst().get().scheduler()).onDone(() -> checkState(0, nodeMap.values()));
+                    ((Cluster.ClusterScheduler) nodeMap.values().stream().findFirst().get().scheduler()).onDone(() -> checkState(0, nodeMap.values()));
                 }
 
                 @Override
@@ -142,6 +142,9 @@ class CommandsTest
                     if (cmd.value() == null) // empty isn't public
                         continue;
                     Command command = cmd.value();
+                    if (command.txnId().isSyncPoint())
+                        continue;
+
                     if (command.status() == Status.Invalidated || command.status() == Status.AcceptedInvalidate)
                         continue;
                     // current limitation of SimpleProgressLog is that only the home shard will attempt to recover, so

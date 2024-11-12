@@ -719,7 +719,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        protected SafeCommand ifLoadedAndInitialisedAndNotErasedInternal(TxnId txnId)
+        protected SafeCommand ifLoadedInternal(TxnId txnId)
         {
             return getInternal(txnId);
         }
@@ -757,7 +757,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public SafeCommand ifLoadedAndInitialisedAndNotErased(TxnId txnId)
+        public SafeCommand ifLoadedAndInitialised(TxnId txnId)
         {
             if (txnId.compareTo(cfk.current.prunedBefore()) < 0)
                 return null;

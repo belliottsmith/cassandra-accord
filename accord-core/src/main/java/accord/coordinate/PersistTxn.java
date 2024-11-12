@@ -22,6 +22,7 @@ import accord.api.Result;
 import accord.local.Node;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -30,8 +31,8 @@ import accord.topology.Topologies;
 
 public class PersistTxn extends Persist
 {
-    public PersistTxn(Node node, Topologies topologies, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public PersistTxn(Node node, Topologies topologies, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> route)
     {
-        super(node, topologies, txnId, route, txn, executeAt, deps, writes, result);
+        super(node, topologies, txnId, sendTo, txn, executeAt, deps, writes, result, route);
     }
 }

@@ -156,6 +156,13 @@ public interface PreLoadContext
         return new Standard(primary, additional, keys, keyHistory);
     }
 
+    default boolean contains(TxnId txnId)
+    {
+        TxnId primaryTxnId = primaryTxnId();
+        return primaryTxnId != null && (txnId.equals(primaryTxnId) || txnId.equals(additionalTxnId()));
+    }
+
+
     class Standard implements PreLoadContext
     {
         private final @Nullable TxnId primary;

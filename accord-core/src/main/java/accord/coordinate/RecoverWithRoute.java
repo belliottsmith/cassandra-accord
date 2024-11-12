@@ -23,8 +23,6 @@ import javax.annotation.Nullable;
 
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.primitives.Status;
-import accord.primitives.Known;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
@@ -33,16 +31,16 @@ import accord.messages.Propagate;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
-import accord.primitives.Participants;
+import accord.primitives.Known;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
+import accord.primitives.Status;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 
 import static accord.coordinate.CoordinationAdapter.Factory.Step.InitiateRecovery;
-import static accord.primitives.Status.Durability.Majority;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Known.Outcome.Apply;
@@ -50,6 +48,7 @@ import static accord.primitives.ProgressToken.APPLIED;
 import static accord.primitives.ProgressToken.INVALIDATED;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.primitives.Route.castToFullRoute;
+import static accord.primitives.Status.Durability.Majority;
 import static accord.utils.Invariants.illegalState;
 
 public class RecoverWithRoute extends CheckShards<FullRoute<?>>
@@ -141,7 +140,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
             return;
         }
 
-        CheckStatusOkFull full = ((CheckStatusOkFull) this.merged).finish(route, success.withQuorum);
+        CheckStatusOkFull full = ((CheckStatusOkFull) this.merged).finish(route, route, success.withQuorum);
         Known known = full.knownFor(txnId, route, route);
 
         // TODO (required): audit this logic, and centralise with e.g. FetchData inferences
@@ -177,7 +176,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                     {
                         // we might have only part of the full transaction, and a shard may have truncated;
                         // in this case we want to skip straight to apply, but only for the shards that haven't truncated
-                        Participants<?> sendTo = route.participants().without(full.truncatedResponse());
+                        Route<?> sendTo = route.without(full.truncatedResponse());
                         if (!sendTo.isEmpty())
                         {
                             known = full.knownFor(txnId, sendTo, sendTo);

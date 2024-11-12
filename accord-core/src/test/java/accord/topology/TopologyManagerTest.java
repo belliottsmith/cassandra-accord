@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.Iterators;
@@ -217,14 +218,14 @@ public class TopologyManagerTest
         Assertions.assertFalse(service.getEpochStateUnsafe(2).syncComplete());
 
         RoutingKeys keys = keys(150).toParticipants();
-        Assertions.assertEquals(topologies(topology3.forSelection(keys), topology2.forSelection(keys), topology1.forSelection(keys)),
+        Assertions.assertEquals(topologies(topology3.select(keys), topology2.select(keys), topology1.select(keys)),
                                 service.withUnsyncedEpochs(keys, 3, 3));
 
         service.onEpochSyncComplete(id(2), 2);
         service.onEpochSyncComplete(id(3), 2);
         service.onEpochSyncComplete(id(2), 3);
         service.onEpochSyncComplete(id(3), 3);
-        Assertions.assertEquals(topologies(topology3.forSelection(keys)),
+        Assertions.assertEquals(topologies(topology3.select(keys)),
                                 service.withUnsyncedEpochs(keys, 3, 3));
     }
 
@@ -392,7 +393,8 @@ public class TopologyManagerTest
         AgentExecutor executor = Mockito.mock(AgentExecutor.class, Mockito.withSettings().defaultAnswer(ignore -> { throw new IllegalStateException("Attempted to perform async operation"); }));
         Mockito.doReturn(new TestAgent.RethrowAgent()).when(executor).agent();
         qt().withExamples(20).check(rs -> {
-            TopologyRandomizer randomizer = new TopologyRandomizer(() -> rs, firstTopology.next(rs), new TopologyUpdates(ignore -> executor), null, TopologyRandomizer.Listeners.NOOP);
+            int[] prefixes = IntStream.generate(rs::nextInt).limit(10).toArray();
+            TopologyRandomizer randomizer = new TopologyRandomizer(() -> rs, prefixes, firstTopology.next(rs), new TopologyUpdates(ignore -> executor), null, TopologyRandomizer.Listeners.NOOP);
             Iterator<Topology> next = Iterators.limit(new AbstractIterator<Topology>()
             {
                 @Override

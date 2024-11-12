@@ -19,6 +19,7 @@
 package accord.primitives;
 
 import accord.api.RoutingKey;
+import accord.primitives.Routable.Domain;
 import accord.utils.Invariants;
 
 import javax.annotation.Nonnull;
@@ -57,6 +58,24 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
             return this;
 
         return with((Unseekables<Range>) Ranges.of(withKey.asRange()));
+    }
+
+    @Override
+    public RangeRoute without(Unseekables<?> keysOrRanges)
+    {
+        return without(keysOrRanges.domain() == Domain.Range ? (AbstractRanges) keysOrRanges : ((AbstractUnseekableKeys)keysOrRanges).toRanges());
+    }
+
+    @Override
+    public RangeRoute without(Ranges that)
+    {
+        return without((AbstractRanges) that);
+    }
+
+    private RangeRoute without(AbstractRanges that)
+    {
+        Range[] newRanges = withoutInternal(that);
+        return newRanges == ranges ? this : new PartialRangeRoute(homeKey, newRanges);
     }
 
     @Override

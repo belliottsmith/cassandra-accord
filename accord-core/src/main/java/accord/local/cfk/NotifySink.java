@@ -49,7 +49,7 @@ interface NotifySink
         @Override
         public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key)
         {
-            SafeCommand safeCommand = safeStore.ifLoadedAndInitialisedAndNotErased(txnId);
+            SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
             if (safeCommand != null) notWaiting(safeStore, safeCommand, key);
             else
             {
@@ -106,7 +106,7 @@ interface NotifySink
             }
             else
             {
-                safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, RoutingKeys.of(key.toUnseekable()));
+                safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, RoutingKeys.of(key.toUnseekable()), null);
             }
         }
 

@@ -63,7 +63,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 {
     private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
 
-    private enum State { PENDING, RETURNED, OBSOLETE }
+    private enum State { PENDING, PENDING_OBSOLETE, RETURNED, OBSOLETE }
     protected enum StoreAction { WAIT, EXECUTE, OBSOLETE }
 
     public enum ReadType
@@ -157,6 +157,11 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         return txnId;
     }
 
+    protected long minEpoch()
+    {
+        return executeAtEpoch;
+    }
+
     @Override
     public final void process(Node on, Node.Id replyTo, ReplyContext replyContext)
     {
@@ -165,7 +170,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         this.replyContext = replyContext;
         waitingOn = new IntHashSet();
         reading = new IntHashSet();
-        Cancellable cancel = node.mapReduceConsumeLocal(this, readScope, executeAtEpoch, executeAtEpoch, this);
+        Cancellable cancel = node.mapReduceConsumeLocal(this, readScope, minEpoch(), executeAtEpoch, this);
         long expiresAt = node.agent().expiresAt(replyContext, MICROSECONDS);
         RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerWithDelay(this, expiresAt, MICROSECONDS);
         synchronized (this)
@@ -176,6 +181,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     this.cancel = cancel;
                     this.timeout = timeout;
                     return;
+                case PENDING_OBSOLETE:
                 case OBSOLETE:
                     timeout = null;
                 case RETURNED:
@@ -197,7 +203,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     @Override
     public CommitOrReadNack apply(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.execute(safeStore, readScope, txnId, executeAtEpoch);
+        StoreParticipants participants = StoreParticipants.execute(safeStore, readScope, txnId, minEpoch(), executeAtEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         return apply(safeStore, safeCommand, participants);
     }
@@ -223,12 +229,12 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     ++waitingOnCount;
 
                     int c = status.compareTo(SaveStatus.Stable);
-                    if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, participants.route(), participants.owns());
-                    else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, readScope);
+                    if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, null, participants);
+                    else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, readScope, null);
                     return status.compareTo(SaveStatus.Stable) >= 0 ? null : Insufficient;
 
                 case OBSOLETE:
-                    state = State.OBSOLETE;
+                    state = State.PENDING_OBSOLETE;
                     return Redundant;
 
                 case EXECUTE:
@@ -400,6 +406,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
             case RETURNED:
                 throw illegalState("ReadOk was sent, yet ack called again");
 
+            case PENDING_OBSOLETE:
             case OBSOLETE:
                 logger.debug("Before the read completed successfully for txn {}, the result was marked obsolete", txnId);
                 return null;
@@ -418,7 +425,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         Cancellable clear;
         synchronized (this)
         {
-            if (state != State.PENDING)
+            if (state.compareTo(State.PENDING_OBSOLETE) > 0)
                 return false;
 
             state = State.OBSOLETE;

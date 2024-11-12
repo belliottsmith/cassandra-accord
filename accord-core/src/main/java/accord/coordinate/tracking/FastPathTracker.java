@@ -22,6 +22,8 @@ import accord.coordinate.tracking.QuorumTracker.QuorumShardTracker;
 import accord.local.Node;
 import accord.topology.Shard;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
+
 import com.google.common.annotations.VisibleForTesting;
 
 import javax.annotation.Nonnull;
@@ -43,6 +45,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
         protected int fastPathAccepts;
         protected int fastPathFailures;
         protected int fastPathDelayed;
+        protected boolean complete;
 
         public FastPathShardTracker(Shard shard)
         {
@@ -51,19 +54,43 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
 
         // return NewQuorumSuccess ONLY once fast path is rejected
         public abstract ShardOutcome<? super FastPathTracker> onQuorumSuccess(Node.Id node);
-        public abstract ShardOutcome<? super FastPathTracker> onMaybeFastPathSuccess(Node.Id node);
+        final ShardOutcome<? super FastPathTracker> complete(ShardOutcome<? super FastPathTracker> result)
+        {
+            Invariants.checkState(!complete);
+            complete = true;
+            return result;
+        }
+
+        public ShardOutcome<? super FastPathTracker> onMaybeFastPathSuccess(Node.Id node)
+        {
+            if (complete)
+                return NoChange;
+
+            ++successes;
+            if (shard.fastPathElectorate.contains(node))
+            {
+                ++fastPathAccepts;
+                if (hasMetFastPathCriteria())
+                    return complete(NewFastPathSuccess);
+            }
+
+            return quorumIfHasRejectedFastPath();
+        }
 
         public final ShardOutcome<? super FastPathTracker> onFailure(@Nonnull Node.Id from)
         {
+            if (complete)
+                return NoChange;
+
             if (++failures > shard.maxFailures)
-                return Fail;
+                return complete(Fail);
 
             if (shard.fastPathElectorate.contains(from))
             {
                 ++fastPathFailures;
 
-                if (isNewFastPathReject() && hasReachedQuorum())
-                    return Success;
+                if (hasRejectedFastPath() && hasReachedQuorum())
+                    return complete(Success);
             }
 
             return NoChange;
@@ -71,40 +98,28 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
 
         public final ShardOutcome<? super FastPathTracker> onDelayed(@Nonnull Node.Id from)
         {
+            if (complete)
+                return NoChange;
+
             if (shard.fastPathElectorate.contains(from))
             {
                 ++fastPathDelayed;
 
-                if (isNewFastPathDelayed() && hasReachedQuorum())
-                    return Success;
+                if (isFastPathDelayed() && hasReachedQuorum())
+                    return complete(Success);
             }
 
             return NoChange;
         }
 
-        final ShardOutcome<? super FastPathTracker> quorumIfNewAndHasRejectedFastPath()
+        final ShardOutcome<? super FastPathTracker> quorumIfHasRejectedFastPath()
         {
-            return isNewSlowPathSuccess() && hasRejectedFastPath() ? Success : NoChange;
+            return hasReachedQuorum() && hasRejectedFastPath() ? complete(Success) : NoChange;
         }
 
-        final boolean isNewSlowPathSuccess()
+        final boolean isFastPathDelayed()
         {
-            return successes == shard.slowPathQuorumSize;
-        }
-
-        final boolean isNewFastPathReject()
-        {
-            return fastPathFailures == shard.fastPathRejectSize && fastPathDelayed < shard.fastPathRejectSize;
-        }
-
-        final boolean isNewFastPathDelayed()
-        {
-            return fastPathDelayed == shard.fastPathRejectSize && fastPathFailures < shard.fastPathRejectSize;
-        }
-
-        final boolean isNewFastPathSuccess()
-        {
-            return fastPathAccepts == shard.fastPathQuorumSize && (fastPathDelayed < shard.fastPathRejectSize || isNewSlowPathSuccess());
+            return fastPathDelayed >= shard.fastPathRejectSize;
         }
 
         @VisibleForTesting
@@ -116,7 +131,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
         @VisibleForTesting
         public final boolean hasRejectedFastPath()
         {
-            return Math.max(fastPathFailures, fastPathDelayed) >= shard.fastPathRejectSize;
+            return fastPathFailures >= shard.fastPathRejectSize;
         }
     }
 
@@ -129,24 +144,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
 
         public ShardOutcome<? super FastPathTracker> onQuorumSuccess(Node.Id node)
         {
-            ++successes;
-            if (!shard.fastPathElectorate.contains(node))
-                return quorumIfNewAndHasRejectedFastPath();
-
-            ++fastPathAccepts;
-            if (isNewFastPathSuccess())
-                return NewFastPathSuccess;
-
-            if (isNewSlowPathSuccess() && hasRejectedFastPath())
-                return Success;
-
-            return NoChange;
-        }
-
-        @Override
-        public ShardOutcome<? super FastPathTracker> onMaybeFastPathSuccess(Node.Id node)
-        {
-            return onQuorumSuccess(node);
+            return onMaybeFastPathSuccess(node);
         }
     }
 
@@ -159,31 +157,14 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
 
         public ShardOutcome<? super FastPathTracker> onQuorumSuccess(Node.Id node)
         {
-            ++successes;
-            if (!shard.fastPathElectorate.contains(node))
-                return quorumIfNewAndHasRejectedFastPath();
+            if (complete)
+                return NoChange;
 
-            ++fastPathFailures;
-            if (isNewFastPathReject() && hasReachedQuorum())
-                return Success;
-
-            if (isNewSlowPathSuccess() && hasRejectedFastPath())
-                return Success;
-
-            return NoChange;
-        }
-
-        @Override
-        public ShardOutcome<? super FastPathTracker> onMaybeFastPathSuccess(Node.Id node)
-        {
             ++successes;
             if (shard.fastPathElectorate.contains(node))
-            {
-                ++fastPathAccepts;
-                if (isNewFastPathSuccess())
-                    return NewFastPathSuccess;
-            }
-            return quorumIfNewAndHasRejectedFastPath();
+                ++fastPathFailures; // Quorum success can not count towards fast path success
+
+            return quorumIfHasRejectedFastPath();
         }
     }
 
@@ -225,11 +206,6 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
     public boolean hasFailed()
     {
         return any(FastPathShardTracker::hasFailed);
-    }
-
-    public boolean hasInFlight()
-    {
-        return any(FastPathShardTracker::hasInFlight);
     }
 
     public boolean hasReachedQuorum()

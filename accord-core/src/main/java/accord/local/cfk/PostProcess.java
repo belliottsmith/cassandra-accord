@@ -21,6 +21,7 @@ package accord.local.cfk;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Predicate;
 
 import javax.annotation.Nullable;
 
@@ -42,7 +43,7 @@ import accord.utils.btree.BTree;
 
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
-import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_PRUNED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.maxContiguousManagedAppliedIndex;
@@ -56,6 +57,7 @@ import static accord.local.cfk.Utils.removeUnmanaged;
 import static accord.local.cfk.Utils.selectUnmanaged;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
+import static accord.utils.SortedArrays.Search.FAST;
 
 abstract class PostProcess
 {
@@ -91,7 +93,7 @@ abstract class PostProcess
             for (TxnId txnId : load)
             {
                 safeStore = safeStore; // make it unsafe for use in lambda
-                SafeCommand safeCommand = safeStore.ifLoadedAndInitialisedAndNotErased(txnId);
+                SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
                 if (safeCommand != null) load(safeStore, safeCommand, safeCfk, notifySink);
                 else
                     safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, RoutingKeys.of(key), SYNC), safeStore0 -> {
@@ -148,7 +150,7 @@ abstract class PostProcess
             if (txn.compareTo(newBoundsInfo.bootstrappedAt) >= 0)
                 break;
 
-            if (txn.status() == STABLE)
+            if (txn.is(STABLE))
             {
                 if (notifyCount == notify.length)
                     notify = cachedTxnIds().resize(notify, notifyCount, Math.max(notifyCount * 2, 8));
@@ -196,7 +198,7 @@ abstract class PostProcess
             List<PostProcess> nestedNotify = new ArrayList<>();
             for (TxnId txnId : notify)
             {
-                SafeCommand safeCommand = safeStore.ifLoadedAndInitialisedAndNotErased(txnId);
+                SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
                 if (safeCommand != null)
                 {
                     CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, UPDATE, addUnmanageds);
@@ -246,10 +248,12 @@ abstract class PostProcess
                                                  int maxAppliedWriteByExecuteAt,
                                                  Object[] loadingPruned,
                                                  RedundantBefore.Entry boundsInfo,
+                                                 boolean isNewBoundsInfo,
                                                  @Nullable TxnInfo curInfo,
                                                  @Nullable TxnInfo newInfo)
     {
-        TxnId redundantBefore = boundsInfo.shardRedundantBefore();
+        // TODO (expected): can we relax this to shardRedundantBefore?
+        TxnId redundantBefore = boundsInfo.gcBefore();
         TxnId bootstrappedAt = boundsInfo.bootstrappedAt;
         if (bootstrappedAt.compareTo(redundantBefore) <= 0) bootstrappedAt = null;
 
@@ -272,7 +276,7 @@ abstract class PostProcess
 
         {
             Timestamp applyTo = null;
-            if (newInfo != null && newInfo.status() == APPLIED)
+            if (newInfo != null && newInfo.is(APPLIED))
             {
                 TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
                 if (maxContiguousApplied != null && maxContiguousApplied.compareExecuteAt(newInfo) >= 0)
@@ -283,7 +287,7 @@ abstract class PostProcess
                 TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
                 if (maxContiguousApplied != null)
                     applyTo = maxContiguousApplied.executeAt;
-                // if we're updating bootstrappedAt, we can fire anyone waiting on an executeAt before the bootstrappedAt
+
                 applyTo = Timestamp.nonNullOrMax(applyTo, TxnId.nonNullOrMax(redundantBefore, bootstrappedAt));
             }
 
@@ -300,39 +304,73 @@ abstract class PostProcess
             }
         }
 
-        if (newInfo != null && newInfo.status() == INVALID_OR_TRUNCATED_OR_PRUNED && curInfo != null && curInfo.status().isCommittedToExecute())
+        Predicate<Timestamp> rescheduleOrNotifyIf  = null;
+        if ((newInfo != null && newInfo.isAtLeast(INVALIDATED) && curInfo != null && curInfo.isCommittedToExecute()))
+        {
+            rescheduleOrNotifyIf = curInfo.executeAt::equals;
+        }
+
+        if (isNewBoundsInfo && bootstrappedAt != null)
+        {
+            Timestamp maxPreBootstrap;
+            {
+                Timestamp tmp = bootstrappedAt;
+                for (int i = 0; i < byId.length; ++i)
+                {
+                    TxnInfo txn = byId[i];
+                    if (txn.compareTo(bootstrappedAt) > 0)
+                        break;
+                    tmp = Timestamp.nonNullOrMax(tmp, txn.executeAt);
+                }
+                maxPreBootstrap = tmp;
+            }
+            if (rescheduleOrNotifyIf == null)
+                rescheduleOrNotifyIf = test -> test.compareTo(maxPreBootstrap) <= 0;
+            else
+                rescheduleOrNotifyIf = test -> curInfo.executeAt.equals(test) || test.compareTo(maxPreBootstrap) <= 0;
+        }
+
+        if (rescheduleOrNotifyIf != null)
         {
             // this is a rare edge case, but we might have unmanaged transactions waiting on this command we must re-schedule or notify
+            boolean clone = true;
             int start = findFirstApply(unmanageds);
-            int end = start;
-            while (end < unmanageds.length && unmanageds[end].waitingUntil.equals(curInfo.executeAt))
-                ++end;
-
-            if (start != end)
+            while (start < unmanageds.length)
             {
-                // find committed predecessor, if any
-                int predecessor = -2 - Arrays.binarySearch(committedByExecuteAt, curInfo, TxnInfo::compareExecuteAt);
+                if (rescheduleOrNotifyIf.test(unmanageds[start].waitingUntil))
+                {
+                    int end = start + 1;
+                    while (end < unmanageds.length && rescheduleOrNotifyIf.test(unmanageds[end].waitingUntil))
+                        ++end;
 
-                if (predecessor >= 0)
-                {
-                    int maxContiguousApplied = maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
-                    if (maxContiguousApplied >= predecessor)
-                        predecessor = -1;
-                }
+                    // find committed predecessor, if any
+                    int predecessor = -2 - SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanageds[start].waitingUntil, (t, i) -> t.compareTo(i.executeAt), FAST);
 
-                if (predecessor >= 0)
-                {
-                    Timestamp waitingUntil = committedByExecuteAt[predecessor].plainExecuteAt();
-                    unmanageds = unmanageds.clone();
-                    for (int i = start ; i < end ; ++i)
-                        unmanageds[i] = new Unmanaged(APPLY, unmanageds[i].txnId, waitingUntil);
+                    if (predecessor >= 0)
+                    {
+                        int maxContiguousApplied = maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                        if (maxContiguousApplied >= predecessor)
+                            predecessor = -1;
+                    }
+
+                    if (predecessor >= 0)
+                    {
+                        Timestamp waitingUntil = committedByExecuteAt[predecessor].plainExecuteAt();
+                        if (clone) unmanageds = unmanageds.clone();
+                        clone = false;
+                        for (int i = start ; i < end ; ++i)
+                            unmanageds[i] = new Unmanaged(APPLY, unmanageds[i].txnId, waitingUntil);
+                    }
+                    else
+                    {
+                        TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
+                        unmanageds = removeUnmanaged(unmanageds, start, end);
+                        notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                        clone = false;
+                    }
+                    start = end - 1;
                 }
-                else
-                {
-                    TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
-                    unmanageds = removeUnmanaged(unmanageds, start, end);
-                    notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
-                }
+                ++start;
             }
         }
 

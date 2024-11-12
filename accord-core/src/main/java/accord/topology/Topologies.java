@@ -23,6 +23,7 @@ import java.util.Arrays;
 import accord.api.TopologySorter;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.utils.ArrayBuffers;
 import accord.utils.ArrayBuffers.RecursiveObjectBuffers;
@@ -79,6 +80,8 @@ public interface Topologies extends TopologySorter
     Ranges computeRangesForNode(Id node);
 
     int maxShardsPerEpoch();
+
+    Topologies select(Participants<?> participants, long sinceEpoch);
 
     default void forEach(IndexedConsumer<Topology> consumer)
     {
@@ -191,6 +194,14 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
+        public Topologies select(Participants<?> participants, long sinceEpoch)
+        {
+            Invariants.checkState(sinceEpoch <= currentEpoch());
+            Topology subset = topology.select(participants);
+            return subset == topology ? this : new Single(sorter, subset);
+        }
+
+        @Override
         public int size()
         {
             return 1;
@@ -269,8 +280,8 @@ public interface Topologies extends TopologySorter
         {
             this.topologies = Invariants.checkArgument(topologies, isSortedUnique(topologies, (a, b) -> Long.compare(b.epoch, a.epoch)));
             int maxShardsPerEpoch = 0;
-            for (int i = 0 ; i < topologies.length ; ++i)
-                maxShardsPerEpoch = Math.max(maxShardsPerEpoch, topologies[i].size());
+            for (Topology topology : topologies)
+                maxShardsPerEpoch = Math.max(maxShardsPerEpoch, topology.size());
             this.maxShardsPerEpoch = maxShardsPerEpoch;
             this.supplier = sorter;
             this.nodes = nodes(topologies);
@@ -433,6 +444,31 @@ public interface Topologies extends TopologySorter
         public boolean isFaulty(Id node)
         {
             return sorter.isFaulty(node);
+        }
+
+        @Override
+        public Topologies select(Participants<?> participants, long sinceEpoch)
+        {
+            Topology[] subsets = null;
+            int limit = topologies.length;
+            if (sinceEpoch > oldestEpoch())
+                limit = indexForEpoch(sinceEpoch) + 1;
+            for (int i = 0 ; i < limit ; ++i)
+            {
+                Topology superset = topologies[i];
+                Topology subset = superset.select(participants);
+                if (subset != superset && subsets == null)
+                {
+                    subsets = new Topology[limit];
+                    System.arraycopy(topologies, 0, subsets, 0, i);
+                }
+                if (subsets != null)
+                    subsets[i] = subset;
+            }
+
+            if (subsets == null)
+                return this;
+            return new Multi(supplier, subsets);
         }
     }
 

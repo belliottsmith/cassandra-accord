@@ -87,13 +87,13 @@ abstract class WaitingState extends BaseTxnState
     private static final long BLOCKED_UNTIL_MASK = 0x7;
     private static final int HOME_SATISFIES_SHIFT = 5;
     private static final long HOME_SATISFIES_MASK = 0x7;
-    private static final int AWAIT_BITS = 32;
     private static final int AWAIT_SHIFT = 8;
+    private static final int AWAIT_BITS = 32;
     private static final long AWAIT_MASK = (1L << AWAIT_BITS) - 1;
     private static final long SET_MASK = ~((PROGRESS_MASK << PROGRESS_SHIFT) | (BLOCKED_UNTIL_MASK << BLOCKED_UNTIL_SHIFT));
     private static final long INITIALISED_MASK = (PROGRESS_MASK << PROGRESS_SHIFT) | (BLOCKED_UNTIL_MASK << BLOCKED_UNTIL_SHIFT) | (HOME_SATISFIES_MASK << HOME_SATISFIES_SHIFT);
 
-    private static final int RETRY_COUNTER_SHIFT = 40;
+    private static final int RETRY_COUNTER_SHIFT = AWAIT_SHIFT + AWAIT_BITS;
     private static final long RETRY_COUNTER_MASK = 0x7;
     static final int WAITING_STATE_END_SHIFT = RETRY_COUNTER_SHIFT + 3;
 

@@ -38,6 +38,8 @@ public interface Route<K extends Unseekable> extends Participants<K>
      */
     @Override
     Route<K> with(Participants<K> participants);
+    @Override Route<K> without(Ranges ranges);
+    @Override Route<K> without(Unseekables<?> without);
 
     @Override
     Route<K> slice(int from, int to);

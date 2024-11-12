@@ -18,6 +18,13 @@
 
 package accord.primitives;
 
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.function.Function;
+import javax.annotation.Nonnull;
+
+import com.google.common.collect.Iterators;
+
 import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers.ObjectBuffers;
 import accord.utils.IndexedFoldToLong;
@@ -26,15 +33,9 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
-import com.google.common.collect.Iterators;
-
-import javax.annotation.Nonnull;
-import java.util.*;
-import java.util.function.Function;
-
 import static accord.primitives.Ranges.EMPTY;
-import static accord.primitives.Ranges.ofSortedAndDeoverlappedUnchecked;
 import static accord.utils.ArrayBuffers.cachedRanges;
+import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FAST;
 import static accord.utils.SortedArrays.isSorted;
@@ -181,13 +182,6 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         }
     }
 
-    public Ranges without(Unseekables<?> keysOrRanges)
-    {
-        if (keysOrRanges.domain() == Routable.Domain.Key)
-            keysOrRanges = ((AbstractUnseekableKeys)keysOrRanges).toRanges();
-        return without((AbstractRanges) keysOrRanges);
-    }
-
     // returns ri in low 32 bits, ki in top, or -1 if no match found
     @Override
     public final long findNextIntersection(int ri, AbstractKeys<?> keys, int ki)
@@ -240,21 +234,13 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     /**
      * Subtracts the given set of ranges from this
      */
-    public Ranges without(Ranges that)
-    {
-        return without((AbstractRanges) that);
-    }
-
-    /**
-     * Subtracts the given set of ranges from this
-     */
-    private Ranges without(AbstractRanges that)
+    Range[] withoutInternal(AbstractRanges that)
     {
         if (that.isEmpty())
-            return this instanceof Ranges ? (Ranges)this : ofSortedAndDeoverlappedUnchecked(ranges);
+            return ranges;
 
         if (isEmpty() || that == this)
-            return EMPTY;
+            return EMPTY.ranges;
 
         ObjectBuffers<Range> cachedRanges = cachedRanges();
         Range[] result = null;
@@ -310,9 +296,9 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         }
 
         if (count == 0)
-            return EMPTY;
+            return EMPTY.ranges;
 
-        return ofSortedAndDeoverlappedUnchecked(cachedRanges.completeAndDiscard(result, count));
+        return cachedRanges.completeAndDiscard(result, count);
     }
 
     /**
@@ -802,7 +788,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         for (int i = 1 ; i < ranges.length ; ++i)
         {
             if (ranges[i - 1].end().compareTo(ranges[i].start()) > 0)
-                throw new IllegalArgumentException(Arrays.toString(ranges) + " is not correctly sorted or deoverlapped");
+                throw illegalArgument(Arrays.toString(ranges) + " is not correctly sorted or deoverlapped");
         }
 
         return constructor.apply(ranges);

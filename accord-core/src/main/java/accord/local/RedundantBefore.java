@@ -21,6 +21,7 @@ package accord.local;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -38,6 +39,7 @@ import accord.primitives.Ranges;
 import accord.primitives.Routables;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
@@ -48,12 +50,15 @@ import org.agrona.collections.Int2ObjectHashMap;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.POST_BOOTSTRAP;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.PARTIALLY;
+import static accord.local.RedundantStatus.GC_BEFORE;
 import static accord.local.RedundantStatus.LIVE;
 import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.NOT_OWNED;
 import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.SHARD_REDUNDANT;
 import static accord.local.RedundantStatus.WAS_OWNED;
+import static accord.local.RedundantStatus.WAS_OWNED_CLOSED;
+import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
 import static accord.utils.Invariants.illegalState;
 
 public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
@@ -155,14 +160,27 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             this.gcBefore = gcBefore;
             this.bootstrappedAt = bootstrappedAt;
             this.staleUntilAtLeast = staleUntilAtLeast;
-            Invariants.checkArgument(locallyWitnessedOrInvalidatedBefore.equals(TxnId.NONE) || locallyWitnessedOrInvalidatedBefore.domain().isRange());
-            Invariants.checkArgument(locallyAppliedOrInvalidatedBefore.equals(TxnId.NONE) || locallyAppliedOrInvalidatedBefore.domain().isRange());
-            Invariants.checkArgument(locallyDecidedAndAppliedOrInvalidatedBefore.equals(TxnId.NONE) || locallyDecidedAndAppliedOrInvalidatedBefore.domain().isRange());
-            Invariants.checkArgument(shardAppliedOrInvalidatedBefore.equals(TxnId.NONE) || shardAppliedOrInvalidatedBefore.domain().isRange());
-            Invariants.checkArgument(gcBefore.equals(TxnId.NONE) || gcBefore.domain().isRange());
-            Invariants.checkArgument(locallyDecidedAndAppliedOrInvalidatedBefore.compareTo(locallyAppliedOrInvalidatedBefore) <= 0);
-            Invariants.checkArgument(shardAppliedOrInvalidatedBefore.compareTo(shardOnlyAppliedOrInvalidatedBefore) <= 0);
-            Invariants.checkArgument(gcBefore.compareTo(shardAppliedOrInvalidatedBefore) <= 0);
+            checkNoneOrRX(locallyWitnessedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore,
+                          shardAppliedOrInvalidatedBefore, gcBefore);
+            checkPartiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
+            checkPartiallyOrdered(shardAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
+            checkPartiallyOrdered(gcBefore, shardAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore);
+        }
+
+        private static void checkPartiallyOrdered(TxnId ... txnIds)
+        {
+            for (int i = 1 ; i < txnIds.length ; ++i)
+                Invariants.checkArgument(txnIds[i - 1].compareTo(txnIds[i]) <= 0);
+        }
+
+        private static void checkNoneOrRX(TxnId ... txnIds)
+        {
+            for (TxnId txnId : txnIds)
+                checkNoneOrRX(txnId);
+        }
+        private static void checkNoneOrRX(TxnId txnId)
+        {
+            Invariants.checkArgument(txnId.equals(TxnId.NONE) || (txnId.domain().isRange() && txnId.is(Txn.Kind.ExclusiveSyncPoint)));
         }
 
         public static Entry reduce(Entry a, Entry b)
@@ -201,7 +219,6 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             TxnId gcBefore = cg >= 0 ? cur.gcBefore : add.gcBefore;
             TxnId bootstrappedAt = cb >= 0 ? cur.bootstrappedAt : add.bootstrappedAt;
             Timestamp staleUntilAtLeast = csu >= 0 ? cur.staleUntilAtLeast : add.staleUntilAtLeast;
-            TxnId shardAppliedOrInvalidatedBefore = TxnId.min(shardOnlyAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
 
             // if a NEW redundantBefore predates our current bootstrappedAt, we should not update it to avoid erroneously
             // treating transactions prior as locally redundant when they may simply have not applied yet, since we may
@@ -212,6 +229,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             // TODO (desired): revisit later as semantics here evolve
             if (bootstrappedAt.compareTo(locallyAppliedOrInvalidatedBefore) >= 0)
                 locallyAppliedOrInvalidatedBefore = cur.locallyAppliedOrInvalidatedBefore;
+
+            TxnId shardAppliedOrInvalidatedBefore = TxnId.min(shardOnlyAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
             if (bootstrappedAt.compareTo(shardAppliedOrInvalidatedBefore) >= 0)
                 locallyDecidedAndAppliedOrInvalidatedBefore = cur.locallyDecidedAndAppliedOrInvalidatedBefore;
             if (staleUntilAtLeast != null && bootstrappedAt.compareTo(staleUntilAtLeast) >= 0)
@@ -246,17 +265,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
         static @Nonnull Boolean isAnyOnCoordinationEpoch(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus status)
         {
-            if (entry == null || prev)
-                return prev;
-
-            long epoch = txnId.epoch();
-            if (entry.startOwnershipEpoch > epoch || entry.endOwnershipEpoch <= epoch)
-                return false;
-
-            return entry.getIgnoringOwnership(txnId) == status;
+            return isAnyOnCoordinationEpoch(entry, prev, txnId, status, (a, b) -> a == b);
         }
 
-        static @Nonnull Boolean isAnyOnAnyEpoch(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus status)
+        static @Nonnull Boolean isAnyOnCoordinationEpochAtLeast(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus status)
+        {
+            return isAnyOnCoordinationEpoch(entry, prev, txnId, status, (a, b) -> a.compareTo(b) >= 0);
+        }
+
+        static @Nonnull Boolean isAnyOnCoordinationEpoch(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus test, BiPredicate<RedundantStatus, RedundantStatus> predicate)
         {
             if (entry == null || prev)
                 return prev;
@@ -265,7 +282,29 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             if (entry.startOwnershipEpoch > epoch || entry.endOwnershipEpoch <= epoch)
                 return false;
 
-            return entry.getIgnoringOwnership(txnId) == status;
+            return predicate.test(entry.getIgnoringOwnership(txnId), test);
+        }
+
+        static @Nonnull Boolean isAnyOnAnyEpoch(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus test, BiPredicate<RedundantStatus, RedundantStatus> predicate)
+        {
+            if (entry == null || prev)
+                return prev;
+
+            long epoch = txnId.epoch();
+            if (entry.startOwnershipEpoch > epoch || entry.endOwnershipEpoch <= epoch)
+                return false;
+
+            return predicate.test(entry.getIgnoringOwnership(txnId), test);
+        }
+
+        static @Nonnull Boolean isAnyOnAnyEpoch(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus status)
+        {
+            return isAnyOnAnyEpoch(entry, prev, txnId, status, (a, b) -> a == b);
+        }
+
+        static @Nonnull Boolean isAnyOnAnyEpochAtLeast(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus status)
+        {
+            return isAnyOnAnyEpoch(entry, prev, txnId, status, (a, b) -> a.compareTo(b) >= 0);
         }
 
         static RedundantStatus get(Entry entry, TxnId txnId, EpochSupplier executeAt)
@@ -282,7 +321,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 return prev;
 
             // TODO (required): consider all call-sites and confirm the answers when wasOwned and willBeOwned are reasonable
-            if (entry.wasOwned(txnId) && entry.isComplete())
+            if (entry.wasOwned(txnId) && entry.isRetired())
                 return prev;
 
             boolean isPreBootstrapOrStale = entry.staleUntilAtLeast != null || entry.bootstrappedAt.compareTo(txnId) > 0;
@@ -363,8 +402,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
         RedundantStatus get(TxnId txnId)
         {
-            if (wasOwned(txnId) && isComplete())
-                return WAS_OWNED;
+            if (wasOwned(txnId))
+                return isRetired() ? WAS_OWNED_RETIRED : isClosed() ? WAS_OWNED_CLOSED : WAS_OWNED;
             return getIgnoringOwnership(txnId);
         }
 
@@ -378,6 +417,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             if (locallyAppliedOrInvalidatedBefore.compareTo(txnId) > 0)
             {
                 if (gcBefore.compareTo(txnId) > 0)
+                    return GC_BEFORE;
+                if (shardAppliedOrInvalidatedBefore.compareTo(txnId) > 0)
                     return SHARD_REDUNDANT;
                 return LOCALLY_REDUNDANT;
             }
@@ -395,9 +436,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return aIsNull ? 0 : a.compareTo(b);
         }
 
-        public final TxnId shardRedundantBefore()
+        public final TxnId gcBefore()
         {
             return gcBefore;
+        }
+
+        public final TxnId shardRedundantBefore()
+        {
+            return shardAppliedOrInvalidatedBefore;
         }
 
         public final TxnId locallyWitnessedBefore()
@@ -426,10 +472,16 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         }
 
         // TODO (required): do we still need this, or can we stick to just the explicit endOwnershipEpoch
-        private boolean isComplete()
+        private boolean isRetired()
         {
             // TODO (required): carefully consider whether we should ALSO expect some local property to be met here
-            return endOwnershipEpoch <= gcBefore.epoch();
+            return endOwnershipEpoch <= shardAppliedOrInvalidatedBefore.epoch();
+        }
+
+        private boolean isClosed()
+        {
+            // TODO (required): carefully consider whether we should ALSO expect some local property to be met here
+            return endOwnershipEpoch <= locallyWitnessedOrInvalidatedBefore.epoch();
         }
 
         private boolean outOfBounds(Timestamp lb)
@@ -598,9 +650,19 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         return foldl(participants, Entry::isAnyOnCoordinationEpoch, false, txnId, status, isDone -> isDone);
     }
 
+    public boolean isAnyOnCoordinationEpochAtLeast(TxnId txnId, Unseekables<?> participants, RedundantStatus status)
+    {
+        return foldl(participants, Entry::isAnyOnCoordinationEpochAtLeast, false, txnId, status, isDone -> isDone);
+    }
+
     public boolean isAnyOnAnyEpoch(TxnId txnId, Unseekables<?> participants, RedundantStatus status)
     {
         return foldl(participants, Entry::isAnyOnAnyEpoch, false, txnId, status, isDone -> isDone);
+    }
+
+    public boolean isAnyOnAnyEpochAtLeast(TxnId txnId, Unseekables<?> participants, RedundantStatus status)
+    {
+        return foldl(participants, Entry::isAnyOnAnyEpochAtLeast, false, txnId, status, isDone -> isDone);
     }
 
     /**

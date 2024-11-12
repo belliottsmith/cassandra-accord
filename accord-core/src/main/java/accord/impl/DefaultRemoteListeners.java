@@ -462,6 +462,11 @@ public class DefaultRemoteListeners implements RemoteListeners
         }
     }
 
+    public void clear()
+    {
+        listeners.clear();
+    }
+
     private static int listenerNodeId(long encodedListener)
     {
         return (int) (encodedListener >>> 31);

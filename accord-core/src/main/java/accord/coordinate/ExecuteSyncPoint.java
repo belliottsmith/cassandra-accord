@@ -18,13 +18,15 @@
 
 package accord.coordinate;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.function.Function;
 
 import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Adapters;
-import accord.coordinate.tracking.SimpleTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
+import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Node;
 import accord.messages.ApplyThenWaitUntilApplied;
 import accord.messages.Callback;
@@ -134,6 +136,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
     final Function<Topologies, SimpleTracker<?>> trackerSupplier;
     final SimpleTracker<?> tracker;
     private Throwable failures = null;
+    final Map<Node.Id, Object> debug = Invariants.debug() ? new LinkedHashMap<>() : null;
 
     ExecuteSyncPoint(Node node, SyncPoint<U> syncPoint, SimpleTracker<?> tracker)
     {
@@ -162,6 +165,8 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
     public synchronized void onSuccess(Node.Id from, ReadReply reply)
     {
         if (isDone()) return;
+        if (debug != null)
+            debug.put(from, reply);
 
         if (!reply.isOk())
         {
@@ -170,7 +175,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
                 default: throw new AssertionError("Unhandled: " + reply);
 
                 case Insufficient:
-                    CoordinateSyncPoint.sendApply(node, from, syncPoint);
+                    CoordinateSyncPoint.sendApply(node, from, syncPoint, tracker.topologies());
                     return;
 
                 case Redundant:
@@ -199,6 +204,9 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
     public synchronized void onFailure(Node.Id from, Throwable failure)
     {
         if (isDone()) return;
+        if (debug != null)
+            debug.put(from, failure);
+
         failures = FailureAccumulator.append(failures, failure);
         if (tracker.recordFailure(from) == RequestStatus.Failed)
             tryFailure(FailureAccumulator.createFailure(failures, syncPoint.syncId, syncPoint.route.homeKey()));

@@ -34,6 +34,7 @@ import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
+import accord.primitives.Route;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -59,7 +60,7 @@ public interface CoordinationAdapter<R>
     void propose(Node node, @Nullable Topologies preaccept, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
     void stabilise(Node node, @Nullable Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
     void execute(Node node, @Nullable Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
-    void persist(Node node, @Nullable Topologies any, FullRoute<?> route, Participants<?> sendTo, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback);
+    void persist(Node node, @Nullable Topologies any, FullRoute<?> route, Route<?> sendTo, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback);
     default void persist(Node node, @Nullable Topologies any, FullRoute<?> route, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback)
     {
         persist(node, any, route, route, txnId, txn, executeAt, deps, writes, result, callback);
@@ -159,13 +160,12 @@ public interface CoordinationAdapter<R>
             public static final StandardTxnAdapter INSTANCE = new StandardTxnAdapter();
 
             @Override
-            public void persist(Node node, Topologies any, FullRoute<?> route, Participants<?> sendTo, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super Result, Throwable> callback)
+            public void persist(Node node, Topologies any, FullRoute<?> route, Route<?> sendTo, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super Result, Throwable> callback)
             {
-                // TODO (required): we aren't using sendTo
                 Topologies all = execution(node, any, sendTo, txnId, executeAt);
 
                 if (callback != null) callback.accept(result, null);
-                new PersistTxn(node, all, txnId, route, txn, executeAt, deps, writes, result)
+                new PersistTxn(node, all, txnId, sendTo, txn, executeAt, deps, writes, result, route)
                     .start(Apply.FACTORY, Minimal, all, writes, result);
             }
         }
@@ -174,12 +174,12 @@ public interface CoordinationAdapter<R>
         {
             public static final RecoveryTxnAdapter INSTANCE = new RecoveryTxnAdapter();
             @Override
-            public void persist(Node node, Topologies any, FullRoute<?> route, Participants<?> participants, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super Result, Throwable> callback)
+            public void persist(Node node, Topologies any, FullRoute<?> route, Route<?> sendTo, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super Result, Throwable> callback)
             {
-                Topologies all = execution(node, any, participants, txnId, executeAt);
+                Topologies all = execution(node, any, sendTo, txnId, executeAt);
 
                 if (callback != null) callback.accept(result, null);
-                new PersistTxn(node, all, txnId, route, txn, executeAt, deps, writes, result)
+                new PersistTxn(node, all, txnId, sendTo, txn, executeAt, deps, writes, result, route)
                     .start(Apply.FACTORY, Maximal, all, writes, result);
             }
         }
@@ -224,7 +224,7 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void persist(Node node, Topologies any, FullRoute<?> route, Participants<?> participants, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void persist(Node node, Topologies any, FullRoute<?> route, Route<?> participants, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super SyncPoint<U>, Throwable> callback)
             {
                 Topologies all = forExecution(node, route, txnId, executeAt, deps);
 
@@ -335,7 +335,7 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void persist(Node node, Topologies any, FullRoute<?> route, Participants<?> participants, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void persist(Node node, Topologies any, FullRoute<?> route, Route<?> participants, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super SyncPoint<U>, Throwable> callback)
             {
                 throw new UnsupportedOperationException();
             }

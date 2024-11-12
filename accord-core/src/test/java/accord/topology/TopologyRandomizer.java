@@ -24,9 +24,10 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -55,8 +56,7 @@ import org.agrona.collections.IntHashSet;
 import static accord.burn.BurnTest.HASH_RANGE_END;
 import static accord.burn.BurnTest.HASH_RANGE_START;
 
-
-// TODO (required, testing): add change replication factor
+// TODO (testing): add change replication factor
 public class TopologyRandomizer
 {
     public interface Listener
@@ -78,7 +78,7 @@ public class TopologyRandomizer
 
     private static class State
     {
-        AtomicInteger currentPrefix;
+        Queue<Integer> newPrefixes;
         Shard[] shards;
     }
 
@@ -87,17 +87,16 @@ public class TopologyRandomizer
     private static final Shard[] EMPTY_SHARDS = new Shard[0];
 
     private final RandomSource random;
-    private final AtomicInteger currentPrefix;
     private final List<Topology> epochs = new ArrayList<>();
     private final Function<Id, Node> nodeLookup;
+    private final ConcurrentLinkedQueue<Integer> newPrefixes = new ConcurrentLinkedQueue<>();
     private final Map<Id, Ranges> previouslyReplicated = new HashMap<>();
     private final TopologyUpdates topologyUpdates;
     private final Listener listener;
 
-    public TopologyRandomizer(Supplier<RandomSource> randomSupplier, Topology initialTopology, TopologyUpdates topologyUpdates, @Nullable Function<Id, Node> nodeLookup, Listener listener)
+    public TopologyRandomizer(Supplier<RandomSource> randomSupplier, int[] prefixes, Topology initialTopology, TopologyUpdates topologyUpdates, @Nullable Function<Id, Node> nodeLookup, Listener listener)
     {
         this.random = randomSupplier.get();
-        this.currentPrefix = new AtomicInteger(random.nextInt(0, 1024));
         this.topologyUpdates = topologyUpdates;
         this.epochs.add(Topology.EMPTY);
         this.epochs.add(initialTopology);
@@ -105,6 +104,8 @@ public class TopologyRandomizer
             previouslyReplicated.put(node, initialTopology.rangesForNode(node));
         this.nodeLookup = nodeLookup;
         this.listener = listener;
+        for (int prefix : prefixes)
+            newPrefixes.add(prefix);
     }
 
     @VisibleForTesting
@@ -318,13 +319,13 @@ public class TopologyRandomizer
         // Future work will add a new "removePrefix" method, that will cause prefixes to be dropped over time, when that happens the ABA problem
         // could pop up (add prefix=0, drop prefix=0, add prefix=0) which is not the focus of this logic, so attempt to also generate a higher
         // prefix than seen before.
-        int[] prefixes = prefixes(shards);
-        if (prefixes[prefixes.length - 1] > state.currentPrefix.get())
-            state.currentPrefix.set(prefixes[prefixes.length - 1]);
         // TODO (coverage): add support for bringing prefixes back after removal
         // In implementations (such as Apache Cassandra) its possible that a range exists, gets removed, then added back (CREATE KEYSPACE, DROP KEYSPACE, CREATE KEYSPACE),
         // in this case the old prefix should be "cleared".
-        int prefix = state.currentPrefix.incrementAndGet();
+        Integer prefix = state.newPrefixes.poll();
+        if (prefix == null)
+            return shards;
+
         Set<Id> joining = new HashSet<>();
         Id[] nodes;
         {
@@ -446,14 +447,14 @@ public class TopologyRandomizer
         logger.debug("Updating topology with {} mutations", remainingMutations);
         Shard[] newShards = oldShards;
         State state = new State();
-        state.currentPrefix = currentPrefix;
+        state.newPrefixes = newPrefixes;
         while (remainingMutations > 0 && rejectedMutations < 10)
         {
             UpdateType type = UpdateType.kind(random);
             state.shards = newShards;
             Shard[] testShards = type.apply(state, random);
+            Arrays.sort(testShards, (a, b) -> a.range.compareTo(b.range));
             if (!everyShardHasOverlaps(current.epoch, oldShards, testShards)
-                // TODO (now): I don't think it is necessary to prevent re-replicating ranges any longer
                 || reassignsRanges(current, testShards, previouslyReplicated)
             )
             {

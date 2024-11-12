@@ -37,23 +37,32 @@ public class WaitUntilApplied extends ReadData
 {
     public static class SerializerSupport
     {
-        public static WaitUntilApplied create(TxnId txnId, Participants<?> scope, long executeAtEpoch)
+        public static WaitUntilApplied create(TxnId txnId, Participants<?> scope, long minEpoch, long executeAtEpoch)
         {
-            return new WaitUntilApplied(txnId, scope, executeAtEpoch);
+            return new WaitUntilApplied(txnId, scope, minEpoch, executeAtEpoch);
         }
     }
 
     private static final ExecuteOn EXECUTE_ON = new ExecuteOn(Applied, TruncatedApply);
+    private final long minEpoch;
     private long retryInLaterEpoch;
 
     public WaitUntilApplied(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch)
     {
         super(to, topologies, txnId, readScope, executeAtEpoch);
+        this.minEpoch = topologies.oldestEpoch();
     }
 
-    protected WaitUntilApplied(TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    protected WaitUntilApplied(TxnId txnId, Participants<?> readScope, long minEpoch, long executeAtEpoch)
     {
         super(txnId, readScope, executeAtEpoch);
+        this.minEpoch = minEpoch;
+    }
+
+    @Override
+    public long minEpoch()
+    {
+        return minEpoch;
     }
 
     @Override

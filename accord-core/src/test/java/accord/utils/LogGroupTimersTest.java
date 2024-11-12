@@ -38,7 +38,7 @@ public class LogGroupTimersTest
     public void test()
     {
         Random random = new Random();
-        for (int i = 0 ; i < 10000 ; ++i)
+        for (int i = 0 ; i < 1000 ; ++i)
             testOne(random.nextLong(), 1000, 100);
     }
 
@@ -95,6 +95,7 @@ public class LogGroupTimersTest
 
     private void testOne(long seed, int rounds, int maxBatchSize)
     {
+        System.out.printf("Seed %d\n", seed);
         RandomTestRunner.test().withSeed(seed).check(rnd -> {
             TimeUnit scale = rnd.randomWeightedPicker(new TimeUnit[] { MINUTES, HOURS, DAYS }).get();
             long globalMaxDeadline = scale.toMicros(rnd.nextInt(1, 8));

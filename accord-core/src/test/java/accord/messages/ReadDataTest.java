@@ -185,8 +185,9 @@ class ReadDataTest
             store = stores.get(1);
             check(store.execute(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
                 StoreParticipants participants = StoreParticipants.invalidate(safeStore, state.route, state.txnId);
-                SafeCommand command = safeStore.get(state.txnId, participants);
-                command.commitInvalidated(safeStore);
+                SafeCommand safeCommand = safeStore.get(state.txnId, participants);
+                Command prev = safeCommand.current();
+                safeCommand.commitInvalidated(safeStore);
             }));
 
             ReplyContext replyContext = state.process();

@@ -29,28 +29,38 @@ public class Packet implements Pending, ReplyContext
 {
     static final int SENTINEL_MESSAGE_ID = Integer.MIN_VALUE;
 
+    final Pending origin = Pending.Global.activeOrigin();
     public final Id src;
     public final Id dst;
+    public final long expiresAt;
     public final long requestId; // if message is Reply, this is the id of the message we are replying to
     public final long replyId; // if message is Reply, this is the id of the message we are replying to
     public final Message message;
 
-    public Packet(Id src, Id dst, long requestId, Request request)
+    public Packet(Id src, Id dst, long expiresAt, long requestId, Request request)
     {
         this.src = src;
         this.dst = dst;
+        this.expiresAt = expiresAt;
         this.requestId = requestId;
         this.replyId = SENTINEL_MESSAGE_ID;
         this.message = request;
     }
 
-    public Packet(Id src, Id dst, long replyId, Reply reply)
+    public Packet(Id src, Id dst, long expiresAt, long replyId, Reply reply)
     {
         this.src = src;
         this.dst = dst;
+        this.expiresAt = expiresAt;
         this.requestId = SENTINEL_MESSAGE_ID;
         this.replyId = replyId;
         this.message = reply;
+    }
+
+    @Override
+    public Pending origin()
+    {
+        return origin;
     }
 
     @Override
@@ -68,5 +78,12 @@ public class Packet implements Pending, ReplyContext
         if (context instanceof Network.MessageId)
             return ((Network.MessageId) context).msgId;
         return ((Packet) context).requestId;
+    }
+
+    public static long getExpiresAt(ReplyContext context)
+    {
+        if (context instanceof Network.MessageId)
+            return -1;
+        return ((Packet) context).expiresAt;
     }
 }

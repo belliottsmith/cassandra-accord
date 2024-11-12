@@ -29,7 +29,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -53,6 +55,7 @@ import accord.api.LocalConfig;
 import accord.api.MessageSink;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
+import accord.api.Scheduler.Scheduled;
 import accord.burn.BurnTestConfigurationService;
 import accord.burn.TopologyUpdates;
 import accord.burn.random.FrequentLargeRange;
@@ -63,10 +66,10 @@ import accord.coordinate.Invalidated;
 import accord.coordinate.Preempted;
 import accord.coordinate.Timeout;
 import accord.coordinate.Truncated;
-import accord.impl.DurabilityScheduling;
 import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.DefaultTimeouts;
+import accord.impl.DurabilityScheduling;
 import accord.impl.InMemoryCommandStore.GlobalCommand;
 import accord.impl.MessageListener;
 import accord.impl.PrefixedIntHashKey;
@@ -82,11 +85,10 @@ import accord.local.CommandStore;
 import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.TimeService;
-import accord.primitives.SaveStatus;
+import accord.local.RedundantBefore;
 import accord.local.ShardDistributor;
-import accord.primitives.Seekables;
-import accord.primitives.Status;
+import accord.local.StoreParticipants;
+import accord.local.TimeService;
 import accord.local.cfk.CommandsForKey;
 import accord.messages.Message;
 import accord.messages.MessageType;
@@ -97,6 +99,10 @@ import accord.primitives.FullRoute;
 import accord.primitives.Keys;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
+import accord.primitives.RoutableKey;
+import accord.primitives.SaveStatus;
+import accord.primitives.Seekables;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -105,8 +111,10 @@ import accord.topology.TopologyRandomizer;
 import accord.utils.Gens;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
+import accord.utils.Timestamped;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
+import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
 import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
@@ -122,7 +130,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toList;
 
-public class Cluster implements Scheduler
+public class Cluster
 {
     public static final Logger trace = LoggerFactory.getLogger("accord.impl.basic.Trace");
 
@@ -164,6 +172,56 @@ public class Cluster implements Scheduler
         }
     }
 
+    public class ClusterScheduler implements Scheduler
+    {
+        final int source;
+
+        ClusterScheduler(int source)
+        {
+            this.source = source;
+        }
+
+        @Override
+        public void now(Runnable run)
+        {
+            run.run();
+        }
+
+        @Override
+        public Scheduled recurring(Runnable run, long delay, TimeUnit units)
+        {
+            return recurring(run, () -> delay, units);
+        }
+
+        @Override
+        public Scheduled once(Runnable run, long delay, TimeUnit units)
+        {
+            RecurringPendingRunnable result = new RecurringPendingRunnable(source, null, run, () -> delay, units, false);
+            pending.add(result, delay, units);
+            return result;
+        }
+
+        @Override
+        public Scheduled selfRecurring(Runnable run, long delay, TimeUnit units)
+        {
+            RecurringPendingRunnable result = new RecurringPendingRunnable(source, null, run, () -> delay, units, true);
+            pending.add(result, delay, units);
+            return result;
+        }
+
+        public Scheduled recurring(Runnable run, LongSupplier delay, TimeUnit units)
+        {
+            RecurringPendingRunnable result = new RecurringPendingRunnable(source, pending, run, delay, units, true);
+            pending.add(result, delay.getAsLong(), units);
+            return result;
+        }
+
+        public void onDone(Runnable run)
+        {
+            Cluster.this.onDone(run);
+        }
+    }
+
     final Map<MessageType, Stats> statsMap = new HashMap<>();
 
     final RandomSource random;
@@ -177,7 +235,6 @@ public class Cluster implements Scheduler
     final Map<Id, NodeSink> sinks = new HashMap<>();
     final MessageListener messageListener;
     int clock;
-    int recurring;
     BiFunction<Id, Id, Link> links;
 
     public Cluster(RandomSource random, MessageListener messageListener, Supplier<PendingQueue> queueSupplier, Runnable checkFailures, Function<Id, Node> lookup, Function<Id, Journal> journalLookup, IntSupplier rf, Consumer<Packet> responseSink)
@@ -193,9 +250,9 @@ public class Cluster implements Scheduler
         this.links = linkConfig.defaultLinks;
     }
 
-    NodeSink create(Id self, RandomSource random)
+    NodeSink create(Id self, NodeSink.TimeoutSupplier timeouts)
     {
-        NodeSink sink = new NodeSink(self, lookup, this, random);
+        NodeSink sink = new NodeSink(self, lookup, this, timeouts);
         sinks.put(self, sink);
         return sink;
     }
@@ -224,34 +281,36 @@ public class Cluster implements Scheduler
 
     boolean hasNonRecurring()
     {
-        boolean hasNonRecurring = false;
+        if (pending.hasNonRecurring())
+            return true;
+
         for (Pending p : pending)
         {
             if (!(p instanceof RecurringPendingRunnable))
                 continue;
-            RecurringPendingRunnable r = (RecurringPendingRunnable) p;
-            if (r.requeue.hasNonRecurring())
-            {
-                hasNonRecurring = true;
-                break;
-            }
+
+            RecurringPendingRunnable r = (RecurringPendingRunnable) p.origin();
+            if (r.requeue != null && r.requeue.hasNonRecurring())
+                return true;
         }
 
-        return hasNonRecurring;
+        return false;
     }
 
     public boolean processPending()
     {
         checkFailures.run();
         // All remaining tasks are recurring
-        if (recurring > 0 && pending.size() == recurring && !hasNonRecurring())
+        if (!hasNonRecurring())
             return false;
 
         Pending next = pending.poll();
         if (next == null)
             return false;
 
+        Pending.Global.setActiveOrigin(next);
         processNext(next);
+        Pending.Global.clearActiveOrigin();
 
         checkFailures.run();
         return true;
@@ -308,51 +367,14 @@ public class Cluster implements Scheduler
             trace.trace("{} DROP[{}] (from:{}, to:{}, {}:{}, body:{})", clock++, lookup.apply(to).epoch(), from, to, message instanceof Reply ? "replyTo" : "id", id, message);
     }
 
-    @Override
-    public Scheduled recurring(Runnable run, long delay, TimeUnit units)
-    {
-        return recurring(run, () -> delay, units);
-    }
-
-    @Override
-    public Scheduled once(Runnable run, long delay, TimeUnit units)
-    {
-        RecurringPendingRunnable result = new RecurringPendingRunnable(null, run, () -> delay, units, false);
-        pending.add(result, delay, units);
-        return result;
-    }
-
-    @Override
-    public Scheduled selfRecurring(Runnable run, long delay, TimeUnit units)
-    {
-        RecurringPendingRunnable result = new RecurringPendingRunnable(null, run, () -> delay, units, true);
-        pending.add(result, delay, units);
-        return result;
-    }
-
-    public Scheduled recurring(Runnable run, LongSupplier delay, TimeUnit units)
-    {
-        RecurringPendingRunnable result = new RecurringPendingRunnable(pending, run, delay, units, true);
-        ++recurring;
-        result.onCancellation(() -> --recurring);
-        pending.add(result, delay.getAsLong(), units);
-        return result;
-
-    }
-
     public void onDone(Runnable run)
     {
         onDone.add(run);
     }
 
-    @Override
-    public void now(Runnable run)
-    {
-        run.run();
-    }
-
     // TODO (expected): merge with BurnTest.burn
     public static Map<MessageType, Cluster.Stats> run(Supplier<RandomSource> randomSupplier,
+                                                      int[] prefixes,
                                                       List<Node.Id> nodes,
                                                       Topology initialTopology,
                                                       Function<Map<Node.Id, Node>, Request> init)
@@ -364,7 +386,7 @@ public class Cluster implements Scheduler
             RandomSource rnd = randomSupplier.get();
             retryBootstrap = retry -> {
                 long delay = rnd.nextInt(1, 15);
-                queue.add((PendingRunnable) retry::run, delay, TimeUnit.SECONDS);
+                queue.add(PendingRunnable.create(retry::run), delay, TimeUnit.SECONDS);
             };
         }
         IntSupplier coordinationDelays, progressDelays, timeoutDelays;
@@ -372,11 +394,11 @@ public class Cluster implements Scheduler
             RandomSource rnd = randomSupplier.get();
             timeoutDelays = progressDelays = coordinationDelays = () -> rnd.nextInt(100, 1000);
         }
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays);
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis);
         RandomSource nowRandom = randomSupplier.get();
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = nowRandom.fork();
-            // TODO (now): meta-randomise scale of clock drift
+            // TODO (testing): meta-randomise scale of clock drift
             return FrequentLargeRange.builder(forked)
                                      .ratio(1, 5)
                                      .small(50, 5000, TimeUnit.MICROSECONDS)
@@ -387,7 +409,7 @@ public class Cluster implements Scheduler
         };
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should never get a stale event");
-        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays));
+        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis));
         TopologyFactory topologyFactory = new TopologyFactory(initialTopology.maxRf(), initialTopology.ranges().stream().toArray(Range[]::new))
         {
             @Override
@@ -399,6 +421,7 @@ public class Cluster implements Scheduler
         AtomicInteger counter = new AtomicInteger();
         AtomicReference<Map<Id, Node>> nodeMap = new AtomicReference<>();
         Map<MessageType, Cluster.Stats> stats = Cluster.run(nodes.toArray(Node.Id[]::new),
+                                                            prefixes,
                                                             MessageListener.get(),
                                                             () -> queue,
                                                             (id, onStale) -> globalExecutor.withAgent(agentSupplier.apply(onStale)),
@@ -415,7 +438,6 @@ public class Cluster implements Scheduler
                                                                 @Override
                                                                 public Packet get()
                                                                 {
-                                                                    // ((Cluster) node.scheduler()).onDone(() -> checkOnResult(homeKey, txnId, 0, null));
                                                                     if (requestIterator == null)
                                                                     {
                                                                         Map<Node.Id, Node> nodes = nodeMap.get();
@@ -424,7 +446,7 @@ public class Cluster implements Scheduler
                                                                     if (!requestIterator.hasNext())
                                                                         return null;
                                                                     Node.Id id = rs.pick(nodes);
-                                                                    return new Packet(id, id, counter.incrementAndGet(), requestIterator.next());
+                                                                    return new Packet(id, id, Long.MAX_VALUE, counter.incrementAndGet(), requestIterator.next());
                                                                 }
                                                             },
                                                             Runnable::run,
@@ -438,7 +460,7 @@ public class Cluster implements Scheduler
         return stats;
     }
 
-    public static Map<MessageType, Stats> run(Id[] nodes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
+    public static Map<MessageType, Stats> run(Id[] nodes, int[] prefixes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
                                               BiFunction<Id, BiConsumer<Timestamp, Ranges>, AgentExecutor> nodeExecutorSupplier,
                                               Runnable checkFailures, Consumer<Packet> responseSink,
                                               Supplier<RandomSource> randomSupplier, Supplier<LongSupplier> nowSupplierSupplier,
@@ -462,12 +484,40 @@ public class Cluster implements Scheduler
                 }
                 messageListener.onTopologyChange(t);
             };
-            TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, topology, topologyUpdates, nodeMap::get, schemaApply);
+            NodeSink.TimeoutSupplier timeouts = new NodeSink.TimeoutSupplier()
+            {
+                final RandomSource random = randomSupplier.get();
+                final LongSupplier slowAt, expiresAt, failsAt;
+                {
+                    int medianSlowAt = random.nextInt(100, 200);
+                    int medianExpiresAt = random.nextInt(1000, 2000);
+                    int medianFailsAt = random.nextInt(1000, 2000);
+
+                    int minSlowAt = random.nextInt(0, 100);
+                    int minExpiresAt = random.nextBiasedInt(500, 800, 1000);
+                    int minFailsAt = random.nextBiasedInt(500, 800, 1000);
+
+                    int maxSlowAt = random.nextBiasedInt(medianSlowAt + 100, medianSlowAt + 200, 1000);
+                    int maxExpiresAt = random.nextBiasedInt(medianExpiresAt + 500, 3000, 10000);
+                    int maxFailsAt = random.nextBiasedInt(medianFailsAt + 500, 3000, 10000);
+
+                    slowAt = random.biasedUniformLongs(minSlowAt, medianSlowAt, maxSlowAt);
+                    expiresAt = random.biasedUniformLongs(minExpiresAt, medianExpiresAt, maxExpiresAt);
+                    failsAt = random.biasedUniformLongs(minFailsAt, medianFailsAt, maxFailsAt);
+                }
+                @Override public long slowAt() { return now() + slowAt.getAsLong();}
+                @Override public long expiresAt() { return now() + expiresAt.getAsLong(); }
+                @Override public long failsAt() { return now() + failsAt.getAsLong(); }
+                @Override public long now() { return sinks.pending.nowInMillis(); }
+                @Override public TimeUnit units() { return MILLISECONDS; }
+            };
+            TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, prefixes, topology, topologyUpdates, nodeMap::get, schemaApply);
             List<DurabilityScheduling> durabilityScheduling = new ArrayList<>();
             List<Service> services = new ArrayList<>();
             for (Id id : nodes)
             {
-                MessageSink messageSink = sinks.create(id, randomSupplier.get());
+                ClusterScheduler scheduler = sinks.new ClusterScheduler(id.id);
+                MessageSink messageSink = sinks.create(id, timeouts);
                 LongSupplier nowSupplier = nowSupplierSupplier.get();
                 LocalConfig localConfig = LocalConfig.DEFAULT;
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
@@ -476,11 +526,43 @@ public class Cluster implements Scheduler
                 Journal journal = new Journal(id);
                 journalMap.put(id, journal);
                 BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
-                BooleanSupplier isLoadedCheck = Gens.supplier(Gens.bools().mixedDistribution().next(random), random);
+                DelayedCommandStores.CacheLoadingChance isLoadedCheck = new DelayedCommandStores.CacheLoadingChance()
+                {
+                    final float presentChance = random.nextBoolean() ? 1.0f : random.nextFloat();
+                    private final BooleanSupplier cacheEmptyChance = Gens.supplier(Gens.bools().mixedDistribution().next(random), random);
+                    public boolean cacheEmpty()
+                    {
+                        return cacheEmptyChance.getAsBoolean();
+                    }
+
+                    private final BooleanSupplier cacheFullChance = Gens.supplier(Gens.bools().mixedDistribution().next(random), random);
+                    public boolean cacheFull()
+                    {
+                        return cacheFullChance.getAsBoolean();
+                    }
+
+                    private final BooleanSupplier commandLoadedChance = random.biasedUniformBools(presentChance);
+                    public boolean commandLoaded()
+                    {
+                        return commandLoadedChance.getAsBoolean();
+                    }
+
+                    private final BooleanSupplier cfkLoadedChance = random.biasedUniformBools(presentChance);
+                    public boolean cfkLoaded()
+                    {
+                        return cfkLoadedChance.getAsBoolean();
+                    }
+
+                    private final BooleanSupplier tfkLoadedChance = random.biasedUniformBools(presentChance);
+                    public boolean tfkLoaded()
+                    {
+                        return tfkLoadedChance.getAsBoolean();
+                    }
+                };
                 Node node = new Node(id, messageSink, configService, TimeService.ofNonMonotonic(nowSupplier, MILLISECONDS),
-                                     () -> new ListStore(sinks, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
+                                     () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      nodeExecutor.agent(),
-                                     randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
+                                     randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
                                      DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, isLoadedCheck, journal), new CoordinationAdapter.DefaultFactory(),
                                      DurableBefore.NOOP_PERSISTER, localConfig);
                 DurabilityScheduling durability = node.durabilityScheduling();
@@ -516,44 +598,36 @@ public class Cluster implements Scheduler
             while (sinks.processPending());
             Assertions.assertTrue(startup.isDone());
 
+            ClusterScheduler clusterScheduler = sinks.new ClusterScheduler(-1);
             List<Id> nodesList = new ArrayList<>(Arrays.asList(nodes));
-            Scheduled chaos = sinks.recurring(() -> {
+            Scheduled chaos = clusterScheduler.recurring(() -> {
                 sinks.links = sinks.linkConfig.overrideLinks.apply(nodesList);
                 if (random.decide(0.1f))
                     updateDurabilityRate.run();
             }, 5L, SECONDS);
 
-            Scheduled reconfigure = sinks.recurring(configRandomizer::maybeUpdateTopology, 1, SECONDS);
+            Scheduled reconfigure = clusterScheduler.recurring(configRandomizer::maybeUpdateTopology, 1, SECONDS);
 
-            Scheduled purge = sinks.recurring(() -> {
-                trace.debug("Triggering purge.");
-                int numNodes = random.nextInt(1, nodeMap.size());
-                for (int i = 0; i < numNodes; i++)
-                {
-                    Id id = random.pick(nodes);
-                    Node node = nodeMap.get(id);
+            Purge purge = new Purge(clusterScheduler, random, nodesList, nodeMap, journalMap);
 
-                    Journal journal = journalMap.get(node.id());
-                    CommandStore[] stores = nodeMap.get(node.id()).commandStores().all();
-                    journal.purge((j) -> stores[j]);
-                }
-            }, () -> random.nextInt(1, 10), SECONDS);
-
-            Scheduled restart = sinks.recurring(() -> {
+            Scheduled restart = clusterScheduler.recurring(() -> {
                 Id id = random.pick(nodes);
                 CommandStore[] stores = nodeMap.get(id).commandStores().all();
                 ((DelayedCommandStore)stores[0]).unsafeRunIn(() -> {
-                    Predicate<Pending> pred = getPendingPredicate(stores);
+                    Predicate<Pending> pred = getPendingPredicate(id.id, stores);
                     while (sinks.drain(pred));
 
                     // Journal cleanup is a rough equivalent of a node restart.
                     trace.debug("Triggering journal cleanup for node " + id);
                     CommandsForKey.disableLinearizabilityViolationsReporting();
                     ListStore listStore = (ListStore) nodeMap.get(id).commandStores().dataStore();
+                    NavigableMap<RoutableKey, Timestamped<int[]>> prevData = listStore.copyOfCurrentData();
                     listStore.clear();
                     listStore.restoreFromSnapshot();
-
+                    // we are simulating node restart, so its remote listeners will also be gone
+                    ((DefaultRemoteListeners)nodeMap.get(id).remoteListeners()).clear();
                     Journal journal = journalMap.get(id);
+                    Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores);
                     for (CommandStore s : stores)
                     {
                         DelayedCommandStores.DelayedCommandStore store = (DelayedCommandStores.DelayedCommandStore) s;
@@ -562,9 +636,11 @@ public class Cluster implements Scheduler
                     }
                     while (sinks.drain(pred));
                     CommandsForKey.enableLinearizabilityViolationsReporting();
+                    Invariants.checkState(listStore.equals(prevData));
+                    verifyConsistentRestore(beforeStores, stores);
                     trace.debug("Done with cleanup.");
                 });
-            }, () -> random.nextInt(1, 10), SECONDS);
+            }, () -> random.nextInt(10, 30), SECONDS);
 
             durabilityScheduling.forEach(DurabilityScheduling::start);
             services.forEach(Service::start);
@@ -612,7 +688,134 @@ public class Cluster implements Scheduler
         }
     }
 
-    private static Predicate<Pending> getPendingPredicate(CommandStore[] stores)
+    private static class Purge
+    {
+        Scheduled scheduled;
+
+        Purge(Scheduler clusterScheduler, RandomSource rs, List<Id> nodes, Map<Id, Node> nodeMap, Map<Id, Journal> journalMap)
+        {
+            schedule(clusterScheduler, rs, nodes, nodeMap, journalMap);
+        }
+
+        void cancel()
+        {
+            scheduled.cancel();
+        }
+
+        private void schedule(Scheduler clusterScheduler, RandomSource rs, List<Id> nodes, Map<Id, Node> nodeMap, Map<Id, Journal> journalMap)
+        {
+            scheduled = clusterScheduler.selfRecurring(() -> run(clusterScheduler, rs, nodes, nodeMap, journalMap), rs.nextInt(1, 30), SECONDS);
+        }
+
+        private void run(Scheduler clusterScheduler, RandomSource rs, List<Id> nodes, Map<Id, Node> nodeMap, Map<Id, Journal> journalMap)
+        {
+            Id id = rs.pick(nodes);
+            Node node = nodeMap.get(id);
+
+            Journal journal = journalMap.get(node.id());
+            CommandStore[] stores = nodeMap.get(node.id()).commandStores().all();
+            // run on node scheduler so doesn't run during replay
+            scheduled = node.scheduler().selfRecurring(() -> {
+                journal.purge(j -> j < stores.length ? stores[j] : null);
+                schedule(clusterScheduler, rs, nodes, nodeMap, journalMap);
+            }, 0, SECONDS);
+        }
+
+    }
+
+    private static Int2ObjectHashMap<NavigableMap<TxnId, Command>> copyCommands(CommandStore[] stores)
+    {
+        Int2ObjectHashMap<NavigableMap<TxnId, Command>> result = new Int2ObjectHashMap<>();
+        for (CommandStore s : stores)
+        {
+            DelayedCommandStores.DelayedCommandStore store = (DelayedCommandStores.DelayedCommandStore) s;
+            NavigableMap<TxnId, Command> commands = new TreeMap<>();
+            result.put(store.id(), commands);
+            for (Map.Entry<TxnId, GlobalCommand> e : store.unsafeCommands().entrySet())
+                commands.put(e.getKey(), e.getValue().value());
+        }
+        return result;
+    }
+
+    private static void verifyConsistentRestore(Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores, CommandStore[] stores)
+    {
+        for (CommandStore s : stores)
+        {
+            DelayedCommandStores.DelayedCommandStore store = (DelayedCommandStores.DelayedCommandStore) s;
+            NavigableMap<TxnId, Command> before = beforeStores.get(store.id());
+            for (Map.Entry<TxnId, GlobalCommand> e : store.unsafeCommands().entrySet())
+            {
+                Command beforeCommand = before.get(e.getKey());
+                Command afterCommand = e.getValue().value();
+                if (beforeCommand == null)
+                {
+                    Invariants.checkArgument(afterCommand.is(Status.NotDefined));
+                    continue;
+                }
+                if (afterCommand.hasBeen(Status.Truncated))
+                {
+                    if (afterCommand.is(Status.Invalidated))
+                        Invariants.checkState(beforeCommand.hasBeen(Status.Truncated) || !beforeCommand.hasBeen(Status.PreCommitted)
+                                              && store.unsafeGetRedundantBefore().max(beforeCommand.participants().touches(), RedundantBefore.Entry::shardRedundantBefore).compareTo(beforeCommand.txnId()) >= 0);
+                    continue;
+                }
+                if (beforeCommand.hasBeen(Status.Truncated))
+                {
+                    Invariants.checkState(!beforeCommand.is(Status.Invalidated) || afterCommand.is(Status.Invalidated));
+                    Invariants.checkState(beforeCommand.is(Status.Invalidated) || afterCommand.is(Status.Truncated) || afterCommand.is(Status.Applied));
+                    continue;
+                }
+                Invariants.checkState(isConsistent(beforeCommand.saveStatus(), afterCommand.saveStatus())
+                    && beforeCommand.executeAtOrTxnId().equals(afterCommand.executeAtOrTxnId())
+                    && beforeCommand.acceptedOrCommitted().equals(afterCommand.acceptedOrCommitted())
+                    && beforeCommand.promised().equals(afterCommand.promised())
+                    && beforeCommand.durability().equals(afterCommand.durability()));
+            }
+            if (before.size() > store.unsafeCommands().size())
+            {
+                for (TxnId txnId : before.keySet())
+                {
+                    if (!store.unsafeCommands().containsKey(txnId))
+                    {
+                        Command beforeCommand = before.get(txnId);
+                        if (beforeCommand.saveStatus() == SaveStatus.Erased)
+                            continue;
+
+                        if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Entry::shardRedundantBefore).compareTo(txnId) > 0)
+                            continue;
+
+                        if (beforeCommand.participants().owns().isEmpty() && store.durableBefore().min(txnId).compareTo(Status.Durability.MajorityOrInvalidated) >= 0)
+                            continue;
+
+                        if (!beforeCommand.saveStatus().hasBeen(Status.PreCommitted) && store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Entry::locallyRedundantBefore).compareTo(txnId) > 0)
+                            continue;
+
+                        Invariants.checkState(false);
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean isConsistent(SaveStatus before, SaveStatus after)
+    {
+        if (before == after)
+            return true;
+
+        if (before == SaveStatus.Uninitialised || before == SaveStatus.NotDefined)
+            return after == SaveStatus.Uninitialised || after == SaveStatus.NotDefined;
+
+        // depending on arrival order, an unmanaged txn may be ready to execute immediately or have to wait for another transaction to commit
+        if (before == SaveStatus.Stable || before == SaveStatus.ReadyToExecute)
+            return after == SaveStatus.Stable || after == SaveStatus.ReadyToExecute;
+
+        if (before == SaveStatus.PreApplied || before == SaveStatus.Applying || before == SaveStatus.Applied)
+            return after == SaveStatus.PreApplied || after == SaveStatus.Applying || after == SaveStatus.Applied;
+
+        return false;
+    }
+
+    private static Predicate<Pending> getPendingPredicate(int nodeId, CommandStore[] stores)
     {
         Set<CommandStore> nodeStores = new HashSet<>(Arrays.asList(stores));
         return item -> {
@@ -621,6 +824,12 @@ public class Cluster implements Scheduler
                 DelayedCommandStore.DelayedTask<?> task = (DelayedCommandStore.DelayedTask<?>) item;
                 if (nodeStores.contains(task.parent()))
                     return true;
+                item = item.origin();
+            }
+            if (item instanceof RecurringPendingRunnable)
+            {
+                RecurringPendingRunnable recurring = (RecurringPendingRunnable) item;
+                return recurring.source == nodeId && (!recurring.isRecurring || recurring.origin() != recurring);
             }
             return false;
         };
@@ -952,9 +1161,19 @@ public class Cluster implements Scheduler
         return findMin(minSaveStatus, maxSaveStatus, txnId::equals);
     }
 
+    public BlockingTransaction find(boolean onlyIfOwned, TxnId txnId, @Nullable SaveStatus minSaveStatus, @Nullable SaveStatus maxSaveStatus)
+    {
+        return findMin(onlyIfOwned, minSaveStatus, maxSaveStatus, txnId::equals);
+    }
+
     public List<BlockingTransaction> findTransitivelyBlocking(TxnId txnId)
     {
-        BlockingTransaction txn = find(txnId, null, null);
+        return findTransitivelyBlocking(true, txnId);
+    }
+
+    public List<BlockingTransaction> findTransitivelyBlocking(boolean onlyIfOwned, TxnId txnId)
+    {
+        BlockingTransaction txn = find(onlyIfOwned, txnId, null, null);
         if (txn == null)
             return null;
 
@@ -986,7 +1205,12 @@ public class Cluster implements Scheduler
 
     public BlockingTransaction findMin(@Nullable SaveStatus minSaveStatus, @Nullable SaveStatus maxSaveStatus, Predicate<TxnId> testTxnId)
     {
-        return find(minSaveStatus, maxSaveStatus, testTxnId, (min, test) -> {
+        return findMin(false, minSaveStatus, maxSaveStatus, testTxnId);
+    }
+
+    public BlockingTransaction findMin(boolean onlyIfOwned, @Nullable SaveStatus minSaveStatus, @Nullable SaveStatus maxSaveStatus, Predicate<TxnId> testTxnId)
+    {
+        return find(onlyIfOwned, minSaveStatus, maxSaveStatus, testTxnId, (min, test) -> {
             int c = -1;
             if (min == null || (c = test.txnId.compareTo(min.txnId)) <= 0 && (c < 0 || test.command.saveStatus().compareTo(min.command.saveStatus()) < 0))
                 min = test;
@@ -1002,11 +1226,11 @@ public class Cluster implements Scheduler
     public List<BlockingTransaction> findAll(@Nullable SaveStatus minSaveStatus, @Nullable SaveStatus maxSaveStatus, Predicate<TxnId> testTxnId)
     {
         List<BlockingTransaction> result = new ArrayList<>();
-        find(minSaveStatus, maxSaveStatus, testTxnId, (r, c) -> { r.add(c); return r; }, result);
+        find(false, minSaveStatus, maxSaveStatus, testTxnId, (r, c) -> { r.add(c); return r; }, result);
         return result;
     }
 
-    public <T> T find(@Nullable SaveStatus minSaveStatus, @Nullable SaveStatus maxSaveStatus, Predicate<TxnId> testTxnId, BiFunction<T, BlockingTransaction, T> fold, T accumulate)
+    public <T> T find(boolean onlyIfOwned, @Nullable SaveStatus minSaveStatus, @Nullable SaveStatus maxSaveStatus, Predicate<TxnId> testTxnId, BiFunction<T, BlockingTransaction, T> fold, T accumulate)
     {
         for (Node.Id id : sinks.keySet())
         {
@@ -1018,7 +1242,8 @@ public class Cluster implements Scheduler
                 for (Map.Entry<TxnId, GlobalCommand> e : store.unsafeCommands().entrySet())
                 {
                     Command command = e.getValue().value();
-                    if ((minSaveStatus == null || command.saveStatus().compareTo(minSaveStatus) >= 0) &&
+                    if ((!onlyIfOwned || owns(command, store)) &&
+                    (minSaveStatus == null || command.saveStatus().compareTo(minSaveStatus) >= 0) &&
                         (maxSaveStatus == null || command.saveStatus().compareTo(maxSaveStatus) <= 0) &&
                         (testTxnId == null || testTxnId.test(command.txnId())))
                     {
@@ -1029,6 +1254,15 @@ public class Cluster implements Scheduler
             }
         }
         return accumulate;
+    }
+
+    private boolean owns(Command command, CommandStore commandStore)
+    {
+        StoreParticipants participants = command.participants();
+        if (participants == null)
+            return false;
+
+        return participants.owns().intersects(commandStore.unsafeRangesForEpoch().allBetween(command.txnId().epoch(), command.executeAtIfKnownElseTxnId()));
     }
 
     private BlockingTransaction toBlocking(Command command, DelayedCommandStore store)

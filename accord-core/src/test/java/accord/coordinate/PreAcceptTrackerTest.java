@@ -43,13 +43,11 @@ public class PreAcceptTrackerTest
     private static void assertResponseState(FastPathTracker responses,
                                             boolean quorumReached,
                                             boolean fastPathAccepted,
-                                            boolean failed,
-                                            boolean hasOutstandingResponses)
+                                            boolean failed)
     {
         Assertions.assertEquals(quorumReached, responses.hasReachedQuorum());
         Assertions.assertEquals(fastPathAccepted, responses.hasFastPathAccepted());
         Assertions.assertEquals(failed, responses.hasFailed());
-        Assertions.assertEquals(hasOutstandingResponses, responses.hasInFlight());
     }
 
     @Test
@@ -59,13 +57,13 @@ public class PreAcceptTrackerTest
         FastPathTracker responses = new FastPathTracker(topologies(subTopology));
 
         responses.recordSuccess(ids[0], false);
-        assertResponseState(responses, false, false, false, true);
+        assertResponseState(responses, false, false, false);
 
         responses.recordSuccess(ids[1], false);
-        assertResponseState(responses, true, false, false, true);
+        assertResponseState(responses, true, false, false);
 
         responses.recordSuccess(ids[2], false);
-        assertResponseState(responses, true, false, false, false);
+        assertResponseState(responses, true, false, false);
     }
 
     @Test
@@ -75,13 +73,13 @@ public class PreAcceptTrackerTest
         FastPathTracker responses = new FastPathTracker(topologies(subTopology));
 
         responses.recordSuccess(ids[0], true);
-        assertResponseState(responses, false, false, false, true);
+        assertResponseState(responses, false, false, false);
 
         responses.recordSuccess(ids[1], true);
-        assertResponseState(responses, true, false, false, true);
+        assertResponseState(responses, true, false, false);
 
         responses.recordSuccess(ids[2], true);
-        assertResponseState(responses, true, true, false, false);
+        assertResponseState(responses, true, true, false);
     }
 
     /**
@@ -94,14 +92,14 @@ public class PreAcceptTrackerTest
         FastPathTracker responses = new FastPathTracker(topologies(subTopology));
 
         responses.recordSuccess(ids[0], false);
-        assertResponseState(responses, false, false, false, true);
+        assertResponseState(responses, false, false, false);
 
         responses.recordSuccess(ids[1], false);
-        assertResponseState(responses, true, false, false, true);
+        assertResponseState(responses, true, false, false);
 
         Assertions.assertFalse(subTopology.get(0).nodes.contains(ids[4]));
         responses.recordSuccess(ids[4], false);
-        assertResponseState(responses, true, false, false, true);
+        assertResponseState(responses, true, false, false);
     }
 
     @Test
@@ -111,13 +109,13 @@ public class PreAcceptTrackerTest
         FastPathTracker responses = new FastPathTracker(topologies(subTopology));
 
         responses.recordSuccess(ids[0], true);
-        assertResponseState(responses, false, false, false, true);
+        assertResponseState(responses, false, false, false);
 
         responses.recordFailure(ids[1]);
-        assertResponseState(responses, false, false, false, true);
+        assertResponseState(responses, false, false, false);
 
         responses.recordFailure(ids[2]);
-        assertResponseState(responses, false, false, true, false);
+        assertResponseState(responses, false, false, true);
     }
 
     @Test
@@ -135,19 +133,19 @@ public class PreAcceptTrackerTest
         Assertions.assertSame(subTopology.get(2), responses.get(2).shard);
 
         responses.recordSuccess(ids[1], true);
-        assertResponseState(responses, false, false, false, true);
+        assertResponseState(responses, false, false, false);
 
         responses.recordSuccess(ids[2], true);
-        assertResponseState(responses, false, false, false, true);
+        assertResponseState(responses, false, false, false);
 
         responses.recordSuccess(ids[3], true);
         // the middle shard will have reached fast path
         Assertions.assertTrue(responses.get(1).hasMetFastPathCriteria());
         // but since the others haven't, it won't report it as accepted
-        assertResponseState(responses, true, false, false, true);
+        assertResponseState(responses, true, false, false);
 
         responses.recordSuccess(ids[0], true);
         responses.recordSuccess(ids[4], true);
-        assertResponseState(responses, true, true, false, false);
+        assertResponseState(responses, true, true, false);
     }
 }

@@ -28,7 +28,7 @@ import accord.local.Node;
 
 // TODO (desired, consider): consider propagating invalidations in the same way as we do applied
 // TODO (expected): report transactions not making progress
-// TODO (required): evict to disk
+// TODO (expected): evict to disk
 public class DefaultProgressLogs implements ProgressLog.Factory
 {
     static ConcurrentHashMap<DefaultProgressLog, Runnable> PAUSE_FOR_TEST;

@@ -34,7 +34,7 @@ public class PersistSyncPoint extends Persist
 {
     public PersistSyncPoint(Node node, Topologies topologies, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        super(node, topologies, txnId, route, txn, executeAt, deps, writes, result);
+        super(node, topologies, txnId, route, txn, executeAt, deps, writes, result, route);
     }
 
     @Override
@@ -50,7 +50,7 @@ public class PersistSyncPoint extends Persist
         {
             for (Node.Id to : contact)
             {
-                Apply apply = factory.create(kind, to, all, txnId, route, txn, executeAt, stableDeps, writes, result);
+                Apply apply = factory.create(kind, to, all, txnId, route, txn, executeAt, stableDeps, writes, result, route);
                 if (apply == null)
                     tracker.recordSuccess(to);
                 else

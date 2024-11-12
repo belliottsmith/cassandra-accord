@@ -28,7 +28,7 @@ import java.util.ArrayList;
 
 public class FastPathTrackerReconciler extends TrackerReconciler<FastPathShardTracker, FastPathTracker, FastPathTrackerReconciler.Rsp>
 {
-    enum Rsp { FAST, SLOW, FAIL }
+    enum Rsp { FAST, SLOW, DELAY, FAIL }
 
     FastPathTrackerReconciler(RandomSource random, Topologies topologies)
     {
@@ -48,6 +48,7 @@ public class FastPathTrackerReconciler extends TrackerReconciler<FastPathShardTr
             default: throw new AssertionError();
             case FAST: inflight.remove(from); return tracker.recordSuccess(from, true);
             case SLOW: inflight.remove(from); return tracker.recordSuccess(from, false);
+            case DELAY: return tracker.recordDelayed(from);
             case FAIL: inflight.remove(from); return tracker.recordFailure(from);
         }
     }
@@ -64,7 +65,7 @@ public class FastPathTrackerReconciler extends TrackerReconciler<FastPathShardTr
 
             case Success:
                 Assertions.assertTrue(tracker.all(FastPathShardTracker::hasReachedQuorum));
-                Assertions.assertTrue(tracker.all(shard -> shard.hasRejectedFastPath() || shard.hasMetFastPathCriteria()));
+                Assertions.assertTrue(tracker.all(shard -> shard.hasRejectedFastPath() || shard.hasMetFastPathCriteria() || shard.isFastPathDelayed()));
                 Assertions.assertFalse(tracker.any(FastPathShardTracker::hasFailed));
                 break;
 

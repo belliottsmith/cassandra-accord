@@ -127,6 +127,9 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 if (command.saveStatus().compareTo(SaveStatus.PreAccepted) > 0)
                     return PreAcceptNack.INSTANCE;
 
+                if (command.executeAt().isRejected())
+                    return new PreAcceptOk(txnId, command.executeAt(), Deps.NONE);
+
                 Deps deps = calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), txnId);
                 // NOTE: we CANNOT test whether we adopt a future dependency here because it might be that this command
                 // is guaranteed to not reach agreement, but that this replica is unaware of that fact and has pruned

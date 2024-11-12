@@ -32,7 +32,6 @@ import accord.messages.Callback;
 import accord.primitives.Participants;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
-import accord.topology.Topology;
 import accord.utils.async.AsyncResults;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
@@ -60,17 +59,17 @@ public class SynchronousAwait extends AsyncResults.SettableResult<Void> implemen
         this.tracker = tracker;
     }
 
-    public static SynchronousAwait awaitQuorum(Node node, Topology topology, TxnId txnId, @Nullable RoutingKey homeKey, BlockedUntil awaiting, Participants<?> participants)
+    public static SynchronousAwait awaitQuorum(Node node, Topologies topologies, TxnId txnId, @Nullable RoutingKey homeKey, BlockedUntil awaiting, Participants<?> participants)
     {
-        QuorumTracker tracker = new QuorumTracker(new Topologies.Single(node.topology().sorter(), topology));
+        QuorumTracker tracker = new QuorumTracker(topologies);
         SynchronousAwait result = new SynchronousAwait(txnId, homeKey, tracker);
-        result.start(node, topology, participants, awaiting);
+        result.start(node, topologies, participants, awaiting);
         return result;
     }
 
-    private void start(Node node, Topology topology, Participants<?> participants, BlockedUntil blockedUntil)
+    private void start(Node node, Topologies topologies, Participants<?> participants, BlockedUntil blockedUntil)
     {
-        node.send(topology.nodes(), to -> new Await(to, topology, txnId, participants, blockedUntil), this);
+        node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, participants, blockedUntil), this);
     }
 
     @Override

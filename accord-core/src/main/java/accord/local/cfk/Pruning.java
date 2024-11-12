@@ -189,7 +189,7 @@ public class Pruning
             while (--i >= 0)
             {
                 TxnInfo txn = cfk.committedByExecuteAt[i];
-                if (txn.is(Write) && txn.executeAt.hlc() <= maxPruneHlc && txn.status() == APPLIED)
+                if (txn.is(Write) && txn.executeAt.hlc() <= maxPruneHlc && txn.is(APPLIED))
                     break;
             }
 
@@ -264,8 +264,7 @@ public class Pruning
                         }
                         break;
 
-                    case HISTORICAL:
-                    case TRANSITIVELY_KNOWN:
+                    case TRANSITIVE:
                     case PREACCEPTED_OR_ACCEPTED_INVALIDATE:
                     case ACCEPTED:
                         newByIdBuffer[pos - ++retainCount] = txn;
@@ -281,10 +280,9 @@ public class Pruning
                             activePruneEpoch = epoch;
                         }
 
-                        boolean tryPrune = activePruneEpochBefore == newPrunedBefore
-                                           ? txn.executeAt.compareTo(newPrunedBefore.executeAt) < 0
-                                           : activePruneEpochBefore != txn && activePruneEpochBefore != null;
-
+                        boolean tryPrune = activePruneEpochBefore != null
+                                           && txn.executeAt.compareTo(activePruneEpochBefore.executeAt) < 0
+                                           && txn.compareTo(activePruneEpochBefore) < 0;
                         if (tryPrune)
                         {
                             TxnId[] missing = txn.missing();
@@ -311,7 +309,8 @@ public class Pruning
                         }
                         newByIdBuffer[pos - ++retainCount] = txn;
 
-                    case INVALID_OR_TRUNCATED_OR_PRUNED:
+                    case INVALIDATED:
+                    case TRUNCATED_OR_PRUNED:
                         break;
                 }
             }
@@ -345,7 +344,7 @@ public class Pruning
             for (int i = sourcePos - 1; i >= 0 ; --i)
             {
                 TxnInfo txn = committedByExecuteAt[i];
-                if (txn.status() == APPLIED)
+                if (txn.is(APPLIED))
                 {
                     long epoch = txn.executeAt.epoch();
                     if (epoch != activePruneEpoch && epochPrunedBefores != null)
@@ -354,10 +353,9 @@ public class Pruning
                         activePruneEpoch = epoch;
                     }
 
-                    boolean tryPrune = activePruneEpochBefore == newPrunedBefore
-                                       ? txn.compareTo(newPrunedBefore) < 0
-                                       : activePruneEpochBefore != txn && activePruneEpochBefore != null;
-
+                    boolean tryPrune = activePruneEpochBefore != null
+                                       && txn.compareTo(activePruneEpochBefore) < 0
+                                       && txn.executeAt.compareTo(activePruneEpochBefore.executeAt) < 0;
                     if (tryPrune)
                     {
                         TxnId[] missing = txn.missing();
@@ -435,7 +433,7 @@ public class Pruning
             {
                 int startPos = prevBootstrappedAt == null ? 0 : insertPos(byId, prevBootstrappedAt);
                 for (int i = startPos ; i < pos ; ++i)
-                    Invariants.checkState(byId[i].status() != COMMITTED, "%s expected to be applied or undecided, as marked redundant", byId[i]);
+                    Invariants.checkState(byId[i].isNot(COMMITTED), "%s expected to be applied or undecided, as marked redundant", byId[i]);
             }
 
             newById = Arrays.copyOfRange(byId, pos, byId.length);

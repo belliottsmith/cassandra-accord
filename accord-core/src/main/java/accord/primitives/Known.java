@@ -96,6 +96,10 @@ public class Known
         return selectOrCreate(that, maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
     }
 
+    public static Known nonNullOrMin(Known a, Known b)
+    {
+        return a == null | b == null ? a == null ? b : a : a.min(b);
+    }
     public Known min(Known that)
     {
         Invariants.checkArgument(compatibleWith(that));
@@ -613,7 +617,7 @@ public class Known
 
         public boolean isOrWasKnown()
         {
-            return this == DefinitionKnown;
+            return this != DefinitionUnknown;
         }
 
         public Definition atLeast(Definition that)

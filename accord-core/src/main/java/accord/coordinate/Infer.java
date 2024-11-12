@@ -41,7 +41,7 @@ import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Route.castToRoute;
 import static accord.primitives.Route.isRoute;
 
-// TODO (required): dedicated randomised testing of all inferences
+// TODO (testing): dedicated randomised testing of all inferences
 public class Infer
 {
     public enum InvalidIf
@@ -73,7 +73,7 @@ public class Infer
 
         public boolean inferInvalidWithQuorum(Known known)
         {
-            return this == IfUncommitted && !known.isDecided();
+            return this == IfUncommitted && (!known.isDecided() || !known.definition.isOrWasKnown());
         }
     }
 

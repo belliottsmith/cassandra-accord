@@ -26,20 +26,16 @@ import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.Callable;
 import java.util.function.BiConsumer;
-import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.google.common.collect.Iterables;
 
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
+import accord.api.RoutingKey;
 import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.InMemorySafeCommand;
@@ -74,46 +70,12 @@ import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 
 public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 {
-    private static final Logger logger = LoggerFactory.getLogger(DelayedCommandStores.class);
-
-    //TODO (correctness): remove once we have a Journal integration that does not change the values of a command...
-    // There are known issues due to Journal, so exclude known problamtic fields
-    private static class ValidationHack
-    {
-        private static Pattern field(String path)
-        {
-            path = path.replace(".", "\\.");
-            path += ".*";
-            return Pattern.compile(path);
-        }
-
-        private static final List<Pattern> KNOWN_ISSUES = List.of(
-                                                                  // when a new epoch is detected and the execute ranges have more than the coordinating ranges,
-                                                                  // and the coordinating ranges doesn't include the home key... we drop the query...
-                                                                  // The logic to stitch messages together is not able to handle this as it doesn't know the original Topologies
-                                                                  // TODO (required): test int if this is still true
-//                                                                  field(".partialTxn.query."),
-                                                                  // cmd.mutable().build() != cmd.  This is due to Command.durability changing NotDurable to Local depending on the status
-                                                                  field(".durability."));
-    }
-
-    private static boolean hasKnownIssue(String path)
-    {
-        for (Pattern p : ValidationHack.KNOWN_ISSUES)
-        {
-            Matcher m = p.matcher(path);
-            if (m.find())
-                return true;
-        }
-        return false;
-    }
-
-    private DelayedCommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ShardDistributor shardDistributor, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, SimulatedDelayedExecutorService executorService, BooleanSupplier isLoadedCheck, Journal journal)
+    private DelayedCommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ShardDistributor shardDistributor, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, SimulatedDelayedExecutorService executorService, CacheLoadingChance isLoadedCheck, Journal journal)
     {
         super(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, DelayedCommandStore.factory(executorService, isLoadedCheck, journal));
     }
 
-    public static CommandStores.Factory factory(PendingQueue pending, BooleanSupplier isLoadedCheck, Journal journal)
+    public static CommandStores.Factory factory(PendingQueue pending, CacheLoadingChance isLoadedCheck, Journal journal)
     {
         return (time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory) ->
                new DelayedCommandStores(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, new SimulatedDelayedExecutorService(pending, agent), isLoadedCheck, journal);
@@ -169,14 +131,14 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
         private final SimulatedDelayedExecutorService executor;
         private final Queue<Task<?>> pending = new LinkedList<>();
-        private final BooleanSupplier isLoadedCheck;
+        private final CacheLoadingChance cacheLoadingChance;
         private final Journal journal;
 
-        public DelayedCommandStore(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, SimulatedDelayedExecutorService executor, BooleanSupplier isLoadedCheck, Journal journal)
+        public DelayedCommandStore(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, SimulatedDelayedExecutorService executor, CacheLoadingChance cacheLoadingChance, Journal journal)
         {
             super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
             this.executor = executor;
-            this.isLoadedCheck = isLoadedCheck;
+            this.cacheLoadingChance = cacheLoadingChance;
             this.journal = journal;
         }
 
@@ -193,17 +155,16 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
             Command reconstructed = journal.reconstruct(id, current.txnId());
             List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed);
-            List<String> filteredDiff = diff.stream().filter(d -> !DelayedCommandStores.hasKnownIssue(d.path)).map(Object::toString).collect(Collectors.toList());
-            Invariants.checkState(filteredDiff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, node, id(), new LazyToString(() -> String.join("\n", filteredDiff)));
+            Invariants.checkState(diff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, node, id(), new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
         }
 
         @Override
         protected boolean canExposeUnloaded()
         {
-            return isLoadedCheck.getAsBoolean();
+            return !cacheLoadingChance.cacheEmpty();
         }
 
-        private static CommandStore.Factory factory(SimulatedDelayedExecutorService executor, BooleanSupplier isLoadedCheck, Journal journal)
+        private static CommandStore.Factory factory(SimulatedDelayedExecutorService executor, CacheLoadingChance isLoadedCheck, Journal journal)
         {
             return (id, node, agent, store, progressLogFactory, listenersFactory, rangesForEpoch) -> new DelayedCommandStore(id, node, agent, store, progressLogFactory, listenersFactory, rangesForEpoch, executor, isLoadedCheck, journal);
         }
@@ -286,7 +247,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         protected InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
         {
-            return new DelayedSafeStore(this, ranges, context, commands, timestampsForKey, commandsForKeys);
+            return new DelayedSafeStore(this, ranges, context, commands, timestampsForKey, commandsForKeys, cacheLoadingChance);
         }
 
         @Override
@@ -299,10 +260,18 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
     public static class DelayedSafeStore extends InMemoryCommandStore.InMemorySafeStore
     {
         private final DelayedCommandStore commandStore;
-        public DelayedSafeStore(DelayedCommandStore commandStore, RangesForEpoch ranges, PreLoadContext context, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey)
+        private final CacheLoadingChance cacheLoadingChance;
+        public DelayedSafeStore(DelayedCommandStore commandStore,
+                                RangesForEpoch ranges,
+                                PreLoadContext context,
+                                Map<TxnId, InMemorySafeCommand> commands,
+                                Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey,
+                                Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey,
+                                CacheLoadingChance cacheLoadingChance)
         {
             super(commandStore, ranges, context, commands, timestampsForKey, commandsForKey);
             this.commandStore = commandStore;
+            this.cacheLoadingChance = cacheLoadingChance;
         }
 
         @Override
@@ -319,6 +288,42 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             });
             super.postExecute();
         }
+
+        @Override
+        protected InMemoryCommandStore.InMemoryCommandStoreCaches tryGetCaches()
+        {
+            if (!cacheLoadingChance.cacheEmpty())
+            {
+                boolean cacheFull = cacheLoadingChance.cacheFull();
+                return commandStore.new InMemoryCommandStoreCaches() {
+                    @Override
+                    public InMemorySafeCommand acquireIfLoaded(TxnId txnId)
+                    {
+                        if (cacheFull || cacheLoadingChance.commandLoaded())
+                            return super.acquireIfLoaded(txnId);
+                        return null;
+                    }
+
+                    @Override
+                    public InMemorySafeTimestampsForKey acquireTfkIfLoaded(RoutingKey key)
+                    {
+                        if (cacheFull || cacheLoadingChance.tfkLoaded())
+                            return super.acquireTfkIfLoaded(key);
+                        return null;
+                    }
+
+                    @Override
+                    public InMemorySafeCommandsForKey acquireIfLoaded(RoutingKey key)
+                    {
+                        if (cacheFull || cacheLoadingChance.cfkLoaded())
+                            return super.acquireIfLoaded(key);
+                        return null;
+                    }
+                };
+            }
+            return null;
+
+        }
     }
 
     public List<DelayedCommandStore> unsafeStores()
@@ -327,5 +332,14 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         for (ShardHolder holder : current().shards)
             stores.add((DelayedCommandStore) holder.store);
         return stores;
+    }
+
+    public interface CacheLoadingChance
+    {
+        boolean cacheEmpty();
+        boolean cacheFull();
+        boolean commandLoaded();
+        boolean cfkLoaded();
+        boolean tfkLoaded();
     }
 }

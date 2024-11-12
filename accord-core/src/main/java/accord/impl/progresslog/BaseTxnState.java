@@ -39,11 +39,11 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
  * - WaitingState defines the methods for updating the WaitingState state machine (i.e. for local commands that are waiting on a dependency's outcome)
  * - HomeState defines the methods for updating the HomeState state machine (i.e. for coordinators ensuring a transaction completes)
  * <p>
- * TODO (required): unit test all bit fiddling methods
+ * TODO (testing): unit test all bit fiddling methods
  */
 abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<BaseTxnState>
 {
-    private static final int PENDING_TIMER_SHIFT = 53;
+    private static final int PENDING_TIMER_SHIFT = HomeState.HOME_STATE_END_SHIFT;
     private static final int PENDING_TIMER_BITS = 9;
     private static final int PENDING_TIMER_LOW_BITS = PackedLogLinearInteger.validateLowBits(4, PENDING_TIMER_BITS);
     private static final long PENDING_TIMER_MASK = (1L << PENDING_TIMER_BITS) - 1;
@@ -51,22 +51,27 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
     private static final int SCHEDULED_TIMER_SHIFT = 62;
     private static final int CONTACT_ALL_SHIFT = 63;
 
+    static
+    {
+        Invariants.checkState(PENDING_TIMER_SHIFT + PENDING_TIMER_BITS <= SCHEDULED_TIMER_SHIFT);
+    }
+
     public final TxnId txnId;
 
     /**
-     * bits [0..40) encode WaitingState
+     * bits [0..43) encode WaitingState
      * 2 bits for Progress
      * 3 bits for BlockedUntil target
      * 3 bits for BlockedUntil that home shard can satisfy
      * 32 bits for remote progress key counter [note: if we need to in future we can safely and easily reclaim bits here]
      * 3 bits for retry counter
      * <p>
-     * bits [40..45) encode HomeState
+     * bits [43..51) encode HomeState
      * 2 bits for Progress
      * 3 bits for CoordinatePhase
      * 3 bits for retry counter
      * <p>
-     * bits [53..62) for pending timer delay
+     * bits [51..60) for pending timer delay
      * bit 62 for which kind of timer is scheduled
      * bit 63 for whether we should contact all candidate replicas (rather than just our preferred group)
      */

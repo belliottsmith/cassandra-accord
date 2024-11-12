@@ -585,7 +585,6 @@ public class AccordGens
             break;
             case ExclusiveSyncPoint:
             case SyncPoint:
-            case LocalOnly:
                 //TODO (coverage, now):
                 keyDepsGen = i -> KeyDeps.NONE;
                 rangeDepsGen = i -> RangeDeps.NONE;

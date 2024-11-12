@@ -288,7 +288,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             return null;
         }
 
-        public CheckStatusOk finish(Unseekables<?> routeOrParticipants, WithQuorum withQuorum)
+        public CheckStatusOk finish(Unseekables<?> queried, Unseekables<?> routeOrParticipants, WithQuorum withQuorum)
         {
             CheckStatusOk finished = this;
             if (withQuorum == HasQuorum)
@@ -310,7 +310,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             }
 
             Known validForAll = map.computeValidForAll(routeOrParticipants);
-            if (withQuorum == HasQuorum && invalidIf.inferInvalidWithQuorum(finished.maxKnown()))
+            if (withQuorum == HasQuorum && invalidIf.inferInvalidWithQuorum(finished.minKnown(queried)))
                 validForAll = validForAll.atLeast(Known.Invalidated);
 
             return finished.with(map.with(validForAll));
@@ -447,6 +447,11 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             return map.foldl(Known::atLeast, Known.Nothing, i -> false);
         }
 
+        public Known minKnown(Unseekables<?> query)
+        {
+            return map.foldlWithDefault(query, Known::nonNullOrMin, Known.Nothing, null);
+        }
+
         @Override
         public MessageType type()
         {
@@ -482,9 +487,9 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             this.result = result;
         }
 
-        public CheckStatusOkFull finish(Unseekables<?> unseekables, WithQuorum withQuorum)
+        public CheckStatusOkFull finish(Unseekables<?> queried, Unseekables<?> routeOrParticipants, WithQuorum withQuorum)
         {
-            return (CheckStatusOkFull) super.finish(unseekables, withQuorum);
+            return (CheckStatusOkFull) super.finish(queried, routeOrParticipants, withQuorum);
         }
 
         public CheckStatusOkFull merge(@Nonnull Route<?> route)

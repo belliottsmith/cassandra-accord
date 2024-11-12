@@ -103,12 +103,7 @@ public interface Txn
         // TODO (expected): introduce a special kind of visible ExclusiveSyncPoint that creates a precise moment,
         //    and is therefore visible to all transactions.
         ExclusiveSyncPoint('X', true, true, true, true),
-
-        /**
-         * Used for local book-keeping only, not visible to any other replica or directly to other transactions.
-         * This is used to create pseudo transactions that take the place of dependencies that will be fulfilled by a bootstrap.
-         */
-        LocalOnly('L', false, false, true, false);
+        ;
 
         public enum Kinds
         {
@@ -198,11 +193,6 @@ public interface Txn
             return this == Read;
         }
 
-        public boolean isLocal()
-        {
-            return this == LocalOnly;
-        }
-
         public boolean isDurable()
         {
             return this != EphemeralRead;
@@ -254,6 +244,11 @@ public interface Txn
         public static boolean awaitsOnlyDeps(int ordinal)
         {
             return 0 != (ENCODED_ORDINAL_INFO & (1L << (AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET + ordinal)));
+        }
+
+        public static boolean awaitsPreviouslyOwned(int ordinal)
+        {
+            return ordinal == ExclusiveSyncPoint.ordinal();
         }
 
         public Kinds witnesses()

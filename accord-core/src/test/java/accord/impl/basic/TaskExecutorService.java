@@ -34,9 +34,15 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
 {
     public static class Task<T> extends AsyncResults.RunnableResult<T> implements Pending, RunnableFuture<T>
     {
+        final Pending origin = Pending.Global.activeOrigin();
         public Task(Callable<T> fn)
         {
             super(fn);
+        }
+
+        public Pending origin()
+        {
+            return origin;
         }
 
         @Override

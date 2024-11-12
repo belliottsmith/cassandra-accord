@@ -54,9 +54,9 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     @SuppressWarnings("unused")
     public static class SerializerSupport
     {
-        public static ApplyThenWaitUntilApplied create(TxnId txnId, Participants<?> readScope, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, Result result)
+        public static ApplyThenWaitUntilApplied create(TxnId txnId, Participants<?> readScope, long minEpoch, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, Result result)
         {
-            return new ApplyThenWaitUntilApplied(txnId, readScope, executeAt, route, txn, deps, writes, result);
+            return new ApplyThenWaitUntilApplied(txnId, readScope, minEpoch, executeAt, route, txn, deps, writes, result);
         }
     }
 
@@ -79,9 +79,9 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
         this.result = result;
     }
 
-    protected ApplyThenWaitUntilApplied(TxnId txnId, Participants<?> readScope, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, Result result)
+    protected ApplyThenWaitUntilApplied(TxnId txnId, Participants<?> readScope, long minEpoch, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, Result result)
     {
-        super(txnId, readScope, executeAt.epoch());
+        super(txnId, readScope, minEpoch, executeAt.epoch());
         this.executeAt = executeAt;
         this.route = route;
         this.txn = txn;

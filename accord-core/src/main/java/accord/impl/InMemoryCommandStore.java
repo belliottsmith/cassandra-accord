@@ -94,7 +94,7 @@ import accord.utils.async.Cancellable;
 
 import static accord.local.KeyHistory.ASYNC;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
-import static accord.local.SafeCommandStore.TestDep.WITH;
+import static accord.local.SafeCommandStore.TestDep.WITH_OR_INVALIDATED;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
 import static accord.local.SafeCommandStore.TestStatus.ANY_STATUS;
 import static accord.primitives.SaveStatus.Applying;
@@ -195,7 +195,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                         long epoch = cur.executeAt().epoch();
                         Ranges ranges = safeStore.ranges().allAt(epoch);
                         Participants<?> participants = cur.route().participants(ranges, Minimal);
-                        // TODO (required): look forwards also, but we only need to look at ?=ReadyToExecute transactions as they have already run their backwards checks
+                        // TODO (testing): look forwards also, but we only need to look at ?=ReadyToExecute transactions as they have already run their backwards checks
                         Iterator<GlobalCommand> iter = commandsByExecuteAt.descendingMap().tailMap(cur.executeAt(), false).values().iterator();
                         while (iter.hasNext())
                         {
@@ -391,16 +391,18 @@ public abstract class InMemoryCommandStore extends CommandStore
             List<TxnId> resubmit = new ArrayList<>();
             for (TxnId txnId : txnIds)
             {
-                Command command = commands.get(txnId).value();
-                if (!command.hasBeen(PreCommitted)) return;
-                if (!command.txnId().isVisible()) return;
+                GlobalCommand globalCommand = commands.get(txnId);
+                if (globalCommand == null) continue;
+                Command command = globalCommand.value();
+                if (!command.hasBeen(PreCommitted)) continue;
+                if (!command.txnId().isVisible()) continue;
 
                 Ranges allRanges = unsafeRangesForEpoch().allBetween(txnId.epoch(), command.executeAtOrTxnId().epoch());
                 boolean done = command.hasBeen(Truncated);
                 if (!done)
                 {
                     if (unsafeGetRedundantBefore().status(txnId, command.route()) == RedundantStatus.PRE_BOOTSTRAP_OR_STALE)
-                        return;
+                        continue;
 
                     Route<?> route = command.route().slice(allRanges);
                     done = !route.isEmpty() && ranges.containsAll(route);
@@ -423,7 +425,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             if (!resubmit.isEmpty())
             {
                 txnIds = resubmit;
-                node.scheduler().once(this, 5L, TimeUnit.SECONDS);
+                node.scheduler().selfRecurring(this, 5L, TimeUnit.SECONDS);
             }
         }
     }
@@ -664,7 +666,40 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
     }
 
-    public static class InMemorySafeStore extends AbstractSafeCommandStore<InMemorySafeCommand, InMemorySafeTimestampsForKey, InMemorySafeCommandsForKey>
+    public class InMemoryCommandStoreCaches implements AbstractSafeCommandStore.CommandStoreCaches<InMemorySafeCommand, InMemorySafeTimestampsForKey, InMemorySafeCommandsForKey>
+    {
+        @Override
+        public void close() {}
+
+        @Override
+        public InMemorySafeCommand acquireIfLoaded(TxnId txnId)
+        {
+            GlobalCommand command = commands.get(txnId);
+            if (command == null)
+                return null;
+            return command.createSafeReference();
+        }
+
+        @Override
+        public InMemorySafeCommandsForKey acquireIfLoaded(RoutingKey key)
+        {
+            GlobalCommandsForKey cfk = commandsForKey.get(key);
+            if (cfk == null)
+                return null;
+            return cfk.createSafeReference();
+        }
+
+        @Override
+        public InMemorySafeTimestampsForKey acquireTfkIfLoaded(RoutingKey key)
+        {
+            GlobalTimestampsForKey tfk = timestampsForKey.get(key);
+            if (tfk == null)
+                return null;
+            return tfk.createSafeReference();
+        }
+    }
+
+    public static class InMemorySafeStore extends AbstractSafeCommandStore<InMemorySafeCommand, InMemorySafeTimestampsForKey, InMemorySafeCommandsForKey, InMemoryCommandStoreCaches>
     {
         private final InMemoryCommandStore commandStore;
         protected final Map<TxnId, InMemorySafeCommand> commands;
@@ -700,69 +735,53 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeCommand getCommandUnsafe(TxnId txnId)
+        protected InMemorySafeCommand getInternal(TxnId txnId)
         {
             return commands.get(txnId);
         }
 
         @Override
-        protected void addCommandUnsafe(InMemorySafeCommand command)
+        protected InMemoryCommandStoreCaches tryGetCaches()
         {
-            if (command.isUnset()) command.uninitialised();
-            commands.put(command.txnId(), command);
+            if (commandStore.canExposeUnloaded())
+                return commandStore.new InMemoryCommandStoreCaches();
+            return null;
         }
 
         @Override
-        protected InMemorySafeTimestampsForKey getTimestampsForKeyUnsafe(RoutingKey key)
+        protected InMemorySafeCommand add(InMemorySafeCommand command, InMemoryCommandStoreCaches caches)
+        {
+            if (command.isUnset()) command.uninitialised();
+            commands.put(command.txnId(), command);
+            return command;
+        }
+
+        @Override
+        protected InMemorySafeTimestampsForKey add(InMemorySafeTimestampsForKey tfk, InMemoryCommandStoreCaches caches)
+        {
+            if (tfk.isUnset()) tfk.initialize();
+            timestampsForKey.put(tfk.key(), tfk);
+            return tfk;
+        }
+
+        @Override
+        protected InMemorySafeTimestampsForKey timestampsForKeyInternal(RoutingKey key)
         {
             return timestampsForKey.get(key);
         }
 
         @Override
-        protected void addTimestampsForKeyUnsafe(InMemorySafeTimestampsForKey tfk)
-        {
-            if (tfk.isUnset()) tfk.initialize();
-            timestampsForKey.put(tfk.key(), tfk);
-        }
-
-        @Override
-        protected InMemorySafeTimestampsForKey getTimestampsForKeyIfUnsafe(RoutingKey key)
-        {
-            if (!commandStore.canExposeUnloaded())
-                return null;
-            GlobalTimestampsForKey global = commandStore.timestampsForKeyIfPresent(key);
-            return global != null ? global.createSafeReference() : null;
-        }
-
-        @Override
-        protected InMemorySafeCommand getIfLoadedUnsafe(TxnId txnId)
-        {
-            if (!commandStore.canExposeUnloaded())
-                return null;
-            GlobalCommand global = commandStore.commandIfPresent(txnId);
-            return global != null ? global.createSafeReference() : null;
-        }
-
-        @Override
-        protected InMemorySafeCommandsForKey getCommandsForKeyUnsafe(RoutingKey key)
+        protected InMemorySafeCommandsForKey getInternal(RoutingKey key)
         {
             return commandsForKey.get(key);
         }
 
         @Override
-        protected void addCommandsForKeyUnsafe(InMemorySafeCommandsForKey cfk)
+        protected InMemorySafeCommandsForKey add(InMemorySafeCommandsForKey cfk, InMemoryCommandStoreCaches caches)
         {
             if (cfk.isUnset()) cfk.initialize();
             commandsForKey.put(cfk.key(), cfk);
-        }
-
-        @Override
-        protected InMemorySafeCommandsForKey getCommandsForKeyIfUnsafe(RoutingKey key)
-        {
-            if (!commandStore.canExposeUnloaded())
-                return null;
-            GlobalCommandsForKey global = commandStore.commandsForKeyIfPresent(key);
-            return global != null ? global.createSafeReference() : null;
+            return cfk;
         }
 
         @Override
@@ -920,6 +939,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                     case IS_STABLE:
                         if (command.status().compareTo(Stable) < 0 || command.status().compareTo(Truncated) >= 0)
                             return;
+                    case IS_STABLE_OR_INVALIDATED:
+                        if (command.status().compareTo(Stable) < 0 || command.status() == Truncated)
+                            return;
                 }
 
                 if (!testKind.test(command.txnId()))
@@ -941,7 +963,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     // and so it is safe to execute, when in fact it is only a dependency on a different shard
                     // (and that other shard, perhaps, does not know that it is a dependency - and so it is not durably known)
                     // TODO (required): consider this some more
-                    if ((testDep == WITH) == !command.partialDeps().intersects(testTxnId, rangeCommand.ranges))
+                    if ((testDep == WITH_OR_INVALIDATED) == !command.partialDeps().intersects(testTxnId, rangeCommand.ranges))
                         return;
                 }
 
@@ -1194,7 +1216,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         public void shutdown()
         {
-            executor.shutdown();
+            executor.shutdownNow();
         }
     }
 
@@ -1213,10 +1235,10 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
 
             @Override
-            public InMemorySafeCommand ifLoadedAndInitialisedAndNotErasedInternal(TxnId txnId)
+            public InMemorySafeCommand ifLoadedInternal(TxnId txnId)
             {
                 assertThread();
-                return super.ifLoadedAndInitialisedAndNotErasedInternal(txnId);
+                return super.ifLoadedInternal(txnId);
             }
 
             @Override

@@ -18,6 +18,28 @@
 
 package accord.impl.basic;
 
+import accord.utils.Invariants;
+
 public interface Pending
 {
+    Pending origin();
+
+    // a slightly hacky but easy way to track transitive recurring tasks
+    class Global
+    {
+        private static Pending activeOrigin;
+        public static void setActiveOrigin(Pending newActive)
+        {
+            Invariants.checkState(activeOrigin == null);
+            activeOrigin = newActive.origin();
+        }
+        public static void clearActiveOrigin()
+        {
+            activeOrigin = null;
+        }
+        public static Pending activeOrigin()
+        {
+            return activeOrigin;
+        }
+    }
 }

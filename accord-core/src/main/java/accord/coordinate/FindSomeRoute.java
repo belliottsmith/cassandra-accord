@@ -80,6 +80,6 @@ public class FindSomeRoute extends CheckShards<Participants<?>>
     {
         if (failure != null) callback.accept(null, failure);
         else if (merged == null) callback.accept(new Result(null, Nothing, success.withQuorum), null);
-        else callback.accept(new Result(merged.route, merged.finish(this.route, success.withQuorum).knownFor(txnId, this.route, this.route), success.withQuorum), null);
+        else callback.accept(new Result(merged.route, merged.finish(this.route, this.route, success.withQuorum).knownFor(txnId, this.route, this.route), success.withQuorum), null);
     }
 }

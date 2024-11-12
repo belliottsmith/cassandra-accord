@@ -44,7 +44,6 @@ import accord.utils.async.AsyncResults;
 import static accord.local.PreLoadContext.empty;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.primitives.Txn.Kind.LocalOnly;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -109,7 +108,7 @@ class Bootstrap
         boolean fetchCompleted;
         boolean completed; // we have finished fetching all the data we are able to, but we may still have in-flight fetches
         Throwable fetchOutcome;
-        TxnId globalSyncId, localSyncId;
+        TxnId globalSyncId;
 
         Attempt(Ranges ranges)
         {
@@ -125,7 +124,6 @@ class Bootstrap
             }
 
             globalSyncId = node.nextTxnId(ExclusiveSyncPoint, Routable.Domain.Range);
-            localSyncId = globalSyncId.as(LocalOnly).withEpoch(epoch);
             Invariants.checkArgument(epoch <= globalSyncId.epoch(), "Attempting to use local epoch %d which is larger than global epoch %d", epoch, globalSyncId.epoch());
 
             if (!node.topology().hasEpoch(globalSyncId.epoch()))

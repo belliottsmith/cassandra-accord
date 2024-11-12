@@ -269,12 +269,12 @@ public class Topology
         return forSubset(EMPTY_SUBSET);
     }
 
-    public Topology forSelection(Routables<?> select)
+    public Topology select(Routables<?> select)
     {
-        return forSelection(select, false);
+        return select(select, false);
     }
 
-    public Topology forSelection(Routables<?> select, boolean permitMissing)
+    public Topology select(Routables<?> select, boolean permitMissing)
     {
         return forSubset(subsetFor(select, permitMissing));
     }
@@ -283,6 +283,9 @@ public class Topology
     Topology forSubset(int[] newSubset)
     {
         Ranges rangeSubset = ranges.select(newSubset);
+        if (rangeSubset == ranges)
+            return this;
+
         SimpleBitSet nodes = new SimpleBitSet(nodeIds.size());
         Int2ObjectHashMap<NodeInfo> nodeLookup = new Int2ObjectHashMap<>(nodes.size(), 0.8f);
         for (int shardIndex : newSubset)

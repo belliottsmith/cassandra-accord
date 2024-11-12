@@ -70,6 +70,8 @@ import static accord.utils.Invariants.illegalState;
 // TODO (expected): do not wait for a quorum if we find enough information to execute
 public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
+    // TODO (required): make sure we contact and wait (at least until timeout)
+    //  for an ACK from any replica that witnessed a txn as something to wait for
     AsyncResult<Object> awaitCommits(Node node, Deps waitOn)
     {
         AtomicInteger remaining = new AtomicInteger(waitOn.txnIdCount());
@@ -78,8 +80,9 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         {
             TxnId txnId = waitOn.txnId(i);
             Participants<?> participants = waitOn.participants(txnId);
-            Topology topology = node.topology().globalForEpoch(txnId.epoch()).forSelection(participants);
-            SynchronousAwait.awaitQuorum(node, topology, txnId, route.homeKey(), BlockedUntil.HasCommittedDeps, participants).addCallback((success, failure) -> {
+            long sinceEpoch = Math.min(txnId.epoch(), Recover.this.txnId.epoch());
+            Topologies topologies = this.tracker.topologies().select(participants, sinceEpoch);
+            SynchronousAwait.awaitQuorum(node, topologies, txnId, route.homeKey(), BlockedUntil.HasCommittedDeps, participants).addCallback((success, failure) -> {
                 if (result.isDone())
                     return;
                 if (failure == null && remaining.decrementAndGet() == 0)

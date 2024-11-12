@@ -192,7 +192,8 @@ public class BurnTestConfigurationService extends AbstractConfigurationService.M
     @Override
     public void reportEpochRedundant(Ranges ranges, long epoch)
     {
-        Topology topology = lookup.apply(localId).topology().globalForEpoch(epoch);
-        topologyUpdates.epochRedundant(lookup.apply(localId), topology.nodes(), ranges, epoch);
+        Topology topology = lookup.apply(localId).topology().maybeGlobalForEpoch(epoch);
+        if (topology != null)
+            topologyUpdates.epochRedundant(lookup.apply(localId), topology.nodes(), ranges, epoch);
     }
 }

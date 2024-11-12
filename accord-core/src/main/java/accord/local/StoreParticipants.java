@@ -126,8 +126,9 @@ public class StoreParticipants
         return new StoreParticipants(route, owns, touches, touches);
     }
 
-    public final StoreParticipants supplement(StoreParticipants that)
+    public final StoreParticipants supplement(@Nullable StoreParticipants that)
     {
+        if (that == null) return this;
         if (this == that) return this;
         return supplement(that.route, that.owns, that.hasTouched);
     }
@@ -242,9 +243,14 @@ public class StoreParticipants
 
     public static StoreParticipants execute(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, long executeAtEpoch)
     {
-        long txnIdEpoch = txnId.epoch();
-        Participants<?> owns = participants.slice(safeStore.ranges().allBetween(txnIdEpoch, executeAtEpoch), Minimal);
-        return new StoreParticipants(tryCastToRoute(participants), owns, owns, owns);
+        return execute(safeStore, participants, txnId, txnId.epoch(), executeAtEpoch);
+    }
+
+    public static StoreParticipants execute(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, long minEpoch, long executeAtEpoch)
+    {
+        Participants<?> owns = participants.slice(safeStore.ranges().allBetween(txnId.epoch(), executeAtEpoch), Minimal);
+        Participants<?> touches = minEpoch >= txnId.epoch() ? owns :  participants.slice(safeStore.ranges().allBetween(minEpoch, executeAtEpoch), Minimal);
+        return new StoreParticipants(tryCastToRoute(participants), owns, touches, touches);
     }
 
     public static StoreParticipants read(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, long minEpoch, long maxEpoch)

@@ -237,24 +237,35 @@ class SortedArraysTest
     @Test
     public void testLinearSubtract()
     {
-        Gen<Integer[]> gen = sortedUniqueIntegerArray(0);
-        qt().forAll(gen, gen).check((a, b) -> {
-            Set<Integer> left = new HashSet<>(Arrays.asList(a));
-            Set<Integer> right = new HashSet<>(Arrays.asList(b));
+        int[][] quants = {{0, 1000, 0, 1000},
+                          {0, 100, 0, 1000},
+                          {0, 100, 0, 10},
+                          {0, 10, 0, 10},
+                          {0, 5, 0, 5},
+                          {0, 5, 0, 5}};
 
-            {
-                Set<Integer> difference = Sets.difference(left, right);
-                Integer[] expected = toArray(difference, Integer[]::new);
-                Arrays.sort(expected);
-                assertArrayEquals(expected, SortedArrays.linearSubtract(a, b, uncached(Integer[]::new)));
-            }
-            {
-                Set<Integer> difference = Sets.difference(right, left);
-                Integer[] expected = toArray(difference, Integer[]::new);
-                Arrays.sort(expected);
-                assertArrayEquals(expected, SortedArrays.linearSubtract(b, a, uncached(Integer[]::new)));
-            }
-        });
+        for (int[] quant : quants)
+        {
+            Gen<Integer[]> gen1 = sortedUniqueIntegerArray(quant[1], quant[0]);
+            Gen<Integer[]> gen2 = sortedUniqueIntegerArray(quant[3], quant[2]);
+            qt().forAll(gen1, gen2).withExamples(1000).check((a, b) -> {
+                Set<Integer> left = new HashSet<>(Arrays.asList(a));
+                Set<Integer> right = new HashSet<>(Arrays.asList(b));
+
+                {
+                    Set<Integer> difference = Sets.difference(left, right);
+                    Integer[] expected = toArray(difference, Integer[]::new);
+                    Arrays.sort(expected);
+                    assertArrayEquals(expected, SortedArrays.linearSubtract(a, b, uncached(Integer[]::new)));
+                }
+                {
+                    Set<Integer> difference = Sets.difference(right, left);
+                    Integer[] expected = toArray(difference, Integer[]::new);
+                    Arrays.sort(expected);
+                    assertArrayEquals(expected, SortedArrays.linearSubtract(b, a, uncached(Integer[]::new)));
+                }
+            });
+        }
     }
 
     @Test

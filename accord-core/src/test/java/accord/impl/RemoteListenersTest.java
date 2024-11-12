@@ -414,7 +414,7 @@ public class RemoteListenersTest
         @Override public CommandStore commandStore() { return commandStore; }
 
         @Override protected SafeCommand getInternal(TxnId txnId) { return null; }
-        @Override protected SafeCommand ifLoadedAndInitialisedAndNotErasedInternal(TxnId txnId) { return null; }
+        @Override protected SafeCommand ifLoadedInternal(TxnId txnId) { return null; }
         @Override protected SafeCommandsForKey getInternal(RoutingKey key) { return null;}
         @Override protected SafeCommandsForKey ifLoadedInternal(RoutingKey key) { return null;}
         @Override public SafeTimestampsForKey timestampsForKey(RoutingKey key) { return null; }

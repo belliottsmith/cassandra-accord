@@ -20,10 +20,8 @@ package accord.impl.basic;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import accord.api.MessageSink;
 import accord.impl.basic.Cluster.Link;
@@ -37,38 +35,42 @@ import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
-import accord.utils.RandomSource;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public class NodeSink implements MessageSink
 {
-    private static final Logger logger = LoggerFactory.getLogger(NodeSink.class);
-
-    private static final boolean DEBUG = false;
     public enum Action { DELIVER, DROP, DELIVER_WITH_FAILURE, FAILURE }
+
+    public interface TimeoutSupplier
+    {
+        long slowAt();
+        long expiresAt();
+        long failsAt();
+        long now();
+        TimeUnit units();
+    }
 
     final Id self;
     final Function<Id, Node> lookup;
     final Cluster parent;
-    final RandomSource random;
+    final TimeoutSupplier timeouts;
 
     int nextMessageId = 0;
     Map<Long, SafeCallback> callbacks = new LinkedHashMap<>();
 
-    public NodeSink(Id self, Function<Id, Node> lookup, Cluster parent, RandomSource random)
+    public NodeSink(Id self, Function<Id, Node> lookup, Cluster parent, TimeoutSupplier timeouts)
     {
         this.self = self;
         this.lookup = lookup;
         this.parent = parent;
-        this.random = random;
+        this.timeouts = timeouts;
     }
 
     @Override
     public void send(Id to, Request send)
     {
-        maybeEnqueue(to, nextMessageId++, send, null);
+        maybeEnqueue(to, nextMessageId++, timeouts.expiresAt(), send, null);
     }
 
     @Override
@@ -77,32 +79,38 @@ public class NodeSink implements MessageSink
         long messageId = nextMessageId++;
         SafeCallback sc = new SafeCallback(executor, callback);
         callbacks.put(messageId, sc);
-        if (maybeEnqueue(to, messageId, send, sc))
+        TimeUnit units = timeouts.units();
+        long now = timeouts.now();
+        long expiresAt = timeouts.expiresAt();
+        long slowAt = timeouts.slowAt();
+        if (maybeEnqueue(to, messageId, expiresAt, send, sc))
         {
-            parent.pending.add((PendingRunnable) () -> {
+            parent.pending.add(PendingRunnable.create(() -> {
                 if (sc == callbacks.get(messageId))
                     sc.slowResponse(to);
-            }, 100 + random.nextInt(200), MILLISECONDS);
-            parent.pending.add((PendingRunnable) () -> {
+            }), slowAt - now, units);
+            parent.pending.add(PendingRunnable.create(() -> {
                 if (sc == callbacks.remove(messageId))
                     sc.timeout(to);
-            }, 1000 + random.nextInt(1000), MILLISECONDS);
+            }), expiresAt - now, units);
         }
     }
 
     @Override
     public void reply(Id replyToNode, ReplyContext replyContext, Reply reply)
     {
-        maybeEnqueue(replyToNode, Packet.getMessageId(replyContext), reply, null);
+        long expiresAt = Packet.getExpiresAt(replyContext);
+        if (expiresAt < 0) expiresAt = timeouts.expiresAt();
+        maybeEnqueue(replyToNode, Packet.getMessageId(replyContext), expiresAt, reply, null);
     }
 
-    private boolean maybeEnqueue(Node.Id to, long id, Message message, SafeCallback callback)
+    private boolean maybeEnqueue(Node.Id to, long id, long expiresAt, Message message, SafeCallback callback)
     {
         Link link = parent.links.apply(self, to);
         if (to.equals(self) || lookup.apply(to) == null /* client */)
         {
             parent.messageListener.onMessage(Action.DELIVER, self, to, id, message);
-            deliver(to, id, message, link);
+            deliver(to, id, expiresAt, message, link);
             return true;
         }
 
@@ -111,21 +119,21 @@ public class NodeSink implements MessageSink
         switch (action)
         {
             case DELIVER:
-                deliver(to, id, message, link);
+                deliver(to, id, expiresAt, message, link);
                 return true;
             case DELIVER_WITH_FAILURE:
-                deliver(to, id, message, link);
+                deliver(to, id, expiresAt, message, link);
             case FAILURE:
                 if (action == Action.FAILURE)
                     parent.notifyDropped(self, to, id, message);
                 if (callback != null)
                 {
-                    parent.pending.add((PendingRunnable) () -> {
+                    long failesAt = timeouts.failsAt();
+                    parent.pending.add(PendingRunnable.create(() -> {
                         if (callback == callbacks.remove(id))
                         {
                             try
                             {
-                                // TODO (now): we MUST drop any ACTUAL reply now
                                 callback.failure(to, new SimulatedFault("Simulation Failure; src=" + self + ", to=" + to + ", id=" + id + ", message=" + message));
                             }
                             catch (Throwable t)
@@ -134,11 +142,11 @@ public class NodeSink implements MessageSink
                                 lookup.apply(self).agent().onUncaughtException(t);
                             }
                         }
-                    }, 1000 + random.nextInt(1000), MILLISECONDS);
+                    }), failesAt - timeouts.now(), timeouts.units());
                 }
                 return false;
             case DROP:
-                // TODO (consistency): parent.notifyDropped is a trace logger that is very similar in spirit to MessageListener; can we unify?
+                // TODO (desired): parent.notifyDropped is a trace logger that is very similar in spirit to MessageListener; can we unify?
                 parent.notifyDropped(self, to, id, message);
                 return true;
             default:
@@ -146,11 +154,11 @@ public class NodeSink implements MessageSink
         }
     }
 
-    private void deliver(Node.Id to, long id, Message message, Link link)
+    private void deliver(Node.Id to, long id, long expiresAt, Message message, Link link)
     {
         Packet packet;
-        if (message instanceof Reply) packet = new Packet(self, to, id, (Reply) message);
-        else packet = new Packet(self, to, id, (Request) message);
+        if (message instanceof Reply) packet = new Packet(self, to, expiresAt, id, (Reply) message);
+        else packet = new Packet(self, to, expiresAt, id, (Request) message);
         parent.add(packet, link.latencyMicros.getAsLong(), MICROSECONDS);
     }
 

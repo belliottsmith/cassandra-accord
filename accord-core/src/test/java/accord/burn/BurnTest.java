@@ -187,7 +187,7 @@ public class BurnTest
                     return new Txn.InMemory(kind, new Keys(requestKeys), read, query, update);
                 };
             }
-            packets.add(new Packet(client, node, count, new ListRequest(description, txnGenerator, listener)));
+            packets.add(new Packet(client, node, Long.MAX_VALUE, count, new ListRequest(description, txnGenerator, listener)));
         }
 
         return packets;
@@ -287,7 +287,7 @@ public class BurnTest
     }
 
     @SuppressWarnings("unused")
-    static void reconcile(long seed, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int operations, int concurrency) throws ExecutionException, InterruptedException
+    static void reconcile(long seed, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency) throws ExecutionException, InterruptedException
     {
         RandomSource random1 = new DefaultRandom(), random2 = new DefaultRandom();
 
@@ -295,14 +295,14 @@ public class BurnTest
         random2.setSeed(seed);
         ExecutorService exec = Executors.newFixedThreadPool(2);
         RandomDelayQueue.ReconcilingQueueFactory factory = new RandomDelayQueue.ReconcilingQueueFactory(seed);
-        Future<?> f1 = exec.submit(() -> burn(random1, topologyFactory, clients, nodes, keyCount, operations, concurrency, factory.get(true)));
-        Future<?> f2 = exec.submit(() -> burn(random2, topologyFactory, clients, nodes, keyCount, operations, concurrency, factory.get(false)));
+        Future<?> f1 = exec.submit(() -> burn(random1, topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, factory.get(true)));
+        Future<?> f2 = exec.submit(() -> burn(random2, topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, factory.get(false)));
         exec.shutdown();
         f1.get();
         f2.get();
     }
 
-    static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int operations, int concurrency, PendingQueue pendingQueue)
+    static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency, PendingQueue pendingQueue)
     {
         List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
         AtomicLong progress = new AtomicLong();
@@ -314,7 +314,7 @@ public class BurnTest
             RandomSource retryRandom = random.fork();
             retryBootstrap = retry -> {
                 long delay = retryRandom.nextInt(1, 15);
-                queue.add((PendingRunnable) retry::run, delay, TimeUnit.SECONDS);
+                queue.add(PendingRunnable.create(retry::run), delay, TimeUnit.SECONDS);
             };
         }
         IntSupplier coordinationDelays, progressDelays, timeoutDelays;
@@ -324,7 +324,7 @@ public class BurnTest
             progressDelays = delayGenerator(rnd, 1, 100, 100, 1000);
             timeoutDelays = delayGenerator(rnd, 500, 800, 1000, 10000);
         }
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays);
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis);
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
@@ -340,12 +340,16 @@ public class BurnTest
 
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should enver get a stale event");
-        }, coordinationDelays, progressDelays, timeoutDelays));
-        Int2ObjectHashMap<Verifier> validators = new Int2ObjectHashMap<>();
+        }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis));
+        Verifier verifier = createVerifier(keyCount * prefixCount);
         Function<CommandStore, AsyncExecutor> executor = ignore -> globalExecutor;
 
         MessageListener listener = MessageListener.get();
-        
+
+        int[] prefixes = IntStream.concat(IntStream.of(0), IntStream.generate(() -> random.nextInt(1024))).distinct().limit(prefixCount).toArray();
+        int[] newPrefixes = Arrays.copyOfRange(prefixes, 1, prefixes.length);
+        Arrays.sort(prefixes);
+
         int[] keys = IntStream.range(0, keyCount).toArray();
         Packet[] requests = toArray(generate(random, listener, executor, clients, nodes, keys, operations), Packet[]::new);
         int[] starts = new int[requests.length];
@@ -424,28 +428,25 @@ public class BurnTest
                 // the current logic for add keyspace only knows what is there, so a ABA problem exists where keyspaces
                 // may come back... logically this is a problem as the history doesn't get reset, but practically that
                 // is fine as the backing map and the validator are consistent
-                Int2ObjectHashMap<Verifier.Checker> seen = new Int2ObjectHashMap<>();
+                Verifier.Checker check = verifier.witness(start, end);
                 for (int i = 0 ; i < reply.read.length ; ++i)
                 {
                     Key key = reply.responseKeys.get(i);
                     int prefix = prefix(key);
                     int keyValue = key(key);
                     int k = Arrays.binarySearch(keys, keyValue);
-                    Verifier verifier = validators.computeIfAbsent(prefix, ignore -> createVerifier(Integer.toString(prefix), keyCount));
-                    Verifier.Checker check = seen.computeIfAbsent(prefix, ignore -> verifier.witness(start, end));
 
                     int[] read = reply.read[i];
                     int write = reply.update == null ? -1 : reply.update.getOrDefault(key, -1);
 
+                    int prefixIndex = Arrays.binarySearch(prefixes, prefix);
+                    int index = keyCount * prefixIndex + k;
                     if (read != null)
-                        check.read(k, read);
+                        check.read(index, read);
                     if (write >= 0)
-                        check.write(k, write);
+                        check.write(index, write);
                 }
-                for (Verifier.Checker check : seen.values())
-                {
-                    check.close();
-                }
+                check.close();
             }
             catch (Throwable t)
             {
@@ -456,7 +457,7 @@ public class BurnTest
         Map<MessageType, Stats> messageStatsMap;
         try
         {
-            messageStatsMap = Cluster.run(toArray(nodes, Id[]::new), listener, () -> queue,
+            messageStatsMap = Cluster.run(toArray(nodes, Id[]::new), newPrefixes, listener, () -> queue,
                                           (id, onStale) -> globalExecutor.withAgent(agentSupplier.apply(onStale)),
                                           queue::checkFailures,
                                           responseSink, random::fork, nowSupplier,
@@ -464,11 +465,12 @@ public class BurnTest
                                           onSubmitted::set,
                                           ignore -> {}
             );
-            for (Verifier verifier : validators.values())
-                verifier.close();
+            verifier.close();
         }
         catch (Throwable t)
         {
+            logger.info("Keys: " + Arrays.toString(keys));
+            logger.info("Prefixes: " + Arrays.toString(prefixes));
             for (int i = 0 ; i < requests.length ; ++i)
             {
                 logger.info("{}", requests[i]);
@@ -518,11 +520,11 @@ public class BurnTest
         return stats.toString();
     }
 
-    private static Verifier createVerifier(String prefix, int keyCount)
+    private static Verifier createVerifier(int keyCount)
     {
         if (!ElleVerifier.Support.allowed())
-            return new StrictSerializabilityVerifier(prefix, keyCount);
-        return CompositeVerifier.create(new StrictSerializabilityVerifier(prefix, keyCount),
+            return new StrictSerializabilityVerifier("", keyCount);
+        return CompositeVerifier.create(new StrictSerializabilityVerifier("", keyCount),
                                         new ElleVerifier());
     }
 
@@ -625,6 +627,7 @@ public class BurnTest
                     clients,
                     nodes,
                     5 + random.nextInt(15),
+                    5 + random.nextInt(15),
                     operations,
                     10 + random.nextInt(30),
                  new Factory(random).get());
@@ -657,6 +660,7 @@ public class BurnTest
             reconcile(seed, new TopologyFactory(rf, ranges(0, HASH_RANGE_START, HASH_RANGE_END, random.nextInt(Math.max(nodes.size() + 1, rf), nodes.size() * 3))),
                     clients,
                     nodes,
+                    5 + random.nextInt(15),
                     5 + random.nextInt(15),
                     operations,
                     10 + random.nextInt(30));

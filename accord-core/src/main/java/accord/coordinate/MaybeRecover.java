@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import accord.messages.Commit;
 import accord.messages.InformDurable;
 import accord.primitives.*;
 import accord.utils.Invariants;
@@ -57,7 +58,8 @@ public class MaybeRecover extends CheckShards<Route<?>>
     @Override
     protected boolean isSufficient(CheckStatusOk ok)
     {
-        return hasMadeProgress(ok) || ok.durability.isDurableOrInvalidated();
+        // We don't accept a single truncated response - must have a quorum so we can make inferences about invalidation
+        return !ok.isTruncatedResponse() && (hasMadeProgress(ok) || ok.durability.isDurableOrInvalidated());
     }
 
     public boolean hasMadeProgress(CheckStatusOk ok)
@@ -70,6 +72,8 @@ public class MaybeRecover extends CheckShards<Route<?>>
     @Override
     protected void onDone(Success success, Throwable fail)
     {
+        // TODO (desired): we don't need a full quorum to proceed, just a quorum that intersects a full quorum (i.e. when rf=2, we need only 1 reply)
+        //  this can be helpful in mitigating flakiness and helping forward progress for large transactions spanning many shards
         if (fail != null)
         {
             callback.accept(null, fail);
@@ -77,7 +81,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
         else
         {
             Invariants.checkState(merged != null);
-            CheckStatusOk full = merged.finish(this.route, success.withQuorum);
+            CheckStatusOk full = merged.finish(this.route, this.route, success.withQuorum);
             Known known = full.maxKnown();
             Route<?> someRoute = full.route;
 
@@ -120,12 +124,13 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
                 case WasApply:
                 case Erased:
+                    // TODO (required): if we're home replica, don't want to cancel coordination without either invalidating or applying unless we're stale
                     // TODO (required): on Erased, should we maybe mark stale, or leave to FetchData?
                     callback.accept(full.toProgressToken(), null);
                     break;
 
                 case Invalidated:
-                    // TODO (required): revisit lowEpoch here
+                    Commit.Invalidate.commitInvalidate(node, txnId, Route.merge(full.route, (Route)route), txnId.epoch());
                     locallyInvalidateAndCallback(node, txnId, txnId, txnId, someRoute, full.toProgressToken(), callback);
                     break;
             }

@@ -25,6 +25,7 @@ import accord.api.Scheduler.Scheduled;
 
 class RecurringPendingRunnable implements PendingRunnable, Scheduled
 {
+    final int source;
     final PendingQueue requeue;
     final LongSupplier delay;
     final TimeUnit units;
@@ -32,13 +33,20 @@ class RecurringPendingRunnable implements PendingRunnable, Scheduled
     Runnable run;
     Runnable onCancellation;
 
-    RecurringPendingRunnable(PendingQueue requeue, Runnable run, LongSupplier delay, TimeUnit units, boolean isRecurring)
+    RecurringPendingRunnable(int source, PendingQueue requeue, Runnable run, LongSupplier delay, TimeUnit units, boolean isRecurring)
     {
+        this.source = source;
         this.requeue = requeue;
         this.run = run;
         this.delay = delay;
         this.units = units;
         this.isRecurring = isRecurring;
+    }
+
+    @Override
+    public Pending origin()
+    {
+        return this;
     }
 
     @Override
@@ -86,5 +94,11 @@ class RecurringPendingRunnable implements PendingRunnable, Scheduled
             return "Done/Cancelled";
 
         return run + " with " + delay + " " + units + " delay";
+    }
+
+    public static boolean isRecurring(Pending pending)
+    {
+        Pending origin = pending.origin();
+        return origin instanceof RecurringPendingRunnable && ((RecurringPendingRunnable) origin).isRecurring;
     }
 }

@@ -127,6 +127,11 @@ public class TxnId extends Timestamp
         return Kind.awaitsOnlyDeps(kindOrdinal(flags()));
     }
 
+    public boolean awaitsPreviouslyOwned()
+    {
+        return Kind.awaitsPreviouslyOwned(kindOrdinal(flags()));
+    }
+
     public boolean is(Domain domain)
     {
         return domainOrdinal(flags()) == domain.ordinal();

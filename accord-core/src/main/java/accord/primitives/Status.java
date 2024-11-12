@@ -167,6 +167,11 @@ public enum Status
             return a;
         }
 
+        public static Durability max(Durability a, Durability b)
+        {
+            return a.compareTo(b) >= 0 ? a : b;
+        }
+
         public static Durability forOrdinal(int ordinal)
         {
             if (ordinal < 0 || ordinal > lookup.length)

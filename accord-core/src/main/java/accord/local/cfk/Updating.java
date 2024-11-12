@@ -49,8 +49,8 @@ import accord.utils.SortedCursor;
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
-import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_PRUNED;
-import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVELY_KNOWN;
+import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
 import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
@@ -64,7 +64,6 @@ import static accord.local.cfk.Utils.missingTo;
 import static accord.local.cfk.Utils.removeOneMissing;
 import static accord.local.cfk.Utils.removePrunedAdditions;
 import static accord.local.cfk.Utils.validateMissing;
-import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -151,7 +150,7 @@ class Updating
                 break;
             }
 
-            if ((newMinUndecided == null || newMinUndecided.compareTo(newInfo) > 0) && newInfo.status().compareTo(COMMITTED) < 0 && cfk.mayExecute(newInfo) && !cfk.isPreBootstrap(newInfo))
+            if ((newMinUndecided == null || newMinUndecided.compareTo(newInfo) > 0) && newInfo.compareTo(COMMITTED) < 0 && cfk.mayExecute(newInfo) && !cfk.isPreBootstrap(newInfo))
                 newMinUndecided = newInfo;
 
             if (newMinUndecided != null && curMinUndecided != null && curMinUndecided.compareTo(newMinUndecided) < 0)
@@ -273,7 +272,7 @@ class Updating
         {
             while (txnIdsIndex < depsKnownBeforePos)
             {
-                if (txnIdsIndex != updatePos && byId[txnIdsIndex].status().compareTo(COMMITTED) < 0)
+                if (txnIdsIndex != updatePos && byId[txnIdsIndex].compareTo(COMMITTED) < 0)
                 {
                     TxnId txnId = byId[txnIdsIndex].plainTxnId();
                     if ((plainTxnId.kind().witnesses(txnId)))
@@ -317,7 +316,7 @@ class Updating
             System.arraycopy(byId, pos, newById, pos + 1, byId.length - pos);
             if (newInfo.mayExecute())
             {
-                if (newInfo.status().compareTo(COMMITTED) >= 0)
+                if (newInfo.compareTo(COMMITTED) >= 0)
                 {
                     if (newMinUndecidedById < 0 || pos <= newMinUndecidedById)
                     {
@@ -338,24 +337,24 @@ class Updating
         {
             newById = byId.clone();
             newById[pos] = newInfo;
-            if (pos == newMinUndecidedById && curInfo.status().compareTo(COMMITTED) < 0 && newInfo.status().compareTo(COMMITTED) >= 0)
+            if (pos == newMinUndecidedById && curInfo.compareTo(COMMITTED) < 0 && newInfo.compareTo(COMMITTED) >= 0)
                 newMinUndecidedById = nextUndecided(newById, pos + 1, cfk);
         }
 
         if (loadingAsPrunedFor == null)
             loadingAsPrunedFor = NO_TXNIDS;
 
-        if (curInfo != null && curInfo.status().compareTo(COMMITTED) < 0 && newInfo.status().compareTo(COMMITTED) >= 0)
+        if (curInfo != null && curInfo.compareTo(COMMITTED) < 0 && newInfo.compareTo(COMMITTED) >= 0)
         {
             Utils.removeFromMissingArrays(newById, newCommittedByExecuteAt, plainTxnId);
         }
-        else if (curInfo == null && newInfo.status().compareTo(COMMITTED) < 0)
+        else if (curInfo == null && newInfo.compareTo(COMMITTED) < 0)
         {
             // TODO (desired): for consistency, move this to insertOrUpdate (without additions), while maintaining the efficiency
             Utils.addToMissingArrays(newById, newCommittedByExecuteAt, newInfo, plainTxnId, loadingAsPrunedFor);
         }
 
-        if (testParanoia(SUPERLINEAR, NONE, LOW) && curInfo == null && newInfo.status().compareTo(COMMITTED) < 0)
+        if (testParanoia(SUPERLINEAR, NONE, LOW) && curInfo == null && newInfo.compareTo(COMMITTED) < 0)
             validateMissing(newById, NO_TXNIDS, 0, curInfo, newInfo, loadingAsPrunedFor);
 
         int newPrunedBeforeById = cfk.prunedBeforeById;
@@ -376,8 +375,8 @@ class Updating
         int targetInsertPos = sourceInsertPos + additionInsertPos;
 
         // we may need to insert or remove ourselves, depending on the new and prior status
-        boolean insertSelfMissing = sourceUpdatePos < 0 && newInfo.status().compareTo(COMMITTED) < 0;
-        boolean removeSelfMissing = sourceUpdatePos >= 0 && newInfo.status().compareTo(COMMITTED) >= 0 && byId[sourceUpdatePos].status().compareTo(COMMITTED) < 0;
+        boolean insertSelfMissing = sourceUpdatePos < 0 && newInfo.compareTo(COMMITTED) < 0;
+        boolean removeSelfMissing = sourceUpdatePos >= 0 && newInfo.compareTo(COMMITTED) >= 0 && byId[sourceUpdatePos].compareTo(COMMITTED) < 0;
         // missingSource starts as additions, but if we insertSelfMissing at the relevant moment it becomes the merge of additions and plainTxnId
         TxnId[] missingSource = additions;
 
@@ -461,7 +460,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j++];
-                newById[count] = TxnInfo.create(txnId, TRANSITIVELY_KNOWN, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 ++missingCount;
             }
             else
@@ -478,7 +477,7 @@ class Updating
                 while (count < targetInsertPos)
                 {
                     TxnId txnId = additions[j++];
-                    newById[count++] = TxnInfo.create(txnId, TRANSITIVELY_KNOWN, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                    newById[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 }
                 newById[targetInsertPos] = newInfo;
                 count = targetInsertPos + 1;
@@ -486,7 +485,7 @@ class Updating
             while (j < additionCount)
             {
                 TxnId txnId = additions[j++];
-                newById[count++] = TxnInfo.create(txnId, TRANSITIVELY_KNOWN, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
             }
         }
         else if (count == targetInsertPos)
@@ -551,7 +550,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j];
-                newInfos[count] = TxnInfo.create(txnId, TRANSITIVELY_KNOWN, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newInfos[count] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 ++j;
                 ++missingCount;
             }
@@ -565,7 +564,7 @@ class Updating
         while (j < additionCount)
         {
             TxnId txnId = additions[j];
-            newInfos[count++] = TxnInfo.create(txnId, TRANSITIVELY_KNOWN, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+            newInfos[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
             j++;
         }
 
@@ -580,7 +579,7 @@ class Updating
         {
             return Arrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, newInfo, TxnInfo::compareExecuteAt);
         }
-        else if (curInfo != null && curInfo.isCommittedAndExecutes() && newInfo.status() == INVALID_OR_TRUNCATED_OR_PRUNED)
+        else if (curInfo != null && curInfo.isCommittedAndExecutes() && newInfo.isAtLeast(INVALIDATED))
         {
             return Arrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, curInfo, TxnInfo::compareExecuteAt);
         }
@@ -593,7 +592,7 @@ class Updating
         if (pos == Integer.MAX_VALUE)
             return committedByExecuteAt;
 
-        if (newInfo.status() != INVALID_OR_TRUNCATED_OR_PRUNED)
+        if (newInfo.compareTo(INVALIDATED) < 0)
         {
             if (pos >= 0 && committedByExecuteAt[pos].equals(newInfo))
             {
@@ -653,7 +652,7 @@ class Updating
             {
                 return maxAppliedWriteByExecuteAt + 1;
             }
-            else if (newInfo.status() == INVALID_OR_TRUNCATED_OR_PRUNED)
+            else if (newInfo.isAtLeast(INVALIDATED))
             {
                 // deleted
                 int newMaxAppliedWriteByExecuteAt = maxAppliedWriteByExecuteAt - 1;
@@ -662,7 +661,7 @@ class Updating
                 return newMaxAppliedWriteByExecuteAt;
             }
         }
-        else if (newInfo.status() == APPLIED || (cfk.isPreBootstrap(newInfo) && pos - 1 == maxAppliedWriteByExecuteAt))
+        else if (newInfo.is(APPLIED) || (cfk.isPreBootstrap(newInfo) && pos - 1 == maxAppliedWriteByExecuteAt))
         {
             return maybeAdvanceMaxAppliedAndCheckForLinearizabilityViolations(cfk, pos, newInfo.kind(), newInfo, wasPruned);
         }
@@ -676,7 +675,7 @@ class Updating
             TxnInfo[] committedByExecuteAt = cfk.committedByExecuteAt;
             for (int i = cfk.maxAppliedWriteByExecuteAt + 1; i < appliedPos ; ++i)
             {
-                if (committedByExecuteAt[i].status() != APPLIED
+                if (committedByExecuteAt[i].isNot(APPLIED)
                     && appliedKind.witnesses(committedByExecuteAt[i])
                     && reportLinearizabilityViolations())
                         logger.error("Linearizability violation on key {}: {} is committed to execute (at {}) before {} that should witness it but has already applied (at {})", cfk.key, committedByExecuteAt[i].plainTxnId(), committedByExecuteAt[i].plainExecuteAt(), applied.plainTxnId(), applied.plainExecuteAt());
@@ -693,7 +692,7 @@ class Updating
             if (pos == infos.length)
                 return -1;
 
-            if (infos[pos].status().compareTo(COMMITTED) < 0 && cfk.mayExecute(infos[pos]))
+            if (infos[pos].compareTo(COMMITTED) < 0 && cfk.mayExecute(infos[pos]))
                 return pos;
 
             ++pos;
@@ -760,6 +759,7 @@ class Updating
             Txn.Kind waitingKind = waitingTxnId.kind();
             boolean readyToApply = true; // our dependencies have applied, so we are ready to apply
             boolean waitingToApply = true; // our dependencies have committed, so we know when we execute and are waiting
+            boolean hasFutureDependency = false;
             Timestamp executesAt = null;
             int j = SortedArrays.binarySearch(byId, 0, byId.length, txnIds.get(i), Timestamp::compareTo, FAST);
 
@@ -772,46 +772,30 @@ class Updating
                     TxnInfo txn = byId[j];
                     if (txn.mayExecute())
                     {
-                        if (txn.status().compareTo(COMMITTED) < 0) waitingToApply = readyToApply = false;
-                        else if (txn.status() != INVALID_OR_TRUNCATED_OR_PRUNED
-                                 && (txn.executeAt.compareTo(waitingExecuteAt) < 0
-                                     || waitingKind == EphemeralRead
-                                     || (waitingKind == ExclusiveSyncPoint && txn.compareTo(waitingTxnId) < 0)
-                                 ))
+                        if (txn.compareTo(COMMITTED) < 0) waitingToApply = readyToApply = false;
+                        else if (txn.compareTo(INVALIDATED) < 0
+                                 && (txn.executeAt.compareTo(waitingExecuteAt) < 0 || waitingKind.awaitsOnlyDeps))
                         {
-                            readyToApply &= txn.is(APPLIED);
-                            executesAt = Timestamp.nonNullOrMax(executesAt, txn.executeAt);
-                        }
-                    }
-                    ++i;
-                    ++j;
-                }
-                else if (c > 0)
-                {
-                    if (waitingKind.isSyncPoint())
-                    {
-                        // we special-case sync points to handle pruning of transactions they should have witnessed as dependencies.
-                        // We require all earlier TxnId to be decided before we can execute; we must be informed of all the necessary TxnId
-                        // transitively by the "future" dependency provided for this purpose in mapReduceActive, so simply ensuring
-                        // all earlier TxnId are committed is sufficient to compute the correct executeAt.
-                        TxnInfo txn = byId[j];
-                        if (txn.mayExecute())
-                        {
-                            if (txn.status().compareTo(COMMITTED) < 0) readyToApply = waitingToApply = false;
-                            else if (txn.status() != INVALID_OR_TRUNCATED_OR_PRUNED
-                                     && cfk.executes(txn.executeAt)
-                                     && (txn.executeAt.compareTo(waitingExecuteAt) < 0
-                                         || waitingKind == EphemeralRead
-                                         || (waitingKind == ExclusiveSyncPoint && txn.compareTo(waitingTxnId) < 0)
-                                     ))
+                            if (waitingKind == ExclusiveSyncPoint && txn.compareTo(waitingTxnId) > 0)
+                            {
+                                // we don't wait for this txn itself to apply, but we do require it to be transitively committed
+                                // (i.e., not just it must be committed, but all of its transitive dependencies;
+                                // and then for the highest committed transaction < waitingTxnId to apply
+                                if (cfk.minUndecidedById >= 0 && cfk.minUndecidedById <= j)
+                                    waitingToApply = readyToApply = false;
+                                hasFutureDependency = true;
+                            }
+                            else
                             {
                                 readyToApply &= txn.is(APPLIED);
                                 executesAt = Timestamp.nonNullOrMax(executesAt, txn.executeAt);
                             }
                         }
                     }
+                    ++i;
                     ++j;
                 }
+                else if (c > 0) ++j;
                 else if (!cfk.mayExecute(txnIds.get(i))) ++i;
                 else if (register)
                 {
@@ -826,8 +810,26 @@ class Updating
                 }
             }
 
-            if (waitingKind.isSyncPoint() && Pruning.isAnyPredecessorWaitingOnPruned(cfk.loadingPruned, waitingTxnId))
-                readyToApply = waitingToApply = false;
+            if (waitingKind.isSyncPoint())
+            {
+                if (Pruning.isAnyPredecessorWaitingOnPruned(cfk.loadingPruned, waitingTxnId))
+                {
+                    readyToApply = waitingToApply = false;
+                }
+                else if (waitingKind == ExclusiveSyncPoint && hasFutureDependency && waitingToApply)
+                {
+                    int w = Arrays.binarySearch(byId, waitingTxnId);
+                    if (w < 0) w = -1 - w;
+                    while (--w >= 0)
+                    {
+                        TxnInfo txn = byId[w];
+                        if (!txn.mayExecute()) continue;
+                        readyToApply &= txn.isAtLeast(APPLIED);
+                        if (txn.isCommittedToExecute())
+                            executesAt = Timestamp.nonNullOrMax(executesAt, byId[w].executeAt);
+                    }
+                }
+            }
 
             if (!readyToApply)
             {

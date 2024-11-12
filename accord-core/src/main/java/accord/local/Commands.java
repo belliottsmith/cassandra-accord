@@ -573,7 +573,7 @@ public class Commands
         if (logger.isTraceEnabled())
             logger.trace("{}: Maybe executing with status {}. Will notify listeners on noop: {}", command.txnId(), command.status(), alwaysNotifyListeners);
 
-        if (command.status() != Stable && command.status() != PreApplied)
+        if (command.status() != Stable && command.saveStatus() != SaveStatus.PreApplied)
         {
             if (alwaysNotifyListeners)
                 safeStore.notifyListeners(safeCommand, command);
@@ -648,7 +648,7 @@ public class Commands
             redundantBefore.removeRedundantDependencies(participants, update);
 
         update.forEachWaitingOnId(safeStore, update, waiting, executeAt, (store, upd, w, exec, i) -> {
-            SafeCommand dep = store.ifLoadedAndInitialisedAndNotErased(upd.txnId(i));
+            SafeCommand dep = store.ifLoadedAndInitialised(upd.txnId(i));
             if (dep == null || !dep.current().hasBeen(PreCommitted))
                 return;
             updateWaitingOn(store, w, exec, upd, dep);
@@ -737,7 +737,7 @@ public class Commands
             {
                 TxnId nextWaitingOn = command.waitingOn().nextWaitingOn();
                 if (nextWaitingOn != null && nextWaitingOn.equals(pred.txnId()) && !pred.hasBeen(PreApplied))
-                    safeStore.progressLog().waiting(CanApply, safeStore, predecessor, pred.route(), null);
+                    safeStore.progressLog().waiting(CanApply, safeStore, predecessor, pred.route(), null, null);
             }
         }
     }
@@ -846,13 +846,13 @@ public class Commands
 
             case TRUNCATE_WITH_OUTCOME:
                 Invariants.checkArgument(!command.hasBeen(Truncated), "%s", command);
-                Invariants.checkState(command.hasBeen(PreApplied));
+                Invariants.checkState(command.hasBeen(PreApplied) || command.participants().touches().isEmpty());
                 result = truncatedApplyWithOutcome(command.asExecuted());
                 break;
 
             case TRUNCATE:
                 Invariants.checkState(command.saveStatus().compareTo(TruncatedApply) < 0);
-                Invariants.checkState(command.hasBeen(PreApplied));
+                Invariants.checkState(command.hasBeen(PreApplied) || command.participants().touches().isEmpty());
                 result = truncatedApply(command, participants);
                 break;
 
@@ -870,7 +870,7 @@ public class Commands
         return result;
     }
 
-    private static boolean validateSafeToCleanup(SafeCommandStore safeStore, Command command, StoreParticipants participants)
+    private static boolean validateSafeToCleanup(SafeCommandStore safeStore, Command command, @Nullable StoreParticipants participants)
     {
         TxnId txnId = command.txnId();
         participants = command.participants().supplement(participants);
@@ -879,13 +879,16 @@ public class Commands
         {
             default: throw new AssertionError("Unhandled RedundantStatus: " + status);
             case LIVE:
+            case WAS_OWNED:
+            case WAS_OWNED_CLOSED:
+            case WAS_OWNED_RETIRED:
             case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
                 return false;
             case LOCALLY_REDUNDANT:
             case SHARD_REDUNDANT:
+            case GC_BEFORE:
                 Invariants.checkState(!command.hasBeen(PreCommitted));
-            case WAS_OWNED:
             case PRE_BOOTSTRAP_OR_STALE:
             case NOT_OWNED:
                 return true;
@@ -894,7 +897,8 @@ public class Commands
 
     public static boolean maybeCleanup(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, @Nonnull StoreParticipants participants)
     {
-        Cleanup cleanup = shouldCleanup(safeStore, command, participants);
+        // TODO (desired): cheaper version of supplement for here
+        Cleanup cleanup = shouldCleanup(safeStore, command, command.participants().supplement(participants));
         if (cleanup == NO)
             return false;
 
@@ -956,13 +960,24 @@ public class Commands
                         switch (redundantStatus)
                         {
                             default: throw new AssertionError("Unexpected redundant status: " + redundantStatus);
-                            case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
+                            case NOT_OWNED:
+                                throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
+
+                            case GC_BEFORE:
                             case SHARD_REDUNDANT:
                             case LOCALLY_REDUNDANT:
                             case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                             case PRE_BOOTSTRAP_OR_STALE:
+                            case WAS_OWNED_RETIRED:
                                 removeRedundantDependencies(safeStore, waitingSafe, loadDepId);
                                 break;
+
+                            case WAS_OWNED:
+                            case WAS_OWNED_CLOSED:
+                                if (!waitingId.awaitsPreviouslyOwned())
+                                    removeNoLongerOwnedDependency(safeStore, waitingSafe, loadDepId);
+                                break;
+
                             case LIVE:
                             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
                         }
@@ -998,7 +1013,7 @@ public class Commands
                         }
                     }
 
-                    depSafe = safeStore.ifLoadedAndInitialisedAndNotErased(directlyBlockedOn);
+                    depSafe = safeStore.ifLoadedAndInitialised(directlyBlockedOn);
                     if (depSafe == null)
                     {
                         loadDepId = directlyBlockedOn;
@@ -1032,16 +1047,22 @@ public class Commands
                         switch (redundantStatus)
                         {
                             default: throw new AssertionError("Unknown redundant status: " + redundantStatus);
-                            case NOT_OWNED: throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
+                            case NOT_OWNED:
+                            case WAS_OWNED:
+                            case WAS_OWNED_CLOSED:
+                            case WAS_OWNED_RETIRED:
+                                throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
+
                             case LIVE:
                             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
                                 if (logger.isTraceEnabled()) logger.trace("{} blocked on {} until ReadyToExclude", waitingId, dep.txnId());
                                 safeStore.registerListener(depSafe, HasDecidedExecuteAt.minSaveStatus, waitingId);
-                                safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, null, participants);
+                                safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, null, participants, null);
                                 return;
 
                             case LOCALLY_REDUNDANT:
                             case SHARD_REDUNDANT:
+                            case GC_BEFORE:
                             case PRE_BOOTSTRAP_OR_STALE:
                             case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                                 Invariants.checkState(dep.hasBeen(Applied) || !dep.hasBeen(PreCommitted) || redundantStatus == PRE_BOOTSTRAP_OR_STALE);
@@ -1060,13 +1081,13 @@ public class Commands
 
                         case NotReady:
                             safeStore.registerListener(depSafe, HasDecidedExecuteAt.minSaveStatus, waitingId);
-                            safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, dep.route(), null);
+                            safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, dep.route(), null, null);
                             return;
 
                         case ReadyToExclude:
                         case WaitingToExecute:
                         case ReadyToExecute:
-                            safeStore.progressLog().waiting(CanApply, safeStore, depSafe, dep.route(), null);
+                            safeStore.progressLog().waiting(CanApply, safeStore, depSafe, dep.route(), null, null);
 
                         case Applying:
                             safeStore.registerListener(depSafe, SaveStatus.Applied, waitingId);
@@ -1127,6 +1148,17 @@ public class Commands
         // if we are a range transaction, being redundant for this transaction does not imply we are redundant for all transactions
         if (redundant != null)
             update.removeWaitingOn(redundant);
+        return safeCommand.updateWaitingOn(update);
+    }
+
+    static Command removeNoLongerOwnedDependency(SafeCommandStore safeStore, SafeCommand safeCommand, @Nonnull TxnId wasOwned)
+    {
+        Command.Committed current = safeCommand.current().asCommitted();
+        if (!current.waitingOn.isWaitingOn(wasOwned))
+            return current;
+
+        WaitingOn.Update update = new WaitingOn.Update(current.waitingOn);
+        update.removeWaitingOn(wasOwned);
         return safeCommand.updateWaitingOn(update);
     }
 

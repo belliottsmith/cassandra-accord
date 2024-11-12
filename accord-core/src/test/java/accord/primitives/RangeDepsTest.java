@@ -237,7 +237,7 @@ public class RangeDepsTest
     }
 
 
-    // TODO (now): broaden patterns of random contents, sizes of collection etc.
+    // TODO (testing): broaden patterns of random contents, sizes of collection etc.
     @Test
     public void testRandom()
     {
@@ -296,7 +296,7 @@ public class RangeDepsTest
             {
                 for (int txnIdCount = 1; txnIdCount < 100 ; txnIdCount *= 2)
                 {
-                    // TODO (now): verify that we write only a small number of checkpoints
+                    // TODO (testing): verify that we write only a small number of checkpoints
                     generateNemesisRanges(width, txnIdCount, 1000, nonNemesisEntryPerNemesisEntry)
                             .validate(random);
                 }

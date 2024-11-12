@@ -226,7 +226,15 @@ public class ListRequest implements Request
                         node.reply(client, replyContext, ListResult.lost(client, ((Packet)replyContext).requestId, txnId), null);
                         break;
                     case Other:
-                        node.reply(client, replyContext, ListResult.other(client, ((Packet)replyContext).requestId, txnId), null);
+                        if (attempt < 100)
+                        {
+                            node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, txnId), null);
+                            node.scheduler().once(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), 5L, TimeUnit.MINUTES);
+                        }
+                        else
+                        {
+                            node.reply(client, replyContext, ListResult.other(client, ((Packet)replyContext).requestId, txnId), null);
+                        }
                         break;
                     default:
                         node.agent().onUncaughtException(new AssertionError("Unknown outcome: " + s));

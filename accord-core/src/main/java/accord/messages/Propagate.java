@@ -55,7 +55,6 @@ import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.VESTIGIAL;
 import static accord.local.Commands.purge;
-import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
@@ -136,7 +135,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         propagate(node, txnId, sourceEpoch, txnId.epoch(), sourceEpoch, withQuorum, route, propagateTo, target, full, callback);
     }
 
-    public static void propagate(Node node, TxnId txnId, long sourceEpoch, long lowEpoch, long highEpoch, WithQuorum withQuorum, Route<?> route, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void propagate(Node node, TxnId txnId, long sourceEpoch, long lowEpoch, long highEpoch, WithQuorum withQuorum, Route<?> queried, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
     {
         if (full.maxKnowledgeSaveStatus.status == NotDefined && full.invalidIf == NotKnownToBeInvalid)
         {
@@ -146,9 +145,10 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.maxKnowledgeSaveStatus == SaveStatus.Erased || full.maxKnowledgeSaveStatus == SaveStatus.ErasedOrVestigial);
 
-        route = route.with((Unseekables) propagateTo);
-        full = full.finish(route, withQuorum);
-        route = Invariants.nonNull(full.route);
+        // TODO (required): consider and document whether it is safe to infer that we are stale if we have not received responses from all shards we know of
+        //  (in principle, we should at least require responses from our own shard, and the home shard if we know it); if we only hear from a remote shard it may have fully Erased
+        full = full.finish(queried, queried.with((Unseekables) propagateTo), withQuorum);
+        Route<?> route = Invariants.nonNull(full.route);
 
         Propagate propagate =
             new Propagate(node, txnId, route, propagateTo, target, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, full.partialTxn, full.stableDeps, lowEpoch, highEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
@@ -157,7 +157,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             highEpoch = full.executeAt.epoch();
         long untilEpoch = full.executeAt == null ? highEpoch : Math.max(highEpoch, full.executeAt.epoch());
 
-        Route<?> finalRoute = route;
+        Route<?> finalRoute = queried;
         node.withEpoch(highEpoch, propagate, () -> node.mapReduceConsumeLocal(propagate, finalRoute, lowEpoch, untilEpoch, propagate));
     }
 
@@ -341,33 +341,25 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             return known.knownForAny();
 
         RedundantStatus status = safeStore.redundantBefore().status(txnId, participants.owns());
+        // try to see if we can safely purge the full command
+        if (tryPurge(safeStore, safeCommand, status))
+            return null;
 
         // if our peers have truncated this command, then either:
         // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
         if (executeAtIfKnown == null)
         {
-            if (status.compareTo(LOCALLY_REDUNDANT) >= 0)
-            {
-                purge(safeStore, safeCommand, null, ERASE, true);
-                return null;
-            }
-
             Ranges ranges = safeStore.ranges().allSince(txnId.epoch());
             ranges = safeStore.redundantBefore().everExpectToExecute(txnId, ranges);
             if (!ranges.isEmpty())
             {
-                // even though command stores only lose ranges, we still adopt ranges as of some epoch, and re-bootstrap.
-                // however, this eventuality should be exceptionally rare
                 // we don't even know the execution time, so we cannot possibly proceed besides erasing the command state and marking ourselves stale
-                // TODO (required): do not setErased until markShardStale is complete
+                // (even though command stores only lose ranges, we still adopt ranges as of some epoch, and re-bootstrap.)
                 safeStore.commandStore().markShardStale(safeStore, txnId, route.slice(ranges, Minimal).toRanges(), false);
             }
             Commands.setErased(safeStore, safeCommand);
             return null;
         }
-
-        if (tryPurge(safeStore, safeCommand, status))
-            return null;
 
         Participants<?> executes = participants.executes(safeStore, txnId, executeAtIfKnown);
         status = safeStore.redundantBefore().status(txnId, executes);
@@ -417,17 +409,21 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         {
             default: throw new AssertionError("Unhandled RedundantStatus: " + status);
             case NOT_OWNED:
-            case WAS_OWNED:
+            case WAS_OWNED_RETIRED:
+            case GC_BEFORE:
             case SHARD_REDUNDANT:
             case LOCALLY_REDUNDANT:
+            case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
+                Invariants.checkState(!known.knownForAny().outcome.isOrWasApply());
                 purge(safeStore, safeCommand, null, ERASE, true);
                 return true;
             case PRE_BOOTSTRAP_OR_STALE:
-            case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
                 purge(safeStore, safeCommand, null, VESTIGIAL, true);
                 return true;
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
             case LIVE:
+            case WAS_OWNED:
+            case WAS_OWNED_CLOSED:
                 return false;
         }
     }

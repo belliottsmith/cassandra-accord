@@ -128,6 +128,12 @@ class AbstractRangesTest
         }
 
         @Override
+        public Routables<Range> without(accord.primitives.Ranges ranges)
+        {
+            return new Ranges(withoutInternal(ranges));
+        }
+
+        @Override
         public Ranges intersecting(Seekables<?, ?> intersecting)
         {
             throw new UnsupportedOperationException();

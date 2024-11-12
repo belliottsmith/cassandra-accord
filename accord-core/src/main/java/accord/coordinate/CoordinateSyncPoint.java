@@ -44,6 +44,7 @@ import accord.utils.async.AsyncResults;
 
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.Invalidate.proposeAndCommitInvalidate;
+import static accord.messages.Apply.executes;
 import static accord.primitives.Timestamp.mergeMax;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Functions.foldl;
@@ -173,10 +174,17 @@ public class CoordinateSyncPoint<U extends Unseekable> extends CoordinatePreAcce
 
     public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint)
     {
+        // TODO (required): consider, document and add invariants checking if this topologies is correct in all cases
+        //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching )
+        Topologies executes = executes(node, syncPoint.route, syncPoint.syncId);
+        sendApply(node, to, syncPoint, executes);
+    }
+    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies executes)
+    {
         TxnId txnId = syncPoint.syncId;
         Timestamp executeAt = txnId;
         Txn txn = node.agent().emptySystemTxn(txnId.kind(), txnId.domain());
         Deps deps = syncPoint.waitFor;
-        Apply.sendMaximal(node, to, txnId, syncPoint.route(), txn, executeAt, deps, txn.execute(txnId, executeAt, null), txn.result(txnId, executeAt, null));
+        Apply.sendMaximal(node, to, executes, txnId, syncPoint.route(), txn, executeAt, deps, txn.execute(txnId, executeAt, null), txn.result(txnId, executeAt, null), syncPoint.route());
     }
 }

@@ -18,9 +18,9 @@
 
 package accord.impl.basic;
 
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -40,19 +40,20 @@ import accord.local.CommandStore;
 import accord.local.Commands;
 import accord.local.CommonAttributes;
 import accord.local.Node;
-import accord.primitives.Known;
-import accord.primitives.SaveStatus;
-import accord.primitives.Status;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
+import accord.primitives.Known;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
+import accord.primitives.SaveStatus;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 import org.agrona.collections.Long2ObjectHashMap;
 
+import static accord.primitives.SaveStatus.NotDefined;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
@@ -76,13 +77,13 @@ public class Journal
             int commandStoreId = e.getKey().intValue();
             Map<TxnId, List<Diff>> localJournal = e.getValue();
             CommandStore store = storeSupplier.apply(commandStoreId);
+            if (store == null)
+                continue;
 
-            Map<TxnId, List<Diff>> updates = new HashMap<>();
-            List<TxnId> removals = new ArrayList<>();
             for (Map.Entry<TxnId, List<Diff>> e2 : localJournal.entrySet())
             {
-                TxnId txnId = e2.getKey();
                 List<Diff> diffs = e2.getValue();
+                if (diffs.isEmpty()) continue;
                 Command command = reconstruct(diffs, Reconstruct.Last).get(0);
                 if (command.status() == Truncated || command.status() == Invalidated)
                     continue; // Already truncated
@@ -94,55 +95,112 @@ public class Journal
                     case INVALIDATE:
                     case TRUNCATE_WITH_OUTCOME:
                     case TRUNCATE:
+                    case ERASE:
                         command = Commands.purge(command, command.participants(), cleanup);
                         Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised);
-                        List<Diff> arr = new ArrayList<>();
-                        arr.add(diff(null, command));
-                        updates.put(txnId, arr);
+                        Diff diff = diff(null, command);
+                        e2.setValue(cleanup == Cleanup.ERASE ? new ErasedList(diff) : new TruncatedList(diff));
                         break;
-                    case ERASE:
-                        removals.add(txnId);
+
+                    case EXPUNGE:
+                        e2.setValue(new PurgedList());
                         break;
                 }
             }
-
-            for (TxnId removal : removals)
-                localJournal.remove(removal);
-            localJournal.putAll(updates);
         }
     }
 
-    // TODO (required): this might be a good first approximation, but maybe we need to make a better distinction between
-    // when we want to produce side-effects.
-    private boolean loading = false;
-
     public void reconstructAll(InMemoryCommandStore.Loader loader, int commandStoreId)
     {
-        Map<TxnId, List<Diff>> diffs = diffsPerCommandStore.get(commandStoreId);
-
         // Nothing to do here, journal is empty for this command store
-        if (diffs == null)
+        if (!diffsPerCommandStore.containsKey(commandStoreId))
             return;
 
-        loading = true;
-        try
-        {
-            List<Command> toApply = new ArrayList<>();
-            for (TxnId txnId : diffs.keySet())
-            {
-                Command command = reconstruct(commandStoreId, txnId);
-                if (command.saveStatus().compareTo(Stable) >= 0 && !command.hasBeen(Truncated))
-                    toApply.add(command);
-                loader.load(command);
-            }
+        // copy to avoid concurrent modification when appending to journal
+        Map<TxnId, List<Diff>> diffs = new TreeMap<>(diffsPerCommandStore.get(commandStoreId));
+        for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
+            e.setValue(new ArrayList<>(e.getValue()));
 
-            toApply.sort(Comparator.comparing(Command::executeAt));
-            for (Command command : toApply)
-                loader.apply(command);
-        }
-        finally
+        List<Command> toApply = new ArrayList<>();
+        for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
         {
-            loading = false;
+            if (e.getValue().isEmpty()) continue;
+            Command command = reconstruct(commandStoreId, e.getKey(), e.getValue());
+            if (command.saveStatus().compareTo(Stable) >= 0 && !command.hasBeen(Truncated))
+                toApply.add(command);
+            loader.load(command);
+        }
+
+        toApply.sort(Comparator.comparing(Command::executeAt));
+        for (Command command : toApply)
+            loader.apply(command);
+    }
+
+    static class ErasedList extends AbstractList<Diff>
+    {
+        final Diff erased;
+
+        ErasedList(Diff erased)
+        {
+            Invariants.checkArgument(erased.saveStatus.value == SaveStatus.Erased);
+            this.erased = erased;
+        }
+
+        @Override
+        public Diff get(int index)
+        {
+            if (index != 0)
+                throw new IndexOutOfBoundsException();
+            return erased;
+        }
+
+        @Override
+        public int size()
+        {
+            return 1;
+        }
+
+        @Override
+        public boolean add(Diff diff)
+        {
+            if (diff.saveStatus != null && diff.saveStatus.value == SaveStatus.Erased)
+                return false;
+            throw illegalState();
+        }
+    }
+
+    static class TruncatedList extends ArrayList<Diff>
+    {
+        TruncatedList(Diff truncated)
+        {
+            add(truncated);
+        }
+    }
+
+    static class PurgedList extends AbstractList<Diff>
+    {
+        PurgedList()
+        {
+        }
+
+        @Override
+        public Diff get(int index)
+        {
+            throw new IndexOutOfBoundsException();
+        }
+
+        @Override
+        public int size()
+        {
+            return 0;
+        }
+
+        @Override
+        public boolean add(Diff diff)
+        {
+            if (diff.saveStatus != null && diff.saveStatus.value == SaveStatus.Erased)
+                return false;
+            throw illegalState();
         }
     }
 
@@ -154,7 +212,11 @@ public class Journal
 
     public Command reconstruct(int commandStoreId, TxnId txnId)
     {
-        List<Diff> diffs = this.diffsPerCommandStore.get(commandStoreId).get(txnId);
+        return reconstruct(commandStoreId, txnId, diffsPerCommandStore.get(commandStoreId).get(txnId));
+    }
+
+    public Command reconstruct(int commandStoreId, TxnId txnId, List<Diff> diffs)
+    {
         return reconstruct(diffs, Reconstruct.Last).get(0);
     }
 
@@ -167,7 +229,7 @@ public class Journal
         TxnId txnId = null;
         Timestamp executeAt = null;
         Timestamp executesAtLeast = null;
-        SaveStatus saveStatus = null;
+        SaveStatus saveStatus = NotDefined;
         Status.Durability durability = Status.Durability.NotDurable;
 
         Ballot acceptedOrCommitted = Ballot.ZERO;
@@ -185,7 +247,7 @@ public class Journal
         {
             Diff diff = diffs.get(i);
             if (diff.txnId != null)
-                txnId = diff.txnId.get();
+                txnId = diff.txnId;
             if (diff.executeAt != null)
                 executeAt = diff.executeAt.get();
             if (diff.executesAtLeast != null)
@@ -229,6 +291,7 @@ public class Journal
             {
                 t.printStackTrace();
             }
+
             switch (saveStatus.known.outcome)
             {
                 case Erased:
@@ -329,15 +392,9 @@ public class Journal
 
     public void onExecute(int commandStoreId, Command before, Command after, boolean isPrimary)
     {
-        if (loading || (before == null && after == null))
+        if (before == null && after == null)
             return;
 
-        if (after.saveStatus() == SaveStatus.Erased)
-        {
-            diffsPerCommandStore.computeIfAbsent(commandStoreId, (k) -> new TreeMap<>())
-                                .remove(after.txnId());
-            return;
-        }
         Diff diff = diff(before, after);
         if (!isPrimary)
             diff = diff.asNonPrimary();
@@ -352,7 +409,7 @@ public class Journal
 
     private static class Diff
     {
-        public final NewValue<TxnId> txnId;
+        public final TxnId txnId;
 
         public final NewValue<Timestamp> executeAt;
         public final NewValue<Timestamp> executesAtLeast;
@@ -371,7 +428,7 @@ public class Journal
 
         public final NewValue<Result> result; // temporarily here for sakes for reloads
 
-        public Diff(NewValue<TxnId> txnId,
+        public Diff(TxnId txnId,
                     NewValue<Timestamp> executeAt,
                     NewValue<Timestamp> executesAtLeast,
                     NewValue<SaveStatus> saveStatus,
@@ -470,7 +527,7 @@ public class Journal
         if (Objects.equals(before, after))
             return null;
 
-        Diff diff = new Diff(ifNotEqual(before, after, Command::txnId, false),
+        Diff diff = new Diff(after.txnId(),
                              ifNotEqual(before, after, Command::executeAt, true),
                              ifNotEqual(before, after, Command::executesAtLeast, true),
                              ifNotEqual(before, after, Command::saveStatus, false),
@@ -542,6 +599,21 @@ public class Journal
         public String toString()
         {
             return "" + value;
+        }
+
+        @Override
+        public boolean equals(Object o)
+        {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            NewValue<?> newValue = (NewValue<?>) o;
+            return Objects.equals(value, newValue.value);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            throw new UnsupportedOperationException();
         }
     }
 

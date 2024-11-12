@@ -57,6 +57,37 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
         return new PartialKeyRoute(homeKey, mergedKeys);
     }
 
+    @Override
+    public KeyRoute without(Unseekables<?> keysOrRanges)
+    {
+        switch (keysOrRanges.domain())
+        {
+            default: throw new AssertionError("Unhandled domain: " + keysOrRanges.domain());
+            case Key:
+            {
+                AbstractUnseekableKeys that = (AbstractUnseekableKeys) keysOrRanges;
+                RoutingKey[] newKeys = SortedArrays.linearSubtract(this.keys, that.keys, cachedRoutingKeys());
+                return newKeys == keys ? this : new PartialKeyRoute(homeKey, newKeys);
+            }
+            case Range:
+            {
+                return without((AbstractRanges)keysOrRanges);
+            }
+        }
+    }
+
+    @Override
+    public KeyRoute without(Ranges ranges)
+    {
+        return without((AbstractRanges) ranges);
+    }
+
+    private KeyRoute without(AbstractRanges ranges)
+    {
+        RoutingKey[] newKeys = subtract(ranges, keys, RoutingKey[]::new);
+        return newKeys == keys ? this : new PartialKeyRoute(homeKey, newKeys);
+    }
+
     @SuppressWarnings("unchecked")
     @Override
     public Participants<RoutingKey> participants()

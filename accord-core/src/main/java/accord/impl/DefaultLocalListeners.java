@@ -84,7 +84,7 @@ public class DefaultLocalListeners implements LocalListeners
         @Override
         public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, TxnId listenerId)
         {
-            SafeCommand listener = safeStore.ifLoadedAndInitialisedAndNotErased(listenerId);
+            SafeCommand listener = safeStore.ifLoadedAndInitialised(listenerId);
             if (listener != null) Commands.listenerUpdate(safeStore, listener, safeCommand);
             else
             {

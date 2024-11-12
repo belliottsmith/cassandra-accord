@@ -306,7 +306,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
                     {
                         synchronized (ShardScheduler.this)
                         {
-                            // TODO (required): try to recover or invalidate prior sync point
+                            // TODO (expected): try to recover or invalidate prior sync point
                             retry();
                             if (numberOfSplits * 2 <= maxNumberOfSplits)
                             {

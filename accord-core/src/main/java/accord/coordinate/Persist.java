@@ -31,6 +31,7 @@ import accord.messages.Callback;
 import accord.messages.InformDurable;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -46,27 +47,29 @@ public abstract class Persist implements Callback<ApplyReply>
 {
     protected final Node node;
     protected final TxnId txnId;
-    protected final FullRoute<?> route;
+    protected final Route<?> sendTo;
     protected final Txn txn;
     protected final Timestamp executeAt;
     protected final Deps stableDeps;
     protected final Writes writes;
     protected final Result result;
+    protected final FullRoute<?> route;
     protected final Topologies topologies;
     protected final QuorumTracker tracker;
     protected final Set<Id> persistedOn;
     boolean isDone;
 
-    protected Persist(Node node, Topologies all, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result)
+    protected Persist(Node node, Topologies all, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route)
     {
         this.node = node;
         this.txnId = txnId;
-        this.route = route;
+        this.sendTo = sendTo;
         this.txn = txn;
         this.executeAt = executeAt;
         this.stableDeps = stableDeps;
         this.writes = writes;
         this.result = result;
+        this.route = route;
         this.topologies = all;
         this.tracker = new QuorumTracker(all);
         this.persistedOn = new HashSet<>();
@@ -81,7 +84,7 @@ public abstract class Persist implements Callback<ApplyReply>
             case Redundant:
             case Applied:
                 persistedOn.add(from);
-                if (tracker.recordSuccess(from) == Success)
+                if (sendTo == route && tracker.recordSuccess(from) == Success)
                 {
                     if (!isDone)
                     {
@@ -96,7 +99,7 @@ public abstract class Persist implements Callback<ApplyReply>
                 }
                 break;
             case Insufficient:
-                Apply.sendMaximal(node, from, txnId, route, txn, executeAt, stableDeps, writes, result);
+                Apply.sendMaximal(node, from, txnId, route, txn, executeAt, stableDeps, writes, result, route);
         }
     }
 
@@ -124,7 +127,7 @@ public abstract class Persist implements Callback<ApplyReply>
         }
         else
         {
-            node.send(contact, to -> factory.create(kind, to, all, txnId, route, txn, executeAt, stableDeps, writes, result), this);
+            node.send(contact, to -> factory.create(kind, to, all, txnId, sendTo, txn, executeAt, stableDeps, writes, result, route), this);
         }
     }
 }

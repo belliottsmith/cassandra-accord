@@ -80,7 +80,7 @@ import static accord.utils.SortedArrays.Search.FAST;
  * TODO (expected): keep only the latest exclusive sync point for a given range
  * TODO (expected): permit building out-of-order
  * TODO (expected): currently permitting duplicates
- * TODO (required): randomised testing of all iteration methods (just found a double increment bug)
+ * TODO (testing): randomised testing of all iteration methods
  */
 public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
 {

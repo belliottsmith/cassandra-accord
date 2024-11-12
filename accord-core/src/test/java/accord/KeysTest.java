@@ -32,10 +32,9 @@ import accord.api.RoutingKey;
 import accord.impl.IntKey;
 import accord.impl.IntKey.Raw;
 import accord.primitives.AbstractKeys;
+import accord.primitives.Keys;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
-import accord.primitives.Keys;
-
 import accord.primitives.RoutableKey;
 import accord.primitives.Routables;
 import accord.primitives.RoutingKeys;

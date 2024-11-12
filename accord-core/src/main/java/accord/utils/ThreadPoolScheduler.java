@@ -101,7 +101,7 @@ public class ThreadPoolScheduler implements Scheduler
 
     public void stop()
     {
-        exec.shutdown();
+        exec.shutdownNow();
         try
         {
             if (!exec.awaitTermination(1L, TimeUnit.MINUTES))

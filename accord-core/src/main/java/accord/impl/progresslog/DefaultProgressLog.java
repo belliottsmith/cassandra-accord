@@ -183,9 +183,11 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             return;
 
         TxnState state = null;
-        if (before.route() == null && after.route() != null)
+        Route<?> beforeRoute = before.route();
+        Route<?> afterRoute = after.route();
+        if (beforeRoute == null && afterRoute != null)
         {
-            RoutingKey homeKey = after.homeKey();
+            RoutingKey homeKey = afterRoute.homeKey();
             Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
             boolean isHome = coordinateRanges.contains(homeKey);
             state = get(txnId);
@@ -200,7 +202,9 @@ public class DefaultProgressLog implements ProgressLog, Runnable
                     state = maybeFetch(safeStore, txnId, after, state);
                 }
                 else
+                {
                     state.set(safeStore, this, Undecided, Queued);
+                }
             }
             else if (state != null)
             {
@@ -317,7 +321,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     }
 
     @Override
-    public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants)
+    public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants blockedOnStoreParticipants)
     {
         if (!blockedBy.txnId().isVisible())
             return;
@@ -334,6 +338,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         CommonAttributes update = blockedBy.current();
         StoreParticipants participants = update.participants();
         StoreParticipants updatedParticipants = participants.supplement(blockedOnRoute, null, blockedOnParticipants);
+        if (blockedOnStoreParticipants != null) updatedParticipants = updatedParticipants.supplement(blockedOnStoreParticipants);
         if (participants != updatedParticipants)
             update = update.mutable().updateParticipants(updatedParticipants);
 
@@ -342,7 +347,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
         // TODO (required): tighten up ExclusiveSyncPoint range bounds
         Invariants.checkState((command.txnId().is(Txn.Kind.ExclusiveSyncPoint) ? safeStore.ranges().all()
-                                                                               : safeStore.ranges().allSince(command.txnId().epoch())).intersects(command.participants().hasTouched()));
+                                                                               : safeStore.ranges().allSince(command.txnId().epoch())
+                              ).intersects(command.participants().hasTouched()));
 
         // TODO (consider): consider triggering a preemption of existing coordinator (if any) in some circumstances;
         //                  today, an LWT can pre-empt more efficiently (i.e. instantly) a failed operation whereas Accord will
@@ -457,6 +463,10 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             // we have to read safeCommand first as it may become truncated on load, which may clear the progress log and invalidate us
             SafeCommand safeCommand = safeStore.ifInitialised(run.txnId);
             if (safeCommand == null)
+                return;
+
+            // check this after fetching SafeCommand, as doing so can erase the command (and invalidate our state)
+            if (run.isDone(runKind))
                 return;
 
             Invariants.checkState(get(run.txnId) == run, "Transaction state for %s does not match expected one %s", run.txnId, run);

@@ -381,7 +381,6 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             };
         }
 
-        // TODO (now): override tryMergeEqual
         static class MergeBuilder extends AbstractIntervalBuilder<RoutingKey, MergeEntry, Merge>
         {
             protected MergeBuilder(boolean inclusiveEnds, int capacity)

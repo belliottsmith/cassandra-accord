@@ -62,7 +62,7 @@ public class TopologyTest
         Assertions.assertTrue(shard.range.contains(expectedKey));
         Assertions.assertEquals(expectedRange, shard.range);
 
-        Topology subTopology = topology.forSelection(Keys.of(expectedKey).toParticipants());
+        Topology subTopology = topology.select(Keys.of(expectedKey).toParticipants());
         shard = Iterables.getOnlyElement(subTopology.shards());
         Assertions.assertTrue(shard.range.contains(expectedKey));
         Assertions.assertEquals(expectedRange, shard.range);
@@ -202,12 +202,12 @@ public class TopologyTest
         }
         for (Range range : topology.ranges())
         {
-            Topology subset = topology.forSelection(Ranges.single(range));
+            Topology subset = topology.select(Ranges.single(range));
             for (int i = 0; i < 10; i++)
             {
                 RoutingKey key = routingKey(range, rs);
 
-                assertThat(topology.forSelection(RoutingKeys.of(key))).isEqualTo(subset);
+                assertThat(topology.select(RoutingKeys.of(key))).isEqualTo(subset);
 
                 assertThat(topology.forKey(key))
                         .describedAs("forKey(key) != get(indexForKey(key)) for key %s", key)
@@ -225,6 +225,6 @@ public class TopologyTest
                         .hasMessage("Range not found for %s", outsideRange);
             }
         }
-        assertThat(topology.forSelection(topology.ranges())).isEqualTo(topology);
+        assertThat(topology.select(topology.ranges())).isEqualTo(topology);
     }
 }

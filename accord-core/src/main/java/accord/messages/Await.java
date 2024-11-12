@@ -44,7 +44,6 @@ import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
-import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 
@@ -63,16 +62,16 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 {
     public static class SerializerSupport
     {
-        public static Await create(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long awaitEpoch, int callbackId)
+        public static Await create(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId)
         {
-            return new Await(txnId, scope, blockedUntil, awaitEpoch, callbackId);
+            return new Await(txnId, scope, blockedUntil, minAwaitEpoch, maxAwaitEpoch, callbackId);
         }
     }
 
     public final TxnId txnId;
     public final Participants<?> scope;
     public final BlockedUntil blockedUntil;
-    public final long awaitEpoch;
+    public final long minAwaitEpoch, maxAwaitEpoch;
     public final int callbackId; // < 0 means synchronous await
 
     private transient Node node;
@@ -94,34 +93,26 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 
     public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, int callbackId)
     {
-        Invariants.checkArgument(topologies.size() == 1);
         this.txnId = txnId;
         this.callbackId = callbackId;
         this.scope = computeScope(to, topologies, participants);
         this.blockedUntil = blockedUntil;
-        this.awaitEpoch = topologies.currentEpoch();
+        this.maxAwaitEpoch = topologies.currentEpoch();
+        this.minAwaitEpoch = topologies.oldestEpoch();
     }
 
-    public Await(Id to, Topology topology, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil)
+    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil)
     {
-        this(to, topology, txnId, participants, blockedUntil, SYNCHRONOUS_CALLBACKID);
+        this(to, topologies, txnId, participants, blockedUntil, SYNCHRONOUS_CALLBACKID);
     }
 
-    public Await(Id to, Topology topology, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, int callbackId)
-    {
-        this.txnId = txnId;
-        this.scope = participants.slice(topology.rangesForNode(to));
-        this.blockedUntil = blockedUntil;
-        this.awaitEpoch = topology.epoch();
-        this.callbackId = callbackId;
-    }
-
-    private Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long awaitEpoch, int callbackId)
+    private Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId)
     {
         this.txnId = txnId;
         this.scope = scope;
         this.blockedUntil = blockedUntil;
-        this.awaitEpoch = awaitEpoch;
+        this.minAwaitEpoch = minAwaitEpoch;
+        this.maxAwaitEpoch = maxAwaitEpoch;
         this.callbackId = callbackId;
     }
 
@@ -131,16 +122,16 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this.node = node;
         this.replyTo = replyToNode;
         this.replyContext = replyContext;
-        node.mapReduceConsumeLocal(this, scope, awaitEpoch, awaitEpoch, this);
+        node.mapReduceConsumeLocal(this, scope, minAwaitEpoch, maxAwaitEpoch, this);
     }
 
     @Override
     public Void apply(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.execute(safeStore, scope, txnId, awaitEpoch);
+        StoreParticipants participants = StoreParticipants.execute(safeStore, scope, txnId, minAwaitEpoch, maxAwaitEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
-        Invariants.checkState(awaitEpoch == txnId.epoch() || !command.known().executeAt.isDecidedAndKnownToExecute() || awaitEpoch == command.executeAt().epoch());
+        Invariants.checkState(minAwaitEpoch >= txnId.epoch());
         if (command.saveStatus().compareTo(blockedUntil.minSaveStatus) >= 0)
             return null;
 
@@ -165,7 +156,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             synchronouslyWaitingOnUpdater.incrementAndGet(this);
         }
 
-        safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, participants.owns());
+        safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, null, participants);
         return null;
     }
 

@@ -39,7 +39,7 @@ import static accord.coordinate.tracking.RequestStatus.Success;
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
  * If we are preempted by a recovery coordinator, we abort and let them complete (and notify us about the execution result)
  *
- * TODO (desired, testing): dedicated burn test to validate outcomes
+ * TODO (expected): we don't need this anymore, we can just use the local MaxConflicts collection when creating a snapshot for streaming
  */
 public class FetchMaxConflict extends AbstractCoordinatePreAccept<Timestamp, GetMaxConflictOk>
 {

@@ -32,6 +32,7 @@ import accord.impl.basic.DelayedCommandStores.DelayedCommandStore.DelayedTask;
 import accord.utils.DefaultRandom;
 import accord.utils.RandomSource;
 
+import static accord.impl.basic.RecurringPendingRunnable.isRecurring;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.Invariants.illegalState;
 
@@ -169,7 +170,9 @@ public class RandomDelayQueue implements PendingQueue
         for (Item item : items)
         {
             if (toDrain.test(item.item))
+            {
                 ret.add(item.item);
+            }
             else
             {
                 queue.add(item);
@@ -300,10 +303,5 @@ public class RandomDelayQueue implements PendingQueue
         {
             this.seed = seed;
         }
-    }
-
-    private static boolean isRecurring(Pending pending)
-    {
-        return pending instanceof RecurringPendingRunnable && ((RecurringPendingRunnable) pending).isRecurring;
     }
 }

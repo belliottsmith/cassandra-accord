@@ -20,4 +20,22 @@ package accord.impl.basic;
 
 public interface PendingRunnable extends Pending, Runnable
 {
+    static PendingRunnable create(Runnable run)
+    {
+        Pending origin = Global.activeOrigin();
+        return new PendingRunnable()
+        {
+            @Override
+            public Pending origin()
+            {
+                return origin;
+            }
+
+            @Override
+            public void run()
+            {
+                run.run();
+            }
+        };
+    }
 }

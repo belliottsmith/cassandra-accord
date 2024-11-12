@@ -22,6 +22,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -179,27 +180,44 @@ public class ListStore implements DataStore
 
     private static final class PendingSnapshot
     {
+        // we don't restart bootstraps after clearing journal state and replaying, so must finish snapshots
+        final boolean runBeforeRestart;
         final long delay;
         final Consumer<Boolean> onCompletion;
 
-        private PendingSnapshot(long delay, Consumer<Boolean> onCompletion)
+        private PendingSnapshot(boolean runBeforeRestart, long delay, Consumer<Boolean> onCompletion)
         {
+            this.runBeforeRestart = runBeforeRestart;
             this.delay = delay;
             this.onCompletion = onCompletion;
         }
     }
 
     private Snapshot snapshot;
+    private Scheduler.Scheduled scheduled;
     private final Deque<PendingSnapshot> pendingSnapshots = new ArrayDeque<>();
     private long pendingDelay = 0;
 
+    @Override
     public AsyncResult<Void> snapshot(Ranges ranges, TxnId before)
+    {
+        return snapshot(false, ranges, before);
+    }
+
+    public AsyncResult<Void> snapshot(boolean runBeforeRestart, Ranges ranges, TxnId before)
     {
         Snapshot snapshot = new Snapshot(data, addedAts, removedAts, purgedAts, fetchCompletes, pendingRemoves);
         AsyncResult.Settable<Void> result = new AsyncResults.SettableResult<>();
         long delay = Math.max(1, random.nextBiasedLong(100, 1000, 5000) - pendingDelay);
         pendingDelay += delay;
-        pendingSnapshots.add(new PendingSnapshot(delay, success -> {
+
+        if (scheduled != null && runBeforeRestart && !pendingSnapshots.stream().anyMatch(p -> p.runBeforeRestart))
+        {
+            scheduled.cancel();
+            scheduled = null;
+        }
+
+        pendingSnapshots.add(new PendingSnapshot(runBeforeRestart, delay, success -> {
             if (success)
             {
                 this.snapshot = snapshot;
@@ -211,7 +229,7 @@ public class ListStore implements DataStore
             }
         }));
 
-        if (pendingSnapshots.size() == 1)
+        if (scheduled == null)
             scheduleRunSnapshot();
         return result;
     }
@@ -219,7 +237,9 @@ public class ListStore implements DataStore
     private void scheduleRunSnapshot()
     {
         Invariants.checkState(!pendingSnapshots.isEmpty());
-        scheduler.once(() -> {
+        // schedule as recurring so that we don't run them
+        Runnable run = () -> {
+            scheduled = null;
             if (pendingSnapshots.isEmpty())
                 return;
 
@@ -228,7 +248,10 @@ public class ListStore implements DataStore
             pendingDelay -= pendingSnapshot.delay;
             if (!pendingSnapshots.isEmpty())
                 scheduleRunSnapshot();
-        }, pendingSnapshots.peekFirst().delay, TimeUnit.MILLISECONDS);
+        };
+
+        if (pendingSnapshots.stream().anyMatch(p -> p.runBeforeRestart)) scheduled = scheduler.once(run, pendingSnapshots.peekFirst().delay, TimeUnit.MILLISECONDS);
+        else scheduled = scheduler.selfRecurring(run, pendingSnapshots.peekFirst().delay, TimeUnit.MILLISECONDS);
     }
 
     public void restoreFromSnapshot()
@@ -297,10 +320,16 @@ public class ListStore implements DataStore
     private void checkAccess(Timestamp executeAt, Key key)
     {
         if (!allowed.contains(key))
-            throw new IllegalStateException(String.format("Attempted to access key %s on node %s, which is not in the range %s;\nexecuteAt = %s\n%s",
-                                                          key, node, allowed,
-                                                          executeAt,
-                                                          history(key)));
+        {
+            // TODO (expected): improve this validation logic
+            // but in the meantime, whitelist valid things, e.g. ephemeral reads can access data that has been retired
+            if (executeAt instanceof TxnId && ((TxnId) executeAt).awaitsOnlyDeps()
+                && removedAts.stream().anyMatch(r -> r.ranges.contains(key) && r.epoch > executeAt.epoch()))
+                return;
+
+            throw illegalState("Attempted to access key %s on node %s, which is not in the range %s;\nexecuteAt = %s\n%s",
+                               key, node, allowed, executeAt, history(key));
+        }
     }
 
     private void checkAccess(Timestamp executeAt, Range range)
@@ -462,6 +491,34 @@ public class ListStore implements DataStore
         return Timestamped.mergeEqual(a, b, Arrays::equals);
     }
 
+    public NavigableMap<RoutableKey, Timestamped<int[]>> copyOfCurrentData()
+    {
+        return new TreeMap<>(data);
+    }
+
+    public boolean equals(NavigableMap<RoutableKey, Timestamped<int[]>> a)
+    {
+        return equal(a, data);
+    }
+
+    public static boolean equal(NavigableMap<RoutableKey, Timestamped<int[]>> a, NavigableMap<RoutableKey, Timestamped<int[]>> b)
+    {
+        Iterator<Map.Entry<RoutableKey, Timestamped<int[]>>> aiter = a.entrySet().iterator();
+        Iterator<Map.Entry<RoutableKey, Timestamped<int[]>>> biter = b.entrySet().iterator();
+        while (aiter.hasNext() && biter.hasNext())
+        {
+            Map.Entry<RoutableKey, Timestamped<int[]>> av = aiter.next();
+            Map.Entry<RoutableKey, Timestamped<int[]>> bv = biter.next();
+            if (!av.getKey().equals(bv.getKey()))
+                return false;
+            if (!av.getValue().equals(bv.getValue(), Arrays::equals))
+                return false;
+        }
+        if (aiter.hasNext() || biter.hasNext())
+            return false;
+        return true;
+    }
+
     private static boolean isStrictPrefix(int[] a, int[] b)
     {
         if (a.length >= b.length)
@@ -531,7 +588,7 @@ public class ListStore implements DataStore
     private void runWhenReady(Node node, long epoch, Runnable whenKnown)
     {
         if (node.topology().epoch() >= epoch) whenKnown.run();
-        else                                  node.scheduler().once(() -> runWhenReady(node, epoch, whenKnown), 10, TimeUnit.SECONDS);
+        else                                  node.scheduler().selfRecurring(() -> runWhenReady(node, epoch, whenKnown), 10, TimeUnit.SECONDS);
     }
 
     private void removeLocalWhenReady(Node node, long epoch, Ranges removed)
@@ -567,16 +624,9 @@ public class ListStore implements DataStore
         pendingRemoves.remove(epoch);
         this.allowed = this.allowed.without(removed);
         purgedAts.add(new PurgeAt(s, epoch, removed));
-        // C* encodes keyspace/table within a Range, so Ranges being added/removed to the cluster are expected behaviors and not just local range movements.  To better simulate that
-        // this logic attempts to purge the data once we know its "safe" (no read/writes pending).
-        // The assumption in the C* case is that we will be able to do similar logic when integrating with Transactional Cluster Metadata (TCM).  The case there is that Epoch is owned by TCM
-        // and C* will start applying changes outside the context of Accord (hence why this logic uses callbacks before Accord sees the topology), so there exists an assumption: we will be able
-        // to delay local removal of data (drop keyspace/table) on accord txn state!
-        for (Range range : removed)
-        {
-            NavigableMap<RoutableKey, Timestamped<int[]>> historicData = data.subMap(range.start(), range.startInclusive(), range.end(), range.endInclusive());
-            historicData.clear();
-        }
+        // C* encodes keyspace/table within a Range, so Ranges being added/removed to the cluster are expected behaviors and not just local range movements.
+        // however, there is no reason to erase old data as it being used should be detected as a violation due to being stale,
+        // and clearing data unnecessarily complicates journal replay
 
         List<Runnable> callbacks = new ArrayList<>(onRemovalDone);
         onRemovalDone.clear();
@@ -607,7 +657,7 @@ public class ListStore implements DataStore
     private static AsyncChain<SyncPoint<Range>> awaitSyncPoint(Node node, SyncPoint<Range> exclusiveSyncPoint)
     {
         Await e = new Await(node, exclusiveSyncPoint);
-        e.addCallback(() -> node.configService().reportEpochRedundant(exclusiveSyncPoint.route.toRanges(), exclusiveSyncPoint.syncId.epoch()));
+        e.addCallback(() -> node.configService().reportEpochRedundant(exclusiveSyncPoint.route.toRanges(), exclusiveSyncPoint.syncId.epoch() - 1));
         e.start();
         return e.recover(t -> {
             if (t.getClass() == SyncPointErased.class)

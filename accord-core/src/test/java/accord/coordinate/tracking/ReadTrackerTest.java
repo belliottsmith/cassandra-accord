@@ -62,6 +62,7 @@ public class ReadTrackerTest
         public TestReadTracker(Topologies topologies)
         {
             super(topologies);
+            Assertions.assertTrue(initialise());
         }
 
         @Override

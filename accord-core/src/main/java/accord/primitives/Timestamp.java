@@ -37,7 +37,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
      * which we may also want to retain when merging in other contexts (such as in Deps).
      */
     private static final int MERGE_FLAGS = 0x8000;
-    // TODO (required): is this the correct set of identity bits?
+    // TODO (testing): is this the correct set of identity bits?
     private static final long IDENTITY_LSB = 0xFFFFFFFFFFFF001EL;
     public static final int IDENTITY_FLAGS = 0x001E;
     public static final long MAX_EPOCH = (1L << 48) - 1;

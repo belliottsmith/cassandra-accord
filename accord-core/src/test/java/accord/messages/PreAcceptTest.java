@@ -165,7 +165,7 @@ public class PreAcceptTest
             invalidate.process(node, ID2, REPLY_CONTEXT);
 
             messageSink.assertHistorySizes(0, 1);
-            assertThat(messageSink.responses.get(0).payload).isEqualTo(new BeginInvalidation.InvalidateReply(null, Ballot.ZERO, SaveStatus.NotDefined, false, null, null, null));
+            assertThat(messageSink.responses.get(0).payload).isEqualTo(new BeginInvalidation.InvalidateReply(null, Ballot.ZERO, SaveStatus.Uninitialised, false, null, null, null));
             messageSink.clearHistory();
 
             PreAccept preAccept = preAccept(txnId, txn, key.toUnseekable());

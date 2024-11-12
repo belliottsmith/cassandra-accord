@@ -107,7 +107,11 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
     @Override
     public void close()
     {
-        nodes.values().forEach(Node::shutdown);
+        nodes.values().forEach(n -> {
+            n.shutdown();
+            ((ThreadPoolScheduler)n.scheduler()).stop();
+        });
+
     }
 
     private synchronized Id nextNodeId()

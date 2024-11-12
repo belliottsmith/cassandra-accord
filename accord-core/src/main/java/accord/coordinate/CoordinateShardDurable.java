@@ -40,7 +40,7 @@ public class CoordinateShardDurable extends ExecuteExclusiveSyncPoint implements
         addCallback((success, fail) -> {
             if (fail == null)
             {
-                node.configService().reportEpochRedundant(syncPoint.route.toRanges(), syncPoint.syncId.epoch());
+                node.configService().reportEpochRedundant(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
                 node.send(tracker.nodes(), new SetShardDurable(syncPoint));
             }
         });

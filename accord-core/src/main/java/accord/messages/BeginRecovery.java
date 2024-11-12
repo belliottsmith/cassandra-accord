@@ -41,18 +41,18 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
-import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.SafeCommandStore.TestDep.WITHOUT;
+import static accord.local.SafeCommandStore.TestDep.WITH_OR_INVALIDATED;
 import static accord.local.SafeCommandStore.TestStartedAt.ANY;
-import static accord.local.SafeCommandStore.TestStatus.IS_STABLE;
-import static accord.local.SafeCommandStore.TestStatus.IS_PROPOSED;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_AFTER;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
+import static accord.local.SafeCommandStore.TestStatus.IS_PROPOSED;
+import static accord.local.SafeCommandStore.TestStatus.IS_STABLE;
+import static accord.messages.PreAccept.calculateDeps;
+import static accord.primitives.EpochSupplier.constant;
 import static accord.primitives.Status.Accepted;
 import static accord.primitives.Status.Phase;
 import static accord.primitives.Status.PreAccepted;
-import static accord.messages.PreAccept.calculateDeps;
-import static accord.primitives.EpochSupplier.constant;
 import static accord.utils.Invariants.illegalState;
 
 public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.RecoverReply>
@@ -144,7 +144,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
 
             // TODO (expected, testing): introduce some good unit tests for verifying these two functions in a real repair scenario
             // committed txns with an earlier txnid and have our txnid as a dependency
-            earlierCommittedWitness = stableStartedBeforeAndWitnessed(safeStore, txnId, participants);
+            earlierCommittedWitness = stableStartedBeforeAndWitnessedOrInvalidated(safeStore, txnId, participants);
 
             // accepted txns with an earlier txnid that don't have our txnid as a dependency
             earlierAcceptedNoWitness = acceptedOrCommittedStartedBeforeWithoutWitnessing(safeStore, txnId, participants);
@@ -345,11 +345,11 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         }
     }
 
-    private static Deps stableStartedBeforeAndWitnessed(SafeCommandStore safeStore, TxnId startedBefore, StoreParticipants participants)
+    private static Deps stableStartedBeforeAndWitnessedOrInvalidated(SafeCommandStore safeStore, TxnId startedBefore, StoreParticipants participants)
     {
         try (Deps.Builder builder = Deps.builder())
         {
-            safeStore.mapReduceFull(participants.owns(), startedBefore, startedBefore.witnessedBy(), STARTED_BEFORE, WITH, IS_STABLE,
+            safeStore.mapReduceFull(participants.owns(), startedBefore, startedBefore.witnessedBy(), STARTED_BEFORE, WITH_OR_INVALIDATED, IS_STABLE,
                                     (p1, keyOrRange, txnId, executeAt, prev) -> builder.add(keyOrRange, txnId), null, (Deps.AbstractBuilder<Deps>)builder);
             return builder.build();
         }

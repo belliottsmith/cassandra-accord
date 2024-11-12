@@ -22,10 +22,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.IntSupplier;
+import java.util.function.LongSupplier;
 
 import accord.api.Agent;
 import accord.api.ProgressLog;
 import accord.api.Result;
+import accord.coordinate.EpochTimeout;
+import accord.impl.basic.Packet;
 import accord.impl.mock.Network;
 import accord.local.Command;
 import accord.local.Node;
@@ -55,8 +58,9 @@ public class ListAgent implements Agent
     final IntSupplier coordinationDelays;
     final IntSupplier progressDelays;
     final IntSupplier timeoutDelays;
+    final LongSupplier nowExact;
 
-    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays)
+    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier nowExact)
     {
         this.rnd = rnd;
         this.timeout = timeout;
@@ -66,6 +70,7 @@ public class ListAgent implements Agent
         this.coordinationDelays = coordinationDelays;
         this.progressDelays = progressDelays;
         this.timeoutDelays = timeoutDelays;
+        this.nowExact = nowExact;
     }
 
     @Override
@@ -105,7 +110,8 @@ public class ListAgent implements Agent
     @Override
     public void onUncaughtException(Throwable t)
     {
-        onFailure.accept(t);
+        if (!(t instanceof EpochTimeout))
+            onFailure.accept(t);
     }
 
     @Override
@@ -152,7 +158,7 @@ public class ListAgent implements Agent
     @Override
     public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
     {
-        // TODO (required): meta randomise
+        // TODO (testing): meta randomise
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
@@ -172,8 +178,12 @@ public class ListAgent implements Agent
     @Override
     public long expiresAt(ReplyContext replyContext, TimeUnit unit)
     {
-        // TODO (required): implement this (add it to the replyContext)
-        return -1;
+        long expiresAt = ((Packet)replyContext).expiresAt;
+        long now = nowExact.getAsLong();
+        expiresAt -= now;
+        expiresAt *= 1.8f - rnd.nextFloat();
+        expiresAt += now;
+        return unit.convert(expiresAt, MILLISECONDS);
     }
 
 

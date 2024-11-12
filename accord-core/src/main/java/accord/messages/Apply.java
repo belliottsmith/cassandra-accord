@@ -57,12 +57,12 @@ public class Apply extends TxnRequest<ApplyReply>
 
     public interface Factory
     {
-        Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result);
+        Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, Route<?> scope, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute);
     }
 
     public static Factory wrapForExclusiveSyncPoint(Factory factory)
     {
-        return (kind, to, participates, txnId, route, txn, executeAt, deps, writes, result) -> {
+        return (kind, to, participates, txnId, sendTo, txn, executeAt, deps, writes, result, fullRoute) -> {
             while (true)
             {
                 long minEpoch = participates.oldestEpoch();
@@ -81,7 +81,7 @@ public class Apply extends TxnRequest<ApplyReply>
                     break;
             }
 
-            return factory.create(kind, to, participates, txnId, route, txn, executeAt, deps, writes, result);
+            return factory.create(kind, to, participates, txnId, sendTo, txn, executeAt, deps, writes, result, fullRoute);
         };
     }
 
@@ -95,26 +95,32 @@ public class Apply extends TxnRequest<ApplyReply>
 
     public enum Kind { Minimal, Maximal }
 
-    protected Apply(Kind kind, Id to, Topologies participates, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    protected Apply(Kind kind, Id to, Topologies participates, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute)
     {
-        super(to, participates, route, txnId);
+        super(to, participates, sendTo, txnId);
         Invariants.checkState(txnId.kind() != Txn.Kind.Write || writes != null);
         // TODO (desired): it's wasteful to encode the full set of ranges owned by the recipient node;
         //     often it will be cheaper to include the FullRoute for Deps scope (or come up with some other safety-preserving encoding scheme)
         this.kind = kind;
         this.deps = deps.intersecting(scope);
         this.txn = kind == Kind.Maximal ? txn.intersecting(scope, true) : null;
-        this.fullRoute = kind == Kind.Maximal ? route : null;
+        this.fullRoute = kind == Kind.Maximal ? fullRoute : null;
         this.executeAt = executeAt;
         this.writes = writes;
         this.result = result;
     }
 
-    public static void sendMaximal(Node node, Id to, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
+    public static void sendMaximal(Node node, Id to, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute)
     {
-        Topologies executes = executes(node, route, executeAt);
-        Topologies participates = participates(node, route, txnId, executeAt, executes);
-        node.send(to, applyMaximal(FACTORY, to, participates, txnId, route, txn, executeAt, deps, writes, result));
+        Topologies executes = executes(node, sendTo, executeAt);
+        sendMaximal(node, to, executes, txnId, sendTo, txn, executeAt, deps, writes, result, fullRoute);
+    }
+
+    public static void sendMaximal(Node node, Id to, Topologies executes, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute)
+    {
+        Topologies participates = participates(node, sendTo, txnId, executeAt, executes);
+        // TODO (expected): should this FACTORY be user configurable? Perhaps via CoordinationAdapter?
+        node.send(to, applyMaximal(FACTORY, to, participates, txnId, sendTo, txn, executeAt, deps, writes, result, fullRoute));
     }
 
     public static Topologies executes(Node node, Unseekables<?> route, Timestamp executeAt)
@@ -127,9 +133,9 @@ public class Apply extends TxnRequest<ApplyReply>
         return txnId.epoch() == executeAt.epoch() ? executes : node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
     }
 
-    public static Apply applyMaximal(Factory factory, Id to, Topologies participates, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result)
+    public static Apply applyMaximal(Factory factory, Id to, Topologies participates, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> fullRoute)
     {
-        return factory.create(Kind.Maximal, to, participates, txnId, route, txn, executeAt, stableDeps, writes, result);
+        return factory.create(Kind.Maximal, to, participates, txnId, sendTo, txn, executeAt, stableDeps, writes, result, fullRoute);
     }
 
     protected Apply(Kind kind, TxnId txnId, Route<?> route, long waitForEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)

@@ -118,7 +118,7 @@ public class ImmutableCommandTest
     void noConflictWitnessTest()
     {
         CommandStoreSupport support = new CommandStoreSupport();
-        InMemoryCommandStore commands = createStore(support);
+        InMemoryCommandStore.Synchronized commands = (InMemoryCommandStore.Synchronized) createStore(support);
         MockCluster.Clock clock = new MockCluster.Clock(100);
         TxnId txnId = clock.idForNode(1, 1);
         Keys keys = Keys.of(KEY);
@@ -130,13 +130,23 @@ public class ImmutableCommandTest
             Assertions.assertEquals(Status.NotDefined, command.status());
             Assertions.assertNull(command.executeAt());
         }
-        SafeCommandStore safeStore = commands.beginOperation(PreLoadContext.contextFor(txnId, keys.toParticipants()));
-        StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, txnId.epoch());
-        SafeCommand  safeCommand = safeStore.get(txnId, participants);
-        Commands.preaccept(safeStore, safeCommand, participants, txnId, txnId.epoch(), txn.slice(FULL_RANGES, true), ROUTE);
-        Command command = safeStore.get(txnId).current();
-        Assertions.assertEquals(Status.PreAccepted, command.status());
-        Assertions.assertEquals(txnId, command.executeAt());
+
+        commands.execute(() -> {
+            SafeCommandStore safeStore = commands.beginOperation(PreLoadContext.contextFor(txnId, keys.toParticipants()));
+            try
+            {
+                StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, txnId.epoch());
+                SafeCommand  safeCommand = safeStore.get(txnId, participants);
+                Commands.preaccept(safeStore, safeCommand, participants, txnId, txnId.epoch(), txn.slice(FULL_RANGES, true), ROUTE);
+                Command command = safeStore.get(txnId).current();
+                Assertions.assertEquals(Status.PreAccepted, command.status());
+                Assertions.assertEquals(txnId, command.executeAt());
+            }
+            finally
+            {
+                commands.completeOperation(safeStore);
+            }
+        });
     }
 
     @Test

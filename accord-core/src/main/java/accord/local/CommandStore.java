@@ -165,6 +165,7 @@ public abstract class CommandStore implements AgentExecutor
      * But they may still be ordered for other key ranges they participate in.
      *
      * TODO (expected): merge with redundantBefore
+     * TODO (required): if we ever actually erase data on disk (after losing ownership), make sure to mark the range unsafe to read
      */
     private NavigableMap<Timestamp, Ranges> safeToRead = ImmutableSortedMap.of(Timestamp.NONE, Ranges.EMPTY);
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
@@ -592,7 +593,7 @@ public abstract class CommandStore implements AgentExecutor
             e.getValue().ranges = remaining = remaining.without(ranges);
             if (e.getValue().ranges.isEmpty())
             {
-                logger.info("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), syncId);
+                logger.debug("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), syncId);
                 e.getValue().whenDone.trySuccess(null);
                 if (remove == null)
                     remove = new LongHashSet();
@@ -600,7 +601,7 @@ public abstract class CommandStore implements AgentExecutor
             }
             else
             {
-                logger.info("Completed partial sync for {} on epoch {} using {}; {} still to sync", synced, e.getKey(), syncId, remaining);
+                logger.debug("Completed partial sync for {} on epoch {} using {}; {} still to sync", synced, e.getKey(), syncId, remaining);
             }
         }
         if (remove != null)
