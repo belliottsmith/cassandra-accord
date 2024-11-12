@@ -121,14 +121,8 @@ public interface PreLoadContext
         Unseekables<?> keys = keys();
         if (!keys.isEmpty())
         {
-            KeyHistory requiredHistory = keyHistory();
-            if (requiredHistory != NONE)
-            {
-                if (requiredHistory == INCR || requiredHistory == ASYNC)
-                    requiredHistory = SYNC;
-                if (requiredHistory != superset.keyHistory())
-                    return false;
-            }
+            if (!superset.keyHistory().satisfies(keyHistory()))
+                return false;
 
             Unseekables<?> supersetKeys = superset.keys();
             if (supersetKeys.domain() != keys.domain() || !supersetKeys.containsAll(keys()))

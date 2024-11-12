@@ -24,6 +24,7 @@ package accord.local;
  */
 public enum KeyHistory
 {
+    NONE,
     // TODO (required): deprecate
     TIMESTAMPS,
 
@@ -48,7 +49,33 @@ public enum KeyHistory
     /**
      * Load recovery information for all keys into memory before processing the command.
      */
-    RECOVER,
+    RECOVER;
+    
+    public boolean satisfiesIfPresent(KeyHistory that)
+    {
+        return satisfies(that, ASYNC);
+    }
 
-    NONE
+    public boolean satisfies(KeyHistory that)
+    {
+        return satisfies(that, SYNC);
+    }
+
+    private boolean satisfies(KeyHistory that, KeyHistory ifSyncRequireAtLeast)
+    {
+        switch (that)
+        {
+            default: throw new AssertionError("Unhandled KeyHistory: " + that);
+            case NONE:
+                return true;
+            case RECOVER:
+            case TIMESTAMPS:
+                return this == that;
+            case ASYNC:
+            case INCR:
+            case SYNC:
+                return this.compareTo(ifSyncRequireAtLeast) >= 0;
+        }
+    }
+
 }
