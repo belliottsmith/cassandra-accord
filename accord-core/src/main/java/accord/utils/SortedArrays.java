@@ -748,15 +748,15 @@ public class SortedArrays
 
         while (keepFrom < keepTo && subtractFrom < subtractTo)
         {
-            I leftKey = keep[keepFrom];
-            I rightKey = subtract[subtractFrom];
-            int cmp = leftKey == rightKey ? 0 : comparator.compare(leftKey, rightKey);
+            I keepKey = keep[keepFrom];
+            I subtractKey = subtract[subtractFrom];
+            int cmp = keepKey == subtractKey ? 0 : comparator.compare(keepKey, subtractKey);
 
-            if (cmp > 0)
+            if (cmp < 0)
             {
                 result[resultSize++] = keep[keepFrom++];
             }
-            else if (cmp < 0)
+            else if (cmp > 0)
             {
                 ++subtractFrom;
             }

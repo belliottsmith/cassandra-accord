@@ -136,6 +136,6 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     {
         Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
         topologies = node.topology().reselect(topologies, QuorumEpochIntersections.preaccept.include, route, executeAtEpoch, executeAtEpoch, Owned);
-        new ExecuteEphemeralRead(node, topologies, route, txnId, txn, executeAtEpoch, deps, this).start();
+        new ExecuteEphemeralRead(node, topologies, route, txnId.withEpoch(executeAtEpoch), txn, executeAtEpoch, deps, this).start();
     }
 }

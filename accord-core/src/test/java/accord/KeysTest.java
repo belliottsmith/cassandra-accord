@@ -19,19 +19,31 @@
 package accord;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.IntFunction;
 import java.util.stream.IntStream;
 
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.impl.IntKey;
 import accord.impl.IntKey.Raw;
+import accord.primitives.AbstractKeys;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Keys;
 
+import accord.primitives.RoutableKey;
+import accord.primitives.Routables;
+import accord.primitives.RoutingKeys;
 import accord.utils.Gen;
 import accord.utils.Gens;
+import accord.utils.RandomTestRunner;
+import org.agrona.collections.IntHashSet;
+
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -223,6 +235,51 @@ public class KeysTest
                 Assertions.assertEquals(Keys.of(expected), keys.slice(allButI), "Expected to exclude " + first + " at index " + 0);
             }
         });
+    }
+
+    @Test
+    public void keysWithout()
+    {
+        without(IntKey::key, Key[]::new, Keys::of, Keys::without);
+    }
+
+    @Test
+    public void routingKeysWithout()
+    {
+        without(IntKey::routing, RoutingKey[]::new, RoutingKeys::of, RoutingKeys::without);
+    }
+
+    private <K extends RoutableKey, KS extends AbstractKeys<K>> void without(IntFunction<K> keyFactory,
+                                                                             IntFunction<K[]> arrayFactory,
+                                                                             Function<K[], KS> keysFactory,
+                                                                             BiFunction<KS, KS, Routables<K>> without)
+    {
+        final int maxSize = 100;
+        final int maxKey = 1000;
+        for (int test = 0 ; test < 10000 ; ++test)
+        {
+            RandomTestRunner.test().check(rs -> {
+                K[] keys = arrayFactory.apply(rs.nextInt(2, maxSize));
+                IntHashSet used = new IntHashSet();
+                for (int i = 0 ; i < keys.length ; ++i)
+                {
+                    int k = rs.nextInt(maxKey);
+                    while (!used.add(k)) k = rs.nextInt(maxKey);
+                    keys[i] = keyFactory.apply(k);
+                }
+                int addTo = rs.nextInt(1, keys.length);
+                int removeFrom = addTo - rs.nextInt(addTo + 1);
+                KS add = keysFactory.apply(Arrays.copyOf(keys, addTo));
+                KS remove = keysFactory.apply(Arrays.copyOfRange(keys, removeFrom, keys.length));
+                Routables<K> result = without.apply(add, remove);
+                Assertions.assertEquals(removeFrom, result.size());
+                if (removeFrom == addTo)
+                    Assertions.assertSame(result, add);
+                Arrays.sort(keys, 0, removeFrom);
+                for (int i = 0 ; i < removeFrom ; ++i)
+                    Assertions.assertEquals(keys[i], result.get(i));
+            });
+        }
     }
 
     @Test

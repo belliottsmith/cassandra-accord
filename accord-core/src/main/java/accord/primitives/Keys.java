@@ -262,16 +262,22 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
 
     public static Keys of(Set<? extends Key> keys)
     {
+        if (keys.size() == 0)
+            return EMPTY;
         return ofUnique(keys.toArray(new Key[0]));
     }
 
     public static Keys ofSorted(Key ... keys)
     {
+        if (keys.length == 0)
+            return EMPTY;
         return new Keys(SortedArrays.toUnique(keys));
     }
 
     public static Keys ofSortedUnique(Key ... keys)
     {
+        if (keys.length == 0)
+            return EMPTY;
         if (!isSortedUnique(keys))
             throw new IllegalArgumentException(Arrays.toString(keys) + " is not sorted");
         return new Keys(keys);
@@ -280,11 +286,6 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     public static Keys ofSortedUnique(Collection<? extends Key> keys)
     {
         return ofSortedUnique(keys.toArray(new Key[0]));
-    }
-
-    static Keys ofSortedUnchecked(Key ... keys)
-    {
-        return new Keys(keys);
     }
 
     private Keys wrap(Key[] wrap, AbstractKeys<Key> that)

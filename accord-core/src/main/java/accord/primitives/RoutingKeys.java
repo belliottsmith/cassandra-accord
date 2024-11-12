@@ -49,6 +49,8 @@ public class RoutingKeys extends AbstractUnseekableKeys implements Unseekables<R
 
     public static RoutingKeys of(RoutingKey ... keys)
     {
+        if (keys.length == 0)
+            return EMPTY;
         return new RoutingKeys(toUnique(sort(keys)));
     }
 
@@ -68,6 +70,8 @@ public class RoutingKeys extends AbstractUnseekableKeys implements Unseekables<R
 
     public static RoutingKeys ofSortedUnique(RoutingKey ... keys)
     {
+        if (keys.length == 0)
+            return EMPTY;
         checkArgument(isSortedUnique(keys));
         return new RoutingKeys(keys);
     }
