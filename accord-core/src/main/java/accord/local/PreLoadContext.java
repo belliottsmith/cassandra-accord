@@ -32,10 +32,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
-import static accord.local.KeyHistory.ASYNC;
-import static accord.local.KeyHistory.INCR;
 import static accord.local.KeyHistory.NONE;
-import static accord.local.KeyHistory.SYNC;
 
 /**
  * Lists txnids and keys of commands and commands for key that will be needed for an operation. Used
