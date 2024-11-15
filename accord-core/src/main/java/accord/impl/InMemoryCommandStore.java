@@ -837,24 +837,17 @@ public abstract class InMemoryCommandStore extends CommandStore
         {
             private final TxnId txnId;
             private final Timestamp executeAt;
-            private final Status status;
-            private final List<TxnId> deps;
 
-                public TxnInfo(TxnId txnId, Timestamp executeAt, Status status, List<TxnId> deps)
+            public TxnInfo(TxnId txnId, Timestamp executeAt)
             {
                 this.txnId = txnId;
                 this.executeAt = executeAt;
-                this.status = status;
-                this.deps = deps;
             }
 
                 public TxnInfo(Command command)
             {
                 this.txnId = command.txnId();
                 this.executeAt = command.executeAt();
-                this.status = command.status();
-                PartialDeps deps = command.partialDeps();
-                this.deps = deps != null ? deps.txnIds() : Collections.emptyList();
             }
         }
 
@@ -987,13 +980,11 @@ public abstract class InMemoryCommandStore extends CommandStore
                             if (global != null && global.value() != null)
                             {
                                 Command command = global.value();
-                                PartialDeps deps = command.partialDeps();
-                                List<TxnId> depsIds = deps != null ? deps.txnIds() : Collections.emptyList();
-                                list.add(new TxnInfo(txnId, txnId, command.status(), depsIds));
+                                list.add(new TxnInfo(command));
                             }
                             else
                             {
-                                list.add(new TxnInfo(txnId, txnId, NotDefined, Collections.emptyList()));
+                                list.add(new TxnInfo(txnId, txnId));
                             }
                         }
                         return in;
