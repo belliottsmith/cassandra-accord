@@ -128,7 +128,7 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
     public static Barrier barrier(Node node, Seekables<?, ?> keysOrRanges, FullRoute<?> route, long minEpoch, BarrierType barrierType, BiFunction<Node, FullRoute<?>, AsyncSyncPoint> syncPoint)
     {
         Barrier barrier = new Barrier(node, keysOrRanges, route, minEpoch, barrierType, syncPoint);
-        node.topology().awaitEpoch(minEpoch).begin((ignored, failure) -> {
+        node.withEpoch(minEpoch, (ignored, failure) -> {
             if (failure != null)
             {
                 barrier.tryFailure(failure);

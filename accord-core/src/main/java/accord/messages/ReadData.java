@@ -514,23 +514,32 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         /**
          * The read is for a point in the past
          */
-        Invalid("CommitInvalid"),
+        Invalid("CommitInvalid", true),
 
         /**
          * The commit has been rejected due to stale ballot.
          */
-        Rejected("CommitRejected"),
+        Rejected("CommitRejected", true),
+
         /**
          * Either not committed, or not stable
          */
-        Insufficient("CommitInsufficient"),
-        Redundant("CommitOrReadRedundant");
+        Insufficient("CommitInsufficient", false),
+
+        /**
+         * PreApplied successfully, but the request is blocking so waiting to reply
+         */
+        Waiting("ApplyWaiting", false),
+
+        Redundant("CommitOrReadRedundant", true);
 
         final String fullname;
+        final boolean isFinal;
 
-        CommitOrReadNack(String fullname)
+        CommitOrReadNack(String fullname, boolean isFinal)
         {
             this.fullname = fullname;
+            this.isFinal = isFinal;
         }
 
         @Override
@@ -554,7 +563,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         @Override
         public boolean isFinal()
         {
-            return this != Insufficient;
+            return isFinal;
         }
     }
 
