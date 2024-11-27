@@ -20,7 +20,9 @@ package accord.verify;
 
 public interface Verifier extends AutoCloseable
 {
-    Checker witness(int start, int end);
+    default Checker witness(int start, int end) { return witness("", start, end); }
+
+    Checker witness(Object description, int start, int end);
 
     interface Checker extends AutoCloseable
     {

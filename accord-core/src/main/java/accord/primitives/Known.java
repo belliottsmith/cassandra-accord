@@ -324,7 +324,12 @@ public class Known
     {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        Known that = (Known) o;
+        return equals((Known) o);
+    }
+
+    // ignores class identity
+    boolean equals(Known that)
+    {
         return route == that.route && definition == that.definition && executeAt == that.executeAt && deps == that.deps && outcome == that.outcome;
     }
 

@@ -179,8 +179,8 @@ public class InMemoryJournal implements Journal
         {
             int commandStoreId = e.getKey();
             Map<TxnId, List<Diff>> localJournal = e.getValue();
-            CommandStore store = commandStores.forId(commandStoreId);
-            if (store == null)
+            CommandStore commandStore = commandStores.forId(commandStoreId);
+            if (commandStore == null)
                 continue;
 
             for (Map.Entry<TxnId, List<Diff>> e2 : localJournal.entrySet())
@@ -190,7 +190,7 @@ public class InMemoryJournal implements Journal
                 Command command =  reconstruct(diffs);
                 if (command.status() == Truncated || command.status() == Invalidated)
                     continue; // Already truncated
-                Cleanup cleanup = Cleanup.shouldCleanup(store.agent(), command, store.unsafeGetRedundantBefore(), store.durableBefore());
+                Cleanup cleanup = Cleanup.shouldCleanup(commandStore.agent(), command, commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
                 switch (cleanup)
                 {
                     case NO:
@@ -199,14 +199,14 @@ public class InMemoryJournal implements Journal
                     case TRUNCATE_WITH_OUTCOME:
                     case TRUNCATE:
                     case ERASE:
-                        command = Commands.purge(command, command.participants(), cleanup);
+                        command = Commands.purgeUnsafe(commandStore, command, command.participants(), cleanup);
                         Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised);
                         Diff diff = diff(null, command);
                         e2.setValue(cleanup == Cleanup.ERASE ? new ErasedList(diff) : new TruncatedList(diff));
                         break;
 
                     case EXPUNGE:
-                        e2.setValue(new PurgedList());
+                        e2.setValue(new PurgedList(e2.getValue()));
                         break;
                 }
             }
@@ -289,8 +289,10 @@ public class InMemoryJournal implements Journal
 
     static class PurgedList extends AbstractList<Diff>
     {
-        PurgedList()
+        final List<Diff> purged;
+        PurgedList(List<Diff> purged)
         {
+            this.purged = purged;
         }
 
         @Override

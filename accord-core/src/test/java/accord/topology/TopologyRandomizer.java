@@ -90,6 +90,7 @@ public class TopologyRandomizer
     private final List<Topology> epochs = new ArrayList<>();
     private final Function<Id, Node> nodeLookup;
     private final ConcurrentLinkedQueue<Integer> newPrefixes = new ConcurrentLinkedQueue<>();
+    // TODO (required): remove this restriction, we should be able to replicate previously owned ranges just fine
     private final Map<Id, Ranges> previouslyReplicated = new HashMap<>();
     private final TopologyUpdates topologyUpdates;
     private final Listener listener;

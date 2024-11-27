@@ -282,7 +282,7 @@ public abstract class Command implements CommonAttributes
                         Invariants.checkState(partialTxn == null, "partialTxn is defined");
                         break;
                     case DefinitionKnown:
-                        Invariants.checkState(partialTxn != null, "partialTxn is null");
+                        Invariants.checkState(partialTxn != null || validate.participants().owns().isEmpty(), "partialTxn is null");
                         break;
                 }
             }
@@ -656,6 +656,8 @@ public abstract class Command implements CommonAttributes
 
         public Truncated(CommonAttributes commonAttributes, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable Writes writes, @Nullable Result result)
         {
+            // TODO (expected): is Ballot.MAX helpful or harmful here?
+            //  We have to special-case partial truncation anyway as we can infinite loop if we think there's a superseding recovery.
             super(commonAttributes, saveStatus, Ballot.MAX);
             this.executeAt = executeAt;
             this.writes = writes;
@@ -1390,7 +1392,9 @@ public abstract class Command implements CommonAttributes
                             Unseekables<?> executionParticipants = participants.route.slice(ranges, Minimal);
                             deps.rangeDeps.forEach(executionParticipants, update, (upd, idx) -> {
                                 TxnId id = upd.txnId(idx);
-                                if (id.epoch() >= epoch && id.epoch() < maxEpoch)
+                                // because we use RX as RedundantBefore bounds, we must not let an RX on a closing range
+                                // get ahead of one that isn't closed but has overlapping transactions (else we may erroneously treat as redundant)
+                                if (id.epoch() >= epoch && (id.is(Txn.Kind.ExclusiveSyncPoint) || id.epoch() < maxEpoch))
                                     update.initialise(idx);
                             });
                             int lbound = deps.rangeDeps.txnIdCount();

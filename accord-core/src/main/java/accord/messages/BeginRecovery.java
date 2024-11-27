@@ -48,6 +48,10 @@ import static accord.local.SafeCommandStore.TestStartedAt.STARTED_AFTER;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
 import static accord.local.SafeCommandStore.TestStatus.IS_PROPOSED;
 import static accord.local.SafeCommandStore.TestStatus.IS_STABLE;
+import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
+import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
+import static accord.messages.BeginRecovery.RecoverReply.Kind.Retired;
+import static accord.messages.BeginRecovery.RecoverReply.Kind.Truncated;
 import static accord.messages.PreAccept.calculateDeps;
 import static accord.primitives.EpochSupplier.constant;
 import static accord.primitives.Status.Accepted;
@@ -97,22 +101,24 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     }
 
     @Override
-
     public RecoverReply apply(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, executeAtOrTxnIdEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        switch (Commands.recover(safeStore, safeCommand, participants, txnId, partialTxn, route, ballot))
+        Commands.AcceptOutcome outcome = Commands.recover(safeStore, safeCommand, participants, txnId, partialTxn, route, ballot);
+        switch (outcome)
         {
-            default:
-                throw illegalState("Unhandled Outcome");
+            default: throw illegalState("Unhandled Outcome: " + outcome);
+            case Redundant: throw illegalState("Invaid Outcome: " + outcome);
 
-            case Redundant:
             case Truncated:
-                return new RecoverNack(null);
+                return new RecoverNack(Truncated, null);
+
+            case Retired:
+                return new RecoverNack(Retired, null);
 
             case RejectedBallot:
-                return new RecoverNack(safeCommand.current().promised());
+                return new RecoverNack(Reject, safeCommand.current().promised());
 
             case Success:
         }
@@ -122,32 +128,47 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         Deps localDeps = null;
         if (!command.known().deps.hasCommittedOrDecidedDeps())
         {
-            localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), txnId);
+            // TODO (required): consider owns vs touches - should be touches?
+            localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), txnId, false);
         }
 
-        LatestDeps deps = LatestDeps.create(safeStore.coordinateRanges(txnId), command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, localDeps);
+        LatestDeps deps = LatestDeps.create(participants.owns(), command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, localDeps);
 
-        boolean rejectsFastPath;
+        boolean supersedingRejects;
         Deps earlierCommittedWitness, earlierAcceptedNoWitness;
 
         if (command.hasBeen(Accepted))
         {
-            rejectsFastPath = false;
+            supersedingRejects = false;
             earlierCommittedWitness = earlierAcceptedNoWitness = Deps.NONE;
         }
         else
         {
+            // Check for superseding commands that should have witnessed us but have not, and that therefore permit
+            // us to infer that we have not executed.
+            // Note: We cannot simply check if there exists a future command that has not witnessed us,
+            // because we perform "transitive dependency elision" where a later command may exclude an earlier command
+            // as a dependency because it is durably the dependency of some intervening stable command.
+            // This can lead to a non-overlapping quorum problem on recovery, where the command we are recovering is only
+            // committed to a minority, and not witnessed at all on at least one replica; the quorum that is used to
+            // compute the dependencies of the future command contacts the minority that has the command durably before
+            // some intervening command plus the replica that has not witnessed it at all; on recovery however we contact
+            // the opposite quorum that has not committed the command (or has not witnessed it).
+            // To avoid this problem, we find the minimum superseding command that decides this - for which we consider
+            // all proposed transactions that reject (exclude) the command, but only stable transactions that accept
+            // (include) the command. This way, any stable command that has witnessed this command as a dependency must
+            // be reported by one of the quorum we contact, or else the command's own commit record must be encountered
+            // and it does not matter.
             // TODO (expected): modify the mapReduce API to perform this check in a single pass
-            rejectsFastPath = hasAcceptedOrCommittedStartedAfterWithoutWitnessing(safeStore, txnId, participants);
-            if (!rejectsFastPath)
-                rejectsFastPath = hasStableExecutesAfterWithoutWitnessing(safeStore, txnId, participants);
+            supersedingRejects = supersedingAcceptedOrCommittedStartedAfterRejects(safeStore, txnId, participants)
+                              || supersedingExecutesAfterRejects(safeStore, txnId, participants);
 
             // TODO (expected, testing): introduce some good unit tests for verifying these two functions in a real repair scenario
             // committed txns with an earlier txnid and have our txnid as a dependency
             earlierCommittedWitness = stableStartedBeforeAndWitnessedOrInvalidated(safeStore, txnId, participants);
 
             // accepted txns with an earlier txnid that don't have our txnid as a dependency
-            earlierAcceptedNoWitness = acceptedOrCommittedStartedBeforeWithoutWitnessing(safeStore, txnId, participants);
+            earlierAcceptedNoWitness = acceptedOrCommittedNotStableStartedBeforeWithoutWitnessing(safeStore, txnId, participants);
         }
 
         Status status = command.status();
@@ -156,7 +177,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         Writes writes = command.writes();
         Result result = command.result();
         boolean acceptsFastPath = executeAt.equals(txnId) || participants.owns().isEmpty();
-        return new RecoverOk(txnId, status, accepted, executeAt, deps, earlierCommittedWitness, earlierAcceptedNoWitness, acceptsFastPath, rejectsFastPath, writes, result);
+        return new RecoverOk(txnId, status, accepted, executeAt, deps, earlierCommittedWitness, earlierAcceptedNoWitness, acceptsFastPath, supersedingRejects, writes, result);
     }
 
     @Override
@@ -165,8 +186,13 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         // TODO (low priority, efficiency): should not operate on dependencies directly here, as we only merge them;
         //                                  want a cheaply mergeable variant (or should collect them before merging)
 
-        if (!r1.isOk()) return r1;
-        if (!r2.isOk()) return r2;
+        RecoverReply.Kind r1kind = r1.kind(), r2kind = r2.kind();
+        if (r1kind != Ok || r2kind != Ok)
+        {
+            if (r1kind == Retired && r2kind == Ok) return r2;
+            if (r2kind == Retired && r1kind == Ok) return r1;
+            return r1kind.compareTo(r2kind) >= 0 ? r1 : r2;
+        }
         RecoverOk ok1 = (RecoverOk) r1;
         RecoverOk ok2 = (RecoverOk) r2;
 
@@ -188,8 +214,8 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         return new RecoverOk(
             txnId, ok1.status, ok1.accepted, timestamp,
             deps, earlierCommittedWitness, earlierAcceptedNoWitness,
-            ok1.acceptsFastPath & ok2.acceptsFastPath,
-            ok1.rejectsFastPath | ok2.rejectsFastPath,
+            ok1.selfAcceptsFastPath & ok2.selfAcceptsFastPath,
+            ok1.supersedingRejects | ok2.supersedingRejects,
             ok1.writes, ok1.result
         );
     }
@@ -228,15 +254,19 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                '}';
     }
 
+
     public static abstract class RecoverReply implements Reply
     {
+        // TODO (expected): recover should gracefully handle partial truncation (currently expected to be handled by MaybeRecover)
+        public enum Kind { Ok, Retired, Truncated, Reject }
+
         @Override
         public MessageType type()
         {
             return MessageType.BEGIN_RECOVER_RSP;
         }
 
-        public abstract boolean isOk();
+        public abstract Kind kind();
     }
 
     public static class RecoverOk extends RecoverReply
@@ -248,12 +278,12 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         public final LatestDeps deps;
         public final Deps earlierCommittedWitness;  // counter-point to earlierAcceptedNoWitness
         public final Deps earlierAcceptedNoWitness; // wait for these to commit
-        public final boolean acceptsFastPath;
-        public final boolean rejectsFastPath;
+        public final boolean selfAcceptsFastPath;
+        public final boolean supersedingRejects;
         public final Writes writes;
         public final Result result;
 
-        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, LatestDeps deps, Deps earlierCommittedWitness, Deps earlierAcceptedNoWitness, boolean acceptsFastPath, boolean rejectsFastPath, Writes writes, Result result)
+        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, LatestDeps deps, Deps earlierCommittedWitness, Deps earlierAcceptedNoWitness, boolean selfAcceptsFastPath, boolean supersedingRejects, Writes writes, Result result)
         {
             this.txnId = txnId;
             this.accepted = accepted;
@@ -262,16 +292,16 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
             this.deps = deps;
             this.earlierCommittedWitness = earlierCommittedWitness;
             this.earlierAcceptedNoWitness = earlierAcceptedNoWitness;
-            this.acceptsFastPath = acceptsFastPath;
-            this.rejectsFastPath = rejectsFastPath;
+            this.selfAcceptsFastPath = selfAcceptsFastPath;
+            this.supersedingRejects = supersedingRejects;
             this.writes = writes;
             this.result = result;
         }
 
         @Override
-        public boolean isOk()
+        public Kind kind()
         {
-            return true;
+            return Ok;
         }
 
         @Override
@@ -290,7 +320,8 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                    ", deps:" + deps +
                    ", earlierCommittedWitness:" + earlierCommittedWitness +
                    ", earlierAcceptedNoWitness:" + earlierAcceptedNoWitness +
-                   ", rejectsFastPath:" + rejectsFastPath +
+                   ", selfAcceptsFastPath:" + selfAcceptsFastPath +
+                   ", supersedingRejects:" + supersedingRejects +
                    ", writes:" + writes +
                    ", result:" + result +
                    '}';
@@ -309,16 +340,19 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
 
     public static class RecoverNack extends RecoverReply
     {
+        public final Kind kind;
         public final @Nullable Ballot supersededBy;
-        public RecoverNack(@Nullable Ballot supersededBy)
+
+        public RecoverNack(Kind kind, @Nullable Ballot supersededBy)
         {
+            this.kind = kind;
             this.supersededBy = supersededBy;
         }
 
         @Override
-        public boolean isOk()
+        public Kind kind()
         {
-            return false;
+            return kind;
         }
 
         @Override
@@ -330,7 +364,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         }
     }
 
-    private static Deps acceptedOrCommittedStartedBeforeWithoutWitnessing(SafeCommandStore safeStore, TxnId startedBefore, StoreParticipants participants)
+    private static Deps acceptedOrCommittedNotStableStartedBeforeWithoutWitnessing(SafeCommandStore safeStore, TxnId startedBefore, StoreParticipants participants)
     {
         try (Deps.Builder builder = Deps.builder())
         {
@@ -355,7 +389,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         }
     }
 
-    private static boolean hasAcceptedOrCommittedStartedAfterWithoutWitnessing(SafeCommandStore safeStore, TxnId startedAfter, StoreParticipants participants)
+    private static boolean supersedingAcceptedOrCommittedStartedAfterRejects(SafeCommandStore safeStore, TxnId startedAfter, StoreParticipants participants)
     {
         /*
          * The idea here is to discover those transactions that were started after us and have been Accepted
@@ -370,7 +404,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                                        (p1, keyOrRange, txnId, executeAt, prev) -> true, null, false);
     }
 
-    private static boolean hasStableExecutesAfterWithoutWitnessing(SafeCommandStore safeStore, TxnId executesAfter, StoreParticipants participants)
+    private static boolean supersedingExecutesAfterRejects(SafeCommandStore safeStore, TxnId executesAfter, StoreParticipants participants)
     {
         /*
          * The idea here is to discover those transactions that have been decided to execute after us
@@ -378,6 +412,9 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
          * taken the fast path. This is central to safe recovery, as if every transaction that executes later has
          * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
          * has not witnessed us we can safely invalidate it.
+         *
+         * TODO (desired): visit in executeAt order, so we can abort a key early
+         * TODO (desured): reduce merge costs
          */
         return safeStore.mapReduceFull(participants.owns(), executesAfter, executesAfter.witnessedBy(), ANY, WITHOUT, IS_STABLE,
                                        (p1, keyOrRange, txnId, executeAt, prev) -> true, null, false);

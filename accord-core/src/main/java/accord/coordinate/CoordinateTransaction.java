@@ -35,7 +35,7 @@ import accord.primitives.TxnId;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import static accord.coordinate.CoordinationAdapter.Factory.Step.Continue;
+import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.Invalidate.proposeAndCommitInvalidate;
 
@@ -69,7 +69,10 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         //  but must have replied from a fast path quorum in earlier epochs
         if (tracker.hasFastPathAccepted())
         {
-            Deps deps = Deps.merge(oks, oks.size(), List::get, ok -> ok.witnessedAt.equals(txnId) ? ok.deps : null);
+            // note: we merge all Deps regardless of witnessedAt. While we only need fast path votes,
+            // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
+            // TODO (required): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
+            Deps deps = Deps.merge(oks, oks.size(), List::get, ok -> ok.deps);
             executeAdapter().execute(node, topologies, route, FAST, txnId, txn, txnId, deps, settingCallback());
             node.agent().metricsEventsListener().onFastPathTaken(txnId, deps);
         }
@@ -105,6 +108,6 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     // TODO (expected): override in C* rather than default to configurability here
     protected CoordinationAdapter<Result> executeAdapter()
     {
-        return node.coordinationAdapter(txnId, Continue);
+        return node.coordinationAdapter(txnId, Standard);
     }
 }

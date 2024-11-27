@@ -189,7 +189,7 @@ public class Pruning
             while (--i >= 0)
             {
                 TxnInfo txn = cfk.committedByExecuteAt[i];
-                if (txn.is(Write) && txn.executeAt.hlc() <= maxPruneHlc && txn.is(APPLIED))
+                if (txn.is(Write) && txn.executeAt.hlc() <= maxPruneHlc && txn.is(APPLIED) && txn.epoch() == txn.executeAt.epoch())
                     break;
             }
 
@@ -310,7 +310,7 @@ public class Pruning
                         newByIdBuffer[pos - ++retainCount] = txn;
 
                     case INVALIDATED:
-                    case TRUNCATED_OR_PRUNED:
+                    case PRUNED:
                         break;
                 }
             }
@@ -393,23 +393,23 @@ public class Pruning
             return null;
 
         Long2ObjectHashMap<TxnInfo> epochPrunedBefores = new Long2ObjectHashMap<>();
-        for (long epoch = newPrunedBefore.epoch() ; epoch <= newPrunedBefore.executeAt.epoch(); ++epoch)
-            epochPrunedBefores.put(epoch, newPrunedBefore);
+        epochPrunedBefores.put(newPrunedBefore.epoch(), newPrunedBefore);
 
-        int maxi = Arrays.binarySearch(committedByExecuteAt, newPrunedBefore, TxnInfo::compareExecuteAt);
+        int maxi = -1 - Arrays.binarySearch(committedByExecuteAt, newPrunedBefore, (a, b) -> a.compareExecuteAtEpoch(b) >= 0 ? 1 : -1);
         int i = 0;
         while (i < maxi)
         {
             TxnInfo test = committedByExecuteAt[i];
-            while (!test.is(Write) && ++i < maxi) test = committedByExecuteAt[i];
-            long epoch = test.executeAt.epoch(); // we only care about executeAt.epoch() here
-            if (epoch >= newPrunedBefore.epoch())
-                break;
+            if (!test.is(Write) || !test.is(APPLIED) || test.epoch() != test.executeAt.epoch())
+            {
+                ++i;
+                continue;
+            }
 
-            Object prev = epochPrunedBefores.putIfAbsent(epoch, test);
+            Object prev = epochPrunedBefores.putIfAbsent(test.epoch(), test);
             Invariants.checkState(prev == null);
 
-            i = SortedArrays.exponentialSearch(committedByExecuteAt, i + 1, maxi, test, TxnInfo::compareExecuteAtEpoch, FLOOR);
+            i = SortedArrays.exponentialSearch(committedByExecuteAt, i + 1, committedByExecuteAt.length, test, TxnInfo::compareExecuteAtEpoch, FLOOR);
             if (i < 0) i = -1 - i;
             else i = i + 1;
         }

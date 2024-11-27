@@ -81,7 +81,7 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
         {
             long expiresAt = node.agent().expiresAt(replyContext, MICROSECONDS);
             if (expiresAt > 0)
-            {
+            {   // TODO (required): now!! this should be registerAt (not changing to avoid messing up seed)
                 RegisteredTimeout timeout = node.timeouts().registerWithDelay(this, expiresAt, MICROSECONDS);
                 Cancellation cancellation = new Cancellation(timeout, cancel);
                 if (!cancellationUpdater.compareAndSet(this, null, cancellation))

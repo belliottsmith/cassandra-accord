@@ -58,6 +58,7 @@ import static java.util.stream.Collectors.joining;
 public class StrictSerializabilityVerifier implements Verifier
 {
     private static final Logger logger = LoggerFactory.getLogger(StrictSerializabilityVerifier.class);
+    private static final boolean DEBUG = true;
 
     /**
      * A link to the maximum predecessor node for a given key reachable from the transitive closure of predecessor
@@ -162,13 +163,15 @@ public class StrictSerializabilityVerifier implements Verifier
     class UnknownStepHolder implements Runnable
     {
         final List<Step> peers = new ArrayList<>();
+        final Object description;
         final int writeValue;
         final int start;
         final int end;
         final Step step;
 
-        UnknownStepHolder(int writeValue, int start, int end, Step step)
+        UnknownStepHolder(Object description, int writeValue, int start, int end, Step step)
         {
+            this.description = description;
             this.start = start;
             this.end = end;
             this.writeValue = writeValue;
@@ -233,6 +236,7 @@ public class StrictSerializabilityVerifier implements Verifier
 
         // TODO (low priority): cleanup
         List<UnknownStepHolder> unknownStepPeers;
+        List<Object> witnessedBy;
         Map<Step, UnknownStepPredecessor> unknownStepPredecessors;
         Runnable onChange;
 
@@ -279,9 +283,15 @@ public class StrictSerializabilityVerifier implements Verifier
             writtenAfter = Integer.MIN_VALUE;
         }
 
-        boolean witnessedBetween(int start, int end, boolean isWrite, StrictSerializabilityVerifier verifier)
+        boolean witnessedBetween(Object description, int start, int end, boolean isWrite, StrictSerializabilityVerifier verifier)
         {
             boolean updated = false;
+            if (DEBUG)
+            {
+                if (witnessedBy == null)
+                    witnessedBy = new ArrayList<>(2);
+                witnessedBy.add(description);
+            }
             if (start > witnessedUntil)
             {
                 witnessedUntil = start;
@@ -508,7 +518,7 @@ public class StrictSerializabilityVerifier implements Verifier
         }
 
         @Override
-        boolean witnessedBetween(int start, int end, boolean isWrite, StrictSerializabilityVerifier verifier)
+        boolean witnessedBetween(Object description, int start, int end, boolean isWrite, StrictSerializabilityVerifier verifier)
         {
             return false;
         }
@@ -546,7 +556,7 @@ public class StrictSerializabilityVerifier implements Verifier
             writtenAfter = Integer.MIN_VALUE;
             witnessedUntil = Integer.MIN_VALUE;
             for (UnknownStepHolder deferred : byTimestamp.values())
-                witnessedBetween(deferred.start, deferred.end, true, verifier);
+                witnessedBetween(deferred.description, deferred.start, deferred.end, true, verifier);
         }
 
         void register(UnknownStepHolder[] newBlindWrites, int start, int end)
@@ -662,7 +672,7 @@ public class StrictSerializabilityVerifier implements Verifier
             }
         }
 
-        private void updatePeersAndPredecessors(int[] newPeerSteps, int[][] reads, int[] writes, int start, int end, UnknownStepHolder[] newBlindWrites)
+        private void updatePeersAndPredecessors(Object description, int[] newPeerSteps, int[][] reads, int[] writes, int start, int end, UnknownStepHolder[] newBlindWrites)
         {
             Step step;
             boolean updated;
@@ -682,7 +692,7 @@ public class StrictSerializabilityVerifier implements Verifier
             }
             updated = step.updatePeers(newPeerSteps, newBlindWrites);
             updated |= step.updatePredecessorsOfWrite(reads, writes, StrictSerializabilityVerifier.this);
-            updated |= step.witnessedBetween(start, end, writes[key] >= 0, StrictSerializabilityVerifier.this);
+            updated |= step.witnessedBetween(description, start, end, writes[key] >= 0, StrictSerializabilityVerifier.this);
             if (updated)
                 onChange(step);
         }
@@ -783,7 +793,7 @@ public class StrictSerializabilityVerifier implements Verifier
     }
 
     @Override
-    public Checker witness(int start, int end)
+    public Checker witness(Object description, int start, int end)
     {
         begin();
         return new Checker()
@@ -803,7 +813,7 @@ public class StrictSerializabilityVerifier implements Verifier
             @Override
             public void close()
             {
-                apply(start, end);
+                apply(description, start, end);
             }
         };
     }
@@ -840,7 +850,7 @@ public class StrictSerializabilityVerifier implements Verifier
      * Apply the pending coincident observations that occurred between {@code start} and {@code end}
      * to the verification graph
      */
-    public void apply(int start, int end)
+    public void apply(Object description, int start, int end)
     {
         boolean hasUnknownSteps = false;
         for (int k = 0; k < bufReads.length ; ++k)
@@ -849,7 +859,7 @@ public class StrictSerializabilityVerifier implements Verifier
             {
                 int i = Arrays.binarySearch(registers[k].sequence, bufWrites[k]);
                 if (i >= 0) bufNewPeerSteps[k] = i + 1;
-                else bufUnknownSteps[k] = new UnknownStepHolder(bufWrites[k], start, end, new Step(k, Integer.MAX_VALUE, keyCount, bufWrites[k]));
+                else bufUnknownSteps[k] = new UnknownStepHolder(description, bufWrites[k], start, end, new Step(k, Integer.MAX_VALUE, keyCount, bufWrites[k]));
                 hasUnknownSteps |= i < 0;
             }
         }
@@ -863,7 +873,7 @@ public class StrictSerializabilityVerifier implements Verifier
         {
             if (bufWrites[k] >= 0 || bufReads[k] != null)
             {
-                registers[k].updatePeersAndPredecessors(bufNewPeerSteps, bufReads, bufWrites, start, end, hasUnknownSteps ? bufUnknownSteps : null);
+                registers[k].updatePeersAndPredecessors(description, bufNewPeerSteps, bufReads, bufWrites, start, end, hasUnknownSteps ? bufUnknownSteps : null);
                 if (bufReads[k] != null)
                     registers[k].checkForUnwitnessed(start);
             }

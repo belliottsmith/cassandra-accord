@@ -53,12 +53,12 @@ import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.impl.progresslog.DefaultProgressLog;
+import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.Commands;
 import accord.local.KeyHistory;
-import accord.local.Node;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
 import accord.local.RedundantStatus;
@@ -91,7 +91,7 @@ import accord.utils.async.Cancellable;
 
 import static accord.local.KeyHistory.ASYNC;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
-import static accord.local.SafeCommandStore.TestDep.WITH_OR_INVALIDATED;
+import static accord.local.SafeCommandStore.TestDep.WITHOUT;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
 import static accord.local.SafeCommandStore.TestStatus.ANY_STATUS;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -101,7 +101,9 @@ import static accord.primitives.SaveStatus.ErasedOrVestigial;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Durability.Local;
-import static accord.primitives.Status.NotDefined;
+import static accord.primitives.Status.Durability.MajorityOrInvalidated;
+import static accord.primitives.Status.Durability.NotDurable;
+import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
@@ -330,6 +332,17 @@ public abstract class InMemoryCommandStore extends CommandStore
                 }
             });
         });
+        TxnId clearProgressLogBefore = unsafeGetRedundantBefore().minShardRedundantBefore();
+        List<TxnId> clearing = ((DefaultProgressLog) progressLog).activeBefore(clearProgressLogBefore);
+        for (TxnId txnId : clearing)
+        {
+            GlobalCommand globalCommand = commands.get(txnId);
+;            Invariants.checkState(globalCommand != null && !globalCommand.isEmpty());
+            Command command = globalCommand.value();
+            Cleanup cleanup = Cleanup.shouldCleanup(agent, txnId, command.saveStatus(), command.durability(), command.participants(), unsafeGetRedundantBefore(), durableBefore());
+            Invariants.checkState(command.hasBeen(Applied) || cleanup.compareTo(Cleanup.INVALIDATE) >= 0 || (durableBefore().min(txnId) == NotDurable && !Route.isFullRoute(command.route())));
+        }
+        super.updatedRedundantBefore(safeStore, syncId, ranges);
     }
 
     @Override
@@ -344,7 +357,6 @@ public abstract class InMemoryCommandStore extends CommandStore
         if (!rangeCommands.containsKey(syncId))
             historicalRangeCommands.merge(syncId, ranges, Ranges::with);
 
-        // TODO (now): apply on retrieval
         historicalRangeCommands.entrySet().removeIf(next -> next.getKey().compareTo(syncId) < 0 && next.getValue().intersects(ranges));
         rangeCommands.entrySet().removeIf(tx -> {
             if (tx.getKey().compareTo(syncId) >= 0)
@@ -361,70 +373,6 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return true;
             }
         });
-
-        // verify we're clearing the progress log
-        new VerifyProgressLogCleared(((Node) node), ranges, Arrays.asList(commands.headMap(syncId, false).keySet().toArray(TxnId[]::new))).run();
-    }
-
-    private class VerifyProgressLogCleared implements Runnable
-    {
-        final Node node;
-        final Ranges ranges;
-        List<TxnId> txnIds;
-        int rounds = 0;
-
-        private VerifyProgressLogCleared(Node node, Ranges ranges, List<TxnId> txnIds)
-        {
-            this.node = node;
-            this.ranges = ranges;
-            this.txnIds = txnIds;
-        }
-
-        @Override
-        public void run()
-        {
-            ++rounds;
-            DefaultProgressLog progressLog = (DefaultProgressLog) InMemoryCommandStore.this.progressLog;
-            List<TxnId> resubmit = new ArrayList<>();
-            for (TxnId txnId : txnIds)
-            {
-                GlobalCommand globalCommand = commands.get(txnId);
-                if (globalCommand == null) continue;
-                Command command = globalCommand.value();
-                if (!command.hasBeen(PreCommitted)) continue;
-                if (!command.txnId().isVisible()) continue;
-
-                Ranges allRanges = unsafeGetRangesForEpoch().allBetween(txnId.epoch(), command.executeAtOrTxnId().epoch());
-                boolean done = command.hasBeen(Truncated);
-                if (!done)
-                {
-                    if (unsafeGetRedundantBefore().status(txnId, command.route()) == RedundantStatus.PRE_BOOTSTRAP_OR_STALE)
-                        continue;
-
-                    Route<?> route = command.route().slice(allRanges);
-                    done = !route.isEmpty() && ranges.containsAll(route);
-                }
-
-                if (done)
-                {
-                    if (progressLog.isWaitingStateActive(txnId))
-                    {
-                        Invariants.checkState(rounds < 4);
-                        resubmit.add(txnId);
-                    }
-                    else if (progressLog.isHomeStateActive(txnId))
-                    {
-                        Invariants.checkState(command.durability() == Local);
-                        resubmit.add(txnId);
-                    }
-                }
-            }
-            if (!resubmit.isEmpty())
-            {
-                txnIds = resubmit;
-                node.scheduler().selfRecurring(this, 5L, TimeUnit.SECONDS);
-            }
-        }
     }
 
     protected InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges,
@@ -799,7 +747,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return;
 
             Ranges slice = ranges(txnId, updated.executeAtOrTxnId());
-            slice = commandStore().unsafeGetRedundantBefore().removeShardRedundant(txnId, updated.executeAtOrTxnId(), slice);
+            slice = commandStore().unsafeGetRedundantBefore().removeGcBefore(txnId, updated.executeAtOrTxnId(), slice);
             commandStore().rangeCommands.computeIfAbsent(txnId, ignore -> new RangeCommand(commandStore().commands.get(txnId)))
                          .update(((AbstractRanges)updated.participants().touches()).toRanges().slice(slice, Minimal));
         }
@@ -832,24 +780,11 @@ public abstract class InMemoryCommandStore extends CommandStore
         {
             private final TxnId txnId;
             private final Timestamp executeAt;
-            private final Status status;
-            private final List<TxnId> deps;
 
-                public TxnInfo(TxnId txnId, Timestamp executeAt, Status status, List<TxnId> deps)
+            public TxnInfo(TxnId txnId, Timestamp executeAt)
             {
                 this.txnId = txnId;
                 this.executeAt = executeAt;
-                this.status = status;
-                this.deps = deps;
-            }
-
-                public TxnInfo(Command command)
-            {
-                this.txnId = command.txnId();
-                this.executeAt = command.executeAt();
-                this.status = command.status();
-                PartialDeps deps = command.partialDeps();
-                this.deps = deps != null ? deps.txnIds() : Collections.emptyList();
             }
         }
 
@@ -880,7 +815,6 @@ public abstract class InMemoryCommandStore extends CommandStore
             Map<Range, List<TxnInfo>> collect = new TreeMap<>(Range::compare);
             commandStore().rangeCommands.forEach(((txnId, rangeCommand) -> {
                 Command command = rangeCommand.command.value();
-                // TODO (now): probably this isn't safe - want to ensure we take dependency on any relevant syncId
                 if (command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
                     return;
 
@@ -939,18 +873,20 @@ public abstract class InMemoryCommandStore extends CommandStore
                     // and so it is safe to execute, when in fact it is only a dependency on a different shard
                     // (and that other shard, perhaps, does not know that it is a dependency - and so it is not durably known)
                     // TODO (required): consider this some more
-                    if ((testDep == WITH_OR_INVALIDATED) == !command.partialDeps().intersects(testTxnId, rangeCommand.ranges))
+                    boolean hasAsDep = command.partialDeps().intersects(testTxnId, rangeCommand.ranges);
+                    if (testDep == WITHOUT && hasAsDep)
                         return;
                 }
 
                 if (!rangeCommand.ranges.intersects(keysOrRanges))
                     return;
 
+                TxnInfo txn = new TxnInfo(command.txnId(), command.executeAt());
                 Routables.foldl(rangeCommand.ranges, keysOrRanges, (r, in, i) -> {
                     // TODO (easy, efficiency): pass command as a parameter to Fold
                     List<TxnInfo> list = in.computeIfAbsent(r, ignore -> new ArrayList<>());
                     if (list.isEmpty() || !list.get(list.size() - 1).txnId.equals(command.txnId()))
-                        list.add(new TxnInfo(command));
+                        list.add(txn);
                     return in;
                 }, collect);
             }));
@@ -980,20 +916,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                         // TODO (easy, efficiency): pass command as a parameter to Fold
                         List<TxnInfo> list = in.computeIfAbsent(r, ignore -> new ArrayList<>());
                         if (list.isEmpty() || !list.get(list.size() - 1).txnId.equals(txnId))
-                        {
-                            GlobalCommand global = commandStore().commands.get(txnId);
-                            if (global != null && global.value() != null)
-                            {
-                                Command command = global.value();
-                                PartialDeps deps = command.partialDeps();
-                                List<TxnId> depsIds = deps != null ? deps.txnIds() : Collections.emptyList();
-                                list.add(new TxnInfo(txnId, txnId, command.status(), depsIds));
-                            }
-                            else
-                            {
-                                list.add(new TxnInfo(txnId, txnId, NotDefined, Collections.emptyList()));
-                            }
-                        }
+                            list.add(new TxnInfo(txnId, txnId));
                         return in;
                     }, collect);
                 }));
@@ -1001,10 +924,10 @@ public abstract class InMemoryCommandStore extends CommandStore
 
             for (Map.Entry<Range, List<TxnInfo>> e : collect.entrySet())
             {
-                for (TxnInfo command : e.getValue())
+                for (TxnInfo txn : e.getValue())
                 {
                     T initial = accumulate;
-                    accumulate = map.apply(p1, e.getKey(), command.txnId, command.executeAt, initial);
+                    accumulate = map.apply(p1, e.getKey(), txn.txnId, txn.executeAt, initial);
                 }
             }
 
@@ -1412,7 +1335,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 commandStore.executeInContext(commandStore,
                                               context,
                                               safeStore -> {
-                                                  applyWrites(command, safeStore, (safeCommand, cmd) -> {
+                                                  applyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
                                                       unsafeApplyWrites(safeStore, safeCommand, cmd);
                                                   });
                                                   return null;

@@ -372,6 +372,7 @@ class Utils
 
     static TxnId[] selectUnmanaged(CommandsForKey.Unmanaged[] unmanageds, int start, int end)
     {
+        Invariants.checkArgument(end >= start);
         TxnId[] notifyNotWaiting = new TxnId[end - start];
         for (int i = start ; i < end ; ++i)
         {

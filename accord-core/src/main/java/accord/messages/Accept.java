@@ -37,6 +37,7 @@ import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Route;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -47,7 +48,6 @@ import accord.utils.async.Cancellable;
 import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
-import static accord.local.Commands.AcceptOutcome.Truncated;
 
 // TODO (low priority, efficiency): use different objects for send and receive, so can be more efficient
 //                                  (e.g. serialize without slicing, and without unnecessary fields)
@@ -89,16 +89,20 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         switch (Commands.accept(safeStore, safeCommand, participants, txnId, ballot, scope, executeAt, partialDeps))
         {
             default: throw new IllegalStateException();
-            case Truncated:
-                return AcceptReply.TRUNCATED;
             case Redundant:
-                return AcceptReply.redundant(ballot, safeCommand.current());
+            case Truncated:
+                return AcceptReply.redundant(ballot, participants, safeCommand.current());
             case RejectedBallot:
                 return new AcceptReply(safeCommand.current().promised());
+                // if owns is empty, we're just fetching deps
+                // TODO (desired): optimise deps calculation; for some keys we only need to return the last RX
+            case Retired:
             case Success:
-                // TODO (desirable, efficiency): we don't need to calculate deps if executeAt == txnId
-                // TODO (desirable, efficiency): only return delta of sent and calculated deps
+                // TODO (desired, efficiency): only return delta of sent and calculated deps
                 Deps deps = calculateDeps(safeStore, participants);
+                if (deps == null)
+                    return AcceptReply.redundant(ballot, participants, safeCommand.current());
+
                 Invariants.checkState(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
                 return new AcceptReply(calculateDeps(safeStore, participants));
         }
@@ -106,7 +110,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
     private Deps calculateDeps(SafeCommandStore safeStore, StoreParticipants participants)
     {
-        return PreAccept.calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), executeAt);
+        return PreAccept.calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), executeAt, true);
     }
 
     @Override
@@ -163,7 +167,6 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     public static final class AcceptReply implements Reply
     {
         public static final AcceptReply ACCEPT_INVALIDATE = new AcceptReply(Success);
-        public static final AcceptReply TRUNCATED = new AcceptReply(Truncated);
 
         public final AcceptOutcome outcome;
         public final Ballot supersededBy;
@@ -203,8 +206,11 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
             this.committedExecuteAt = committedExecuteAt;
         }
 
-        static AcceptReply redundant(Ballot ballot, Command command)
+        static AcceptReply redundant(Ballot ballot, StoreParticipants participants, Command command)
         {
+            if (participants.owns().isEmpty() && (command.is(Status.Truncated) || command.promised().compareTo(ballot) <= 0))
+                return new AcceptReply(Deps.NONE);
+
             Ballot superseding = command.promised();
             if (superseding.compareTo(ballot) <= 0)
                 superseding = null;
@@ -271,10 +277,10 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
             switch (outcome)
             {
                 default: throw new IllegalArgumentException("Unknown status: " + outcome);
-                case Truncated:
-                    return AcceptReply.TRUNCATED;
                 case Redundant:
-                    return AcceptReply.redundant(ballot, safeCommand.current());
+                case Truncated:
+                    return AcceptReply.redundant(ballot, participants, safeCommand.current());
+                case Retired:
                 case Success:
                     return AcceptReply.ACCEPT_INVALIDATE;
                 case RejectedBallot:

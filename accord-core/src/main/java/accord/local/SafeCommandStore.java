@@ -28,10 +28,14 @@ import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.impl.SafeTimestampsForKey;
+import accord.local.CommandStores.RangesForEpochSupplier;
+import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.local.cfk.UpdateUnmanagedMode;
 import accord.primitives.AbstractUnseekableKeys;
+import accord.primitives.KeyDeps;
+import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.RoutingKeys;
@@ -44,14 +48,16 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
+import accord.utils.SimpleBitSet;
+import accord.utils.SortedList;
 import accord.utils.async.AsyncChain;
 
 import static accord.local.KeyHistory.INCR;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Range;
-import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applied;
+import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.Invariants.illegalState;
 
@@ -61,7 +67,7 @@ import static accord.utils.Invariants.illegalState;
  *
  * Method implementations may therefore be single threaded, without volatile access or other concurrency control
  */
-public abstract class SafeCommandStore
+public abstract class SafeCommandStore implements RangesForEpochSupplier, RedundantBeforeSupplier
 {
     public interface CommandFunction<P1, I, O>
     {
@@ -74,7 +80,21 @@ public abstract class SafeCommandStore
         STARTED_AFTER,
         ANY
     }
-    public enum TestDep { WITH_OR_INVALIDATED, WITHOUT, ANY_DEPS }
+
+    public enum TestDep
+    {
+        // special variant that matches the same as WITH or if the command is Invalidated
+        // this is useful when we care about establishing whether later transactions durably witness the command
+        // (since invalidated commands can be treated as witnessing the command for progress purposes)
+        WITH_OR_INVALIDATED,
+
+        // filter to only those commands with deps, but without the parameter as a dependency
+        WITHOUT,
+
+        // don't test deps
+        ANY_DEPS;
+    }
+
     public enum TestStatus { ANY_STATUS, IS_PROPOSED, IS_STABLE, IS_STABLE_OR_INVALIDATED }
 
     /**
@@ -174,8 +194,10 @@ public abstract class SafeCommandStore
                 return null;
         }
 
-        safeCommand = maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
-        return safeCommand.isUnset() ? null : safeCommand;
+        if (safeCommand.isUnset() || safeCommand.current().saveStatus() == Uninitialised)
+            return null;
+
+        return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
     }
 
     protected SafeCommandsForKey maybeCleanup(SafeCommandsForKey safeCfk)
@@ -262,13 +284,13 @@ public abstract class SafeCommandStore
         TxnId txnId = updated.txnId();
         if (newSaveStatus.known.isDefinitionKnown() && !oldSaveStatus.known.isDefinitionKnown())
         {
-            Ranges ranges = updated.route().slice(ranges().all(), Minimal).toRanges();
+            Ranges ranges = updated.participants().touches().toRanges();
             commandStore().markExclusiveSyncPoint(this, txnId, ranges);
         }
 
         if (newSaveStatus == Applied && oldSaveStatus != Applied)
         {
-            Ranges ranges = updated.route().slice(ranges().all(), Minimal).toRanges();
+            Ranges ranges = updated.participants().touches().toRanges();
             commandStore().markExclusiveSyncPointLocallyApplied(this, txnId, ranges);
         }
     }
@@ -369,9 +391,62 @@ public abstract class SafeCommandStore
     private static void updateUnmanagedCommandsForKey(SafeCommandStore safeStore, Command next, UpdateUnmanagedMode mode)
     {
         TxnId txnId = next.txnId();
+        RoutingKeys keys;
+
+        if (!txnId.is(Kind.ExclusiveSyncPoint)) keys = next.asCommitted().waitingOn().keys;
+        else
+        {
+            Command.WaitingOn waitingOn = next.asCommitted().waitingOn;
+            RedundantBefore redundantBefore = safeStore.redundantBefore();
+            KeyDeps deps = next.partialDeps().keyDeps;
+            keys = deps.keys();
+            SimpleBitSet select = new SimpleBitSet(keys.size());
+            for (int i = 0 ; i < keys.size() ; ++i)
+            {
+                if (waitingOn.isWaitingOnKey(i))
+                {
+                    select.set(i);
+                    continue;
+                }
+
+                SortedList<TxnId> txnIdsForKey = deps.txnIdsForKeyIndex(i);
+                RoutingKey key = keys.get(i);
+                TxnId maxTxnId = txnIdsForKey.get(txnIdsForKey.size() - 1);
+                // TODO (required): convert to O(n) merge
+                RedundantStatus status = redundantBefore.status(maxTxnId, key);
+                switch (status)
+                {
+                    default: throw new AssertionError("Unhandled RedundantStatus: " + status);
+                    case NOT_OWNED:
+                    case WAS_OWNED:
+                    case WAS_OWNED_CLOSED:
+                    case LIVE:
+                    case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
+                    case PRE_BOOTSTRAP_OR_STALE:
+                    case PARTIALLY_LOCALLY_REDUNDANT:
+                    case LOCALLY_REDUNDANT:
+                        select.set(i);
+                    case WAS_OWNED_RETIRED:
+                    case PARTIALLY_SHARD_REDUNDANT:
+                    case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
+                    case SHARD_REDUNDANT:
+                    case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
+                    case GC_BEFORE:
+                }
+            }
+            if (select.getSetBitCount() != keys.size())
+            {
+                RoutingKey[] array = new RoutingKey[select.getSetBitCount()];
+                int count = 0;
+                for (int i = 0 ; i < keys.size() ; ++i)
+                {
+                    if (select.get(i))
+                        array[count++] = keys.get(i);
+                }
+                keys = RoutingKeys.ofSortedUnique(array);
+            }
+        }
         // TODO (required): use StoreParticipants.executes()
-        Command.WaitingOn waitingOn = next.asCommitted().waitingOn();
-        RoutingKeys keys = waitingOn.waitingOnKeys();
         // TODO (required): consider how execution works for transactions that await future deps and where the command store inherits additional keys in execution epoch
         PreLoadContext context = PreLoadContext.contextFor(txnId, keys, INCR);
         PreLoadContext execute = safeStore.canExecute(context);
@@ -420,21 +495,17 @@ public abstract class SafeCommandStore
     /**
      * Visits keys first and then ranges, both in ascending order.
      * Within each key or range visits all visible txnids needed for the given scope in ascending order of queried timestamp.
-     * TODO (expected): no need for slice in most (all?) cases
      */
     public abstract <P1, T> T mapReduceActive(Unseekables<?> keys, @Nullable Timestamp withLowerTxnId, Kinds kinds, CommandFunction<P1, T, T> map, P1 p1, T initialValue);
 
-    /**
-     * Visits keys first and then ranges, both in ascending order.
-     * Within each key or range visits all unevicted txnids needed for the given scope in ascending order of queried timestamp.
-     */
     public abstract <P1, T> T mapReduceFull(Unseekables<?> keys,
                                             TxnId testTxnId,
                                             Kinds testKind,
                                             TestStartedAt testStartedAt,
                                             TestDep testDep,
                                             TestStatus testStatus,
-                                            CommandFunction<P1, T, T> map, P1 p1, T initialValue);
+                                            CommandFunction<P1, T, T> map,
+                                            P1 p1, T initialValue);
 
     public abstract CommandStore commandStore();
     public abstract DataStore dataStore();

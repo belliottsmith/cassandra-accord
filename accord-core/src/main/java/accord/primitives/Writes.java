@@ -66,21 +66,18 @@ public class Writes
     }
 
     // TODO (expected): accept Participants here, computes from StoreParticipants.executes
-    public AsyncChain<Void> apply(SafeCommandStore safeStore, Ranges ranges, PartialTxn txn)
+    public AsyncChain<Void> apply(SafeCommandStore safeStore, Participants<?> executes, PartialTxn txn)
     {
-        if (write == null)
+        if (write == null || executes.isEmpty())
             return SUCCESS;
 
-        if (ranges.isEmpty())
+        Seekables<?, ?> keys = this.keys.intersecting(executes);
+        if (keys.isEmpty())
             return SUCCESS;
 
-        List<AsyncChain<Void>> futures = Routables.foldl(keys, ranges, (key, accumulate, index) -> {
-            accumulate.add(write.apply(key, safeStore, txnId, executeAt, safeStore.dataStore(), txn));
-            return accumulate;
-        }, new ArrayList<>());
-
-        if (futures.isEmpty())
-            return SUCCESS;
+        List<AsyncChain<Void>> futures = new ArrayList<>(keys.size());
+        for (Seekable key : keys)
+            futures.add(write.apply(key, safeStore, txnId, executeAt, safeStore.dataStore(), txn));
 
         return AsyncChains.reduce(futures, (l, r) -> null);
     }

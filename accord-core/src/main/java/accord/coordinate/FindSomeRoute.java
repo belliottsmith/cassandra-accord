@@ -51,21 +51,21 @@ public class FindSomeRoute extends CheckShards<Participants<?>>
     }
 
     final BiConsumer<Result, Throwable> callback;
-    FindSomeRoute(Node node, TxnId txnId, Participants<?> unseekables, BiConsumer<Result, Throwable> callback)
+    FindSomeRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> unseekables, BiConsumer<Result, Throwable> callback)
     {
-        super(node, txnId, unseekables, IncludeInfo.Route);
+        super(node, txnId, unseekables, IncludeInfo.Route, invalidIf);
         this.callback = callback;
     }
 
-    public static void findSomeRoute(Node node, TxnId txnId, Participants<?> unseekables, BiConsumer<Result, Throwable> callback)
+    public static void findSomeRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> unseekables, BiConsumer<Result, Throwable> callback)
     {
         if (!node.topology().hasEpoch(txnId.epoch()))
         {
-            node.withEpoch(txnId.epoch(), callback, () -> findSomeRoute(node, txnId, unseekables, callback));
+            node.withEpoch(txnId.epoch(), callback, () -> findSomeRoute(node, txnId, invalidIf, unseekables, callback));
             return;
         }
 
-        FindSomeRoute findSomeRoute = new FindSomeRoute(node, txnId, unseekables, callback);
+        FindSomeRoute findSomeRoute = new FindSomeRoute(node, txnId, invalidIf, unseekables, callback);
         findSomeRoute.start();
     }
 
@@ -80,6 +80,6 @@ public class FindSomeRoute extends CheckShards<Participants<?>>
     {
         if (failure != null) callback.accept(null, failure);
         else if (merged == null) callback.accept(new Result(null, Nothing, success.withQuorum), null);
-        else callback.accept(new Result(merged.route, merged.finish(this.route, this.route, success.withQuorum).knownFor(txnId, this.route, this.route), success.withQuorum), null);
+        else callback.accept(new Result(merged.route, merged.finish(this.route, this.route, this.route, success.withQuorum, previouslyKnownToBeInvalidIf).knownFor(txnId, this.route, this.route), success.withQuorum), null);
     }
 }

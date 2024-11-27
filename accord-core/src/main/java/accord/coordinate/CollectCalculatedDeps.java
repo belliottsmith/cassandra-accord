@@ -59,9 +59,9 @@ public class CollectCalculatedDeps implements Callback<CalculateDepsOk>
         this.tracker = new QuorumTracker(topologies);
     }
 
-    public static void withCalculatedDeps(Node node, TxnId txnId, FullRoute<?> fullRoute, Unseekables<?> sendTo, Timestamp executeAt, BiConsumer<Deps, Throwable> callback)
+    public static void withCalculatedDeps(Node node, TxnId txnId, FullRoute<?> fullRoute, Unseekables<?> collectFrom, Timestamp executeAt, BiConsumer<Deps, Throwable> callback)
     {
-        Topologies topologies = node.topology().withUnsyncedEpochs(sendTo, txnId, executeAt);
+        Topologies topologies = node.topology().withUnsyncedEpochs(collectFrom, txnId, executeAt);
         CollectCalculatedDeps collect = new CollectCalculatedDeps(node, topologies, txnId, fullRoute.homeKey(), executeAt, callback);
         CommandStore store = CommandStore.maybeCurrent();
         if (store == null)

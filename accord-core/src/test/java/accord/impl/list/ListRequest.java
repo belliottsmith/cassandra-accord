@@ -50,6 +50,7 @@ import accord.primitives.TxnId;
 
 import javax.annotation.Nullable;
 
+import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.impl.list.ListResult.Status.RecoveryApplied;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Status.Applied;
@@ -86,7 +87,7 @@ public class ListRequest implements Request
         int count = 0;
         protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback)
         {
-            super(node, txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All);
+            super(node, txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All, NotKnownToBeInvalid);
             this.callback = callback;
         }
 

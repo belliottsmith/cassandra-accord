@@ -480,11 +480,12 @@ public abstract class CommandStore implements AgentExecutor
                 Bootstrap bootstrap = new Bootstrap(node, this, epoch, newRanges);
                 bootstraps.add(bootstrap);
                 bootstrap.start(safeStore);
-                return new EpochReady(epoch, null, bootstrap.coordination, bootstrap.data, bootstrap.reads);
+                return new EpochReady(epoch, null, null, bootstrap.data, bootstrap.reads);
             }).beginAsResult();
 
+            AsyncResult<Void> readyToCoordinate = readyToCoordinate(newRanges, epoch);
             return new EpochReady(epoch, metadata.<Void>map(ignore -> null).beginAsResult(),
-                metadata.flatMap(e -> e.fastPath).beginAsResult(),
+                readyToCoordinate.beginAsResult(),
                 metadata.flatMap(e -> e.data).beginAsResult(),
                 metadata.flatMap(e -> e.reads).beginAsResult());
         };
@@ -499,13 +500,19 @@ public abstract class CommandStore implements AgentExecutor
     protected Supplier<EpochReady> sync(Node node, Ranges ranges, long epoch)
     {
         return () -> {
-            if (redundantBefore.min(ranges, RedundantBefore.Entry::locallyWitnessedBefore).epoch() >= epoch)
-                return new EpochReady(epoch, DONE, DONE, DONE, DONE);
-
-            AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
-            waitingOnSync.put(epoch, new WaitingOnSync(whenDone, ranges));
-            return new EpochReady(epoch, DONE, whenDone, DONE, DONE);
+            AsyncResult<Void> readyToCoordinate = readyToCoordinate(ranges, epoch);
+            return new EpochReady(epoch, DONE, readyToCoordinate, DONE, DONE);
         };
+    }
+
+    private AsyncResult<Void> readyToCoordinate(Ranges ranges, long epoch)
+    {
+        if (redundantBefore.min(ranges, RedundantBefore.Entry::locallyWitnessedBefore).epoch() >= epoch)
+            return DONE;
+
+        AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
+        waitingOnSync.put(epoch, new WaitingOnSync(whenDone, ranges));
+        return whenDone;
     }
 
     Supplier<EpochReady> unbootstrap(long epoch, Ranges removedRanges)
@@ -575,6 +582,9 @@ public abstract class CommandStore implements AgentExecutor
 
     protected void updatedRedundantBefore(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
+        TxnId clearBefore = redundantBefore.minShardRedundantBefore();
+        progressLog.clearBefore(clearBefore);
+        listeners.clearBefore(this, clearBefore);
     }
 
     protected void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
@@ -760,5 +770,10 @@ public abstract class CommandStore implements AgentExecutor
     public int hashCode()
     {
         return id;
+    }
+
+    public boolean isBootstrapping()
+    {
+        return !bootstraps.isEmpty();
     }
 }

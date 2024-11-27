@@ -23,6 +23,8 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.local.CommandStores.RangesForEpoch;
+import accord.local.CommandStores.RangesForEpochSupplier;
+import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
@@ -30,15 +32,16 @@ import accord.primitives.Routable;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.tryCastToRoute;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 // TODO (desired): split into a single sub-class to save memory in typical case of owns==touches==hasTouched
+// TODO (required): reify more clearly ownership and execution distinctions for ExclusiveSyncPoints vs normal TxnId, esp. low/high epoch
 public class StoreParticipants
 {
     public static class SerializationSupport
@@ -90,11 +93,17 @@ public class StoreParticipants
 
     /**
      * Everything that the replica is known by all other replicas to own and
-     * participate in the coordination or execution of.
+     * participate in the coordination.
      */
     public final Participants<?> owns()
     {
         return owns;
+    }
+
+    public Participants<?> ownsOrMayExecute(TxnId txnId)
+    {
+        Invariants.checkState(Route.isFullRoute(route));
+        return txnId.is(ExclusiveSyncPoint) ? touches : owns;
     }
 
     public final Participants<?> touches()
@@ -170,46 +179,49 @@ public class StoreParticipants
 
     public Ranges executeRanges(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt)
     {
-        Ranges ranges = txnId.is(Txn.Kind.ExclusiveSyncPoint)
+        Ranges ranges = txnId.is(ExclusiveSyncPoint)
                         ? safeStore.ranges().all()
                         : safeStore.ranges().allAt(executeAt.epoch());
 
+        // TODO (required): remove stale?
         return safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
     }
 
-    public Participants<?> executes(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt)
+    public <T extends RangesForEpochSupplier & RedundantBeforeSupplier> Participants<?> executes(T safeStore, TxnId txnId, Timestamp executeAt)
+    {
+        Participants<?> executes = executesInternal(safeStore, txnId, executeAt);
+        return safeStore.redundantBefore().expectToExecute(txnId, executeAt, executes);
+    }
+
+    public <T extends RangesForEpochSupplier & RedundantBeforeSupplier> Participants<?> ownsOrExecutes(T safeStore, TxnId txnId, Timestamp executeAt)
+    {
+        Invariants.checkState(Route.isFullRoute(route));
+        return safeStore.redundantBefore().expectToExecute(txnId, executeAt, txnId.is(ExclusiveSyncPoint) ? touches : owns);
+    }
+
+    private Participants<?> executesInternal(RangesForEpochSupplier safeStore, TxnId txnId, Timestamp executeAt)
     {
         Invariants.checkState(Route.isFullRoute(route));
         if (route == owns)
             return route;
 
-        if (txnId.is(Txn.Kind.ExclusiveSyncPoint))
-            return route.slice(safeStore.ranges().all(), Minimal);
+        if (txnId.is(ExclusiveSyncPoint))
+            return touches;
 
-        if (txnId == executeAt || txnId.epoch() == executeAt.epoch())
-            return owns;
-
-        return owns.slice(safeStore.ranges().allAt(executeAt.epoch()), Minimal);
+        Ranges removed = safeStore.ranges().removed(txnId.epoch(), executeAt.epoch());
+        return removed.isEmpty() ? owns : owns.without(removed);
     }
 
     public static Route<?> touches(SafeCommandStore safeStore, TxnId txnId, EpochSupplier toEpoch, Route<?> route)
     {
         // TODO (required): remove pre-bootstrap?
-        if (txnId.is(Txn.Kind.ExclusiveSyncPoint))
+        if (txnId.is(ExclusiveSyncPoint))
             return route.slice(safeStore.ranges().all(), Minimal);
 
         if (txnId == toEpoch || txnId.epoch() == toEpoch.epoch())
             return route;
 
         return route.slice(safeStore.ranges().allBetween(txnId.epoch(), toEpoch), Minimal);
-    }
-
-    public Participants<?> dependencyExecutesAtLeast(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, Timestamp executeAt)
-    {
-        if (txnId.is(Txn.Kind.ExclusiveSyncPoint))
-            return participants.slice(safeStore.ranges().all(), Minimal);
-
-        return participants.slice(safeStore.ranges().allAt(executeAt.epoch()), Minimal);
     }
 
     @Override
@@ -266,14 +278,12 @@ public class StoreParticipants
         return update(safeStore, participants, minEpoch, txnId, executeAtEpoch, executeAtEpoch);
     }
 
-    public static StoreParticipants update(SafeCommandStore safeStore, Participants<?> participants, long lowEpoch, TxnId txnId, long executeAtEpoch, long highEpoch)
+    public static StoreParticipants update(SafeCommandStore safeStore, Participants<?> participants, long minEpoch, TxnId txnId, long executeAtEpoch, long highEpoch)
     {
         RangesForEpoch storeRanges = safeStore.ranges();
         Ranges ownedRanges = storeRanges.allBetween(txnId.epoch(), executeAtEpoch);
         Participants<?> owns = participants.slice(ownedRanges, Minimal);
-        Ranges touchesRanges = txnId.is(Txn.Kind.ExclusiveSyncPoint)
-                               ? storeRanges.all()
-                               : storeRanges.extend(ownedRanges, txnId.epoch(), executeAtEpoch, lowEpoch, highEpoch);
+        Ranges touchesRanges = storeRanges.extend(ownedRanges, txnId.epoch(), executeAtEpoch, minEpoch, highEpoch);
         Participants<?> touches = ownedRanges == touchesRanges || owns == participants ? owns : participants.slice(touchesRanges, Minimal);
         return new StoreParticipants(tryCastToRoute(participants), owns, touches, touches);
     }

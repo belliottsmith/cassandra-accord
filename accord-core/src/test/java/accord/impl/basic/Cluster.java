@@ -44,6 +44,7 @@ import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
@@ -489,6 +490,7 @@ public class Cluster
             NodeSink.TimeoutSupplier timeouts = new NodeSink.TimeoutSupplier()
             {
                 final RandomSource random = randomSupplier.get();
+                // TODO (expected): slow/expires should be broadly in sync with our link latency config
                 final LongSupplier slowAt, expiresAt, failsAt;
                 {
                     int medianSlowAt = random.nextInt(100, 200);
@@ -613,8 +615,11 @@ public class Cluster
             Purge purge = new Purge(clusterScheduler, random, nodesList, nodeMap, journalMap);
 
             Scheduled restart = clusterScheduler.recurring(() -> {
-                Id id = random.pick(nodes);
+                Id id = pickNodeNotBootstrapping(random, nodesList, nodeMap);
+                if (id == null)
+                    return;
                 CommandStore[] stores = nodeMap.get(id).commandStores().all();
+
                 ((DelayedCommandStore)stores[0]).unsafeRunIn(() -> {
                     Predicate<Pending> pred = getPendingPredicate(id.id, stores);
                     while (sinks.drain(pred));
@@ -638,8 +643,9 @@ public class Cluster
                     journal.replay(nodeMap.get(id).commandStores());
                     while (sinks.drain(pred));
                     CommandsForKey.enableLinearizabilityViolationsReporting();
-                    Invariants.checkState(listStore.equals(prevData));
                     verifyConsistentRestore(beforeStores, stores);
+                    // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
+                    listStore.checkAtLeast(prevData);
                     trace.debug("Done with cleanup.");
                 });
             }, () -> random.nextInt(10, 30), SECONDS);
@@ -651,7 +657,6 @@ public class Cluster
                 reconfigure.cancel();
                 purge.cancel();
                 restart.cancel();
-                durabilityScheduling.forEach(DurabilityScheduling::stop);
                 services.forEach(Service::close);
             };
             noMoreWorkSignal.accept(stop);
@@ -743,6 +748,23 @@ public class Cluster
 
         }
         return result;
+    }
+
+    private static Id pickNodeNotBootstrapping(RandomSource random, List<Id> ids, Map<Id, Node> nodeMap)
+    {
+        List<Id> remaining = new ArrayList<>(ids);
+        while (!remaining.isEmpty())
+        {
+            int i = random.nextInt(remaining.size());
+            Id id = remaining.get(i);
+            CommandStore[] stores = nodeMap.get(id).commandStores().all();
+            if (!Stream.of(stores).anyMatch(CommandStore::isBootstrapping))
+                return id;
+
+            remaining.set(i, remaining.get(remaining.size() - 1));
+            remaining.remove(remaining.size() - 1);
+        }
+        return null;
     }
 
     private static void verifyConsistentRestore(Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores, CommandStore[] stores)
@@ -1152,7 +1174,7 @@ public class Cluster
 
     public BlockingTransaction findMinUnstable()
     {
-        return findMin(null, SaveStatus.Committed, null);
+        return findMin(true, null, SaveStatus.Committed, null);
     }
 
     public BlockingTransaction findMinUnstable(@Nullable Txn.Kind first, Txn.Kind ... rest)

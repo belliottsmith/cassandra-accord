@@ -47,10 +47,10 @@ public class CompositeVerifier implements Verifier
     }
 
     @Override
-    public Checker witness(int start, int end)
+    public Checker witness(Object description, int start, int end)
     {
         List<Checker> sub = new ArrayList<>(delegates.size());
-        delegates.forEach(v -> sub.add(v.witness(start, end)));
+        delegates.forEach(v -> sub.add(v.witness(description, start, end)));
         return new Checker()
         {
             @Override

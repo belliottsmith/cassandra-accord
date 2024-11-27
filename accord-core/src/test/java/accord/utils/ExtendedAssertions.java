@@ -181,7 +181,7 @@ public class ExtendedAssertions
             {
                 try
                 {
-                    assertThat(actual.forEpoch(epoch)).isNotNull();
+                    assertThat(actual.getEpoch(epoch)).isNotNull();
                 }
                 catch (Throwable t)
                 {
@@ -202,7 +202,7 @@ public class ExtendedAssertions
             isNotNull();
             try
             {
-                assertThat(actual.forEpoch(epoch)).isNotNull();
+                assertThat(actual.getEpoch(epoch)).isNotNull();
             }
             catch (Throwable t)
             {
@@ -227,7 +227,7 @@ public class ExtendedAssertions
         public TopologiesAssert topology(long epoch, Consumer<TopologyAssert> fn)
         {
             hasEpoch(epoch);
-            fn.accept(assertThat(actual.forEpoch(epoch)));
+            fn.accept(assertThat(actual.getEpoch(epoch)));
             return myself;
         }
     }

@@ -39,6 +39,7 @@ import accord.topology.Topologies;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListMap;
 
+import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ExecutePath.SLOW;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.messages.Commit.Kind.CommitWithTxn;
@@ -117,7 +118,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
                     callback.accept(null, new Preempted(txnId, route.homeKey()));
                     break;
                 case Insufficient:
-                    node.send(from, new Commit(CommitWithTxn, from, allTopologies.forEpoch(txnId.epoch()), allTopologies,
+                    node.send(from, new Commit(CommitWithTxn, from, allTopologies.getEpoch(txnId.epoch()), allTopologies,
                                                txnId, txn, route, ballot, executeAt, stabiliseDeps, (ReadTxnData) null));
                     break;
             }
@@ -151,7 +152,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
 
     protected void onStabilised()
     {
-        adapter().execute(node, allTopologies, route, SLOW, txnId, txn, executeAt, stabiliseDeps, callback);
+        adapter().execute(node, allTopologies, route, ballot == Ballot.ZERO ? SLOW : RECOVER, txnId, txn, executeAt, stabiliseDeps, callback);
     }
 
     protected abstract CoordinationAdapter<R> adapter();

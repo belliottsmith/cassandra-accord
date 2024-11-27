@@ -49,9 +49,9 @@ public class Apply extends TxnRequest<ApplyReply>
     public static final Factory FACTORY = Apply::new;
     public static class SerializationSupport
     {
-        public static Apply create(TxnId txnId, Route<?> scope, long waitForEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
+        public static Apply create(TxnId txnId, Route<?> scope, long minEpoch, long waitForEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
         {
-            return new Apply(kind, txnId, scope, waitForEpoch, executeAt, deps, txn, fullRoute, writes, result);
+            return new Apply(kind, txnId, scope, minEpoch, waitForEpoch, executeAt, deps, txn, fullRoute, writes, result);
         }
     }
 
@@ -92,6 +92,7 @@ public class Apply extends TxnRequest<ApplyReply>
     public final @Nullable FullRoute<?> fullRoute;
     public final Writes writes;
     public final Result result;
+    public final long minEpoch;
 
     public enum Kind { Minimal, Maximal }
 
@@ -108,6 +109,7 @@ public class Apply extends TxnRequest<ApplyReply>
         this.executeAt = executeAt;
         this.writes = writes;
         this.result = result;
+        this.minEpoch = participates.oldestEpoch();
     }
 
     public static void sendMaximal(Node node, Id to, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute)
@@ -132,7 +134,12 @@ public class Apply extends TxnRequest<ApplyReply>
 
     public static Topologies participates(Node node, Unseekables<?> route, TxnId txnId, Timestamp executeAt, Topologies executes)
     {
-        return txnId.epoch() == executeAt.epoch() ? executes : node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
+        return txnId.epoch() == executeAt.epoch() ? executes : participates(node, route, txnId, executeAt);
+    }
+
+    public static Topologies participates(Node node, Unseekables<?> route, TxnId txnId, Timestamp executeAt)
+    {
+        return node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
     }
 
     public static Apply applyMaximal(Factory factory, Id to, Topologies participates, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> fullRoute)
@@ -140,7 +147,7 @@ public class Apply extends TxnRequest<ApplyReply>
         return factory.create(Kind.Maximal, to, participates, txnId, sendTo, txn, executeAt, stableDeps, writes, result, fullRoute);
     }
 
-    protected Apply(Kind kind, TxnId txnId, Route<?> route, long waitForEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
+    protected Apply(Kind kind, TxnId txnId, Route<?> route, long minEpoch, long waitForEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
     {
         super(txnId, route, waitForEpoch);
         this.kind = kind;
@@ -150,26 +157,20 @@ public class Apply extends TxnRequest<ApplyReply>
         this.fullRoute = fullRoute;
         this.writes = writes;
         this.result = result;
+        this.minEpoch = minEpoch;
     }
 
     @Override
     public Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch(txnId), executeAt.epoch(), this);
-    }
-
-    private long minEpoch(TxnId txnId)
-    {
-        if (!txnId.awaitsOnlyDeps())
-            return txnId.epoch();
-        return deps.minTxnId(txnId).epoch();
+        return node.mapReduceConsumeLocal(this, minEpoch, executeAt.epoch(), this);
     }
 
     @Override
     public ApplyReply apply(SafeCommandStore safeStore)
     {
         Route<?> route = fullRoute != null ? fullRoute : scope;
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch(txnId), txnId, executeAt.epoch());
+        StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, executeAt.epoch());
         return apply(safeStore, participants);
     }
 

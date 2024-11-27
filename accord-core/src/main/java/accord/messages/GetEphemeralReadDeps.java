@@ -71,7 +71,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     public GetEphemeralReadDepsOk apply(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, Long.MAX_VALUE);
-        Deps deps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), Timestamp.MAX);
+        Deps deps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), Timestamp.MAX, false);
 
         return new GetEphemeralReadDepsOk(deps, Math.max(safeStore.node().epoch(), node.epoch()));
     }

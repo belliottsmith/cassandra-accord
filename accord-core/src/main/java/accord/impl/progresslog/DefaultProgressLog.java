@@ -18,8 +18,10 @@
 
 package accord.impl.progresslog;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -35,6 +37,7 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommonAttributes;
 import accord.local.Node;
+import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
@@ -43,7 +46,7 @@ import accord.primitives.Participants;
 import accord.primitives.ProgressToken;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
-import accord.primitives.Txn;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.LogGroupTimers;
@@ -66,10 +69,12 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
+// TODO (required): for transactions that span multiple progress logs (notably: sync points) we need to coordinate *fetching* to avoid redundant work
 public class DefaultProgressLog implements ProgressLog, Runnable
 {
     private static final Logger logger = LoggerFactory.getLogger(DefaultProgressLog.class);
@@ -278,6 +283,37 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             clear(state);
     }
 
+    public List<TxnId> activeBefore(TxnId before)
+    {
+        List<TxnId> result = new ArrayList<>();
+        for (TxnState state : BTree.<TxnState>iterable(stateMap))
+        {
+            if (state.txnId.compareTo(before) >= 0)
+                break;
+
+            result.add(state.txnId);
+        }
+        return result;
+    }
+
+    @Override
+    public void clearBefore(TxnId clearBefore)
+    {
+        if (clearBefore.equals(Timestamp.NONE))
+            return;
+
+        Invariants.checkState(clearBefore.is(ExclusiveSyncPoint));
+
+        while (!BTree.isEmpty(stateMap))
+        {
+            TxnState state = BTree.findByIndex(stateMap, 0);
+            if (state.txnId.compareTo(clearBefore) >= 0)
+                return;
+
+            clear(state);
+        }
+    }
+
     public void clear()
     {
         timers.clear();
@@ -346,8 +382,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             command = blockedBy.updateAttributes(safeStore, update);
 
         // TODO (required): tighten up ExclusiveSyncPoint range bounds
-        Invariants.checkState((command.txnId().is(Txn.Kind.ExclusiveSyncPoint) ? safeStore.ranges().all()
-                                                                               : safeStore.ranges().allSince(command.txnId().epoch())
+        Invariants.checkState((command.txnId().is(ExclusiveSyncPoint) ? safeStore.ranges().all()
+                                                                      : safeStore.ranges().allSince(command.txnId().epoch())
                               ).intersects(command.participants().hasTouched()));
 
         // TODO (consider): consider triggering a preemption of existing coordinator (if any) in some circumstances;
@@ -359,6 +395,14 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         //                               later topology that wasn't covered by its coordination
         TxnState state = ensure(blockedBy.txnId());
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
+    }
+
+    @Override
+    public void invalidIfUncommitted(TxnId txnId)
+    {
+        TxnState state = get(txnId);
+        if (state != null)
+            state.setInvalidIfUncommitted();
     }
 
     @Override

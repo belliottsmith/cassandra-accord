@@ -60,4 +60,6 @@ public interface LocalListeners
      * Should forward notifications to the node's RemoteListeners object
      */
     void notify(SafeCommandStore safeStore, SafeCommand safeCommand, Command prev);
+
+    void clearBefore(CommandStore safeStore, TxnId clearBefore);
 }

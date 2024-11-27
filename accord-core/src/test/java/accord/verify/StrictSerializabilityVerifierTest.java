@@ -127,8 +127,8 @@ public class StrictSerializabilityVerifierTest
                         verifier.witnessWrite(j, observation.writes[j]);
                 }
 
-                if (i == observations.size() - 1) onLast.accept(() -> verifier.apply(observation.start, observation.end));
-                else verifier.apply(observation.start, observation.end);
+                if (i == observations.size() - 1) onLast.accept(() -> verifier.apply("", observation.start, observation.end));
+                else verifier.apply("", observation.start, observation.end);
             }
         }
     }
@@ -270,7 +270,7 @@ public class StrictSerializabilityVerifierTest
                             verifier.witnessWrite(write.pk, write.id);
                     }
                 }
-                verifier.apply(start, end);
+                verifier.apply("", start, end);
             }
         }
         List<Witness> witnesses = new ArrayList<>();

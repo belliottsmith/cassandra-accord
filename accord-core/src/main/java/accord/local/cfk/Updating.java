@@ -34,6 +34,7 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.cfk.CommandsForKey.InternalStatus;
+import accord.primitives.Routable;
 import accord.primitives.Status;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.primitives.Ballot;
@@ -56,6 +57,7 @@ import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
 import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
+import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER_DEPS_ONLY;
 import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Utils.insertMissing;
@@ -64,6 +66,7 @@ import static accord.local.cfk.Utils.missingTo;
 import static accord.local.cfk.Utils.removeOneMissing;
 import static accord.local.cfk.Utils.removePrunedAdditions;
 import static accord.local.cfk.Utils.validateMissing;
+import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -97,11 +100,11 @@ class Updating
         }
     }
 
-    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command command)
+    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Command command)
     {
         Invariants.checkArgument(loadingPrunedFor(cfk.loadingPruned, plainTxnId, null) == null);
         // TODO (expected): do not calculate any deps or additions if we're transitioning from Stable to Applied; wasted effort and might trigger LoadPruned
-        Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, mayExecute, command);
+        Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, isDurable, mayExecute, command);
         if (newInfoObj.getClass() != InfoWithAdditions.class)
             return insertOrUpdate(cfk, insertPos, plainTxnId, curInfo, (TxnInfo)newInfoObj, false, null);
 
@@ -178,7 +181,7 @@ class Updating
         return PostProcess.LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
     }
 
-    static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, InternalStatus newStatus, boolean mayExecute, Command command)
+    static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Command command)
     {
         Invariants.checkState(newStatus.hasExecuteAtOrDeps);
         Timestamp executeAt = command.executeAt();
@@ -191,14 +194,14 @@ class Updating
         SortedCursor<TxnId> deps = command.partialDeps().txnIds(cfk.key());
         deps.find(cfk.redundantBefore());
 
-        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, mayExecute, ballot, executeAt, depsKnownBefore, deps);
+        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, isDurable, mayExecute, ballot, executeAt, depsKnownBefore, deps);
     }
 
     /**
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, SortedCursor<TxnId> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, SortedCursor<TxnId> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -286,7 +289,7 @@ class Updating
             }
         }
 
-        TxnInfo info = TxnInfo.create(plainTxnId, newStatus, mayExecute, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount), ballot);
+        TxnInfo info = TxnInfo.create(plainTxnId, newStatus, isDurable, mayExecute, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount), ballot);
         if (additionCount == 0)
             return info;
 
@@ -460,7 +463,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j++];
-                newById[count] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 ++missingCount;
             }
             else
@@ -477,7 +480,7 @@ class Updating
                 while (count < targetInsertPos)
                 {
                     TxnId txnId = additions[j++];
-                    newById[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                    newById[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 }
                 newById[targetInsertPos] = newInfo;
                 count = targetInsertPos + 1;
@@ -485,7 +488,7 @@ class Updating
             while (j < additionCount)
             {
                 TxnId txnId = additions[j++];
-                newById[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
             }
         }
         else if (count == targetInsertPos)
@@ -550,7 +553,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j];
-                newInfos[count] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newInfos[count] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 ++j;
                 ++missingCount;
             }
@@ -564,7 +567,7 @@ class Updating
         while (j < additionCount)
         {
             TxnId txnId = additions[j];
-            newInfos[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+            newInfos[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
             j++;
         }
 
@@ -754,6 +757,14 @@ class Updating
         // so we can filter to only transactions we need to execute locally
         int i = txnIds.find(cfk.redundantOrBootstrappedBefore());
         if (i < 0) i = -1 - i;
+        int waitingOnIndex = i;
+        if (waitingTxnId.is(ExclusiveSyncPoint) && waitingTxnId.is(Range) && mode == REGISTER)
+        {
+            // for RX we register all our transitive dependencies to make sure we can answer coordinated dependency calculations
+            // in this case we separate out the position from which we insert missing txnId and where we compute readiness to execute
+            i = txnIds.find(cfk.redundantBefore());
+            if (i < 0) i = -1 - i;
+        }
         if (i < txnIds.size())
         {
             Txn.Kind waitingKind = waitingTxnId.kind();
@@ -770,7 +781,7 @@ class Updating
                 if (c == 0)
                 {
                     TxnInfo txn = byId[j];
-                    if (txn.mayExecute())
+                    if (i >= waitingOnIndex && txn.mayExecute())
                     {
                         if (txn.compareTo(COMMITTED) < 0) waitingToApply = readyToApply = false;
                         else if (txn.compareTo(INVALIDATED) < 0
@@ -796,10 +807,11 @@ class Updating
                     ++j;
                 }
                 else if (c > 0) ++j;
-                else if (!cfk.mayExecute(txnIds.get(i))) ++i;
+                else if (i >= waitingOnIndex && !cfk.mayExecute(txnIds.get(i))) ++i;
                 else if (register)
                 {
-                    readyToApply = waitingToApply = false;
+                    if (i >= waitingOnIndex)
+                        readyToApply = waitingToApply = false;
                     if (missingCount == missing.length)
                         missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount + missingCount/2));
                     missing[missingCount++] = txnIds.get(i++);
@@ -831,7 +843,7 @@ class Updating
                 }
             }
 
-            if (!readyToApply)
+            if (!readyToApply || missingCount > 0)
             {
                 TxnInfo[] newById = byId, newCommittedByExecuteAt = cfk.committedByExecuteAt;
                 int newMinUndecidedById = cfk.minUndecidedById;
@@ -855,13 +867,19 @@ class Updating
                         newById = new TxnInfo[byId.length + missingCount];
                         newCommittedByExecuteAt = insertAdditionsOnly(byId, cfk.committedByExecuteAt, newById, missing, missingCount, cfk.boundsInfo);
                         // we can safely use missing[prunedIndex] here because we only fill missing with transactions for which we manage execution
-                        newMinUndecidedById = Arrays.binarySearch(newById, TxnId.nonNullOrMin(missing[0], cfk.minUndecided()));
+                        int minUndecidedMissingIndex = 0;
+                        while (minUndecidedMissingIndex < missingCount && !cfk.mayExecute(missing[minUndecidedMissingIndex]))
+                            ++minUndecidedMissingIndex;
+                        TxnId minUndecidedMissing = minUndecidedMissingIndex == missingCount ? null : missing[minUndecidedMissingIndex];
+                        TxnId minUndecided = TxnId.nonNullOrMin(minUndecidedMissing, cfk.minUndecided());
+                        if (minUndecided != null)
+                            newMinUndecidedById = Arrays.binarySearch(newById, TxnId.nonNullOrMin(minUndecidedMissing, cfk.minUndecided()));
                     }
                 }
                 cachedTxnIds().discard(missing, clearMissingCount);
 
                 CommandsForKey.Unmanaged[] newUnmanaged = cfk.unmanageds;
-                if (mode != REGISTER_DEPS_ONLY)
+                if (!readyToApply && mode != REGISTER_DEPS_ONLY)
                 {
                     CommandsForKey.Unmanaged newPendingRecord;
                     if (waitingToApply)

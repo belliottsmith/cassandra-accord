@@ -33,6 +33,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.WrappableException;
 import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.DoNotChase;
@@ -97,8 +98,7 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
     }
 
     final Node node;
-    @Nullable
-    final TxnId txnId;
+    @Nullable final TxnId txnId;
     final FullRoute<?> route;
 
     private Topologies topologies;
@@ -207,7 +207,7 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         if (QuorumEpochIntersections.preaccept.chase == DoNotChase)
         {
             long latestEpoch = executeAtEpoch();
-            if (latestEpoch > topologies.currentEpoch()) node.withEpoch(latestEpoch, node.agent(), () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
+            if (latestEpoch > topologies.currentEpoch()) node.withEpoch(latestEpoch, this, () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
             else onPreAccepted(topologies);
             return;
         }
@@ -236,14 +236,9 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
     {
         // TODO (desired, efficiency): check if we have already have a valid quorum for the future epoch
         //  (noting that nodes may have adopted new ranges, in which case they should be discounted, and quorums may have changed shape)
-        node.withEpoch(latestEpoch, (ignored, withEpochFailure) -> {
+        node.withEpoch(latestEpoch, this, () -> {
             // TODO (required): this isn't synchronized, and isn't submitted back to the calling executor.
-            if (withEpochFailure != null)
-            {
-                tryFailure(CoordinationFailed.wrap(withEpochFailure));
-                return;
-            }
-            TopologyMismatch mismatch = txnId.kind() == Txn.Kind.ExclusiveSyncPoint
+            TopologyMismatch mismatch = txnId != null && txnId.kind() == Txn.Kind.ExclusiveSyncPoint
                                         ? TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(latestEpoch), txnId, route.homeKey(), route)
                                         : TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(latestEpoch), txnId, route.homeKey(), route);
             if (mismatch != null)
@@ -255,7 +250,7 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
             topologies = node.topology().withUnsyncedEpochs(route, earliestEpoch(), latestEpoch);
             boolean equivalent = topologies.oldestEpoch() <= prevTopologies.currentEpoch();
             for (long epoch = topologies.currentEpoch() ; equivalent && epoch > prevTopologies.currentEpoch() ; --epoch)
-                equivalent = topologies.forEpoch(epoch).shards().equals(prevTopologies.current().shards());
+                equivalent = topologies.getEpoch(epoch).shards().equals(prevTopologies.current().shards());
 
             if (equivalent)
             {
@@ -278,6 +273,6 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
     public final void accept(T success, Throwable failure)
     {
         if (success != null) trySuccess(success);
-        else tryFailure(failure);
+        else tryFailure(WrappableException.wrap(failure));
     }
 }

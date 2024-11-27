@@ -99,6 +99,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this.blockedUntil = blockedUntil;
         this.maxAwaitEpoch = topologies.currentEpoch();
         this.minAwaitEpoch = topologies.oldestEpoch();
+        Invariants.checkState(minAwaitEpoch >= txnId.epoch());
     }
 
     public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil)
@@ -114,6 +115,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this.minAwaitEpoch = minAwaitEpoch;
         this.maxAwaitEpoch = maxAwaitEpoch;
         this.callbackId = callbackId;
+        Invariants.checkState(minAwaitEpoch >= txnId.epoch());
     }
 
     @Override
@@ -135,7 +137,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         if (command.saveStatus().compareTo(blockedUntil.minSaveStatus) >= 0)
             return null;
 
-        Commands.updateParticipants(safeStore, safeCommand, participants);
+        Commands.enrichParticipants(safeStore, safeCommand, participants);
 
         if (callbackId >= 0)
         {

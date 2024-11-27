@@ -34,6 +34,7 @@ import java.util.stream.Collectors;
 
 import accord.api.DataStore;
 import accord.api.Key;
+import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.coordinate.ExecuteSyncPoint;
@@ -496,27 +497,24 @@ public class ListStore implements DataStore
         return new TreeMap<>(data);
     }
 
-    public boolean equals(NavigableMap<RoutableKey, Timestamped<int[]>> a)
+    public void checkAtLeast(NavigableMap<RoutableKey, Timestamped<int[]>> a)
     {
-        return equal(a, data);
+        checkAtLeast(a, data);
     }
 
-    public static boolean equal(NavigableMap<RoutableKey, Timestamped<int[]>> a, NavigableMap<RoutableKey, Timestamped<int[]>> b)
+    public static void checkAtLeast(NavigableMap<RoutableKey, Timestamped<int[]>> a, NavigableMap<RoutableKey, Timestamped<int[]>> b)
     {
-        Iterator<Map.Entry<RoutableKey, Timestamped<int[]>>> aiter = a.entrySet().iterator();
-        Iterator<Map.Entry<RoutableKey, Timestamped<int[]>>> biter = b.entrySet().iterator();
-        while (aiter.hasNext() && biter.hasNext())
+        if (a.isEmpty())
+            return;
+        for (Map.Entry<RoutableKey, Timestamped<int[]>> ae : a.entrySet())
         {
-            Map.Entry<RoutableKey, Timestamped<int[]>> av = aiter.next();
-            Map.Entry<RoutableKey, Timestamped<int[]>> bv = biter.next();
-            if (!av.getKey().equals(bv.getKey()))
-                return false;
-            if (!av.getValue().equals(bv.getValue(), Arrays::equals))
-                return false;
+            RoutableKey k = ae.getKey();
+            Timestamped<int[]> av = ae.getValue();
+            Timestamped<int[]> bv = b.get(k);
+            Invariants.checkState(bv != null);
+            Invariants.checkState(bv.timestamp.compareTo(av.timestamp) >= 0);
+            Invariants.checkState(bv.timestamp.equals(av.timestamp) ? Arrays.equals(av.data, bv.data) : ListStore.isStrictPrefix(av.data, bv.data));
         }
-        if (aiter.hasNext() || biter.hasNext())
-            return false;
-        return true;
     }
 
     private static boolean isStrictPrefix(int[] a, int[] b)

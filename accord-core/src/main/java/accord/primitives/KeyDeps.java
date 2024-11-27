@@ -36,6 +36,8 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
+import javax.annotation.Nullable;
+
 import static accord.primitives.RoutingKeys.toRoutingKeys;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.*;
@@ -206,6 +208,17 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
 
         AbstractUnseekableKeys select = keys.intersecting(participants);
         return select(toRoutingKeys(select));
+    }
+
+    public @Nullable TxnId minTxnId(Unseekables<?> participants)
+    {
+        return Routables.foldl(keys, participants, (rk, min, index) -> {
+            int start = index == 0 ? keys.size() : keysToTxnIds[index - 1];
+            int end = keysToTxnIds[index];
+            if (start == end)
+                return min;
+            return TxnId.nonNullOrMin(min, txnIds[start]);
+        }, (TxnId)null);
     }
 
     private KeyDeps select(RoutingKeys select)

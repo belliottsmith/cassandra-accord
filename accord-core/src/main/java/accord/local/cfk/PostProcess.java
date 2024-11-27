@@ -275,30 +275,54 @@ abstract class PostProcess
         }
 
         {
-            Timestamp applyTo = null;
             if (newInfo != null && newInfo.is(APPLIED))
             {
                 TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
                 if (maxContiguousApplied != null && maxContiguousApplied.compareExecuteAt(newInfo) >= 0)
-                    applyTo = maxContiguousApplied.executeAt;
+                {
+                    Timestamp applyTo = maxContiguousApplied.executeAt;
+                    int start = findFirstApply(unmanageds);
+                    int end = findApply(unmanageds, start, applyTo);
+                    if (start != end)
+                    {
+                        TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
+                        unmanageds = removeUnmanaged(unmanageds, start, end);
+                        notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                    }
+                }
             }
-            else if (newInfo == null)
-            {
-                TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
-                if (maxContiguousApplied != null)
-                    applyTo = maxContiguousApplied.executeAt;
-
-                applyTo = Timestamp.nonNullOrMax(applyTo, TxnId.nonNullOrMax(redundantBefore, bootstrappedAt));
-            }
-
-            if (applyTo != null)
+            else if (newInfo == null && isNewBoundsInfo)
             {
                 int start = findFirstApply(unmanageds);
-                int end = findApply(unmanageds, start, applyTo);
-                if (start != end)
+                int end = start;
+                int j = 1 + maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                while (end < unmanageds.length && j < committedByExecuteAt.length)
                 {
-                    TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
-                    unmanageds = removeUnmanaged(unmanageds, start, end);
+                    int c = committedByExecuteAt[j].executeAt.compareTo(unmanageds[end].waitingUntil);
+                    if (c == 0)
+                    {
+                        if (start != end)
+                        {
+                            TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
+                            unmanageds = removeUnmanaged(unmanageds, start, end);
+                            end -= (end - start);
+                            notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                        }
+                        start = ++end;
+                    }
+                    else if (c < 0)
+                    {
+                        ++j;
+                    }
+                    else
+                    {
+                        ++end;
+                    }
+                }
+                if (start != unmanageds.length)
+                {
+                    TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, unmanageds.length);
+                    unmanageds = removeUnmanaged(unmanageds, start, unmanageds.length);
                     notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
                 }
             }

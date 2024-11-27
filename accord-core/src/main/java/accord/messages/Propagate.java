@@ -20,6 +20,7 @@ package accord.messages;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.coordinate.FetchData.FetchResult;
+import accord.coordinate.Infer.InvalidIf;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
@@ -51,6 +52,7 @@ import javax.annotation.Nullable;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 
+import static accord.coordinate.Infer.InvalidIf.IfUncommitted;
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.VESTIGIAL;
@@ -59,6 +61,7 @@ import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.WithQuorum.HasQuorum;
 import static accord.utils.Invariants.illegalState;
 
 // TODO (required): detect propagate loops where we don't manage to update anything but should
@@ -69,6 +72,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     final Route<?> route;
     final Unseekables<?> propagateTo;
     final Known target;
+    final InvalidIf invalidIf;
 
     // TODO (desired): remove dependency on these two SaveStatus
     final SaveStatus maxKnowledgeSaveStatus;
@@ -78,6 +82,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     @Nullable final RoutingKey homeKey;
     // this is a WHOLE NODE measure, so if commit epoch has more ranges we do not count as committed if we can only commit in coordination epoch
     final KnownMap known;
+    final WithQuorum withQuorum;
     @Nullable final PartialTxn partialTxn;
     @Nullable final PartialDeps stableDeps;
     // TODO (expected): toEpoch may only apply to certain local command stores that have "witnessed the future" - confirm it is fine to use globally or else narrow its scope
@@ -93,13 +98,13 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     Propagate(
     Node node, TxnId txnId,
     Route<?> route,
-    Unseekables<?> propagateTo, Known target,
+    Unseekables<?> propagateTo, Known target, InvalidIf invalidIf,
     SaveStatus maxKnowledgeSaveStatus,
     SaveStatus maxSaveStatus,
     Ballot ballot,
     Status.Durability durability,
     @Nullable RoutingKey homeKey,
-    KnownMap known,
+    KnownMap known, WithQuorum withQuorum,
     @Nullable PartialTxn partialTxn,
     @Nullable PartialDeps stableDeps,
     long lowEpoch,
@@ -114,12 +119,14 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.route = route;
         this.propagateTo = propagateTo;
         this.target = target;
+        this.invalidIf = invalidIf;
         this.maxKnowledgeSaveStatus = maxKnowledgeSaveStatus;
         this.maxSaveStatus = maxSaveStatus;
         this.ballot = ballot;
         this.durability = durability;
         this.homeKey = homeKey;
         this.known = known;
+        this.withQuorum = withQuorum;
         this.partialTxn = partialTxn;
         this.stableDeps = stableDeps;
         this.lowEpoch = lowEpoch;
@@ -130,12 +137,12 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.callback = callback;
     }
 
-    public static void propagate(Node node, TxnId txnId, long sourceEpoch, WithQuorum withQuorum, Route<?> route, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, WithQuorum withQuorum, Route<?> route, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        propagate(node, txnId, sourceEpoch, txnId.epoch(), sourceEpoch, withQuorum, route, propagateTo, target, full, callback);
+        propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, txnId.epoch(), sourceEpoch, withQuorum, route, propagateTo, target, full, callback);
     }
 
-    public static void propagate(Node node, TxnId txnId, long sourceEpoch, long lowEpoch, long highEpoch, WithQuorum withQuorum, Route<?> queried, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, long lowEpoch, long highEpoch, WithQuorum withQuorum, Route<?> queried, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
     {
         if (full.maxKnowledgeSaveStatus.status == NotDefined && full.invalidIf == NotKnownToBeInvalid)
         {
@@ -147,11 +154,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         // TODO (required): consider and document whether it is safe to infer that we are stale if we have not received responses from all shards we know of
         //  (in principle, we should at least require responses from our own shard, and the home shard if we know it); if we only hear from a remote shard it may have fully Erased
-        full = full.finish(queried, queried.with((Unseekables) propagateTo), withQuorum);
+        full = full.finish(queried, propagateTo, queried.with((Unseekables) propagateTo), withQuorum, previouslyKnownToBeInvalidIf);
         Route<?> route = Invariants.nonNull(full.route);
 
         Propagate propagate =
-            new Propagate(node, txnId, route, propagateTo, target, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, full.partialTxn, full.stableDeps, lowEpoch, highEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
+            new Propagate(node, txnId, route, propagateTo, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, lowEpoch, highEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
 
         if (full.executeAt != null && full.executeAt.epoch() > highEpoch)
             highEpoch = full.executeAt.epoch();
@@ -209,10 +216,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         if (found.hasDecidedDeps())
             stableDeps = this.stableDeps.intersecting(participants.touches()).reconstitutePartial(participants.touches());
 
-        boolean isShardTruncated = known.hasTruncated(participants.owns());
+        // TODO (required): is it safe to use owns() here when pulling - or do we need to compute a new touches() as though we were coordinating the transaction?
+        //   i.e. can we ignore dependencies for earlier epochs that haven't been closed yet, since this isn't a coordinated/distributed action
+        boolean isShardTruncated = withQuorum == HasQuorum && known.hasAnyFullyTruncated(participants.owns());
         if (isShardTruncated)
         {
-            // TODO (required): applyOrUpgradeTruncated assumes we had a node-level achieved, whereas we now compute at CommandStore level; simplify/merge
             // TODO (required): do not markShardStale for reads; in general optimise handling of case where we cannot recover a known no-op transaction
             // TODO (required): permit staleness to be gated by some configuration state
             found = applyOrUpgradeTruncated(safeStore, safeCommand, participants, command, executeAtIfKnown);
@@ -283,9 +291,10 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 // only preaccept if we coordinate the transaction
                 if (safeStore.ranges().coordinates(txnId).intersects(route) && Route.isFullRoute(route))
                     Commands.preaccept(safeStore, safeCommand, participants, txnId, txnId.epoch(), partialTxn, Route.castToFullRoute(route));
-                break;
 
             case NotDefined:
+                if (invalidIf == IfUncommitted)
+                    safeStore.progressLog().invalidIfUncommitted(txnId);
                 break;
         }
 
@@ -337,10 +346,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
         Invariants.checkState(!maxKnowledgeSaveStatus.is(Status.Invalidated));
 
-        if (participants.owns().isEmpty())
+        Participants<?> ownsOrMayExecute = participants.ownsOrMayExecute(txnId);
+        if (ownsOrMayExecute.isEmpty())
             return known.knownForAny();
 
-        RedundantStatus status = safeStore.redundantBefore().status(txnId, participants.owns());
+        RedundantStatus status = safeStore.redundantBefore().status(txnId, ownsOrMayExecute);
         // try to see if we can safely purge the full command
         if (tryPurge(safeStore, safeCommand, status))
             return null;
@@ -362,40 +372,31 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         }
 
         Participants<?> executes = participants.executes(safeStore, txnId, executeAtIfKnown);
-        status = safeStore.redundantBefore().status(txnId, executes);
-        if (tryPurge(safeStore, safeCommand, status))
+        RedundantStatus executeStatus = safeStore.redundantBefore().status(txnId, executes);
+        if (tryPurge(safeStore, safeCommand, executeStatus))
             return null;
 
-        // compute the ranges we expect to execute - i.e. those we own, and are not stale or pre-bootstrap
-        // TODO (required): use StoreParticipants.executes
-        Ranges ranges = safeStore.ranges().allAt(executeAtIfKnown.epoch());
-        ranges = safeStore.redundantBefore().expectToExecute(txnId, executeAtIfKnown, ranges);
-        if (ranges.isEmpty() || (executes = executes.slice(ranges, Minimal)).isEmpty())
-        {
-            // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
-            Commands.setTruncatedApplyOrErasedVestigial(safeStore, safeCommand, participants, executeAtIfKnown);
-            return null;
-        }
-
+        Participants<?> ownsOrExecutes = participants.ownsOrExecutes(safeStore, txnId, executeAtIfKnown);
         // if the command has been truncated globally, then we should expect to apply it
         // if we cannot obtain enough information from a majority to do so then we have been left behind
         Known required = PreApplied.minKnown;
         Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
-        Ranges achieveRanges = known.knownForRanges(requireExtra, ranges); // the ranges for which we can already successfully achieve this
+        Participants<?> notStale = known.knownFor(requireExtra, ownsOrExecutes); // the ranges for which we can already successfully achieve this
 
         // any ranges we execute but cannot achieve the pre-applied status for have been left behind and are stale
-        Ranges staleRanges = ranges.without(achieveRanges);
-        Participants<?> staleParticipants = executes.slice(staleRanges, Minimal);
-        staleRanges = staleParticipants.toRanges();
-
-        if (staleRanges.isEmpty())
+        Participants<?> stale = ownsOrExecutes.without(notStale);
+        if (stale.isEmpty())
         {
-            Invariants.checkState(achieveRanges.containsAll(executes));
+            Invariants.checkState(notStale.containsAll(ownsOrExecutes));
             return required;
         }
 
-        safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown, staleRanges, true);
-        if (!staleRanges.containsAll(executes))
+        if (!known.hasFullyTruncated(stale))
+            return null;
+
+        // TODO (required): if the above last ditch doesn't work, see if only the stale ranges can't apply and so some shenanigans to apply partially and move on
+        safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown, stale.toRanges(), true);
+        if (!stale.containsAll(ownsOrExecutes))
             return required;
 
         // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
@@ -410,15 +411,15 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             default: throw new AssertionError("Unhandled RedundantStatus: " + status);
             case NOT_OWNED:
             case WAS_OWNED_RETIRED:
-            case GC_BEFORE:
-            case SHARD_REDUNDANT:
             case LOCALLY_REDUNDANT:
-            case REDUNDANT_PRE_BOOTSTRAP_OR_STALE:
-                Invariants.checkState(!known.knownForAny().outcome.isOrWasApply());
-                purge(safeStore, safeCommand, null, ERASE, true);
-                return true;
+            case PARTIALLY_LOCALLY_REDUNDANT:
+            case SHARD_REDUNDANT:
+            case PARTIALLY_SHARD_REDUNDANT:
+            case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
+            case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
+            case GC_BEFORE:
             case PRE_BOOTSTRAP_OR_STALE:
-                purge(safeStore, safeCommand, null, VESTIGIAL, true);
+                purge(safeStore, safeCommand, null, ERASE, true, true);
                 return true;
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
             case LIVE:

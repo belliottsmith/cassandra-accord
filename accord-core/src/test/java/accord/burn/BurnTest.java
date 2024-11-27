@@ -19,7 +19,8 @@
 package accord.burn;
 
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.LongSupplier;
+import java.util.stream.LongStream;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 
@@ -39,10 +40,9 @@ public class BurnTest extends BurnTestBase
     {
         int count = 1;
         int operations = 1000;
-        Long overrideSeed = null;
         boolean reconcile = false;
-        LongSupplier seedGenerator = ThreadLocalRandom.current()::nextLong;
-        boolean hasOverriddenSeed = false;
+        LongStream seeds = LongStream.generate(ThreadLocalRandom.current()::nextLong);
+        boolean hasSetCount = false;
         for (int i = 0 ; i < args.length ; i += 2)
         {
             switch (args[i])
@@ -50,14 +50,15 @@ public class BurnTest extends BurnTestBase
                 default: throw illegalArgument("Invalid option: " + args[i]);
                 case "-c":
                     count = Integer.parseInt(args[i + 1]);
-                    if (hasOverriddenSeed)
+                    if (count < 0)
                         throw illegalArgument("Cannot override both seed (-s) and number of seeds to run (-c)");
-                    overrideSeed = null;
+                    hasSetCount = true;
                     break;
                 case "-s":
-                    overrideSeed = Long.parseLong(args[i + 1]);
-                    hasOverriddenSeed = true;
-                    count = 1;
+                    seeds = Stream.of(args[i + 1].split(",")).mapToLong(Long::parseLong);
+                    if (hasSetCount)
+                        throw illegalArgument("Cannot override both seed (-s) and number of seeds to run (-c)");
+                    count = -1;
                     break;
                 case "-o":
                     operations = Integer.parseInt(args[i + 1]);
@@ -67,19 +68,14 @@ public class BurnTest extends BurnTestBase
                     --i;
                     break;
                 case "--loop-seed":
-                    seedGenerator = new DefaultRandom(Long.parseLong(args[i + 1]))::nextLong;
+                    seeds = LongStream.generate(new DefaultRandom(Long.parseLong(args[i + 1]))::nextLong);
             }
         }
-        while (count-- > 0)
-        {
-            if (!reconcile)
-            {
-                run(overrideSeed != null ? overrideSeed : seedGenerator.getAsLong(), operations);
-            }
-            else
-            {
-                reconcile(overrideSeed != null ? overrideSeed : seedGenerator.getAsLong(), operations);
-            }
-        }
+
+        if (count > 0)
+            seeds = seeds.limit(count);
+
+        int opCount = operations;
+        seeds.forEach(reconcile ? seed -> reconcile(seed, opCount) : seed -> run(seed, opCount));
     }
 }

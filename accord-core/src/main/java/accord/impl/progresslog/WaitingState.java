@@ -107,7 +107,7 @@ abstract class WaitingState extends BaseTxnState
         super(txnId);
     }
 
-    private void set(SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil newBlockedUntil, Progress newProgress)
+    private void set(@Nullable SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil newBlockedUntil, Progress newProgress)
     {
         encodedState &= SET_MASK;
         encodedState |= ((long) newBlockedUntil.ordinal() << BLOCKED_UNTIL_SHIFT) | ((long) newProgress.ordinal() << PROGRESS_SHIFT);

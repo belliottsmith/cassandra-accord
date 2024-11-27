@@ -43,6 +43,7 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.SortedListMap;
+import accord.utils.WrappableException;
 
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.Fail;
 import static accord.coordinate.tracking.RequestStatus.Failed;
@@ -95,7 +96,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
 
         switch (reply.outcome())
         {
-            default: throw new IllegalStateException();
+            default: throw new AssertionError("Unhandled AcceptOutcome: " + reply.outcome());
             case Truncated:
                 isDone = true;
                 callback.accept(null, new Truncated(txnId, route.homeKey()));
@@ -107,11 +108,20 @@ abstract class Propose<R> implements Callback<AcceptReply>
                 break;
 
             case Redundant:
-                isDone = true;
-                if (reply.supersededBy != null || ballot.equals(Ballot.ZERO)) callback.accept(null, new Preempted(txnId, route.homeKey()));
-                else callback.accept(null, new Redundant(txnId, route.homeKey(), reply.committedExecuteAt));
+                if (reply.supersededBy != null || ballot.equals(Ballot.ZERO))
+                {
+                    isDone = true;
+                    callback.accept(null, new Preempted(txnId, route.homeKey()));
+                }
+                else if (reply.committedExecuteAt != null)
+                {
+                    isDone = true;
+                    callback.accept(null, new Redundant(txnId, route.homeKey(), reply.committedExecuteAt));
+                }
+
                 break;
 
+            case Retired:
             case Success:
                 acceptOks.put(from, reply);
                 if (acceptTracker.recordSuccess(from) == RequestStatus.Success)
@@ -125,6 +135,9 @@ abstract class Propose<R> implements Callback<AcceptReply>
     @Override
     public void onFailure(Id from, Throwable failure)
     {
+        if (isDone)
+            return;
+
         // TODO (expected): we aren't tracking the specific failure here to report
         if (acceptTracker.recordFailure(from) == Failed)
         {
@@ -136,6 +149,9 @@ abstract class Propose<R> implements Callback<AcceptReply>
     @Override
     public void onCallbackFailure(Id from, Throwable failure)
     {
+        if (isDone)
+            return;
+
         isDone = true;
         callback.accept(null, failure);
     }
@@ -183,12 +199,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
                 }
                 else
                 {
-                    node.withEpoch(invalidateUntil.epoch(), (ignored, withEpochFailure) -> {
-                        if (withEpochFailure != null)
-                        {
-                            callback.accept(null, CoordinationFailed.wrap(withEpochFailure));
-                            return;
-                        }
+                    node.withEpoch(invalidateUntil.epoch(), callback, t -> WrappableException.wrap(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
                         callback.accept(null, new Invalidated(txnId, invalidateWithParticipant));
                     });
@@ -221,6 +232,9 @@ abstract class Propose<R> implements Callback<AcceptReply>
         @Override
         public void onFailure(Id from, Throwable failure)
         {
+            if (isDone)
+                return;
+
             if (acceptTracker.onFailure(from) == Fail)
             {
                 isDone = true;

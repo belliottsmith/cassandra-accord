@@ -71,7 +71,7 @@ public class CalculateDeps extends TxnRequest.WithUnsynced<CalculateDeps.Calcula
     public CalculateDepsOk apply(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, executeAt.epoch());
-        return new CalculateDepsOk(calculateDeps(safeStore, txnId, participants, constant(minEpoch), executeAt));
+        return new CalculateDepsOk(calculateDeps(safeStore, txnId, participants, constant(minEpoch), executeAt, false));
     }
 
     @Override

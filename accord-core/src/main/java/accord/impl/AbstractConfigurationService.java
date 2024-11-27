@@ -295,7 +295,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
     public void acknowledgeEpoch(EpochReady ready, boolean startSync)
     {
         ready.metadata.addCallback(() -> epochs.acknowledge(ready));
-        ready.fastPath.addCallback(() ->  localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync));
+        ready.coordinate.addCallback(() ->  localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync));
     }
 
     protected void topologyUpdatePreListenerNotify(Topology topology) {}

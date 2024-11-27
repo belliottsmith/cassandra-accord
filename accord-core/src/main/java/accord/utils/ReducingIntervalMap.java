@@ -81,6 +81,9 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
 
     public V foldl(BiFunction<V, V, V> reduce)
     {
+        if (values.length == 0)
+            return null;
+
         V result = values[0];
         for (int i = 1; i < values.length; ++i)
         {
@@ -428,16 +431,22 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         protected final boolean inclusiveEnds;
         protected final List<K> starts;
         protected final List<V> values;
-        protected AbstractBoundariesBuilder(boolean inclusiveEnds, int capacity)
+        private K safeToAdd;
+        protected AbstractBoundariesBuilder(boolean inclusiveEnds, int estimatedCapacity)
         {
             this.inclusiveEnds = inclusiveEnds;
-            this.starts = new ArrayList<>(capacity);
-            this.values = new ArrayList<>(capacity + 1);
+            this.starts = new ArrayList<>(estimatedCapacity);
+            this.values = new ArrayList<>(estimatedCapacity + 1);
         }
 
         public boolean isEmpty()
         {
             return values.isEmpty();
+        }
+
+        public @Nullable K safeToAdd()
+        {
+            return safeToAdd;
         }
 
         /**
@@ -449,28 +458,26 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             int tailIdx = starts.size() - 1;
 
             Invariants.checkState(starts.size() == values.size());
-            Invariants.checkState( tailIdx < 0 || start.compareTo(starts.get(tailIdx)) >= 0);
 
-            boolean sameAsTailKey, sameAsTailValue;
+            int compareToTailKey;
             V tailValue;
             if (tailIdx < 0)
             {
-                sameAsTailKey = sameAsTailValue = false;
+                compareToTailKey = 1;
                 tailValue = null;
             }
             else
             {
-                sameAsTailKey = start.equals(starts.get(tailIdx));
+                compareToTailKey = start.compareTo(starts.get(tailIdx));
+                Invariants.checkState( compareToTailKey >= 0 || safeToAdd == null || start.compareTo(safeToAdd) >= 0);
                 tailValue = values.get(tailIdx);
-                sameAsTailValue = Objects.equals(value, tailValue);
+                if (Objects.equals(value, tailValue))
+                    return;
             }
-            if (sameAsTailKey || sameAsTailValue)
+
+            if (compareToTailKey == 0)
             {
-                if (sameAsTailValue)
-                {
-                    values.set(tailIdx, value == null ? null : tailValue);
-                }
-                else if (tailValue != null)
+                if (tailValue != null)
                 {
                     values.set(tailIdx, reduce.apply(tailValue, value));
                 }
@@ -485,10 +492,20 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
                     values.set(tailIdx, value);
                 }
             }
+            else if (compareToTailKey < 0)
+            {
+                starts.set(tailIdx, start);
+                values.set(tailIdx, value);
+            }
             else
             {
                 starts.add(start);
                 values.add(value);
+            }
+            if (value != null)
+            {
+                Invariants.checkState(safeToAdd == null || safeToAdd.compareTo(start) <= 0);
+                safeToAdd = start;
             }
         }
 

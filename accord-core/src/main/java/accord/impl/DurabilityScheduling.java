@@ -47,6 +47,7 @@ import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.utils.Invariants;
+import accord.utils.WrappableException;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
@@ -292,7 +293,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
                 {
                     // don't wait on epoch failure - we aren't the cause of any problems
                     startShardSync(syncId, ranges, nextIndex);
-                    Throwable wrapped = CoordinationFailed.wrap(withEpochFailure);
+                    Throwable wrapped = WrappableException.wrap(withEpochFailure);
                     logger.trace("Exception waiting for epoch before coordinating exclusive sync point for local shard durability, epoch " + syncId.epoch(), wrapped);
                     node.agent().onUncaughtException(wrapped);
                     return;

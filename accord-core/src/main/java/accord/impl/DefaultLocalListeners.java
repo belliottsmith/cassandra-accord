@@ -476,4 +476,22 @@ public class DefaultLocalListeners implements LocalListeners
         });
     }
 
+    @Override
+    public void clearBefore(CommandStore commandStore, TxnId clearBefore)
+    {
+        while (!BTree.isEmpty(txnListeners))
+        {
+            TxnListeners entry = BTree.findByIndex(txnListeners, 0);
+            if (entry.compareTo(clearBefore) >= 0)
+                return;
+
+            commandStore.execute(PreLoadContext.contextFor(entry), safeStore -> {
+                SafeCommand safeCommand = safeStore.unsafeGet(entry);
+                SaveStatus saveStatus = safeCommand.current().saveStatus();
+                Invariants.checkState(saveStatus.compareTo(entry.await) >= 0);
+                entry.notify(notifySink, safeStore, safeCommand);
+            }).begin(commandStore.agent());
+            txnListeners = BTreeRemoval.remove(txnListeners, TxnListeners::compareListeners, entry);
+        }
+    }
 }

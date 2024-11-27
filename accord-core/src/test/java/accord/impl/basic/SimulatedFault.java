@@ -18,10 +18,23 @@
 
 package accord.impl.basic;
 
-public class SimulatedFault extends AssertionError
+import accord.utils.WrappableException;
+
+public class SimulatedFault extends AssertionError implements WrappableException<SimulatedFault>
 {
     public SimulatedFault(Object detailMessage)
     {
         super(detailMessage);
+    }
+
+    public SimulatedFault(String message, Throwable cause)
+    {
+        super(message, cause);
+    }
+
+    @Override
+    public SimulatedFault wrap()
+    {
+        return new SimulatedFault(getMessage(), this);
     }
 }

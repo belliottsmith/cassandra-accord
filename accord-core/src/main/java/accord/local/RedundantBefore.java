@@ -21,6 +21,7 @@ package accord.local;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
 import javax.annotation.Nonnull;
@@ -39,7 +40,6 @@ import accord.primitives.Ranges;
 import accord.primitives.Routables;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
@@ -55,14 +55,22 @@ import static accord.local.RedundantStatus.LIVE;
 import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.NOT_OWNED;
 import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
+import static accord.local.RedundantStatus.GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.SHARD_REDUNDANT;
+import static accord.local.RedundantStatus.SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.WAS_OWNED;
 import static accord.local.RedundantStatus.WAS_OWNED_CLOSED;
 import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
 
 public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 {
+    public interface RedundantBeforeSupplier
+    {
+        RedundantBefore redundantBefore();
+    }
+
     public static class SerializerSupport
     {
         public static RedundantBefore create(boolean inclusiveEnds, RoutingKey[] ends, Entry[] values)
@@ -117,6 +125,10 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         /**
          * Represents the maximum TxnId we know to have fully executed until across all healthy non-bootstrapping replicas
          * for the range in question, including ourselves.
+         *
+         * Note that in some cases we can safely use this property in place of gcBefore for cleaning up or inferring
+         * invalidations, but remember that if we are erasing data we may report to peers then we must provide an RX
+         * in place of that data to prevent a stale peer thinking they have enough information.
          */
         public final @Nonnull TxnId shardAppliedOrInvalidatedBefore;
 
@@ -161,8 +173,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             this.bootstrappedAt = bootstrappedAt;
             this.staleUntilAtLeast = staleUntilAtLeast;
             checkNoneOrRX(locallyWitnessedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore,
-                          shardAppliedOrInvalidatedBefore, gcBefore);
-            checkPartiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
+                          shardAppliedOrInvalidatedBefore, gcBefore);checkPartiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
             checkPartiallyOrdered(shardAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
             checkPartiallyOrdered(gcBefore, shardAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore);
         }
@@ -180,7 +191,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         }
         private static void checkNoneOrRX(TxnId txnId)
         {
-            Invariants.checkArgument(txnId.equals(TxnId.NONE) || (txnId.domain().isRange() && txnId.is(Txn.Kind.ExclusiveSyncPoint)));
+            Invariants.checkArgument(txnId.equals(TxnId.NONE) || (txnId.domain().isRange() && txnId.is(ExclusiveSyncPoint)));
         }
 
         public static Entry reduce(Entry a, Entry b)
@@ -290,11 +301,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             if (entry == null || prev)
                 return prev;
 
-            long epoch = txnId.epoch();
-            if (entry.startOwnershipEpoch > epoch || entry.endOwnershipEpoch <= epoch)
-                return false;
-
-            return predicate.test(entry.getIgnoringOwnership(txnId), test);
+            return predicate.test(entry.get(txnId), test);
         }
 
         static @Nonnull Boolean isAnyOnAnyEpoch(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus status)
@@ -334,8 +341,12 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             if (entry == null)
                 return prev;
 
-            if (entry.gcBefore.compareTo(Timestamp.NONE) > 0)
-                prev.add(entry.range, entry.gcBefore);
+            // we report an RX that represents a point on or after our GC bound, so that we never report an incomplete
+            // transitive dependency history. If we consistently only GC'd at gcBefore we could report this bound,
+            // but since it is likely safe to use this bound in cases that don't have lagged durability,
+            // we conservatively report this bound since it is expected to be applied already at all non-stale shards
+            if (entry.shardAppliedOrInvalidatedBefore.compareTo(Timestamp.NONE) > 0)
+                prev.add(entry.range, entry.shardAppliedOrInvalidatedBefore);
 
             return prev;
         }
@@ -367,18 +378,39 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return TxnId.nonNullOrMax(max, get.apply(entry));
         }
 
-        static Ranges expectToExecute(Entry entry, @Nonnull Ranges executeRanges, TxnId txnId, @Nullable Timestamp executeAt)
+        static Participants<?> expectToExecuteParticipants(Entry entry, @Nonnull Participants<?> execute, TxnId txnId, @Nullable Timestamp executeAt)
         {
-            if (entry == null || (executeAt == null ? entry.outOfBounds(txnId) : entry.outOfBounds(txnId, executeAt)))
-                return executeRanges;
-
-            if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
-                return executeRanges.without(Ranges.of(entry.range));
-
-            return executeRanges;
+            return expectToExecute(entry, execute, txnId, executeAt, Participants::without);
         }
 
-        static Ranges removeShardRedundant(Entry entry, @Nonnull Ranges notRedundant, TxnId txnId, @Nullable Timestamp executeAt)
+        static Ranges expectToExecuteRanges(Entry entry, @Nonnull Ranges execute, TxnId txnId, @Nullable Timestamp executeAt)
+        {
+            return expectToExecute(entry, execute, txnId, executeAt, Ranges::without);
+        }
+
+        static <P extends Participants<?>> P expectToExecute(Entry entry, @Nonnull P execute, TxnId txnId, @Nullable Timestamp executeAt, BiFunction<P, Ranges, P> without)
+        {
+            if (entry == null || (executeAt == null ? entry.outOfBounds(txnId) : entry.outOfBounds(txnId, executeAt)))
+                return execute;
+
+            if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
+                return without.apply(execute, Ranges.of(entry.range));
+
+            return execute;
+        }
+
+        static Participants<?> expectToExecuteRX(Entry entry, @Nonnull Participants<?> execute, TxnId txnId)
+        {
+            if (entry == null)
+                return execute;
+
+            if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
+                return execute.without(Ranges.of(entry.range));
+
+            return execute;
+        }
+
+        static Ranges removeGcBefore(Entry entry, @Nonnull Ranges notRedundant, TxnId txnId, @Nullable Timestamp executeAt)
         {
             if (entry == null || (executeAt == null ? entry.outOfBounds(txnId) : entry.outOfBounds(txnId, executeAt)))
                 return notRedundant;
@@ -387,6 +419,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 return notRedundant.without(Ranges.of(entry.range));
 
             return notRedundant;
+        }
+
+        static Ranges removeRetired(Entry entry, @Nonnull Ranges notRedundant)
+        {
+            if (entry == null || entry.endOwnershipEpoch > entry.shardAppliedOrInvalidatedBefore.epoch())
+                return notRedundant;
+
+            return notRedundant.without(Ranges.of(entry.range));
         }
 
         static Ranges removePreBootstrap(Entry entry, @Nonnull Ranges notPreBootstrap, TxnId txnId, Object ignore)
@@ -412,7 +452,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             // we have to first check bootstrappedAt, since we are not locally redundant for the covered range
             // if the txnId is partially pre-bootstrap (since we may not have applied it for this range)
             if (staleUntilAtLeast != null || bootstrappedAt.compareTo(txnId) > 0)
-                return PRE_BOOTSTRAP_OR_STALE;
+                return shardAppliedOrInvalidatedBefore.compareTo(txnId) > 0
+                       ? SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE : PRE_BOOTSTRAP_OR_STALE;
 
             if (locallyAppliedOrInvalidatedBefore.compareTo(txnId) > 0)
             {
@@ -423,6 +464,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 return LOCALLY_REDUNDANT;
             }
 
+            // TODO (expected): place this at top with related conditions?
             if (txnId.epoch() < startOwnershipEpoch)
                 return PRE_BOOTSTRAP_OR_STALE;
 
@@ -645,6 +687,13 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         return foldl(participants, Entry::getAndMerge, NOT_OWNED, txnId, null, ignore -> false);
     }
 
+    public RedundantStatus status(TxnId txnId, RoutingKey key)
+    {   // TODO (required): consider how the use of txnId for executeAt affects exclusive sync points for cleanup
+        //    may want to issue synthetic sync points for local evaluation in later epochs
+        Entry entry = get(key);
+        return entry == null ? NOT_OWNED : entry.get(txnId);
+    }
+
     public boolean isAnyOnCoordinationEpoch(TxnId txnId, Unseekables<?> participants, RedundantStatus status)
     {
         return foldl(participants, Entry::isAnyOnCoordinationEpoch, false, txnId, status, isDone -> isDone);
@@ -697,12 +746,25 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     /**
      * Subtract any ranges we consider stale or pre-bootstrap
      */
-    public Ranges removeShardRedundant(TxnId txnId, @Nonnull Timestamp executeAt, Ranges ranges)
+    public Ranges removeGcBefore(TxnId txnId, @Nonnull Timestamp executeAt, Ranges ranges)
     {
         Invariants.checkArgument(executeAt != null, "executeAt must not be null");
         if (txnId.compareTo(maxGcBefore) >= 0)
             return ranges;
-        return foldl(ranges, Entry::removeShardRedundant, ranges, txnId, executeAt, r -> false);
+        return foldl(ranges, Entry::removeGcBefore, ranges, txnId, executeAt, r -> false);
+    }
+
+    /**
+     * Subtract any ranges we consider stale or pre-bootstrap
+     */
+    public Ranges removeRetired(Ranges ranges)
+    {
+        return foldl(ranges, Entry::removeRetired, ranges, r -> false);
+    }
+
+    public TxnId minShardRedundantBefore()
+    {
+        return foldl((e, v) -> e == null || e.shardAppliedOrInvalidatedBefore.compareTo(v) >= 0 ? v : e.shardAppliedOrInvalidatedBefore, TxnId.MAX, i -> false);
     }
 
     /**
@@ -718,12 +780,19 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     /**
      * Subtract any ranges we consider stale or pre-bootstrap
      */
-    public Ranges expectToExecute(TxnId txnId, @Nonnull Timestamp executeAt, Ranges ranges)
+    public Participants<?> expectToExecute(TxnId txnId, @Nonnull Timestamp executeAt, Participants<?> keysOrRanges)
     {
-        Invariants.checkArgument(executeAt != null, "executeAt must not be null");
-        if (maxBootstrap.compareTo(txnId) <= 0 && (staleRanges == null || !staleRanges.intersects(ranges)))
-            return ranges;
-        return foldl(ranges, Entry::expectToExecute, ranges, txnId, executeAt, r -> false);
+        if (txnId.is(ExclusiveSyncPoint))
+        {
+            return foldl(keysOrRanges, Entry::expectToExecuteRX, keysOrRanges, txnId, i -> false);
+        }
+        else
+        {
+            Invariants.checkArgument(executeAt != null, "executeAt must not be null");
+            if (maxBootstrap.compareTo(txnId) <= 0 && (staleRanges == null || !staleRanges.intersects(keysOrRanges)))
+                return keysOrRanges;
+            return foldl(keysOrRanges, Entry::expectToExecuteParticipants, keysOrRanges, txnId, executeAt, r -> false);
+        }
     }
 
     /**
@@ -733,7 +802,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     {
         if (maxBootstrap.compareTo(txnId) <= 0 && (staleRanges == null || !staleRanges.intersects(ranges)))
             return ranges;
-        return foldl(ranges, Entry::expectToExecute, ranges, txnId, null, r -> false);
+        return foldl(ranges, Entry::expectToExecuteRanges, ranges, txnId, null, r -> false);
     }
 
     /**
@@ -914,6 +983,13 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
             int appliedIdx = d.txnIds().find(e.locallyAppliedOrInvalidatedBefore);
             if (appliedIdx < 0) appliedIdx = -1 - appliedIdx;
+            if (e.locallyAppliedOrInvalidatedBefore.epoch() >= e.endOwnershipEpoch)
+            {
+                // for range transactions, we should not infer that a still-owned range is redundant because a not-owned range that overlaps is redundant
+                int altAppliedIdx = d.txnIds().find(TxnId.minForEpoch(e.endOwnershipEpoch));
+                if (altAppliedIdx < 0) altAppliedIdx = -1 - altAppliedIdx;
+                if (altAppliedIdx < appliedIdx) appliedIdx = altAppliedIdx;
+            }
             s.appliedIdx = appliedIdx;
 
             // remove intersecting transactions with known redundant txnId

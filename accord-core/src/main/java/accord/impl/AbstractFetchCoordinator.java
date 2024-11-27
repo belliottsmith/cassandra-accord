@@ -157,10 +157,12 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                         switch ((CommitOrReadNack) reply)
                         {
                             default: throw new AssertionError("Unhandled enum: " + reply);
-                            case Invalid:
                             case Redundant:
-                            case Rejected:
                                 // TODO (expected): stop fetch sync points from garbage collecting too quickly
+                                // too late, sync point has been erased
+                                break;
+                            case Invalid:
+                            case Rejected:
                                 throw new AssertionError(String.format("Unexpected reply: %s", reply));
                         }
                     }
@@ -168,7 +170,6 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                 }
 
                 FetchResponse ok = (FetchResponse) reply;
-                // TODO (required): implement support for notReady and retryInFutureEpoch, or else have option of disabling this behaviour on recipient
                 Ranges received;
                 if (ok.unavailable != null)
                 {
@@ -240,7 +241,6 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     {
         private static final ExecuteOn EXECUTE_ON = new ExecuteOn(Applied, TruncatedApply);
         public final PartialTxn read;
-
         public final PartialDeps partialDeps;
 
         public FetchRequest(long sourceEpoch, TxnId syncId, Ranges ranges, PartialDeps partialDeps, PartialTxn partialTxn)

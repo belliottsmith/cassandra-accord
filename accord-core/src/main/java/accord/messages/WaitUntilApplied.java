@@ -18,6 +18,8 @@
 
 package accord.messages;
 
+import java.util.function.ToLongFunction;
+
 import accord.api.Data;
 import accord.local.Command;
 import accord.local.Node;
@@ -47,15 +49,15 @@ public class WaitUntilApplied extends ReadData
     private final long minEpoch;
     private long retryInLaterEpoch;
 
-    public WaitUntilApplied(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    public WaitUntilApplied(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long executeAtEpoch)
     {
-        super(to, topologies, txnId, readScope, executeAtEpoch);
+        super(to, topologies, txnId, scope, executeAtEpoch);
         this.minEpoch = topologies.oldestEpoch();
     }
 
-    protected WaitUntilApplied(TxnId txnId, Participants<?> readScope, long minEpoch, long executeAtEpoch)
+    protected WaitUntilApplied(TxnId txnId, Participants<?> scope, long minEpoch, long executeAtEpoch)
     {
-        super(txnId, readScope, executeAtEpoch);
+        super(txnId, scope, executeAtEpoch);
         this.minEpoch = minEpoch;
     }
 
