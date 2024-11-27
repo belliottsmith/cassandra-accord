@@ -59,6 +59,8 @@ import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
+// TODO (expected): if one shard timesout waiting to reply, but another shard produces a reply, return a partial response (or response with suitably populated unavailable)
+//   this means timing out a little earlier so the reply has time to arrive (but this should anyway be the case)
 public abstract class ReadData implements PreLoadContext, Request, MapReduceConsume<SafeCommandStore, ReadData.CommitOrReadNack>, LocalListeners.ComplexListener, Timeouts.Timeout
 {
     private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
@@ -115,13 +117,14 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public final long executeAtEpoch;
     private transient State state = State.PENDING; // TODO (low priority, semantics): respond with the Executed result we have stored?
 
+    transient Timestamp executeAt;
     private Data data;
     transient IntHashSet waitingOn, reading;
     transient int waitingOnCount;
     transient Ranges unavailable;
-    Int2ObjectHashMap<LocalListeners.Registered> listeners = new Int2ObjectHashMap<>();
-    Cancellable cancel;
-    RegisteredTimeout timeout;
+    transient Int2ObjectHashMap<LocalListeners.Registered> listeners = new Int2ObjectHashMap<>();
+    transient Cancellable cancel;
+    transient RegisteredTimeout timeout;
 
     protected transient Node node;
     protected transient Node.Id replyTo;
@@ -322,12 +325,16 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Ranges unavailable)
     {
+        if (this.executeAt == null) this.executeAt = executeAt;
+        else if (txnId.awaitsOnlyDeps()) this.executeAt = Timestamp.max(this.executeAt, executeAt);
+        else Invariants.checkState(executeAt.equals(this.executeAt));
         return txn.read(safeStore, executeAt, unavailable);
     }
 
     static Ranges unavailable(SafeCommandStore safeStore, Command command)
     {
         Timestamp executeAt = command.executesAtLeast();
+        if (executeAt == null) executeAt = command.executeAtOrTxnId();
         // TODO (required): for awaitsOnlyDeps commands, if we cannot infer an actual executeAtLeast we should confirm no situation where txnId is not an adequately conservative value for unavailable/unsafeToRead
         return safeStore.unsafeToReadAt(executeAt);
     }
@@ -341,7 +348,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         beginRead(safeStore, command.executeAt(), command.partialTxn(), unavailable).begin((next, throwable) -> {
             if (throwable != null)
             {
-                logger.trace("{}: read failed for {}: {}", txnId, unsafeStore, throwable);
+                logger.trace("{}: read failed for {}", txnId, unsafeStore, throwable);
                 onFailure(null, throwable);
             }
             else
@@ -418,8 +425,6 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
     }
 
-    protected void submitted() {}
-
     boolean cancel()
     {
         Cancellable clear;
@@ -493,6 +498,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     protected ReadOk constructReadOk(Ranges unavailable, Data data)
     {
+        if (data != null) data.validateReply(txnId, executeAt);
         return new ReadOk(unavailable, data);
     }
 

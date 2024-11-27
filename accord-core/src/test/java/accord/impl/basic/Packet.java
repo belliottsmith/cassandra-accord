@@ -29,7 +29,7 @@ public class Packet implements Pending, ReplyContext
 {
     static final int SENTINEL_MESSAGE_ID = Integer.MIN_VALUE;
 
-    final Pending origin = Pending.Global.activeOrigin();
+    final Pending origin;
     public final Id src;
     public final Id dst;
     public final long expiresAt;
@@ -39,12 +39,18 @@ public class Packet implements Pending, ReplyContext
 
     public Packet(Id src, Id dst, long expiresAt, long requestId, Request request)
     {
+        this(src, dst, expiresAt, requestId, request, src.id < 0);
+    }
+
+    public Packet(Id src, Id dst, long expiresAt, long requestId, Request request, boolean isSelfOrigin)
+    {
         this.src = src;
         this.dst = dst;
         this.expiresAt = expiresAt;
         this.requestId = requestId;
         this.replyId = SENTINEL_MESSAGE_ID;
         this.message = request;
+        this.origin = isSelfOrigin ? this : Pending.Global.activeOrigin();
     }
 
     public Packet(Id src, Id dst, long expiresAt, long replyId, Reply reply)
@@ -55,6 +61,7 @@ public class Packet implements Pending, ReplyContext
         this.requestId = SENTINEL_MESSAGE_ID;
         this.replyId = replyId;
         this.message = reply;
+        this.origin = src.id < 0 ? this : Pending.Global.activeOrigin();
     }
 
     @Override

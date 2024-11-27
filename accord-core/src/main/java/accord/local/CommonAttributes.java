@@ -101,12 +101,6 @@ public interface CommonAttributes
             return participants;
         }
 
-        public Mutable updateParticipants(StoreParticipants participants)
-        {
-            this.participants = this.participants == null ? participants : participants.supplement(this.participants);
-            return this;
-        }
-
         public Mutable setParticipants(StoreParticipants participants)
         {
             this.participants = participants;

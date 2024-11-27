@@ -18,6 +18,7 @@
 
 package accord.local.cfk;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -34,6 +35,7 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.cfk.CommandsForKey.InternalStatus;
+import accord.local.cfk.PostProcess.LoadPruned;
 import accord.primitives.Status;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.primitives.Ballot;
@@ -56,6 +58,7 @@ import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
 import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
+import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER_DEPS_ONLY;
 import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Utils.insertMissing;
@@ -64,6 +67,8 @@ import static accord.local.cfk.Utils.missingTo;
 import static accord.local.cfk.Utils.removeOneMissing;
 import static accord.local.cfk.Utils.removePrunedAdditions;
 import static accord.local.cfk.Utils.validateMissing;
+import static accord.primitives.Routable.Domain.Range;
+import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -97,17 +102,18 @@ class Updating
         }
     }
 
-    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command command)
+    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Command command)
     {
         Invariants.checkArgument(loadingPrunedFor(cfk.loadingPruned, plainTxnId, null) == null);
         // TODO (expected): do not calculate any deps or additions if we're transitioning from Stable to Applied; wasted effort and might trigger LoadPruned
-        Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, mayExecute, command);
+        Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, isDurable, mayExecute, command);
         if (newInfoObj.getClass() != InfoWithAdditions.class)
             return insertOrUpdate(cfk, insertPos, plainTxnId, curInfo, (TxnInfo)newInfoObj, false, null);
 
         InfoWithAdditions newInfoWithAdditions = (InfoWithAdditions) newInfoObj;
         TxnId[] additions = newInfoWithAdditions.additions;
         int additionCount = newInfoWithAdditions.additionCount;
+        int additionAndPrunedCount = additionCount;
         TxnInfo newInfo = newInfoWithAdditions.info;
 
         TxnId[] prunedIds = removePrunedAdditions(additions, additionCount, cfk.prunedBefore());
@@ -115,7 +121,9 @@ class Updating
         if (prunedIds != NO_TXNIDS)
         {
             additionCount -= prunedIds.length;
-            newLoadingPruned = Pruning.loadPruned(cfk.loadingPruned, prunedIds, plainTxnId);
+            List<TxnId> insertLoadPruned = new ArrayList<>();
+            newLoadingPruned = Pruning.loadPruned(cfk.loadingPruned, prunedIds, plainTxnId, insertLoadPruned);
+            prunedIds = insertLoadPruned.isEmpty() ? NO_TXNIDS : insertLoadPruned.toArray(TxnId[]::new);
         }
 
         int committedByExecuteAtUpdatePos = committedByExecuteAtUpdatePos(cfk.committedByExecuteAt, curInfo, newInfo);
@@ -169,18 +177,18 @@ class Updating
                 newMinUndecidedById = Arrays.binarySearch(newById, 0, newById.length, newMinUndecided);
         }
 
-        cachedTxnIds().forceDiscard(additions, additionCount + prunedIds.length);
+        cachedTxnIds().forceDiscard(additions, additionAndPrunedCount);
 
         int newPrunedBeforeById = cfk.prunedBeforeById;
         if (curInfo == null && insertPos <= cfk.prunedBeforeById)
             ++newPrunedBeforeById;
 
-        return PostProcess.LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
+        return LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
     }
 
-    static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, InternalStatus newStatus, boolean mayExecute, Command command)
+    static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Command command)
     {
-        Invariants.checkState(newStatus.hasExecuteAtOrDeps);
+        Invariants.checkState(newStatus.hasExecuteAtAndDeps);
         Timestamp executeAt = command.executeAt();
         if (executeAt.equals(txnId)) executeAt = txnId;
         Ballot ballot = Ballot.ZERO;
@@ -191,14 +199,14 @@ class Updating
         SortedCursor<TxnId> deps = command.partialDeps().txnIds(cfk.key());
         deps.find(cfk.redundantBefore());
 
-        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, mayExecute, ballot, executeAt, depsKnownBefore, deps);
+        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, isDurable, mayExecute, ballot, executeAt, depsKnownBefore, deps);
     }
 
     /**
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, SortedCursor<TxnId> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, SortedCursor<TxnId> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -286,7 +294,7 @@ class Updating
             }
         }
 
-        TxnInfo info = TxnInfo.create(plainTxnId, newStatus, mayExecute, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount), ballot);
+        TxnInfo info = TxnInfo.create(plainTxnId, newStatus, isDurable, mayExecute, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount), ballot);
         if (additionCount == 0)
             return info;
 
@@ -460,7 +468,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j++];
-                newById[count] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 ++missingCount;
             }
             else
@@ -477,7 +485,7 @@ class Updating
                 while (count < targetInsertPos)
                 {
                     TxnId txnId = additions[j++];
-                    newById[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                    newById[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 }
                 newById[targetInsertPos] = newInfo;
                 count = targetInsertPos + 1;
@@ -485,7 +493,7 @@ class Updating
             while (j < additionCount)
             {
                 TxnId txnId = additions[j++];
-                newById[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
             }
         }
         else if (count == targetInsertPos)
@@ -550,7 +558,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j];
-                newInfos[count] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newInfos[count] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 ++j;
                 ++missingCount;
             }
@@ -564,7 +572,7 @@ class Updating
         while (j < additionCount)
         {
             TxnId txnId = additions[j];
-            newInfos[count++] = TxnInfo.create(txnId, TRANSITIVE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+            newInfos[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
             j++;
         }
 
@@ -744,7 +752,8 @@ class Updating
 
         Command.Committed command = safeCommand.current().asCommitted();
         TxnId waitingTxnId = command.txnId();
-        Timestamp waitingExecuteAt = command.executeAt();
+        // used only to decide if an executeAt is included _on the assumption the TxnId is_. For ?[EX] this is all timestamps
+        Timestamp compareExecuteAt = waitingTxnId.awaitsOnlyDeps() ? Timestamp.MAX : command.executeAt();
 
         TxnInfo[] byId = cfk.byId;
         RelationMultiMap.SortedRelationList<TxnId> txnIds = command.partialDeps().keyDeps.txnIds(cfk.key());
@@ -754,55 +763,107 @@ class Updating
         // so we can filter to only transactions we need to execute locally
         int i = txnIds.find(cfk.redundantOrBootstrappedBefore());
         if (i < 0) i = -1 - i;
-        if (i < txnIds.size())
+        int waitingFromIndex = i; // the min input index we expect to execute
+        if (waitingTxnId.is(ExclusiveSyncPoint) && waitingTxnId.is(Range) && mode == REGISTER)
         {
-            Txn.Kind waitingKind = waitingTxnId.kind();
+            // for RX we register all our transitive dependencies to make sure we can answer coordinated dependency calculations
+            // in this case we separate out the position from which we insert missing txnId and where we compute readiness to execute
+            i = txnIds.find(cfk.redundantBefore());
+            if (i < 0) i = -1 - i;
+        }
+
+        // note that while we may directly insert transactions that are for a future epoch we don't own,
+        // we don't do this for dependencies as we only want to know these transactions for answering
+        // recovery decisions about transactions we do own
+        // We make sure to compute dependencies that satisfy all participating epochs for RX/KX
+        int toIndex = txnIds.size();
+        while (toIndex > waitingFromIndex && txnIds.get(toIndex - 1).epoch() >= cfk.boundsInfo.endOwnershipEpoch)
+            --toIndex;
+
+        if (i < toIndex)
+        {
+            // we may have dependencies that execute after us, but in this case we only wait for them to (transitively) commit
+            // so we distinguish the input index we need to execute transactions to from the index we need to commit to
+            int waitingToExecuteIndex = toIndex;
+            if (waitingToExecuteIndex > waitingFromIndex)
+            {
+                TxnId maxWaiting = txnIds.get(waitingToExecuteIndex - 1);
+                Timestamp includeBefore = waitingTxnId.is(EphemeralRead) ? Timestamp.MAX : command.executeAt();
+                if (maxWaiting.compareTo(includeBefore) >= 0)
+                {
+                    waitingToExecuteIndex = txnIds.find(includeBefore);
+                    if (waitingToExecuteIndex < 0)
+                        waitingToExecuteIndex = -1 - waitingToExecuteIndex;
+                }
+            }
+
             boolean readyToApply = true; // our dependencies have applied, so we are ready to apply
             boolean waitingToApply = true; // our dependencies have committed, so we know when we execute and are waiting
-            boolean hasFutureDependency = false;
-            Timestamp executesAt = null;
-            int j = SortedArrays.binarySearch(byId, 0, byId.length, txnIds.get(i), Timestamp::compareTo, FAST);
+            boolean hasFutureDependency = toIndex > waitingFromIndex
+                                          && !waitingTxnId.is(EphemeralRead) // ephemeral reads wait for everything they witness, regardless of TxnId or executeAt, so the latest dependency is always enough
+                                          && txnIds.get(toIndex - 1).compareTo(command.executeAt()) > 0;
 
+            if (hasFutureDependency)
+            {
+                // This logic is to handle the case where we have pruned dependencies on the replicas we have used to calculate our dependencies
+                // so we may be missing an execution dependency, and we require that we are transitively committed
+                int waitingOnCommit = Arrays.binarySearch(byId, txnIds.get(toIndex - 1));
+                if (waitingOnCommit < 0) waitingOnCommit = -1 - waitingOnCommit;
+                if (cfk.minUndecidedById >= 0 && cfk.minUndecidedById < waitingOnCommit)
+                    readyToApply = waitingToApply = false;
+            }
+
+            Timestamp waitingToExecuteAt = null; // when the CFK should notify not waiting
+            Timestamp effectiveExecutesAt = null; // the executeAt we should report to WaitingOn for ephemeral reads
+
+            int j = SortedArrays.binarySearch(byId, 0, byId.length, txnIds.get(i), Timestamp::compareTo, FAST);
             if (j < 0) j = -1 -j;
-            while (i < txnIds.size())
+
+            while (i < toIndex)
             {
                 int c = j == byId.length ? -1 : txnIds.get(i).compareTo(byId[j]);
-                if (c == 0)
+                if (c >= 0)
                 {
                     TxnInfo txn = byId[j];
-                    if (txn.mayExecute())
+                    if (c == 0 || txn.is(waitingTxnId.witnesses()))
                     {
-                        if (txn.compareTo(COMMITTED) < 0) waitingToApply = readyToApply = false;
-                        else if (txn.compareTo(INVALIDATED) < 0
-                                 && (txn.executeAt.compareTo(waitingExecuteAt) < 0 || waitingKind.awaitsOnlyDeps))
+                        if (i >= waitingFromIndex && waitingToApply)
                         {
-                            if (waitingKind == ExclusiveSyncPoint && txn.compareTo(waitingTxnId) > 0)
+                            if (txn.mayExecute())
                             {
-                                // we don't wait for this txn itself to apply, but we do require it to be transitively committed
-                                // (i.e., not just it must be committed, but all of its transitive dependencies;
-                                // and then for the highest committed transaction < waitingTxnId to apply
-                                if (cfk.minUndecidedById >= 0 && cfk.minUndecidedById <= j)
-                                    waitingToApply = readyToApply = false;
-                                hasFutureDependency = true;
+                                if (txn.compareTo(COMMITTED) < 0) waitingToApply = readyToApply = false;
+                                else if (i < waitingToExecuteIndex)
+                                {
+                                    if (txn.compareTo(APPLIED) < 0 && txn.executeAt.compareTo(compareExecuteAt) < 0)
+                                    {
+                                        readyToApply = false;
+                                        waitingToExecuteAt = Timestamp.nonNullOrMax(waitingToExecuteAt, txn.executeAt);
+                                    }
+                                    else if (txn.is(APPLIED))
+                                    {
+                                        effectiveExecutesAt = Timestamp.nonNullOrMax(effectiveExecutesAt, txn.executeAt);
+                                    }
+                                }
                             }
-                            else
+                            else if (waitingTxnId.awaitsOnlyDeps())
                             {
-                                readyToApply &= txn.is(APPLIED);
-                                executesAt = Timestamp.nonNullOrMax(executesAt, txn.executeAt);
+                                // only really need to track epoch, but track max executeAt to support retryInLatestEpoch
+                                effectiveExecutesAt = Timestamp.nonNullOrMax(effectiveExecutesAt, txn.executeAt);
                             }
                         }
+                        if (c == 0) ++i;
                     }
-                    ++i;
                     ++j;
                 }
-                else if (c > 0) ++j;
-                else if (!cfk.mayExecute(txnIds.get(i))) ++i;
                 else if (register)
                 {
-                    readyToApply = waitingToApply = false;
+                    TxnId insert = txnIds.get(i);
+                    if (i >= waitingFromIndex)
+                        readyToApply = waitingToApply = false;
                     if (missingCount == missing.length)
                         missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount + missingCount/2));
-                    missing[missingCount++] = txnIds.get(i++);
+                    missing[missingCount++] = insert;
+                    ++i;
                 }
                 else
                 {
@@ -810,33 +871,43 @@ class Updating
                 }
             }
 
-            if (waitingKind.isSyncPoint())
+            if (toIndex < txnIds.size() && waitingTxnId.awaitsOnlyDeps())
+                effectiveExecutesAt = Timestamp.nonNullOrMax(effectiveExecutesAt, txnIds.get(txnIds.size() - 1));
+
+            // TODO (required): document why we can restrict this test to sync points
+            if (waitingToApply && waitingTxnId.isSyncPoint() && Pruning.isAnyPredecessorWaitingOnPruned(cfk.loadingPruned, waitingTxnId))
+                readyToApply = waitingToApply = false;
+
+            if (waitingToApply && hasFutureDependency)
             {
-                if (Pruning.isAnyPredecessorWaitingOnPruned(cfk.loadingPruned, waitingTxnId))
+                // This logic is to handle the case where we have pruned dependencies on the replicas we have used to calculate our dependencies
+                // so we may be missing an execution dependency, and we require that we are transitively committed
+                int w = Arrays.binarySearch(byId, command.executeAt());
+                if (w < 0) w = -1 - w;
+                // TODO (desired): consider moving this logic inline to the main loop body
+                while (--w >= 0)
                 {
-                    readyToApply = waitingToApply = false;
-                }
-                else if (waitingKind == ExclusiveSyncPoint && hasFutureDependency && waitingToApply)
-                {
-                    int w = Arrays.binarySearch(byId, waitingTxnId);
-                    if (w < 0) w = -1 - w;
-                    while (--w >= 0)
-                    {
-                        TxnInfo txn = byId[w];
-                        if (!txn.mayExecute()) continue;
-                        readyToApply &= txn.isAtLeast(APPLIED);
-                        if (txn.isCommittedToExecute())
-                            executesAt = Timestamp.nonNullOrMax(executesAt, byId[w].executeAt);
-                    }
+                    TxnInfo txn = byId[w];
+                    if (!txn.mayExecute()
+                        || !txn.is(waitingTxnId.witnesses())
+                        || txn.isAtLeast(APPLIED))
+                        continue;
+
+                    Invariants.checkState(txn.compareTo(COMMITTED) >= 0);
+                    if (txn.executeAt.compareTo(compareExecuteAt) >= 0)
+                        continue;
+
+                    readyToApply = false;
+                    waitingToExecuteAt = Timestamp.nonNullOrMax(waitingToExecuteAt, txn.executeAt);
                 }
             }
 
-            if (!readyToApply)
+            if (!readyToApply || missingCount > 0)
             {
                 TxnInfo[] newById = byId, newCommittedByExecuteAt = cfk.committedByExecuteAt;
                 int newMinUndecidedById = cfk.minUndecidedById;
                 Object[] newLoadingPruned = cfk.loadingPruned;
-                TxnId[] loadPruned = NO_TXNIDS;
+                TxnId[] prunedIds = NO_TXNIDS;
                 int clearMissingCount = missingCount;
                 if (missingCount > 0)
                 {
@@ -844,44 +915,53 @@ class Updating
                     if (prunedIndex < 0) prunedIndex = -1 - prunedIndex;
                     if (prunedIndex > 0)
                     {
-                        loadPruned = Arrays.copyOf(missing, prunedIndex);
-                        newLoadingPruned = Pruning.loadPruned(cfk.loadingPruned, loadPruned, waitingTxnId);
+                        prunedIds = Arrays.copyOf(missing, prunedIndex);
+                        List<TxnId> insertLoadPruned = new ArrayList<>();
+                        newLoadingPruned = Pruning.loadPruned(cfk.loadingPruned, prunedIds, waitingTxnId, insertLoadPruned);
+                        prunedIds = insertLoadPruned.isEmpty() ? NO_TXNIDS : insertLoadPruned.toArray(TxnId[]::new);
                     }
 
                     if (prunedIndex != missingCount)
                     {
                         missingCount -= prunedIndex;
                         System.arraycopy(missing, prunedIndex, missing, 0, missingCount);
+                        int minUndecidedMissingIndex = 0;
+                        while (minUndecidedMissingIndex < missingCount && !cfk.mayExecute(missing[minUndecidedMissingIndex]))
+                            ++minUndecidedMissingIndex;
+                        TxnId minUndecidedMissing = minUndecidedMissingIndex == missingCount ? null : missing[minUndecidedMissingIndex];
+                        TxnId minUndecided = TxnId.nonNullOrMin(minUndecidedMissing, cfk.minUndecided());
                         newById = new TxnInfo[byId.length + missingCount];
                         newCommittedByExecuteAt = insertAdditionsOnly(byId, cfk.committedByExecuteAt, newById, missing, missingCount, cfk.boundsInfo);
                         // we can safely use missing[prunedIndex] here because we only fill missing with transactions for which we manage execution
-                        newMinUndecidedById = Arrays.binarySearch(newById, TxnId.nonNullOrMin(missing[0], cfk.minUndecided()));
+                        if (minUndecided != null)
+                            newMinUndecidedById = Arrays.binarySearch(newById, minUndecided);
                     }
                 }
                 cachedTxnIds().discard(missing, clearMissingCount);
 
                 CommandsForKey.Unmanaged[] newUnmanaged = cfk.unmanageds;
-                if (mode != REGISTER_DEPS_ONLY)
+                if (!readyToApply && mode != REGISTER_DEPS_ONLY)
                 {
                     CommandsForKey.Unmanaged newPendingRecord;
                     if (waitingToApply)
                     {
-                        if (executesAt instanceof TxnInfo)
-                            executesAt = ((TxnInfo) executesAt).plainExecuteAt();
+                        if (waitingToExecuteAt instanceof TxnInfo)
+                            waitingToExecuteAt = ((TxnInfo) waitingToExecuteAt).plainExecuteAt();
 
-                        if (waitingTxnId.awaitsOnlyDeps() && executesAt != null)
+                        if (waitingTxnId.awaitsOnlyDeps())
                         {
-                            if (executesAt.compareTo(command.waitingOn.executeAtLeast(Timestamp.NONE)) > 0)
+                            effectiveExecutesAt = Timestamp.nonNullOrMax(effectiveExecutesAt, waitingToExecuteAt);
+                            if (effectiveExecutesAt != null && effectiveExecutesAt.compareTo(command.waitingOn.executeAtLeast(Timestamp.NONE)) > 0)
                             {
                                 Command.WaitingOn.Update waitingOn = new Command.WaitingOn.Update(command.waitingOn);
-                                waitingOn.updateExecuteAtLeast(executesAt);
+                                waitingOn.updateExecuteAtLeast(effectiveExecutesAt);
                                 safeCommand.updateWaitingOn(waitingOn);
                             }
                         }
 
-                        newPendingRecord = new CommandsForKey.Unmanaged(APPLY, command.txnId(), executesAt);
+                        newPendingRecord = new CommandsForKey.Unmanaged(APPLY, command.txnId(), waitingToExecuteAt);
                     }
-                    else newPendingRecord = new CommandsForKey.Unmanaged(COMMIT, command.txnId(), txnIds.get(txnIds.size() - 1));
+                    else newPendingRecord = new CommandsForKey.Unmanaged(COMMIT, command.txnId(), txnIds.get(toIndex - 1));
 
                     if (update != null)
                     {
@@ -892,19 +972,23 @@ class Updating
                     newUnmanaged = SortedArrays.insert(cfk.unmanageds, newPendingRecord, CommandsForKey.Unmanaged[]::new);
                 }
 
-                CommandsForKey result;
-                if (newById == byId) result = new CommandsForKey(cfk, newLoadingPruned, newUnmanaged);
+                CommandsForKey newCfk;
+                if (newById == byId) newCfk = new CommandsForKey(cfk, newLoadingPruned, newUnmanaged);
                 else
                 {
                     int prunedBeforeById = cfk.prunedBeforeById;
                     Invariants.checkState(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
-                    result = new CommandsForKey(cfk.key(), cfk.boundsInfo, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, newLoadingPruned, prunedBeforeById, newUnmanaged);
+                    newCfk = new CommandsForKey(cfk.key(), cfk.boundsInfo, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, newLoadingPruned, prunedBeforeById, newUnmanaged);
                 }
 
-                if (loadPruned == NO_TXNIDS)
-                    return result;
+                CommandsForKeyUpdate result = newCfk;
+                if (prunedIds != NO_TXNIDS)
+                    result = new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(newCfk, new LoadPruned(result.postProcess(), prunedIds));
 
-                return new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(result, new PostProcess.LoadPruned(null, loadPruned));
+                if (readyToApply)
+                    result = new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(newCfk, new PostProcess.NotifyNotWaiting(result.postProcess(), new TxnId[] { safeCommand.txnId() }));
+
+                return result;
             }
         }
 

@@ -83,7 +83,7 @@ public abstract class Persist implements Callback<ApplyReply>
                     if (!isDone)
                     {
                         isDone = true;
-                        InformDurable.informHome(node, topologies, txnId, route, executeAt, Majority);
+                        InformDurable.informDefault(node, topologies, txnId, route, executeAt, Majority);
                     }
                 }
                 break;

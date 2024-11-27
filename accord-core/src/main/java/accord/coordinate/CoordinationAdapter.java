@@ -42,8 +42,10 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
+import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.SLOW;
 import static accord.messages.Apply.Kind.Maximal;
@@ -53,8 +55,8 @@ public interface CoordinationAdapter<R>
 {
     interface Factory
     {
-        enum Step { Continue, InitiateRecovery }
-        <R> CoordinationAdapter<R> get(TxnId txnId, Step step);
+        enum Kind { Standard, Recovery }
+        <R> CoordinationAdapter<R> get(TxnId txnId, Kind kind);
     }
 
     void propose(Node node, @Nullable Topologies preaccept, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
@@ -69,18 +71,23 @@ public interface CoordinationAdapter<R>
     class DefaultFactory implements Factory
     {
         @Override
-        public <R> CoordinationAdapter<R> get(TxnId txnId, Step step)
+        public <R> CoordinationAdapter<R> get(TxnId txnId, Kind kind)
         {
             switch (txnId.kind())
             {
-                case ExclusiveSyncPoint: return (CoordinationAdapter<R>) Adapters.exclusiveSyncPoint();
-                case SyncPoint: return (CoordinationAdapter<R>) Adapters.inclusiveSyncPoint();
+                case ExclusiveSyncPoint:
+                    // callback types are different, and we pass through the recovery adapter for sync points so should not invoke Continue
+                    Invariants.checkState(kind == Recovery);
+                    return (CoordinationAdapter<R>) Adapters.recoverExclusiveSyncPoint();
+                case SyncPoint:
+                    Invariants.checkState(kind == Recovery);
+                    return (CoordinationAdapter<R>) Adapters.recoverInclusiveSyncPoint();
             }
-            switch (step)
+            switch (kind)
             {
-                default: throw new AssertionError("Unhandled step: " + step);
-                case Continue: return (CoordinationAdapter<R>) Adapters.standard();
-                case InitiateRecovery: return (CoordinationAdapter<R>) Adapters.recovery();
+                default: throw new AssertionError("Unhandled kind: " + kind);
+                case Standard: return (CoordinationAdapter<R>) Adapters.standard();
+                case Recovery: return (CoordinationAdapter<R>) Adapters.recover();
             }
         }
     }
@@ -94,24 +101,34 @@ public interface CoordinationAdapter<R>
 
         // note that by default the recovery adapter is only used for the initial recovery decision - if e.g. propose is initiated
         // then we revert back to standard adapter behaviour for later steps
-        public static CoordinationAdapter<Result> recovery()
+        public static CoordinationAdapter<Result> recover()
         {
-            return RecoveryTxnAdapter.INSTANCE;
+            return RecoverTxnAdapter.INSTANCE;
         }
 
-        public static <U extends Unseekable> SyncPointAdapter<U> inclusiveSyncPoint()
+        public static <U extends Unseekable> SyncPointAdapter<SyncPoint<U>> inclusiveSyncPoint()
         {
             return AsyncInclusiveSyncPointAdapter.INSTANCE;
         }
 
-        public static <U extends Unseekable> SyncPointAdapter<U> inclusiveSyncPointBlocking()
+        public static <U extends Unseekable> SyncPointAdapter<SyncPoint<U>> inclusiveSyncPointBlocking()
         {
             return InclusiveSyncPointBlockingAdapter.INSTANCE;
         }
 
-        public static <U extends Unseekable> SyncPointAdapter<U> exclusiveSyncPoint()
+        public static CoordinationAdapter<Result> recoverInclusiveSyncPoint()
+        {
+            return RecoverInclusiveSyncPointAdapter.INSTANCE;
+        }
+
+        public static <U extends Unseekable> SyncPointAdapter<SyncPoint<U>> exclusiveSyncPoint()
         {
             return ExclusiveSyncPointAdapter.INSTANCE;
+        }
+
+        public static CoordinationAdapter<Result> recoverExclusiveSyncPoint()
+        {
+            return RecoverExclusiveSyncPointAdapter.INSTANCE;
         }
 
         public static abstract class AbstractTxnAdapter implements CoordinationAdapter<Result>
@@ -138,7 +155,7 @@ public interface CoordinationAdapter<R>
 
                 Topologies all = node.topology().reselect(accept, QuorumEpochIntersections.accept,
                                                           route, txnId, executeAt, QuorumEpochIntersections.commit);
-                Topologies coordinates = all.size() == 1 ? all : accept.forEpochs(txnId.epoch(), txnId.epoch());
+                Topologies coordinates = all.size() == 1 ? all : accept.forEpoch(txnId.epoch());
 
                 if (ProtocolModifiers.Faults.txnInstability) execute(node, all, route, SLOW, txnId, txn, executeAt, deps, callback);
                 else new StabiliseTxn(node, coordinates, all, route, ballot, txnId, txn, executeAt, deps, callback).start();
@@ -175,9 +192,9 @@ public interface CoordinationAdapter<R>
             }
         }
 
-        public static class RecoveryTxnAdapter extends AbstractTxnAdapter
+        public static class RecoverTxnAdapter extends AbstractTxnAdapter
         {
-            public static final RecoveryTxnAdapter INSTANCE = new RecoveryTxnAdapter();
+            public static final RecoverTxnAdapter INSTANCE = new RecoverTxnAdapter();
             @Override
             public void persist(Node node, Topologies any, FullRoute<?> route, Route<?> sendTo, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super Result, Throwable> callback)
             {
@@ -189,7 +206,7 @@ public interface CoordinationAdapter<R>
             }
         }
 
-        public static abstract class SyncPointAdapter<U extends Unseekable> implements CoordinationAdapter<SyncPoint<U>>
+        public static abstract class SyncPointAdapter<R> implements CoordinationAdapter<R>
         {
             final Function<Topologies, PreAcceptTracker<?>> preacceptTrackerFactory;
 
@@ -200,49 +217,43 @@ public interface CoordinationAdapter<R>
 
             abstract Topologies forDecision(Node node, FullRoute<?> route, TxnId txnId);
             abstract Topologies forExecution(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Deps deps);
-
-            void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
-            {
-                callback.accept(new SyncPoint<>(txnId, deps, (FullRoute<U>)route), null);
-            }
+            abstract void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super R, Throwable> callback);
 
             @Override
-            public void propose(Node node, Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void propose(Node node, Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
                 Topologies all = forDecision(node, route, txnId);
                 new ProposeSyncPoint<>(this, node, all, route, ballot, txnId, txn, executeAt, deps, callback).start();
             }
 
             @Override
-            public void stabilise(Node node, Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void stabilise(Node node, Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
                 Topologies all = forExecution(node, route, txnId, executeAt, deps);
-                Topologies coordinates = all.forEpochs(txnId.epoch(), txnId.epoch());
+                Topologies coordinates = all.forEpoch(txnId.epoch());
                 new StabiliseSyncPoint<>(this, node, coordinates, all, route, ballot, txnId, txn, executeAt, deps, callback).start();
             }
 
             @Override
-            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
                 persist(node, null, route, txnId, txn, executeAt, deps, txn.execute(txnId, executeAt, null), txn.result(txnId, executeAt, null), callback);
             }
 
             @Override
-            public void persist(Node node, Topologies ignore, FullRoute<?> route, Route<?> participants, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void persist(Node node, Topologies ignore, FullRoute<?> route, Route<?> participants, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback)
             {
                 Topologies all = forExecution(node, route, txnId, executeAt, deps);
 
-                invokeSuccess(node, route, txnId, txn, deps, callback);
+                invokeSuccess(node, route, txnId, executeAt, txn, deps, callback);
                 new PersistSyncPoint(node, all, txnId, route, txn, executeAt, deps, writes, result)
                 .start(Apply.FACTORY, Maximal, all, writes, result);
             }
         }
 
-        public static class ExclusiveSyncPointAdapter<U extends Unseekable> extends SyncPointAdapter<U>
+        private static abstract class AbstractExclusiveSyncPointAdapter<R> extends SyncPointAdapter<R>
         {
-            private static final ExclusiveSyncPointAdapter INSTANCE = new ExclusiveSyncPointAdapter();
-
-            public ExclusiveSyncPointAdapter()
+            public AbstractExclusiveSyncPointAdapter()
             {
                 super(QuorumTracker::new);
             }
@@ -256,12 +267,11 @@ public interface CoordinationAdapter<R>
             @Override
             Topologies forExecution(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Deps deps)
             {
-                TxnId minId = TxnId.nonNullOrMin(txnId, deps.minTxnId());
-                return node.topology().withUncompletedEpochs(route, minId, txnId);
+                return node.topology().withUncompletedEpochs(route, txnId, txnId);
             }
 
             @Override
-            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
                 // TODO (required, consider): remember and document why we don't use fast path for exclusive sync points
                 if (path == FAST) stabilise(node, any, route, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
@@ -269,7 +279,29 @@ public interface CoordinationAdapter<R>
             }
         }
 
-        public static abstract class AbstractInclusiveSyncPointAdapter<U extends Unseekable> extends SyncPointAdapter<U>
+        static class RecoverExclusiveSyncPointAdapter extends AbstractExclusiveSyncPointAdapter<Result>
+        {
+            static final RecoverExclusiveSyncPointAdapter INSTANCE = new RecoverExclusiveSyncPointAdapter();
+
+            @Override
+            void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super Result, Throwable> callback)
+            {
+                callback.accept(txn.result(txnId, executeAt, null), null);
+            }
+        }
+
+        static class ExclusiveSyncPointAdapter<U extends Unseekable> extends AbstractExclusiveSyncPointAdapter<SyncPoint<U>>
+        {
+            static final ExclusiveSyncPointAdapter INSTANCE = new ExclusiveSyncPointAdapter();
+
+            @Override
+            void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            {
+                callback.accept(new SyncPoint<>(txnId, executeAt, deps, (FullRoute<U>)route), null);
+            }
+        }
+
+        private static abstract class AbstractInclusiveSyncPointAdapter<R> extends SyncPointAdapter<R>
         {
             protected AbstractInclusiveSyncPointAdapter()
             {
@@ -289,13 +321,24 @@ public interface CoordinationAdapter<R>
             }
         }
 
+        private static abstract class AbstractInitiateInclusiveSyncPointAdapter<U extends Unseekable> extends AbstractInclusiveSyncPointAdapter<SyncPoint<U>>
+        {
+            protected AbstractInitiateInclusiveSyncPointAdapter() {}
+
+            @Override
+            void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            {
+                callback.accept(new SyncPoint<>(txnId, executeAt, deps, (FullRoute<U>) route), null);
+            }
+        }
+
         /*
          * Async meaning that the result of the distributed sync point is not known when this returns
          * At most the caller can wait for the sync point to complete locally. This does mean that the sync
          * point is being executed and that eventually information will be known locally everywhere about the last
          * sync point for the keys/ranges this sync point covered.
          */
-        private static class AsyncInclusiveSyncPointAdapter<U extends Unseekable> extends AbstractInclusiveSyncPointAdapter<U>
+        public static class AsyncInclusiveSyncPointAdapter<U extends Unseekable> extends AbstractInitiateInclusiveSyncPointAdapter<U>
         {
             private static final AsyncInclusiveSyncPointAdapter INSTANCE = new AsyncInclusiveSyncPointAdapter();
 
@@ -304,7 +347,7 @@ public interface CoordinationAdapter<R>
             }
         }
 
-        private static class InclusiveSyncPointBlockingAdapter<U extends Unseekable> extends AbstractInclusiveSyncPointAdapter<U>
+        public static class InclusiveSyncPointBlockingAdapter<U extends Unseekable> extends AbstractInitiateInclusiveSyncPointAdapter<U>
         {
             private static final InclusiveSyncPointBlockingAdapter INSTANCE = new InclusiveSyncPointBlockingAdapter();
 
@@ -317,7 +360,7 @@ public interface CoordinationAdapter<R>
             {
                 Topologies all = forExecution(node, route, txnId, executeAt, deps);
 
-                ExecuteInclusive<U> execute = ExecuteInclusive.atQuorum(node, all, new SyncPoint<>(txnId, deps, (FullRoute<U>) route), executeAt);
+                ExecuteInclusive<U> execute = ExecuteInclusive.atQuorum(node, all, new SyncPoint<>(txnId, executeAt, deps, (FullRoute<U>) route), executeAt);
                 execute.addCallback(callback);
                 execute.start();
             }
@@ -326,6 +369,19 @@ public interface CoordinationAdapter<R>
             public void persist(Node node, Topologies any, FullRoute<?> route, Route<?> participants, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super SyncPoint<U>, Throwable> callback)
             {
                 throw new UnsupportedOperationException();
+            }
+        }
+
+        private static class RecoverInclusiveSyncPointAdapter extends AbstractInclusiveSyncPointAdapter<Result>
+        {
+            private static final RecoverInclusiveSyncPointAdapter INSTANCE = new RecoverInclusiveSyncPointAdapter();
+
+            protected RecoverInclusiveSyncPointAdapter() {}
+
+            @Override
+            void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super Result, Throwable> callback)
+            {
+                callback.accept(txn.result(txnId, executeAt, null), null);
             }
         }
     }

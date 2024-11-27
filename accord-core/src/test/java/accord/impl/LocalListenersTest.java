@@ -500,6 +500,12 @@ public class LocalListenersTest
         {
             return null;
         }
+
+        @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            return null;
+        }
     }
 
 

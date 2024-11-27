@@ -67,6 +67,14 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return foldl(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], self.starts[k+1]), accumulator, fold, this, terminate);
     }
 
+    // note: last end bound may be null
+    // TODO (required): should there be a call where start bound is null? Should we always provide null end bound if we match to the end?
+    //  I don't think it should functionally matter in caller, but for symmetry should probably be one or the other
+    public <V2> V2 foldlWithDefaultAndBounds(Routables<?> routables, QuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V defaultValue, V2 accumulator, Predicate<V2> terminate)
+    {
+        return foldlWithDefault(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], k + 1 >= self.starts.length ? null : self.starts[k+1]), defaultValue, accumulator, fold, this, terminate);
+    }
+
     public <R extends Routable, V2> V2 foldlWithInputAndBounds(Routables<R> routables, IndexedRangeQuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V2 accumulator, Predicate<V2> terminate)
     {
         return foldl(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], self.starts[k+1], i, j), accumulator, fold, this, terminate);
@@ -97,7 +105,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return foldlWithDefault(routables, (a, b, f, ignore) -> f.apply(a, b), defaultValue, accumulator, fold, null, ignore -> false);
     }
 
-    public <V2> V2 foldlWithDefault(Routables<?> routables, BiFunction<V, V2, V2> fold, V defaultValue, V2 accumulator, Predicate<V2> terminate)
+    public <V2> V2 foldlWithDefault(Routables<?> routables, BiFunction<? super V, V2, V2> fold, V defaultValue, V2 accumulator, Predicate<V2> terminate)
     {
         return foldlWithDefault(routables, (a, b, f, ignore) -> f.apply(a, b), defaultValue, accumulator, fold, null, terminate);
     }
@@ -109,7 +117,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     public <V2, P1, P2> V2 foldlWithDefault(Routables<?> routables, QuadFunction<V, V2, P1, P2, V2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
     {
-        return foldlWithDefault(routables, (v, v2, param1, param2, i, j) -> fold.apply(v, v2, param1, param2), defaultValue, accumulator, p1, p2, terminate);
+        return foldlWithDefault(routables, (v, v2, param1, param2, i, j, k) -> fold.apply(v, v2, param1, param2), defaultValue, accumulator, p1, p2, terminate);
     }
 
     public <V2, P1, P2> V2 foldl(Routables<?> routables, ReduceFunction<V, V2, P1, P2> fold, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
@@ -218,7 +226,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return accumulator;
     }
 
-    public <V2, P1, P2> V2 foldlWithDefault(Routables<?> routables, IndexedRangeQuadFunction<V, V2, P1, P2, V2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
+    public <V2, P1, P2> V2 foldlWithDefault(Routables<?> routables, ReduceFunction<V, V2, P1, P2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
     {
         switch (routables.domain())
         {
@@ -228,17 +236,17 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         }
     }
 
-    private <V2, P1, P2> V2 foldlWithDefault(AbstractKeys<?> keys, IndexedRangeQuadFunction<V, V2, P1, P2, V2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
+    private <V2, P1, P2> V2 foldlWithDefault(AbstractKeys<?> keys, ReduceFunction<V, V2, P1, P2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
     {
         if (values.length == 0 || keys.isEmpty())
-            return fold.apply(defaultValue, accumulator, p1, p2, 0, keys.size());
+            return fold.apply(defaultValue, accumulator, p1, p2, 0, keys.size(), 0);
 
         int i = 0, j = keys.find(starts[0], FAST);
         if (j < 0) j = -1 - j;
         else if (inclusiveEnds) ++j;
 
         if (j > 0)
-            accumulator = fold.apply(defaultValue, accumulator, p1, p2, 0, j);
+            accumulator = fold.apply(defaultValue, accumulator, p1, p2, 0, j, 0);
 
         while (j < keys.size())
         {
@@ -248,7 +256,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             else if (inclusiveEnds) --i;
 
             if (i >= values.length)
-                return fold.apply(defaultValue, accumulator, p1, p2, j, keys.size());
+                return fold.apply(defaultValue, accumulator, p1, p2, j, keys.size(), i);
 
             int nextj = keys.findNext(j, starts[i + 1], FAST);
             if (nextj < 0) nextj = -1 -nextj;
@@ -260,7 +268,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
                 if (value == null)
                     value = defaultValue;
 
-                accumulator = fold.apply(value, accumulator, p1, p2, j, nextj);
+                accumulator = fold.apply(value, accumulator, p1, p2, j, nextj, i);
                 if (terminate.test(accumulator))
                     return accumulator;
             }
@@ -270,17 +278,17 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return accumulator;
     }
 
-    private <V2, P1, P2> V2 foldlWithDefault(AbstractRanges ranges, IndexedRangeQuadFunction<V, V2, P1, P2, V2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
+    private <V2, P1, P2> V2 foldlWithDefault(AbstractRanges ranges, ReduceFunction<V, V2, P1, P2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
     {
         if (values.length == 0 || ranges.isEmpty())
-            return fold.apply(defaultValue, accumulator, p1, p2, 0, ranges.size());
+            return fold.apply(defaultValue, accumulator, p1, p2, 0, ranges.size(), 0);
 
         int j = ranges.find(starts[0], FAST);
         if (j < 0) j = -1 - j;
         else if (inclusiveEnds && ranges.get(j).end().equals(starts[0])) ++j;
 
         if (j > 0 || starts[0].compareTo(ranges.get(0).start()) > 0)
-            accumulator = fold.apply(defaultValue, accumulator, p1, p2, 0, j);
+            accumulator = fold.apply(defaultValue, accumulator, p1, p2, 0, j, 0);
 
         int i = 0;
         while (j < ranges.size())
@@ -292,7 +300,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             else i = nexti;
 
             if (i >= values.length)
-                return fold.apply(defaultValue, accumulator, p1, p2, j, ranges.size());
+                return fold.apply(defaultValue, accumulator, p1, p2, j, ranges.size(), i);
 
             int toj, nextj = ranges.findNext(j, starts[i + 1], FAST);
             if (nextj < 0)
@@ -312,7 +320,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
                 if (value == null)
                     value = defaultValue;
 
-                accumulator = fold.apply(value, accumulator, p1, p2, j, toj);
+                accumulator = fold.apply(value, accumulator, p1, p2, j, toj, i);
                 if (terminate.test(accumulator))
                     return accumulator;
             }
@@ -348,6 +356,11 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             return new ReducingRangeMap<>();
 
         return create(ranges, value, ReducingRangeMap.Builder::new);
+    }
+
+    public static <V> ReducingRangeMap<V> create(Range range, V value)
+    {
+        return new ReducingRangeMap<>(range.endInclusive(), new RoutingKey[] { range.start(), range.end() }, (V[])new Object[] { value });
     }
 
     public static <V, M extends ReducingRangeMap<V>> M create(Unseekables<?> keysOrRanges, V value, BuilderFactory<RoutingKey, V, M> builder)
@@ -446,9 +459,9 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return ReducingIntervalMap.merge(historyLeft, historyRight, reduce, ReducingRangeMap.Builder::new);
     }
 
-    static class Builder<V> extends AbstractBoundariesBuilder<RoutingKey, V, ReducingRangeMap<V>>
+    public static class Builder<V> extends AbstractBoundariesBuilder<RoutingKey, V, ReducingRangeMap<V>>
     {
-        protected Builder(boolean inclusiveEnds, int capacity)
+        public Builder(boolean inclusiveEnds, int capacity)
         {
             super(inclusiveEnds, capacity);
         }

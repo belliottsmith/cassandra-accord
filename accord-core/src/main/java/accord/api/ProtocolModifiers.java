@@ -23,65 +23,20 @@ import java.util.regex.Pattern;
 
 import accord.utils.Invariants;
 
-import static accord.api.ProtocolModifiers.Faults.initialiseFaults;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.Chase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.DoNotChase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owned;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
-import static accord.api.ProtocolModifiers.QuorumEpochIntersections.initialiseQuorumEpochIntersections;
+import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
+import static accord.api.ProtocolModifiers.Toggles.InformOfDurability.ALL;
 
+/**
+ * Configure various protocol behaviours. Many of these switches are correctness impacting, and should not be touched.
+ */
 public class ProtocolModifiers
 {
-    public static final ProtocolModifiers.QuorumEpochIntersections QuorumEpochIntersections = initialiseQuorumEpochIntersections();
-    public static final Faults Faults = initialiseFaults();
-
     public static class QuorumEpochIntersections
     {
-        private static final Pattern PARSE = Pattern.compile("(preaccept|accept|commit|stable|recover)=([+-]{0,2})");
-
-        static ProtocolModifiers.QuorumEpochIntersections initialiseQuorumEpochIntersections()
-        {
-            String description = System.getProperty("accord.quorums.epochs", "preaccept=-,accept=-,commit=-,stable=,recover=-");
-            Matcher m = PARSE.matcher(description);
-            ChaseAndInclude preaccept = null;
-            Include accept = null;
-            Include commit = null;
-            Include stable = null;
-            Include recover = null;
-            while (m.find())
-            {
-                ChaseFixedPoint cfp = DoNotChase;
-                Include include = Owned;
-                String str = m.group(2);
-                for (int i = 0 ; i < str.length() ; ++i)
-                {
-                    switch (str.charAt(i))
-                    {
-                        default: throw new AssertionError("Unexpected char: '" + str.charAt(i) + "'");
-                        case '+': cfp = Chase; break;
-                        case '-': include = Unsynced; break;
-                    }
-                }
-
-                switch (m.group(1))
-                {
-                    default: throw new AssertionError("Unexpected phase: " + m.group(1));
-                    case "preaccept": preaccept = new ChaseAndInclude(cfp, include); break;
-                    case "accept": accept = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for accept"); break;
-                    case "commit": commit = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for commit"); break;
-                    case "stable": stable = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
-                    case "recover": recover = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
-                }
-            }
-
-            Invariants.checkState(preaccept != null, "preaccept not specified for quorum epoch intersections: " + description);
-            Invariants.checkState(accept != null, "accept not specified for quorum epoch intersections: " + description);
-            Invariants.checkState(commit != null, "commit not specified for quorum epoch intersections: " + description);
-            Invariants.checkState(stable != null, "stable not specified for quorum epoch intersections: " + description);
-            Invariants.checkState(recover != null, "recover not specified for quorum epoch intersections: " + description);
-            return new QuorumEpochIntersections(preaccept, accept, commit, stable, recover);
-        }
-
         public enum ChaseFixedPoint
         {
             Chase, DoNotChase;
@@ -103,41 +58,126 @@ public class ProtocolModifiers
             }
         }
 
-        // TODO (desired): support fixed-point chasing for recovery
-        public final ChaseAndInclude preaccept;
-        public final Include accept, commit, stable, recover;
-        public final Include preacceptOrRecover, preacceptOrCommit;
-
-        public QuorumEpochIntersections(ChaseAndInclude preaccept, Include accept, Include commit, Include stable, Include recover)
+        static class Spec
         {
-            this.preaccept = preaccept;
-            this.accept = accept;
-            this.commit = commit;
-            this.stable = stable;
-            this.recover = recover;
-            this.preacceptOrRecover = preaccept.include == Owned || recover == Owned ? Owned : Unsynced;
-            this.preacceptOrCommit = preaccept.include == Owned || commit == Owned ? Owned : Unsynced;
+            private static final Pattern PARSE = Pattern.compile("(preaccept|accept|commit|stable|recover)=([+-]{0,2})");
+
+            final ChaseAndInclude preaccept;
+            final Include accept, commit, stable, recover;
+            final Include preacceptOrRecover, preacceptOrCommit;
+
+            Spec(ChaseAndInclude preaccept, Include accept, Include commit, Include stable, Include recover)
+            {
+                this.preaccept = preaccept;
+                this.accept = accept;
+                this.commit = commit;
+                this.stable = stable;
+                this.recover = recover;
+                this.preacceptOrRecover = preaccept.include == Owned || recover == Owned ? Owned : Unsynced;
+                this.preacceptOrCommit = preaccept.include == Owned || commit == Owned ? Owned : Unsynced;
+            }
+
+            static Spec parse(String description)
+            {
+                Matcher m = PARSE.matcher(description);
+                ChaseAndInclude preaccept = null;
+                Include accept = null;
+                Include commit = null;
+                Include stable = null;
+                Include recover = null;
+                while (m.find())
+                {
+                    ChaseFixedPoint cfp = DoNotChase;
+                    Include include = Owned;
+                    String str = m.group(2);
+                    for (int i = 0 ; i < str.length() ; ++i)
+                    {
+                        switch (str.charAt(i))
+                        {
+                            default: throw new AssertionError("Unexpected char: '" + str.charAt(i) + "'");
+                            case '+': cfp = Chase; break;
+                            case '-': include = Unsynced; break;
+                        }
+                    }
+
+                    switch (m.group(1))
+                    {
+                        default: throw new AssertionError("Unexpected phase: " + m.group(1));
+                        case "preaccept": preaccept = new ChaseAndInclude(cfp, include); break;
+                        case "accept": accept = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for accept"); break;
+                        case "commit": commit = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for commit"); break;
+                        case "stable": stable = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
+                        case "recover": recover = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
+                    }
+                }
+
+                Invariants.checkState(preaccept != null, "preaccept not specified for quorum epoch intersections: " + description);
+                Invariants.checkState(accept != null, "accept not specified for quorum epoch intersections: " + description);
+                Invariants.checkState(commit != null, "commit not specified for quorum epoch intersections: " + description);
+                Invariants.checkState(stable != null, "stable not specified for quorum epoch intersections: " + description);
+                Invariants.checkState(recover != null, "recover not specified for quorum epoch intersections: " + description);
+                return new Spec(preaccept, accept, commit, stable, recover);
+            }
         }
+
+        static
+        {
+            Spec spec = Spec.parse(System.getProperty("accord.quorums.epochs", "preaccept=-,accept=-,commit=-,stable=,recover=-"));
+            preaccept = spec.preaccept;
+            accept = spec.accept;
+            commit = spec.commit;
+            stable = spec.stable;
+            recover = spec.recover;
+            preacceptOrRecover = spec.preacceptOrRecover;
+            preacceptOrCommit = spec.preacceptOrCommit;
+        }
+
+        // TODO (desired): support fixed-point chasing for recovery
+        public static final ChaseAndInclude preaccept;
+        public static final Include accept, commit, stable, recover;
+        public static final Include preacceptOrRecover, preacceptOrCommit;
     }
 
     public static class Faults
     {
-        static Faults initialiseFaults()
+        static class Spec
+        {
+            final boolean txnInstability, txnDiscardPreAcceptDeps;
+            final boolean syncPointInstability, syncPointDiscardPreAcceptDeps;
+
+            Spec(boolean txnInstability, boolean txnDiscardPreAcceptDeps, boolean syncPointInstability, boolean syncPointDiscardPreAcceptDeps)
+            {
+                this.txnInstability = txnInstability;
+                this.txnDiscardPreAcceptDeps = txnDiscardPreAcceptDeps;
+                this.syncPointInstability = syncPointInstability;
+                this.syncPointDiscardPreAcceptDeps = syncPointDiscardPreAcceptDeps;
+            }
+        }
+
+        static
         {
             // TODO (expected): configurable
-            return new Faults(false, false, false, false);
+            Spec spec = new Spec(false, false, false, false);
+            txnInstability = spec.txnInstability;
+            txnDiscardPreAcceptDeps = spec.txnDiscardPreAcceptDeps;
+            syncPointInstability = spec.syncPointInstability;
+            syncPointDiscardPreAcceptDeps = spec.syncPointDiscardPreAcceptDeps;
         }
 
-        public final boolean txnInstability, txnDiscardPreAcceptDeps;
-        public final boolean syncPointInstability, syncPointDiscardPreAcceptDeps;
-
-        public Faults(boolean txnInstability, boolean txnDiscardPreAcceptDeps, boolean syncPointInstability, boolean syncPointDiscardPreAcceptDeps)
-        {
-            this.txnInstability = txnInstability;
-            this.txnDiscardPreAcceptDeps = txnDiscardPreAcceptDeps;
-            this.syncPointInstability = syncPointInstability;
-            this.syncPointDiscardPreAcceptDeps = syncPointDiscardPreAcceptDeps;
-        }
+        public static final boolean txnInstability, txnDiscardPreAcceptDeps;
+        public static final boolean syncPointInstability, syncPointDiscardPreAcceptDeps;
     }
 
+    public static class Toggles
+    {
+        public enum DependencyElision { OFF, ON, IF_DURABLE }
+        private static DependencyElision dependencyElision = IF_DURABLE;
+        public static DependencyElision dependencyElision() { return dependencyElision; }
+        public static void setDependencyElision(DependencyElision newDependencyElision) { dependencyElision = newDependencyElision; }
+
+        public enum InformOfDurability { HOME, ALL }
+        private static InformOfDurability informOfDurability = ALL;
+        public static InformOfDurability informOfDurability() { return informOfDurability; }
+        public static void setInformOfDurability(InformOfDurability newInformOfDurability) { informOfDurability = newInformOfDurability; }
+    }
 }

@@ -27,23 +27,21 @@ import accord.local.Node;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
-import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekable;
 import accord.topology.Topologies;
 import accord.utils.SortedListMap;
 
 import static accord.api.ProtocolModifiers.Faults;
 
-public class ProposeSyncPoint<U extends Unseekable> extends Propose<SyncPoint<U>>
+public class ProposeSyncPoint<R> extends Propose<R>
 {
     @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(ProposeSyncPoint.class);
-    private final CoordinationAdapter<SyncPoint<U>> adapter;
+    private final CoordinationAdapter<R> adapter;
 
-    ProposeSyncPoint(CoordinationAdapter<SyncPoint<U>> adapter, Node node, Topologies topologies, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+    ProposeSyncPoint(CoordinationAdapter<R> adapter, Node node, Topologies topologies, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
         super(node, topologies, ballot, txnId, txn, route, executeAt, deps, callback);
         this.adapter = adapter;

@@ -86,7 +86,7 @@ public class AsynchronousAwait implements Callback<AwaitOk>
     }
 
     /**
-     * we require a Route to contact so we can be sure a home shard recipient invokes {@link Commands#updateParticipants},
+     * we require a Route to contact so we can be sure a home shard recipient invokes {@link Commands#supplementParticipants},
      * notifying the progress log of a Route to determine it is the home shard.
      */
     public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)

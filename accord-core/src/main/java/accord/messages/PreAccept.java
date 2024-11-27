@@ -31,6 +31,7 @@ import accord.local.KeyHistory;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.RangeDeps;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.messages.TxnRequest.WithUnsynced;
@@ -47,6 +48,9 @@ import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
+
+import static accord.primitives.Txn.Kind.EphemeralRead;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
 {
@@ -117,26 +121,29 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         Command command = safeCommand.current();
         switch (outcome)
         {
-            default:
-                // we might hit 'Redundant' if we have to contact later epochs and partially re-contact a node we already contacted
-                // TODO (desired): consider dedicated special case, or rename
+            default: throw new AssertionError("Unhandled AcceptOutcome: " + outcome);
             case Redundant:
+                // we might hit 'Redundant' if we have to contact later epochs and partially re-contact a node we already contacted
             case Success:
-                // Either messages are being delivered out of order or the coordinator was interrupted by some
-                // recovery coordinator
+                // Either messages are being delivered out of order or the coordinator was interrupted by some recovery coordinator
                 if (command.saveStatus().compareTo(SaveStatus.PreAccepted) > 0)
                     return PreAcceptNack.INSTANCE;
 
                 if (command.executeAt().isRejected())
                     return new PreAcceptOk(txnId, command.executeAt(), Deps.NONE);
 
-                Deps deps = calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), txnId);
+            case Retired:
+                Deps deps = calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), txnId, true);
+                if (deps == null)
+                    return PreAcceptNack.INSTANCE;
+
                 // NOTE: we CANNOT test whether we adopt a future dependency here because it might be that this command
                 // is guaranteed to not reach agreement, but that this replica is unaware of that fact and has pruned
-                // all preceding transactions.
-                //  in which case we may be able to adopt a future dependency but won't propose it
+                // all preceding transactions. In which case we may be able to adopt a future dependency but won't propose it.
+                // We do however prohibit later epochs as dependencies as we cannot handle those effectively
+                // when back-filling for execution of the transaction.
                 Invariants.checkState(deps.maxTxnId(txnId).epoch() <= txnId.epoch());
-                return new PreAcceptOk(txnId, command.executeAt(), deps);
+                return new PreAcceptOk(txnId, command.executeAtOrTxnId(), deps);
 
             case Truncated:
             case RejectedBallot:
@@ -243,26 +250,34 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         }
     }
 
-    static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, StoreParticipants participants, EpochSupplier minEpoch, Timestamp executeAt)
+    static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, StoreParticipants participants, EpochSupplier minEpoch, Timestamp executeAt, boolean nullIfRedundant)
     {
         // TODO (expected): do not build covering ranges; no longer especially valuable given use of FullRoute
-        // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute after it.
-        //       This is necessary for reporting to a bootstrapping replica which TxnId it must not prune from dependencies
-        //       i.e. the source replica reports to the target replica those TxnId that STARTED_BEFORE and EXECUTES_AFTER.
+        // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
 
-        try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder();
-             Deps.AbstractBuilder<Deps> redundantBuilder = new Deps.Builder())
+        try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder(true);
+             RangeDeps.BuilderByRange redundantBuilder = RangeDeps.builderByRange())
         {
-            safeStore.mapReduceActive(participants.touches(), executeAt, txnId.witnesses(),
-                                      (p1, keyOrRange, testTxnId, testExecuteAt, in) -> {
-                                          if (p1 == null || !testTxnId.equals(p1))
-                                              in.add(keyOrRange, testTxnId);
-                                          return in;
-                                      }, executeAt.equals(txnId) ? null : txnId, builder);
+            RangeDeps redundant = safeStore.redundantBefore().collectDeps(participants.touches(), redundantBuilder, minEpoch, executeAt).build();
+            if (nullIfRedundant && !txnId.is(EphemeralRead))
+            {
+                TxnId maxRedundantBefore = redundant.maxTxnId(null);
+                if (maxRedundantBefore != null && maxRedundantBefore.compareTo(executeAt) >= 0)
+                {
+                    Invariants.checkState(maxRedundantBefore.is(ExclusiveSyncPoint));
+                    return null;
+                }
+            }
+
+            safeStore.visit(participants.touches(), executeAt, txnId.witnesses(),
+                            (p1, in, keyOrRange, testTxnId) -> {
+                                if (p1 == null || !testTxnId.equals(p1))
+                                    in.add(keyOrRange, testTxnId);
+                                }, executeAt.equals(txnId) ? null : txnId, builder);
 
             // TODO (required): make sure any sync point is in the past
-            Deps redundant = safeStore.redundantBefore().collectDeps(participants.touches(), redundantBuilder, minEpoch, executeAt).build();
-            Deps result = builder.build().with(redundant);
+            Deps result = builder.build();
+            result = new Deps(result.keyDeps, result.rangeDeps.with(redundant), result.directKeyDeps);
             Invariants.checkState(!result.contains(txnId));
             return result;
         }

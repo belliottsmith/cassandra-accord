@@ -100,9 +100,15 @@ public class SortedArrays
         }
 
         @Override
-        public int find(@Nonnull Comparable<? super T> find)
+        public final int find(@Nonnull Comparable<? super T> find)
         {
-            return Arrays.binarySearch(array, 0, array.length, find);
+            return find(0, array.length, find);
+        }
+
+        @Override
+        public final int find(int from, int to, @Nonnull Comparable<? super T> find)
+        {
+            return Arrays.binarySearch(array, from, to, find);
         }
 
         public boolean containsAll(SortedArrayList<T> test)

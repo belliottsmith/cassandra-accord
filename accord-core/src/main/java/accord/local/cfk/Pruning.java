@@ -19,6 +19,7 @@
 package accord.local.cfk;
 
 import java.util.Arrays;
+import java.util.List;
 
 import accord.local.RedundantBefore;
 import accord.local.cfk.CommandsForKey.TxnInfo;
@@ -35,12 +36,13 @@ import org.agrona.collections.Long2ObjectHashMap;
 
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
 import static accord.local.cfk.CommandsForKey.bootstrappedAt;
 import static accord.local.cfk.CommandsForKey.insertPos;
 import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.CommandsForKey.redundantBefore;
-import static accord.local.cfk.Pruning.LoadingPruned.LOADINGF;
+import static accord.local.cfk.Updating.nextUndecided;
 import static accord.local.cfk.Utils.removeRedundantMissing;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -65,7 +67,31 @@ public class Pruning
      */
     static class LoadingPruned extends TxnId
     {
-        static final UpdateFunction.Simple<LoadingPruned> LOADINGF = UpdateFunction.Simple.of(LoadingPruned::merge);
+        static class Merge implements UpdateFunction<TxnId, LoadingPruned>
+        {
+            final TxnId[] witnessedBy;
+            final List<TxnId> inserted;
+
+            Merge(TxnId[] witnessedBy, List<TxnId> inserted)
+            {
+                this.witnessedBy = witnessedBy;
+                this.inserted = inserted;
+            }
+
+
+            @Override
+            public LoadingPruned insert(TxnId insert)
+            {
+                inserted.add(insert);
+                return new LoadingPruned(insert, witnessedBy);
+            }
+
+            @Override
+            public LoadingPruned merge(LoadingPruned replacing, TxnId update)
+            {
+                return new LoadingPruned(update, SortedArrays.linearUnion(replacing.witnessedBy, witnessedBy, cachedTxnIds()));
+            }
+        }
 
         /**
          * Transactions that had witnessed this pre-pruned TxnId and are therefore waiting for the load to complete
@@ -92,21 +118,15 @@ public class Pruning
     /**
      * Updating {@code loadingPruned} to register that each element of {@code toLoad} is being loaded for {@code loadingFor}
      */
-    static Object[] loadPruned(Object[] loadingPruned, TxnId[] toLoad, TxnId loadingFor)
+    static Object[] loadPruned(Object[] loadingPruned, TxnId[] toLoad, TxnId witnessedBy, List<TxnId> inserted)
     {
-        return loadPruned(loadingPruned, toLoad, new TxnId[]{ loadingFor });
+        return loadPruned(loadingPruned, toLoad, new TxnId[]{ witnessedBy }, inserted);
     }
 
-    static Object[] loadPruned(Object[] loadingPruned, TxnId[] toLoad, TxnId[] loadingForAsList)
+    static Object[] loadPruned(Object[] loadingPruned, TxnId[] toLoad, TxnId[] witnessedBy, List<TxnId> inserted)
     {
-        Object[] toLoadAsTree;
-        try (BTree.FastBuilder<LoadingPruned> fastBuilder = BTree.fastBuilder())
-        {
-            for (TxnId txnId : toLoad)
-                fastBuilder.add(new LoadingPruned(txnId, loadingForAsList));
-            toLoadAsTree = fastBuilder.build();
-        }
-        return BTree.update(loadingPruned, toLoadAsTree, LoadingPruned::compareTo, LOADINGF);
+        Object[] toLoadAsTree = BTree.build(BulkIterator.of(toLoad), toLoad.length, UpdateFunction.noOp());
+        return BTree.update(loadingPruned, toLoadAsTree, TxnId::compareTo, new LoadingPruned.Merge(witnessedBy, inserted));
     }
 
     /**
@@ -179,33 +199,69 @@ public class Pruning
      */
     static CommandsForKey maybePrune(CommandsForKey cfk, int pruneInterval, long minHlcDelta)
     {
-        TxnInfo newPrunedBefore;
-        {
-            if (cfk.maxAppliedWriteByExecuteAt < pruneInterval)
-                return cfk;
+        TxnInfo newPruneBefore = newPruneBefore(cfk, pruneInterval, minHlcDelta);
+        if (newPruneBefore == null)
+            return cfk;
 
-            int i = cfk.maxAppliedWriteByExecuteAt;
-            long maxPruneHlc = cfk.committedByExecuteAt[i].executeAt.hlc() - minHlcDelta;
-            while (--i >= 0)
-            {
-                TxnInfo txn = cfk.committedByExecuteAt[i];
-                if (txn.is(Write) && txn.executeAt.hlc() <= maxPruneHlc && txn.is(APPLIED))
-                    break;
-            }
-
-            if (i < 0)
-                return cfk;
-
-            newPrunedBefore = cfk.committedByExecuteAt[i];
-            if (newPrunedBefore.compareTo(cfk.prunedBefore()) <= 0)
-                return cfk;
-        }
-
-        int pos = cfk.insertPos(newPrunedBefore);
+        int pos = cfk.insertPos(newPruneBefore);
         if (pos == 0)
             return cfk;
 
-        return pruneBefore(cfk, newPrunedBefore, pos);
+        return pruneBefore(cfk, newPruneBefore, pos);
+    }
+
+    static CommandsForKey maximalPrune(CommandsForKey cfk)
+    {
+        TxnInfo pruneBefore = newPruneBefore(cfk, 0, 0);
+        if (pruneBefore == null)
+        {
+            int prunedCount = 0;
+            for (int i = 0 ; i < cfk.size() ; ++i)
+                prunedCount += cfk.get(i).is(PRUNED) ? 1 : 0;
+
+            if (prunedCount == 0)
+                return cfk;
+
+            TxnInfo[] newById = new TxnInfo[cfk.byId.length - prunedCount];
+            int count = 0;
+            for (int i = 0 ; i < cfk.size() ; ++i)
+            {
+                TxnInfo txn = cfk.get(i);
+                if (!txn.is(PRUNED))
+                    newById[count++] = txn;
+            }
+            int newPrunedBeforeId = cfk.prunedBeforeById - prunedCount;
+            return new CommandsForKey(cfk.key, cfk.boundsInfo, false, newById, cfk.committedByExecuteAt,
+                                      nextUndecided(newById, 0, cfk), cfk.maxAppliedWriteByExecuteAt, cfk.loadingPruned, newPrunedBeforeId, cfk.unmanageds);
+        }
+        int pos = cfk.insertPos(pruneBefore);
+        if (pos == 0)
+            return cfk;
+
+        return pruneBefore(cfk, pruneBefore, pos);
+    }
+
+    private static TxnInfo newPruneBefore(CommandsForKey cfk, int pruneInterval, long minHlcDelta)
+    {
+        if (cfk.maxAppliedWriteByExecuteAt < pruneInterval)
+            return null;
+
+        int i = cfk.maxAppliedWriteByExecuteAt;
+        long maxPruneHlc = cfk.committedByExecuteAt[i].executeAt.hlc() - minHlcDelta;
+        while (--i >= 0)
+        {
+            TxnInfo txn = cfk.committedByExecuteAt[i];
+            if (txn.is(Write) && txn.executeAt.hlc() <= maxPruneHlc && txn.is(APPLIED) && txn.epoch() == txn.executeAt.epoch())
+                break;
+        }
+
+        if (i < 0)
+            return null;
+
+        TxnInfo newPrunedBefore = cfk.committedByExecuteAt[i];
+        if (newPrunedBefore.compareTo(cfk.prunedBefore()) <= 0)
+            return null;
+        return newPrunedBefore;
     }
 
     /**
@@ -213,6 +269,8 @@ public class Pruning
      * These later commands can durably stand in for any recovery or dependency calculations.
      *
      * TODO (desired): we could limit this restriction to epochs where ownership changes; introduce some global summary info to facilitate this
+     * TODO (desired): we may be able prune more transactions that cross epochs if we have a prune point in both epochs,
+     *   where the execution epoch prune point as ahead of the executeAt, and the coordination epoch prune point is ahead of the TxnId
      */
     static CommandsForKey pruneBefore(CommandsForKey cfk, TxnInfo newPrunedBefore, int pos)
     {
@@ -252,7 +310,7 @@ public class Pruning
                         }
                         else
                         {
-                            long epoch = txn.executeAt.epoch();
+                            long epoch = txn.epoch();
                             if (epoch != activePruneEpoch && epochPrunedBefores != null)
                             {
                                 activePruneEpochBefore = epochPrunedBefores.get(epoch);
@@ -273,7 +331,7 @@ public class Pruning
                         break;
 
                     case APPLIED:
-                        long epoch = txn.executeAt.epoch();
+                        long epoch = txn.epoch();
                         if (epoch != activePruneEpoch && epochPrunedBefores != null)
                         {
                             activePruneEpochBefore = epochPrunedBefores.get(epoch);
@@ -310,7 +368,7 @@ public class Pruning
                         newByIdBuffer[pos - ++retainCount] = txn;
 
                     case INVALIDATED:
-                    case TRUNCATED_OR_PRUNED:
+                    case PRUNED:
                         break;
                 }
             }
@@ -346,7 +404,7 @@ public class Pruning
                 TxnInfo txn = committedByExecuteAt[i];
                 if (txn.is(APPLIED))
                 {
-                    long epoch = txn.executeAt.epoch();
+                    long epoch = txn.epoch();
                     if (epoch != activePruneEpoch && epochPrunedBefores != null)
                     {
                         activePruneEpochBefore = epochPrunedBefores.get(epoch);
@@ -386,6 +444,10 @@ public class Pruning
      * due to the way we execute these transactions, by stabilising all of their dependencies (transitively) before taking our Apply point,
      * this is true _so long_ as we participate in the epochs of the future transactions.
      * So, to facilitate this we retain the highest committed transaction for each epoch, that would otherwise be pruned.
+     *
+     * TODO (required): formalise better. We filter dependencies by TxnId and execute by executeAt, so our prune points need to be based on both
+     *  so we don't filter a dependency by TxnId that we need to see by executeAt (or vice-versa).
+     *  We might just want to strengthen the replica dependency processing anyway.
      */
     private static Long2ObjectHashMap<TxnInfo> buildEpochPrunedBefores(TxnInfo[] byId, TxnInfo[] committedByExecuteAt, TxnInfo newPrunedBefore)
     {
@@ -393,23 +455,23 @@ public class Pruning
             return null;
 
         Long2ObjectHashMap<TxnInfo> epochPrunedBefores = new Long2ObjectHashMap<>();
-        for (long epoch = newPrunedBefore.epoch() ; epoch <= newPrunedBefore.executeAt.epoch(); ++epoch)
-            epochPrunedBefores.put(epoch, newPrunedBefore);
+        epochPrunedBefores.put(newPrunedBefore.epoch(), newPrunedBefore);
 
-        int maxi = Arrays.binarySearch(committedByExecuteAt, newPrunedBefore, TxnInfo::compareExecuteAt);
+        int maxi = -1 - Arrays.binarySearch(committedByExecuteAt, newPrunedBefore, (a, b) -> a.compareExecuteAtEpoch(b) >= 0 ? 1 : -1);
         int i = 0;
         while (i < maxi)
         {
             TxnInfo test = committedByExecuteAt[i];
-            while (!test.is(Write) && ++i < maxi) test = committedByExecuteAt[i];
-            long epoch = test.executeAt.epoch(); // we only care about executeAt.epoch() here
-            if (epoch >= newPrunedBefore.epoch())
-                break;
+            if (!test.is(Write) || !test.is(APPLIED) || test.epoch() != test.executeAt.epoch())
+            {
+                ++i;
+                continue;
+            }
 
-            Object prev = epochPrunedBefores.putIfAbsent(epoch, test);
+            Object prev = epochPrunedBefores.putIfAbsent(test.epoch(), test);
             Invariants.checkState(prev == null);
 
-            i = SortedArrays.exponentialSearch(committedByExecuteAt, i + 1, maxi, test, TxnInfo::compareExecuteAtEpoch, FLOOR);
+            i = SortedArrays.exponentialSearch(committedByExecuteAt, i + 1, committedByExecuteAt.length, test, TxnInfo::compareExecuteAtEpoch, FLOOR);
             if (i < 0) i = -1 - i;
             else i = i + 1;
         }

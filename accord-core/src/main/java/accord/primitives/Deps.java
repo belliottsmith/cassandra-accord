@@ -61,21 +61,22 @@ public class Deps
 {
     public static final Deps NONE = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
 
-    public static Builder builder()
+    public static Builder builder(boolean buildRangeByTxnId)
     {
-        return new Builder();
+        return new Builder(buildRangeByTxnId);
     }
 
     // TODO (expected, efficiency): cache this object per thread
     public static abstract class AbstractBuilder<T extends Deps> implements AutoCloseable
     {
         final KeyDeps.Builder keyBuilder;
-        RangeDeps.Builder rangeBuilder;
+        final RangeDeps.AbstractRangeBuilder<?, ?> rangeBuilder;
         KeyDeps.Builder directKeyBuilder;
 
-        AbstractBuilder()
+        AbstractBuilder(boolean buildRangesByTxnId)
         {
             this.keyBuilder = KeyDeps.builder();
+            this.rangeBuilder = buildRangesByTxnId ? RangeDeps.byTxnIdBuilder() : RangeDeps.builderByRange();
         }
 
         public AbstractBuilder<T> add(Unseekable keyOrRange, TxnId txnId)
@@ -98,8 +99,6 @@ public class Deps
                     break;
 
                 case Range:
-                    if (rangeBuilder == null)
-                        rangeBuilder = RangeDeps.builder();
                     rangeBuilder.add(keyOrRange.asRange(), txnId);
                     break;
             }
@@ -121,17 +120,15 @@ public class Deps
 
     public static class Builder extends AbstractBuilder<Deps>
     {
-        public Builder()
+        public Builder(boolean buildRangesByTxnId)
         {
-            super();
+            super(buildRangesByTxnId);
         }
 
         @Override
         public Deps build()
         {
-            return new Deps(keyBuilder.build(),
-                            rangeBuilder == null ? RangeDeps.NONE : rangeBuilder.build(),
-                            directKeyBuilder == null ? KeyDeps.NONE : directKeyBuilder.build());
+            return new Deps(keyBuilder.build(), rangeBuilder.build(), directKeyBuilder == null ? KeyDeps.NONE : directKeyBuilder.build());
         }
     }
 

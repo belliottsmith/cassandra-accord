@@ -25,6 +25,7 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.CoordinationAdapter.Adapters.SyncPointAdapter;
 import accord.local.Node;
@@ -41,13 +42,15 @@ import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
+import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.Invalidate.proposeAndCommitInvalidate;
-import static accord.messages.Apply.executes;
+import static accord.messages.Apply.Kind.Maximal;
+import static accord.messages.Apply.participates;
 import static accord.primitives.Timestamp.mergeMax;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Functions.foldl;
@@ -59,14 +62,14 @@ import static accord.utils.Invariants.checkArgument;
  *
  * TODO (desired, testing): dedicated burn test to validate outcomes
  */
-public class CoordinateSyncPoint<U extends Unseekable> extends CoordinatePreAccept<SyncPoint<U>>
+public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
 {
     @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(CoordinateSyncPoint.class);
 
-    final CoordinationAdapter<SyncPoint<U>> adapter;
+    final CoordinationAdapter<R> adapter;
 
-    private CoordinateSyncPoint(Node node, TxnId txnId, Topologies topologies, Txn txn, FullRoute<?> route, SyncPointAdapter<U> adapter)
+    private CoordinateSyncPoint(Node node, TxnId txnId, Topologies topologies, Txn txn, FullRoute<?> route, SyncPointAdapter<R> adapter)
     {
         super(node, txnId, txn, route, topologies, adapter.preacceptTrackerFactory);
         this.adapter = adapter;
@@ -117,28 +120,28 @@ public class CoordinateSyncPoint<U extends Unseekable> extends CoordinatePreAcce
         return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, route, Adapters.inclusiveSyncPointBlocking())).beginAsResult();
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<U> adapter)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         checkArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain());
         return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, keysOrRanges, adapter)).beginAsResult();
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, FullRoute<U> route, SyncPointAdapter<U> adapter)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         checkArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnId(kind, route.domain());
         return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, route, adapter)).beginAsResult();
     }
 
-    private static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, TxnId txnId, Unseekables<U> keysOrRanges, SyncPointAdapter<U> adapter)
+    private static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, TxnId txnId, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         checkArgument(txnId.isSyncPoint());
         FullRoute<U> route = (FullRoute<U>) node.computeRoute(txnId, keysOrRanges);
         return coordinate(node, txnId, route, adapter);
     }
 
-    private static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, TxnId txnId, FullRoute<U> route, SyncPointAdapter<U> adapter)
+    private static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, TxnId txnId, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         checkArgument(txnId.isSyncPoint());
         TopologyMismatch mismatch = txnId.kind() == ExclusiveSyncPoint
@@ -146,7 +149,7 @@ public class CoordinateSyncPoint<U extends Unseekable> extends CoordinatePreAcce
                                     : TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
-        CoordinateSyncPoint<U> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter);
+        CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter);
         coordinate.start();
         return coordinate;
     }
@@ -179,25 +182,25 @@ public class CoordinateSyncPoint<U extends Unseekable> extends CoordinatePreAcce
     {
         // TODO (required): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching )
-        sendApply(node, to, syncPoint, executes(node, syncPoint.route, syncPoint.syncId));
+        sendApply(node, to, syncPoint, participates(node, syncPoint.route, syncPoint.syncId, syncPoint.executeAt));
     }
 
-    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies executes)
+    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates)
     {
-        sendApply(node, to, syncPoint, executes, null);
+        sendApply(node, to, syncPoint, participates, null);
     }
 
-    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, @Nullable Callback<Apply.ApplyReply> callback)
-    {
-        sendApply(node, to, syncPoint, executes(node, syncPoint.route, syncPoint.syncId), callback);
-    }
-
-    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies executes, @Nullable Callback<Apply.ApplyReply> callback)
+    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates, @Nullable Callback<Apply.ApplyReply> callback)
     {
         TxnId txnId = syncPoint.syncId;
-        Timestamp executeAt = txnId;
+        Timestamp executeAt = syncPoint.executeAt;
         Txn txn = node.agent().emptySystemTxn(txnId.kind(), txnId.domain());
         Deps deps = syncPoint.waitFor;
-        Apply.sendMaximal(node, to, executes, txnId, syncPoint.route(), txn, executeAt, deps, txn.execute(txnId, executeAt, null), txn.result(txnId, executeAt, null), syncPoint.route(), callback);
+        FullRoute<?> route = syncPoint.route;
+        Result result = txn.result(txnId, executeAt, null);
+        Writes writes = txn.execute(txnId, executeAt, null);
+        Apply apply = Apply.FACTORY.create(Maximal, to, participates, txnId, route, txn, executeAt, deps, writes, result, route);
+        if (callback == null) node.send(to, apply);
+        else node.send(to, apply, callback);
     }
 }

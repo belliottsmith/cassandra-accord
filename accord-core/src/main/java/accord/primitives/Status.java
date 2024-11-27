@@ -18,6 +18,7 @@
 
 package accord.primitives;
 
+import accord.local.CommandSummaries.SummaryStatus;
 import accord.messages.BeginRecovery;
 
 import java.util.Collection;
@@ -26,6 +27,12 @@ import java.util.function.Predicate;
 
 import javax.annotation.Nullable;
 
+import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
+import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
+import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
+import static accord.local.CommandSummaries.SummaryStatus.NOT_ACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.primitives.Known.Definition.*;
 import static accord.primitives.Known.*;
 import static accord.primitives.Known.KnownDeps.*;
@@ -38,10 +45,10 @@ import static accord.primitives.Status.Phase.*;
 
 public enum Status
 {
-    NotDefined        (None,      Nothing),
-    PreAccepted       (PreAccept, DefinitionAndRoute),
-    AcceptedInvalidate(Accept,    Maybe,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,  Unknown), // may or may not have witnessed
-    Accepted          (Accept,    Covering,          DefinitionUnknown, ExecuteAtProposed,     DepsProposed, Unknown), // may or may not have witnessed
+    NotDefined        (None,      NOT_ACCEPTED,   Nothing),
+    PreAccepted       (PreAccept, NOT_ACCEPTED,   DefinitionAndRoute),
+    AcceptedInvalidate(Accept,    NOT_ACCEPTED,   Maybe,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,  Unknown), // may or may not have witnessed
+    Accepted          (Accept,    ACCEPTED,       Covering,          DefinitionUnknown, ExecuteAtProposed,     DepsProposed, Unknown), // may or may not have witnessed
 
     /**
      * PreCommitted is a peculiar state, half-way between Accepted and Committed.
@@ -68,14 +75,17 @@ public enum Status
      * To solve this problem we simply permit the executeAt we discover for B to be propagated to A* without
      * its dependencies. Though this does complicate the state machine a little.
      */
-    PreCommitted      (Accept,  Full,  DefinitionUnknown, ExecuteAtKnown,   DepsUnknown,  Unknown),
+    PreCommitted      (Accept,     NOT_ACCEPTED,Full,  DefinitionUnknown, ExecuteAtKnown,   DepsUnknown,  Unknown),
 
-    Committed         (Commit,  Full,  DefinitionKnown,   ExecuteAtKnown,   DepsCommitted,Unknown),
-    Stable            (Execute, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Unknown),
-    PreApplied        (Persist, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Outcome.Apply),
-    Applied           (Persist, Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Outcome.Apply),
-    Truncated         (Cleanup, Maybe, DefinitionErased,  ExecuteAtErased,  DepsErased,   Outcome.Erased),
-    Invalidated       (Persist, Maybe, NoOp,              NoExecuteAt,      NoDeps,       Outcome.Invalidated),
+    Committed         (Commit,     COMMITTED,   Full,  DefinitionKnown,   ExecuteAtKnown,   DepsCommitted,Unknown),
+    Stable            (Execute,    STABLE,      Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Unknown),
+    PreApplied        (Persist,    STABLE,      Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Outcome.Apply),
+    Applied           (Persist,    APPLIED,     Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Outcome.Apply),
+    // TODO (required): TruncatedApply should be treated as APPLIED for summary status; when computing recovery decisions
+    //  anything already APPLIED should be treated as not witnessing anything being recovered from preaccept status
+    //  EXCEPT this cannot apply for touches \notin owns... consider some more how we handle this case
+    Truncated         (Cleanup,    null, Maybe, DefinitionErased,  ExecuteAtErased,  DepsErased, Outcome.Erased),
+    Invalidated       (Invalidate, INVALIDATED, Maybe, NoOp,              NoExecuteAt,      NoDeps,       Outcome.Invalidated),
     ;
 
     /**
@@ -96,7 +106,9 @@ public enum Status
         Commit(true),
         Execute(false),
         Persist(false),
-        Cleanup(false);
+        Cleanup(false),
+        Invalidate(false)
+        ;
 
         public final boolean tieBreakWithBallot;
 
@@ -186,17 +198,20 @@ public enum Status
     }
 
     public final Phase phase;
+    public final SummaryStatus summary;
     public final Known minKnown;
 
-    Status(Phase phase, Known minKnown)
+    Status(Phase phase, SummaryStatus summary, Known minKnown)
     {
         this.phase = phase;
+        this.summary = summary;
         this.minKnown = minKnown;
     }
 
-    Status(Phase phase, KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome)
+    Status(Phase phase, SummaryStatus summary, KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome)
     {
         this.phase = phase;
+        this.summary = summary;
         this.minKnown = new Known(route, definition, executeAt, deps, outcome);
     }
 

@@ -103,6 +103,7 @@ import static accord.primitives.Status.Durability.NotDurable;
 // TODO (expected): ensure execution is not too early
 // TODO (expected): validate mapReduce
 // TODO (expected): insert linearizability violations and detect them
+// TODO (required): make sure we test execution is triggered promptly (precisely when it should be), esp. for unmanaged txns
 public class CommandsForKeyTest
 {
     private static final Logger logger = LoggerFactory.getLogger(CommandsForKeyTest.class);
@@ -343,7 +344,7 @@ public class CommandsForKeyTest
         private Deps generateDeps(TxnId txnId, Timestamp executeAt, Status forStatus)
         {
             maybeGenerateUnwitnessed();
-            try (Deps.Builder builder = new Deps.Builder())
+            try (Deps.Builder builder = new Deps.Builder(true))
             {
                 for (Command command : byId.headMap(executeAt, false).values())
                 {
@@ -541,7 +542,7 @@ public class CommandsForKeyTest
         {
             CommonAttributes.Mutable result = new CommonAttributes.Mutable(txnId)
                    .durability(NotDurable)
-                   .updateParticipants(StoreParticipants.all(txnId.is(Key) ? KEY_ROUTE : RANGE_ROUTE));
+                   .setParticipants(StoreParticipants.all(txnId.is(Key) ? KEY_ROUTE : RANGE_ROUTE));
 
             if (withDefinition)
                 result.partialTxn((txnId.domain() == Key ? KEY_TXN : RANGE_TXN).slice(RANGES, true));
@@ -578,7 +579,7 @@ public class CommandsForKeyTest
     @Test
     public void testOne()
     {
-        test(232412256985395L, 1000);
+        test(1379416440687226L, 1000);
 //        test(System.nanoTime(), 500);
     }
 
@@ -804,15 +805,14 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public <P1, T> T mapReduceActive(Unseekables<?> keys, @Nullable Timestamp withLowerTxnId, Txn.Kind.Kinds kinds, CommandFunction<P1, T, T> map, P1 p1, T initialValue)
+        public boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Txn.Kind.Kinds testKind, TestStartedAt testStartedAt, Timestamp testStartAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit)
         {
-            throw new UnsupportedOperationException();
+            return false;
         }
 
         @Override
-        public <P1, T> T mapReduceFull(Unseekables<?> keys, TxnId testTxnId, Txn.Kind.Kinds testKind, TestStartedAt testStartedAt, TestDep testDep, TestStatus testStatus, CommandFunction<P1, T, T> map, P1 p1, T initialValue)
+        public <P1, P2> void visit(Unseekables<?> keysOrRanges, Timestamp startedBefore, Txn.Kind.Kinds testKind, ActiveCommandVisitor<P1, P2> visit, P1 p1, P2 p2)
         {
-            throw new UnsupportedOperationException();
         }
 
         @Override

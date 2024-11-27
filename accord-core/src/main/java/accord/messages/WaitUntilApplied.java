@@ -28,7 +28,7 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
 import static accord.primitives.SaveStatus.Applied;
-import static accord.primitives.SaveStatus.TruncatedApply;
+import static accord.primitives.SaveStatus.ErasedOrVestigial;
 
 /**
  * Wait until the transaction has been applied locally
@@ -43,19 +43,19 @@ public class WaitUntilApplied extends ReadData
         }
     }
 
-    private static final ExecuteOn EXECUTE_ON = new ExecuteOn(Applied, TruncatedApply);
+    private static final ExecuteOn EXECUTE_ON = new ExecuteOn(Applied, ErasedOrVestigial);
     private final long minEpoch;
     private long retryInLaterEpoch;
 
-    public WaitUntilApplied(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    public WaitUntilApplied(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long executeAtEpoch)
     {
-        super(to, topologies, txnId, readScope, executeAtEpoch);
+        super(to, topologies, txnId, scope, executeAtEpoch);
         this.minEpoch = topologies.oldestEpoch();
     }
 
-    protected WaitUntilApplied(TxnId txnId, Participants<?> readScope, long minEpoch, long executeAtEpoch)
+    protected WaitUntilApplied(TxnId txnId, Participants<?> scope, long minEpoch, long executeAtEpoch)
     {
-        super(txnId, readScope, executeAtEpoch);
+        super(txnId, scope, executeAtEpoch);
         this.minEpoch = minEpoch;
     }
 

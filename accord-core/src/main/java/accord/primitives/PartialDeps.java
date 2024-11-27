@@ -18,25 +18,29 @@
 
 package accord.primitives;
 
+import java.util.Objects;
+
 import accord.api.RoutingKey;
 import accord.utils.Invariants;
 import accord.utils.SortedCursor;
 
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalArgument;
 
 public class PartialDeps extends Deps
 {
     public static final PartialDeps NONE = new PartialDeps(Ranges.EMPTY, KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
 
-    public static Builder builder(Participants<?> covering)
+    public static Builder builder(Participants<?> covering, boolean buildRangeByTxnId)
     {
-        return new Builder(covering);
+        return new Builder(covering, buildRangeByTxnId);
     }
     public static class Builder extends AbstractBuilder<PartialDeps>
     {
         final Participants<?> covering;
-        public Builder(Participants<?> covering)
+        public Builder(Participants<?> covering, boolean buildRangeByTxnId)
         {
+            super(buildRangeByTxnId);
             this.covering = covering;
         }
 
@@ -97,11 +101,19 @@ public class PartialDeps extends Deps
     }
 
     @Override
+    public boolean equals(Deps that)
+    {
+        return that instanceof PartialDeps
+               && Objects.equals(covering, ((PartialDeps) that).covering)
+               && super.equals(that);
+    }
+
+    @Override
     public PartialDeps intersecting(Participants<?> participants)
     {
         if (!covers(participants))
             throw illegalArgument("This PartialDeps does not cover the requested participants");
-        return new PartialDeps(this.covering.intersecting(participants), keyDeps.intersecting(participants), rangeDeps.intersecting(participants), directKeyDeps.intersecting(participants));
+        return new PartialDeps(this.covering.intersecting(participants, Minimal), keyDeps.intersecting(participants), rangeDeps.intersecting(participants), directKeyDeps.intersecting(participants));
     }
 
     public Deps reconstitute(FullRoute<?> route)

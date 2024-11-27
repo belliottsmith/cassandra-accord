@@ -23,4 +23,6 @@ import accord.api.RoutingKey;
 public interface RangeFactory
 {
     Range newRange(RoutingKey start, RoutingKey end);
+    // makes a range representing a lack of knowledge that is used for e.g. subtracting from another range; weaker invariant checks may therefore apply
+    default Range newAntiRange(RoutingKey start, RoutingKey end) { return newRange(start, end); }
 }

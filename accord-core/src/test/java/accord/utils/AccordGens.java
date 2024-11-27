@@ -535,7 +535,7 @@ public class AccordGens
         double emptyProb = .2D;
         return rs -> {
             if (rs.decide(emptyProb)) return RangeDeps.NONE;
-            RangeDeps.Builder builder = RangeDeps.builder();
+            RangeDeps.BuilderByRange builder = RangeDeps.builderByRange();
             List<? extends Range> uniqRanges = Gens.lists(rangeGen).uniqueBestEffort().ofSize(rs.nextInt(1, 10)).next(rs);
             for (Range range : uniqRanges)
             {

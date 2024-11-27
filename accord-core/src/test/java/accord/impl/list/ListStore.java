@@ -22,7 +22,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -46,6 +45,7 @@ import accord.coordinate.TopologyMismatch;
 import accord.coordinate.Truncated;
 import accord.coordinate.tracking.AllTracker;
 import accord.impl.basic.SimulatedFault;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.primitives.Range;
@@ -123,7 +123,7 @@ public class ListStore implements DataStore
 
         private PurgeAt(SyncPoint syncPoint, long epoch, Ranges ranges)
         {
-            this.syncPoint = syncPoint;
+            this.syncPoint = Invariants.nonNull(syncPoint);
             this.epoch = epoch;
             this.ranges = ranges;
         }
@@ -149,7 +149,7 @@ public class ListStore implements DataStore
     private final List<ChangeAt> removedAts = new ArrayList<>();
     private final List<PurgeAt> purgedAts = new ArrayList<>();
     private final List<FetchComplete> fetchCompletes = new ArrayList<>();
-    private Ranges allowed = null;
+    private Ranges allowedReads = null, allowedWrites = null;
     // used only to detect changes when a new Topology is notified
     private Topology previousTopology = null;
     // used to make sure removes are applied in epoch order and not in the order sync points complete in
@@ -295,7 +295,7 @@ public class ListStore implements DataStore
         // we perform the read, and report alongside its result what we were unable to provide to the coordinator
         // since we might have part of the read request, and it might be necessary for availability for us to serve that part
         if (!unavailable.contains(key))
-            checkAccess(executeAt, key);
+            checkReadAccess(executeAt, key);
         Timestamped<int[]> v = data.get(key);
         return v == null ? EMPTY : v;
     }
@@ -305,21 +305,36 @@ public class ListStore implements DataStore
         // we perform the read, and report alongside its result what we were unable to provide to the coordinator
         // since we might have part of the read request, and it might be necessary for availability for us to serve that part
         if (!unavailable.intersects(range))
-            checkAccess(executeAt, range);
+            checkReadAccess(executeAt, range);
         return data.subMap(range.start(), range.startInclusive(), range.end(), range.endInclusive())
                 .entrySet().stream().map(e -> (Map.Entry<Key, Timestamped<int[]>>)(Map.Entry)e)
                 .collect(Collectors.toList());
     }
 
-    public synchronized void write(Key key, Timestamp executeAt, int[] value)
+    public void write(Key key, Timestamp executeAt, int[] value)
     {
-        checkAccess(executeAt, key);
-        data.merge(key, new Timestamped<>(executeAt, value, Arrays::toString), ListStore::merge);
+        write(key, new Timestamped<>(executeAt, value, Arrays::toString));
     }
 
-    private void checkAccess(Timestamp executeAt, Key key)
+    public void write(Key key, Timestamped<int[]> value)
     {
-        if (!allowed.contains(key))
+        checkWriteAccess(value.timestamp, key);
+        writeUnsafe(key, value);
+    }
+
+    public void writeUnsafe(Key key, Timestamp executeAt, int[] value)
+    {
+        writeUnsafe(key, new Timestamped<>(executeAt, value, Arrays::toString));
+    }
+
+    public void writeUnsafe(Key key, Timestamped<int[]> value)
+    {
+        data.merge(key,value, ListStore::merge);
+    }
+
+    private void checkReadAccess(Timestamp executeAt, Key key)
+    {
+        if (!allowedReads.contains(key))
         {
             // TODO (expected): improve this validation logic
             // but in the meantime, whitelist valid things, e.g. ephemeral reads can access data that has been retired
@@ -328,11 +343,18 @@ public class ListStore implements DataStore
                 return;
 
             throw illegalState("Attempted to access key %s on node %s, which is not in the range %s;\nexecuteAt = %s\n%s",
-                               key, node, allowed, executeAt, history(key));
+                               key, node, allowedReads, executeAt, history(key));
         }
     }
 
-    private void checkAccess(Timestamp executeAt, Range range)
+    private void checkWriteAccess(Timestamp executeAt, Key key)
+    {
+        if (!allowedWrites.contains(key))
+            throw illegalState("Attempted to access key %s on node %s, which is not in the range %s;\nexecuteAt = %s\n%s",
+                               key, node, allowedReads, executeAt, history(key));
+    }
+
+    private void checkReadAccess(Timestamp executeAt, Range range)
     {
         if (executeAt instanceof TxnId)
         {
@@ -345,12 +367,12 @@ public class ListStore implements DataStore
             }
         }
         Ranges singleRanges = Ranges.of(range);
-        if (!allowed.containsAll(singleRanges))
+        if (!allowedReads.containsAll(singleRanges))
         {
             // TODO (required): it is actually safe for a node on an old epoch to still be executing a transaction that has been executed in a later epoch,
             //   making this check over-enthusiastic.
             illegalState(String.format("Attempted to access range %s on node %s, which is not in the range %s;\nexecuteAt = %s\n%s",
-                                       range, node, allowed, executeAt, history(singleRanges)));
+                                       range, node, allowedReads, executeAt, history(singleRanges)));
         }
     }
 
@@ -444,7 +466,7 @@ public class ListStore implements DataStore
             {
                 synchronized (ListStore.this)
                 {
-                    allowed = allowed.with(fetched);
+                    allowedReads = allowedReads.with(fetched);
                     success = success.with(fetched);
                     if (pendingFetches.containsKey(storeId))
                     {
@@ -496,27 +518,32 @@ public class ListStore implements DataStore
         return new TreeMap<>(data);
     }
 
-    public boolean equals(NavigableMap<RoutableKey, Timestamped<int[]>> a)
+    public void checkAtLeast(CommandStore[] commandStores, NavigableMap<RoutableKey, Timestamped<int[]>> a)
     {
-        return equal(a, data);
+        checkAtLeast(commandStores, a, data);
     }
 
-    public static boolean equal(NavigableMap<RoutableKey, Timestamped<int[]>> a, NavigableMap<RoutableKey, Timestamped<int[]>> b)
+    public static void checkAtLeast(CommandStore[] commandStores, NavigableMap<RoutableKey, Timestamped<int[]>> a, NavigableMap<RoutableKey, Timestamped<int[]>> b)
     {
-        Iterator<Map.Entry<RoutableKey, Timestamped<int[]>>> aiter = a.entrySet().iterator();
-        Iterator<Map.Entry<RoutableKey, Timestamped<int[]>>> biter = b.entrySet().iterator();
-        while (aiter.hasNext() && biter.hasNext())
+        if (a.isEmpty())
+            return;
+        for (Map.Entry<RoutableKey, Timestamped<int[]>> ae : a.entrySet())
         {
-            Map.Entry<RoutableKey, Timestamped<int[]>> av = aiter.next();
-            Map.Entry<RoutableKey, Timestamped<int[]>> bv = biter.next();
-            if (!av.getKey().equals(bv.getKey()))
-                return false;
-            if (!av.getValue().equals(bv.getValue(), Arrays::equals))
-                return false;
+            RoutableKey k = ae.getKey();
+            Timestamped<int[]> av = ae.getValue();
+            Timestamped<int[]> bv = b.get(k);
+            if (bv == null || bv.timestamp.compareTo(av.timestamp) < 0)
+            {
+                for (CommandStore commandStore : commandStores)
+                {
+                    if (!commandStore.unsafeGetRangesForEpoch().allSince(av.timestamp.epoch()).contains(k))
+                        continue;
+                    Invariants.checkState(!commandStore.unsafeGetSafeToRead().lastEntry().getValue().contains(k));
+                }
+                return;
+            }
+            Invariants.checkState(bv.timestamp.equals(av.timestamp) ? Arrays.equals(av.data, bv.data) : ListStore.isStrictPrefix(av.data, bv.data));
         }
-        if (aiter.hasNext() || biter.hasNext())
-            return false;
-        return true;
     }
 
     private static boolean isStrictPrefix(int[] a, int[] b)
@@ -538,7 +565,8 @@ public class ListStore implements DataStore
         if (previousTopology == null)
         {
             previousTopology = topology;
-            allowed = updatedRanges;
+            allowedReads = updatedRanges;
+            allowedWrites = updatedRanges;
             addedAts.add(new ChangeAt(epoch, updatedRanges));
             return;
         }
@@ -552,11 +580,12 @@ public class ListStore implements DataStore
             addedAts.add(new ChangeAt(epoch, added));
             for (Range range : added)
             {
+                allowedWrites = allowedWrites.with(Ranges.of(range));
                 if (!previousTopology.ranges().intersects(range))
                 {
                     // A range was added that globally didn't exist before; there is nothing to bootstrap here!
                     // TODO (now): document this history change
-                    allowed = allowed.with(Ranges.of(range));
+                    allowedReads = allowedReads.with(Ranges.of(range));
                 }
             }
         }
@@ -600,14 +629,17 @@ public class ListStore implements DataStore
         // * api is range -> TxnId, so we still need a TxnId to be referenced off... so we need to create a TxnId to know when we are in-sync!
         // * if we have a sync point, we really only care if the sync point is applied globally...
         // * even though CoordinateDurabilityScheduling is part of BurnTest, it was seen that shard/global syncs were only happening in around 1/5 of the tests (mostly due to timeouts/invalidates), which would mean purge was called infrequently.
-        currentSyncPoint(node, removed).flatMap(sp -> awaitSyncPoint(node, sp)).begin((s, f) -> {
-            if (f != null)
-            {
-                node.agent().onUncaughtException(f);
-                return;
-            }
-            performRemoval(epoch, removed, s);
-        });
+        node.scheduler().selfRecurring(() -> {
+            currentSyncPoint(node, removed).flatMap(sp -> awaitSyncPoint(node, sp)).begin((s, f) -> {
+                if (f != null)
+                {
+                    node.agent().onUncaughtException(f);
+                    return;
+                }
+                if (s != null)
+                    performRemoval(epoch, removed, s);
+            });
+        }, 0, TimeUnit.MILLISECONDS);
     }
 
     private synchronized void performRemoval(long epoch, Ranges removed, SyncPoint s)
@@ -622,7 +654,8 @@ public class ListStore implements DataStore
             return;
         }
         pendingRemoves.remove(epoch);
-        this.allowed = this.allowed.without(removed);
+        this.allowedReads = this.allowedReads.without(removed);
+        this.allowedWrites = this.allowedWrites.without(removed);
         purgedAts.add(new PurgeAt(s, epoch, removed));
         // C* encodes keyspace/table within a Range, so Ranges being added/removed to the cluster are expected behaviors and not just local range movements.
         // however, there is no reason to erase old data as it being used should be detected as a violation due to being stale,

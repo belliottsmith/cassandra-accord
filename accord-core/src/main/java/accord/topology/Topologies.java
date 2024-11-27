@@ -43,7 +43,8 @@ public interface Topologies extends TopologySorter
 
     int indexForEpoch(long epoch);
 
-    Topology forEpoch(long epoch);
+    Topology getEpoch(long epoch);
+    Topologies forEpoch(long epoch);
     Topologies forEpochs(long minEpochInclusive, long maxEpochInclusive);
 
     long oldestEpoch();
@@ -164,11 +165,19 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topology forEpoch(long epoch)
+        public Topology getEpoch(long epoch)
         {
             if (topology.epoch != epoch)
                 throw new IndexOutOfBoundsException();
             return topology;
+        }
+
+        @Override
+        public Topologies forEpoch(long epoch)
+        {
+            if (epoch != topology.epoch)
+                throw new IndexOutOfBoundsException();
+            return this;
         }
 
         @Override
@@ -304,9 +313,19 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topology forEpoch(long epoch)
+        public Topology getEpoch(long epoch)
         {
             return get(indexForEpoch(epoch));
+        }
+
+        @Override
+        public Topologies forEpoch(long epoch)
+        {
+            if (epoch < oldestEpoch() || epoch > currentEpoch())
+                throw new IndexOutOfBoundsException();
+            if (size() == 1)
+                return this;
+            return new Single(supplier, getEpoch(epoch));
         }
 
         @Override
@@ -316,6 +335,8 @@ public interface Topologies extends TopologySorter
                 throw new IndexOutOfBoundsException();
             if (minEpochInclusive == oldestEpoch() && maxEpochInclusive == currentEpoch())
                 return this;
+            if (minEpochInclusive == maxEpochInclusive)
+                return new Single(supplier, getEpoch(minEpochInclusive));
             // TODO (desired): copy if underlying list is small, or delta is large (or just copy)
             return new Multi(supplier, Arrays.copyOfRange(topologies, indexForEpoch(maxEpochInclusive), 1 + indexForEpoch(minEpochInclusive)));
         }
@@ -467,7 +488,13 @@ public interface Topologies extends TopologySorter
             }
 
             if (subsets == null)
-                return this;
+            {
+                if (limit == topologies.length)
+                    return this;
+                if (limit == 1)
+                    return new Single(supplier, topologies[0]);
+                return new Multi(supplier, Arrays.copyOf(topologies, limit));
+            }
             return new Multi(supplier, subsets);
         }
     }

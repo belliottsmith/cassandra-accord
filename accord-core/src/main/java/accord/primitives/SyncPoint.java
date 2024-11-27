@@ -34,27 +34,23 @@ public class SyncPoint<U extends Unseekable>
 {
     public static class SerializationSupport
     {
-        public static SyncPoint construct(TxnId syncId, Deps waitFor, FullRoute<?> route)
+        public static SyncPoint construct(TxnId syncId, Timestamp executeAt, Deps waitFor, FullRoute<?> route)
         {
-            return new SyncPoint(syncId, waitFor, route);
+            return new SyncPoint(syncId, executeAt, waitFor, route);
         }
     }
 
     public final TxnId syncId;
+    public final Timestamp executeAt;
     public final Deps waitFor;
     public final FullRoute<U> route;
 
-    public SyncPoint(TxnId syncId, Deps waitFor, FullRoute<U> route)
+    public SyncPoint(TxnId syncId, Timestamp executeAt, Deps waitFor, FullRoute<U> route)
     {
         this.syncId = syncId;
+        this.executeAt = executeAt;
         this.waitFor = waitFor;
         this.route = route;
-    }
-
-    // TODO (required): this is not safe to use as a "sourceEpoch", as a transaction in the dependencies may execute in a future epoch
-    public long sourceEpoch()
-    {
-        return syncId.epoch();
     }
 
     public FullRoute<U> route()

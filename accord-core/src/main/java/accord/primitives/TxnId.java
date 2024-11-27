@@ -94,47 +94,47 @@ public class TxnId extends Timestamp
 
     public Kind kind()
     {
-        return kind(flags());
+        return kind(flagsUnmasked());
     }
 
     public boolean is(Kinds kinds)
     {
-        return kinds.testOrdinal(kindOrdinal(flags()));
+        return kinds.testOrdinal(kindOrdinal(flagsUnmasked()));
     }
 
     public boolean is(Kind kind)
     {
-        return kindOrdinal(flags()) == kind.ordinal();
+        return kindOrdinal(flagsUnmasked()) == kind.ordinal();
     }
 
     public boolean isVisible()
     {
-        return Kind.isVisible(kindOrdinal(flags()));
+        return Kind.isVisible(kindOrdinal(flagsUnmasked()));
     }
 
     public boolean isSyncPoint()
     {
-        return Kind.isSyncPoint(kindOrdinal(flags()));
+        return Kind.isSyncPoint(kindOrdinal(flagsUnmasked()));
     }
 
     public boolean isSystemTxn()
     {
-        return Kind.isSystemTxn(kindOrdinal(flags()));
+        return Kind.isSystemTxn(kindOrdinal(flagsUnmasked()));
     }
 
     public boolean awaitsOnlyDeps()
     {
-        return Kind.awaitsOnlyDeps(kindOrdinal(flags()));
+        return Kind.awaitsOnlyDeps(kindOrdinal(flagsUnmasked()));
     }
 
     public boolean awaitsPreviouslyOwned()
     {
-        return Kind.awaitsPreviouslyOwned(kindOrdinal(flags()));
+        return Kind.awaitsPreviouslyOwned(kindOrdinal(flagsUnmasked()));
     }
 
     public boolean is(Domain domain)
     {
-        return domainOrdinal(flags()) == domain.ordinal();
+        return domainOrdinal(flagsUnmasked()) == domain.ordinal();
     }
 
     public Kinds witnesses()
@@ -149,7 +149,7 @@ public class TxnId extends Timestamp
 
     public Domain domain()
     {
-        return domain(flags());
+        return domain(flagsUnmasked());
     }
 
     public TxnId as(Kind kind)
@@ -209,7 +209,7 @@ public class TxnId extends Timestamp
         return Domain.ofOrdinal(domainOrdinal(flags));
     }
 
-    private static int kindOrdinal(int flags)
+    public static int kindOrdinal(int flags)
     {
         return (flags >> 1) & 7;
     }

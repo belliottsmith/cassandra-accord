@@ -40,9 +40,11 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
 import org.agrona.collections.IntHashSet;
 
-import static accord.coordinate.CoordinationAdapter.Factory.Step.Continue;
+import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
+import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.messages.Commit.Kind.StableFastPath;
@@ -69,9 +71,9 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
 
     ExecuteTxn(Node node, Topologies topologies, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Participants<?> readScope, Timestamp executeAt, Deps stableDeps, BiConsumer<? super Result, Throwable> callback)
     {
-        // we need to send Stable to the origin epoch as well as the execution epoch
-        // TODO (desired): permit slicing Topologies by key (though unnecessary if we eliminate the concept of non-participating home keys)
-        super(node, topologies, txnId);
+        super(node, topologies.forEpoch(executeAt.epoch()), txnId);
+        Invariants.checkState(!txnId.awaitsOnlyDeps());
+        Invariants.checkState(!txnId.awaitsPreviouslyOwned());
         this.path = path;
         this.txn = txn;
         this.route = route;
@@ -87,7 +89,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     {
         IntHashSet readSet = new IntHashSet();
         to.forEach(i -> readSet.add(i.id));
-        Commit.stableAndRead(node, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, stableDeps, readSet, this, SEND_MINIMUM_STABLE_MESSAGES);
+        Commit.stableAndRead(node, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, stableDeps, readSet, this, SEND_MINIMUM_STABLE_MESSAGES && path != RECOVER);
     }
 
     private Commit.Kind commitKind()
@@ -104,8 +106,15 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     @Override
     public void contact(Id to)
     {
-        if (SEND_MINIMUM_STABLE_MESSAGES) Commit.stableAndRead(to, node, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, stableDeps, this, SEND_MINIMUM_STABLE_MESSAGES);
-        else node.send(to, new ReadTxnData(to, topologies(), txnId, readScope, executeAt.epoch()), this);
+        if (SEND_MINIMUM_STABLE_MESSAGES && path != RECOVER)
+        {
+            // we are always sending to a replica in the latest epoch and requesting a read, so onlyContactOldAndReadSet is a redundant parameter
+            Commit.stableAndRead(to, node, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, stableDeps, this, false);
+        }
+        else
+        {
+            node.send(to, new ReadTxnData(to, topologies(), txnId, readScope, executeAt.epoch()), this);
+        }
     }
 
     @Override
@@ -162,7 +171,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
 
     protected CoordinationAdapter<Result> adapter()
     {
-        return node.coordinationAdapter(txnId, Continue);
+        return node.coordinationAdapter(txnId, Standard);
     }
 
     @Override

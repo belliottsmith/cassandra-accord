@@ -35,7 +35,6 @@ import accord.api.Key;
 import accord.api.Write;
 import accord.local.CommandStore;
 import accord.local.SafeCommandStore;
-import accord.utils.Timestamped;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncExecutor;
 
@@ -61,7 +60,7 @@ public class ListWrite extends TreeMap<Key, int[]> implements Write
         logger.trace("submitting WRITE on {} at {} key:{}", s.node, executeAt, key);
         return executor.apply(safeStore.commandStore()).submit(() -> {
             int[] data = get(key);
-            s.data.merge((Key)key, new Timestamped<>(executeAt, data, Arrays::toString), ListStore::merge);
+            s.write((Key)key, executeAt, data);
             logger.trace("WRITE on {} at {} key:{} -> {}", s.node, executeAt, key, data);
             return null;
         });
@@ -76,7 +75,7 @@ public class ListWrite extends TreeMap<Key, int[]> implements Write
         TimestampsForKeys.updateLastExecutionTimestamps(safeStore, ((Key)key).toUnseekable(), txnId, executeAt, true);
         logger.trace("unsafe applying WRITE on {} at {} key:{}", s.node, executeAt, key);
         int[] data = get(key);
-        s.data.merge((Key)key, new Timestamped<>(executeAt, data, Arrays::toString), ListStore::merge);
+        s.writeUnsafe((Key)key, executeAt, data);
     }
 
     @Override

@@ -30,7 +30,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
-import static accord.coordinate.CoordinationAdapter.Factory.Step.Continue;
+import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 
 public class StabiliseTxn extends Stabilise<Result>
 {
@@ -42,6 +42,6 @@ public class StabiliseTxn extends Stabilise<Result>
     @Override
     protected CoordinationAdapter<Result> adapter()
     {
-        return node.coordinationAdapter(txnId, Continue);
+        return node.coordinationAdapter(txnId, Standard);
     }
 }

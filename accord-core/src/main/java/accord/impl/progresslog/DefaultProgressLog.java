@@ -18,8 +18,10 @@
 
 package accord.impl.progresslog;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -43,7 +45,6 @@ import accord.primitives.Participants;
 import accord.primitives.ProgressToken;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.LogGroupTimers;
@@ -64,12 +65,15 @@ import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.PreLoadContext.contextFor;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
+// TODO (required): for transactions that span multiple progress logs (notably: sync points) we need to coordinate *fetching* to avoid redundant work
 public class DefaultProgressLog implements ProgressLog, Runnable
 {
     private static final Logger logger = LoggerFactory.getLogger(DefaultProgressLog.class);
@@ -255,6 +259,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         if (after.hasBeen(PreApplied))
             return state;
 
+        // TODO (required): (LHF) this does not appear to correctly compute for an ExclusiveSyncPoint, but equally
+        //   executes() may not be set for only PreCommitted transactions.
         Ranges executeRanges = after.hasBeen(PreCommitted) ? safeStore.ranges().allAt(after.executeAt())
                                                            : safeStore.ranges().allSince(after.txnId().epoch());
         if (executeRanges.intersects(after.participants().owns()))
@@ -276,6 +282,40 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         TxnState state = get(txnId);
         if (state != null)
             clear(state);
+    }
+
+    public List<TxnId> activeBefore(TxnId before)
+    {
+        List<TxnId> result = new ArrayList<>();
+        for (TxnState state : BTree.<TxnState>iterable(stateMap))
+        {
+            if (state.txnId.compareTo(before) >= 0)
+                break;
+
+            result.add(state.txnId);
+        }
+        return result;
+    }
+
+    @Override
+    public void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore)
+    {
+        int index = 0;
+        while (index < BTree.size(stateMap))
+        {
+            TxnState state = BTree.findByIndex(stateMap, index);
+            if (state.txnId.compareTo(clearAnyBefore) < 0)
+            {
+                clear(state);
+            }
+            else if (state.txnId.compareTo(clearWaitingBefore) < 0)
+            {
+                state.setWaitingDone(this);
+                if (!state.maybeRemove(this))
+                    ++index;
+            }
+            else return;
+        }
     }
 
     public void clear()
@@ -329,36 +369,63 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         // ensure we have a record to work with later; otherwise may think has been truncated
         // TODO (expected): we shouldn't rely on this anymore
         blockedBy.initialise();
-        Invariants.checkState(blockedBy.current().saveStatus().compareTo(blockedUntil.minSaveStatus) < 0);
-        Invariants.checkState(blockedOnParticipants == null || safeStore.ranges().all().containsAll(blockedOnParticipants)); // more permissive than strictly necessary, but just to cheaply catch errors
+        Command command = blockedBy.current();
+        SaveStatus saveStatus = command.saveStatus();
+        Invariants.checkState(saveStatus.compareTo(blockedUntil.minSaveStatus) < 0);
+
+        StoreParticipants blockedOnStoreParticipants2 = null;
+        if (blockedOnParticipants != null || blockedOnRoute != null)
+        {
+            Participants<?> owns, touches;
+            Ranges coordinateRanges = safeStore.ranges().allAt(blockedBy.txnId().epoch());
+            if (blockedOnRoute == null)
+            {
+                touches = blockedOnParticipants;
+                owns = blockedOnParticipants.slice(coordinateRanges, Minimal);
+            }
+            else
+            {
+                owns = blockedOnRoute.slice(coordinateRanges, Minimal);
+                touches = owns;
+            }
+            blockedOnStoreParticipants2 = StoreParticipants.create(blockedOnRoute, owns, null, touches, touches);
+        }
 
         // first save the route/participant info into the Command if it isn't already there
-        Command command = blockedBy.current();
 
         CommonAttributes update = blockedBy.current();
         StoreParticipants participants = update.participants();
-        StoreParticipants updatedParticipants = participants.supplement(blockedOnRoute, null, blockedOnParticipants);
-        if (blockedOnStoreParticipants != null) updatedParticipants = updatedParticipants.supplement(blockedOnStoreParticipants);
+        StoreParticipants updatedParticipants = participants;
+        if (blockedOnStoreParticipants != null) updatedParticipants = updatedParticipants.supplementOrMerge(saveStatus, blockedOnStoreParticipants);
+        if (blockedOnStoreParticipants2 != null) updatedParticipants = updatedParticipants.supplementOrMerge(saveStatus, blockedOnStoreParticipants2);
         if (participants != updatedParticipants)
-            update = update.mutable().updateParticipants(updatedParticipants);
+            update = update.mutable().setParticipants(updatedParticipants);
 
         if (update != command)
             command = blockedBy.updateAttributes(safeStore, update);
 
         // TODO (required): tighten up ExclusiveSyncPoint range bounds
-        Invariants.checkState((command.txnId().is(Txn.Kind.ExclusiveSyncPoint) ? safeStore.ranges().all()
-                                                                               : safeStore.ranges().allSince(command.txnId().epoch())
+        Invariants.checkState((command.txnId().is(ExclusiveSyncPoint) ? safeStore.ranges().all()
+                                                                      : safeStore.ranges().allSince(command.txnId().epoch())
                               ).intersects(command.participants().hasTouched()));
 
-        // TODO (consider): consider triggering a preemption of existing coordinator (if any) in some circumstances;
+        // TODO (desired):  consider triggering a preemption of existing coordinator (if any) in some circumstances;
         //                  today, an LWT can pre-empt more efficiently (i.e. instantly) a failed operation whereas Accord will
         //                  wait for some progress interval before taking over; there is probably some middle ground where we trigger
         //                  faster preemption once we're blocked on a transaction, while still offering some amount of time to complete.
-        // TODO (desirable, efficiency): forward to local progress shard for processing (if known)
-        // TODO (desirable, efficiency): if we are co-located with the home shard, don't need to do anything unless we're in a
-        //                               later topology that wasn't covered by its coordination
+        // TODO (desired, efficiency): forward to local progress shard for processing (if known)
+        // TODO (desired, efficiency): if we are co-located with the home shard, don't need to do anything unless we're in a
+        //                             later topology that wasn't covered by its coordination
         TxnState state = ensure(blockedBy.txnId());
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
+    }
+
+    @Override
+    public void invalidIfUncommitted(TxnId txnId)
+    {
+        TxnState state = get(txnId);
+        if (state != null)
+            state.setInvalidIfUncommitted();
     }
 
     @Override

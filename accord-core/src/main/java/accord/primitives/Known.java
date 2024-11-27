@@ -26,6 +26,7 @@ import javax.annotation.Nullable;
 
 import accord.utils.Invariants;
 
+import static accord.primitives.Known.Definition.DefinitionErased;
 import static accord.primitives.Known.Definition.DefinitionKnown;
 import static accord.primitives.Known.Definition.DefinitionUnknown;
 import static accord.primitives.Known.KnownDeps.DepsErased;
@@ -42,7 +43,7 @@ import static accord.primitives.Status.Phase.Accept;
 import static accord.primitives.Status.Phase.Cleanup;
 import static accord.primitives.Status.Phase.Commit;
 import static accord.primitives.Status.Phase.Execute;
-import static accord.primitives.Status.Phase.Persist;
+import static accord.primitives.Status.Phase.Invalidate;
 import static accord.primitives.Status.Phase.PreAccept;
 
 /**
@@ -51,10 +52,12 @@ import static accord.primitives.Status.Phase.PreAccept;
  * Each property's values are however ordered with respect to each other.
  * <p>
  * This information does not need to be consistent with
+ * TODO (expected): encode as an integer
  */
 public class Known
 {
     public static final Known Nothing = new Known(Maybe, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown);
+    public static final Known DefinitionOnly = new Known(Maybe, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown);
     public static final Known DefinitionAndRoute = new Known(Full, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown);
     public static final Known Apply = new Known(Full, DefinitionUnknown, ExecuteAtKnown, DepsKnown, Outcome.Apply);
     public static final Known Invalidated = new Known(Maybe, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Outcome.Invalidated);
@@ -198,6 +201,13 @@ public class Known
         return new Known(route, definition, executeAt, deps, newOutcome);
     }
 
+    public Known with(Definition newDefinition)
+    {
+        if (definition == newDefinition)
+            return this;
+        return new Known(route, newDefinition, executeAt, deps, outcome);
+    }
+
     public Known with(KnownDeps newDeps)
     {
         if (deps == newDeps)
@@ -222,7 +232,7 @@ public class Known
         if (route != Full)
             return SaveStatus.NotDefined;
 
-        if (definition == DefinitionUnknown)
+        if (definition == DefinitionUnknown || definition == DefinitionErased)
         {
             if (executeAt.isDecidedAndKnownToExecute())
                 return SaveStatus.PreCommitted;
@@ -324,7 +334,12 @@ public class Known
     {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        Known that = (Known) o;
+        return equals((Known) o);
+    }
+
+    // ignores class identity
+    boolean equals(Known that)
+    {
         return route == that.route && definition == that.definition && executeAt == that.executeAt && deps == that.deps && outcome == that.outcome;
     }
 
@@ -518,7 +533,7 @@ public class Known
         /**
          * A decision to invalidate the transaction is known to have been reached
          */
-        NoDeps(Persist);
+        NoDeps(Invalidate);
 
         public final Status.Phase phase;
 

@@ -19,14 +19,29 @@
 package accord.api;
 
 import java.util.function.BiConsumer;
+import java.util.function.Function;
+
+import accord.utils.WrappableException;
 
 public interface UncaughtExceptionListener extends BiConsumer<Object, Throwable>
 {
     void onUncaughtException(Throwable t);
+
     @Override
     default void accept(Object ignore, Throwable t)
     {
         if (t != null)
             onUncaughtException(t);
+    }
+
+    default void accept(Object ignore, Throwable t, Function<Throwable, Throwable> ifException)
+    {
+        if (t != null)
+            onUncaughtException(ifException.apply(t));
+    }
+
+    default void acceptAndWrap(Object ignore, Throwable t)
+    {
+        accept(ignore, t, WrappableException::wrap);
     }
 }

@@ -30,7 +30,6 @@ import accord.api.DataStore.FetchRanges;
 import accord.api.DataStore.FetchResult;
 import accord.api.DataStore.StartingRangeFetch;
 import accord.coordinate.CoordinateSyncPoint;
-import accord.coordinate.CoordinationFailed;
 import accord.coordinate.FetchMaxConflict;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
@@ -131,7 +130,7 @@ class Bootstrap
                 // Ignore timeouts fetching the epoch, always keep trying to bootstrap
                 node.withEpoch(globalSyncId.epoch(), (ignored, failure) -> store.execute(empty(), Attempt.this::start).begin((ignored1, failure2) -> {
                     if (failure2 != null)
-                        node.agent().onUncaughtException(CoordinationFailed.wrap(failure2));
+                        node.agent().acceptAndWrap(null, failure2);
                 }));
                 return;
             }
@@ -307,7 +306,7 @@ class Bootstrap
             {
                 if (ranges.intersects(state.ranges))
                 {
-                    // TODO (now): try to uncontact if not finished
+                    // TODO (desired): try to uncontact if not finished
                     maybeComplete(state);
                 }
             }
@@ -421,7 +420,6 @@ class Bootstrap
     final CommandStore store;
     final long epoch;
     // TODO (required): make sure this is triggered in event of partial expiration of work to do
-    final AsyncResult.Settable<Void> coordination = AsyncResults.settable();
     final AsyncResult.Settable<Void> data = AsyncResults.settable();
     final AsyncResult.Settable<Void> reads = AsyncResults.settable();
     final Set<Attempt> inProgress = new DeterministicIdentitySet<>();
@@ -465,8 +463,6 @@ class Bootstrap
         remaining = remaining.without(attempt.fetched);
         if (inProgress.isEmpty() && remaining.isEmpty())
         {
-            // TODO (now): this waits too long?
-            coordination.setSuccess(null);
             data.setSuccess(null);
             reads.setSuccess(null);
             store.complete(this);

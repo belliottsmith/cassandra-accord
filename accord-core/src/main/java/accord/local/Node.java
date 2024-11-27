@@ -33,7 +33,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import javax.annotation.Nonnull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
@@ -57,9 +56,8 @@ import accord.api.TopologySorter;
 import accord.coordinate.CoordinateEphemeralRead;
 import accord.coordinate.CoordinateTransaction;
 import accord.coordinate.CoordinationAdapter;
-import accord.coordinate.CoordinationAdapter.Factory.Step;
-import accord.coordinate.CoordinationFailed;
-import accord.coordinate.MaybeRecover;
+import accord.coordinate.CoordinationAdapter.Factory.Kind;
+import accord.coordinate.Infer.InvalidIf;
 import accord.coordinate.Outcome;
 import accord.coordinate.RecoverWithRoute;
 import accord.impl.DurabilityScheduling;
@@ -71,11 +69,9 @@ import accord.messages.TxnRequest;
 import accord.primitives.Ballot;
 import accord.primitives.EpochSupplier;
 import accord.primitives.FullRoute;
-import accord.primitives.ProgressToken;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Routables;
-import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -91,6 +87,7 @@ import accord.utils.PersistentField.Persister;
 import accord.utils.RandomSource;
 import accord.utils.SortedList;
 import accord.utils.SortedListMap;
+import accord.utils.WrappableException;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncExecutor;
 import accord.utils.async.AsyncResult;
@@ -243,7 +240,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     {
         EpochReady ready = onTopologyUpdateInternal(configService.currentTopology(), false);
         durabilityScheduling.updateTopology();
-        ready.fastPath.addCallback(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
+        ready.coordinate.addCallback(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
         configService.acknowledgeEpoch(ready, false);
         return ready.metadata;
     }
@@ -268,14 +265,19 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return durableBefore;
     }
 
-    public void addNewRangesToDurableBefore(Ranges ranges)
+    public void addNewRangesToDurableBefore(Ranges ranges, long epoch)
     {
         durableBeforeLock.lock();
         try
         {
-            DurableBefore addDurableBefore = DurableBefore.create(ranges, TxnId.NONE, TxnId.NONE);
+            TxnId from = TxnId.minForEpoch(epoch);
+            DurableBefore addDurableBefore = DurableBefore.create(ranges, from, from);
+            DurableBefore newDurableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
+            // TODO (required): it is possible for this invariant to be breached if topologies are received out of order.
+            //  We should not update min past the max known epoch.
+            Invariants.checkState(newDurableBefore.min.majorityBefore.compareTo(durableBefore.min.majorityBefore) >= 0);
             minDurableBefore = DurableBefore.merge(minDurableBefore, addDurableBefore);
-            durableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
+            durableBefore = newDurableBefore;
         }
         finally
         {
@@ -327,10 +329,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     {
         if (previous.epoch + 1 != next.epoch)
             throw new IllegalArgumentException("Attempted to order epochs but they are not next to each other... previous=" + previous.epoch + ", next=" + next.epoch);
-        if (previous.fastPath.isDone()) return next;
+        if (previous.coordinate.isDone()) return next;
         return new EpochReady(next.epoch,
                               next.metadata,
-                              previous.fastPath.flatMap(ignore -> next.fastPath).beginAsResult(),
+                              previous.coordinate.flatMap(ignore -> next.coordinate).beginAsResult(),
                               next.data,
                               next.reads);
     }
@@ -341,9 +343,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         if (topology.epoch() <= this.topology.epoch())
             return AsyncResults.success(null);
         EpochReady ready = onTopologyUpdateInternal(topology, startSync);
-        ready.fastPath.addCallback(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
+        ready.coordinate.addCallback(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
         configService.acknowledgeEpoch(ready, startSync);
-        return ready.fastPath;
+        return ready.coordinate;
     }
 
     @Override
@@ -376,6 +378,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         topology.onEpochRedundant(ranges, epoch);
     }
 
+    // TODO (required): audit error handling, as the refactor to provide epoch timeouts appears to have broken a number of coordination
     public void withEpoch(EpochSupplier epochSupplier, BiConsumer<Void, Throwable> callback)
     {
         if (epochSupplier == null)
@@ -407,8 +410,24 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         {
             configService.fetchTopologyForEpoch(epoch);
             topology.awaitEpoch(epoch).begin((success, fail) -> {
-                if (fail != null) ifFailure.accept(null, CoordinationFailed.wrap(fail));
-                else ifSuccess.run();;
+                if (fail != null) ifFailure.accept(null, fail);
+                else ifSuccess.run();
+            });
+        }
+    }
+
+    public void withEpoch(long epoch, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
+    {
+        if (topology.hasEpoch(epoch))
+        {
+            ifSuccess.run();
+        }
+        else
+        {
+            configService.fetchTopologyForEpoch(epoch);
+            topology.awaitEpoch(epoch).begin((success, fail) -> {
+                if (fail != null) ifFailure.accept(null, onFailure.apply(fail));
+                else ifSuccess.run();
             });
         }
     }
@@ -744,7 +763,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public AsyncResult<? extends Outcome> recover(TxnId txnId, FullRoute<?> route)
+    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, long reportLowEpoch, long reportHighEpoch)
     {
         {
             AsyncResult<? extends Outcome> result = coordinating.get(txnId);
@@ -754,24 +773,12 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
         AsyncResult<Outcome> result = withEpoch(txnId.epoch(), () -> {
             RecoverFuture<Outcome> future = new RecoverFuture<>();
-            RecoverWithRoute.recover(this, txnId, route, null, future);
+            RecoverWithRoute.recover(this, txnId, invalidIf, route, null, reportLowEpoch, reportHighEpoch, future);
             return future;
         }).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
         result.addCallback((success, fail) -> coordinating.remove(txnId, result));
         return result;
-    }
-
-    // TODO (low priority, API/efficiency): coalesce maybeRecover calls? perhaps have mutable knownStatuses so we can inject newer ones?
-    public AsyncResult<? extends Outcome> maybeRecover(TxnId txnId, @Nonnull Route<?> someRoute, ProgressToken prevProgress)
-    {
-        AsyncResult<? extends Outcome> result = coordinating.get(txnId);
-        if (result != null)
-            return result;
-
-        RecoverFuture<Outcome> future = new RecoverFuture<>();
-        MaybeRecover.maybeRecover(this, txnId, someRoute, prevProgress, future);
-        return future;
     }
 
     public void receive(Request request, Id from, ReplyContext replyContext)
@@ -782,7 +789,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             configService.fetchTopologyForEpoch(waitForEpoch);
             topology().awaitEpoch(waitForEpoch).addCallback((ignored, failure) -> {
                 if (failure != null)
-                    agent().onUncaughtException(CoordinationFailed.wrap(failure));
+                    agent().onUncaughtException(WrappableException.wrap(failure));
                 else
                     receive(request, from, replyContext);
             });
@@ -802,9 +809,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         scheduler.now(processMsg);
     }
 
-    public <R> CoordinationAdapter<R> coordinationAdapter(TxnId txnId, Step step)
+    public <R> CoordinationAdapter<R> coordinationAdapter(TxnId txnId, Kind kind)
     {
-        return coordinationAdapters.get(txnId, step);
+        return coordinationAdapters.get(txnId, kind);
     }
 
     public Scheduler scheduler()

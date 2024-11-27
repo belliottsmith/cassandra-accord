@@ -24,15 +24,18 @@ import accord.local.Node;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.topology.Topology;
+import accord.utils.Invariants;
 import accord.utils.MessageTask;
 import org.agrona.collections.Long2ObjectHashMap;
 
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 public class TopologyUpdates
 {
-    private final Long2ObjectHashMap<Map<Node.Id, Ranges>> pendingTopologies = new Long2ObjectHashMap<>();
+    private final Long2ObjectHashMap<Map<Node.Id, Ranges>> pendingSyncTopologies = new Long2ObjectHashMap<>();
+    private final Long2ObjectHashMap<Map<Node.Id, Ranges>> pendingBootstrap = new Long2ObjectHashMap<>();
 
     Function<Node.Id, AgentExecutor> executors;
     public TopologyUpdates(Function<Node.Id, AgentExecutor> executors)
@@ -50,7 +53,8 @@ public class TopologyUpdates
             Ranges newRanges = update.rangesForNode(node).without(prev.rangesForNode(node));
             nodeToNewRanges.put(node, newRanges);
         }
-        pendingTopologies.put(update.epoch(), nodeToNewRanges);
+        pendingSyncTopologies.put(update.epoch(), nodeToNewRanges);
+        pendingBootstrap.put(update.epoch(), new HashMap<>(nodeToNewRanges));
         return MessageTask.begin(originator, nodes, executors.apply(originator.id()), "TopologyNotify:" + update.epoch(), (node, from, onDone) -> {
             long nodeEpoch = node.epoch();
             if (nodeEpoch + 1 < update.epoch())
@@ -62,20 +66,31 @@ public class TopologyUpdates
 
     public synchronized void syncComplete(Node originator, Collection<Node.Id> cluster, long epoch)
     {
-        // topology is init topology
-        if (pendingTopologies.isEmpty())
+        if (pendingSyncTopologies.isEmpty())
             return;
-        Map<Node.Id, Ranges> pending = pendingTopologies.get(epoch);
-        if (pending == null || null == pending.remove(originator.id()))
-            throw new AssertionError();
+
+        Map<Node.Id, Ranges> pending = pendingSyncTopologies.get(epoch);
+        Invariants.checkState(pending != null && pending.remove(originator.id()) != null);
 
         if (pending.isEmpty())
-            pendingTopologies.remove(epoch);
+            pendingSyncTopologies.remove(epoch);
 
         MessageTask.begin(originator, cluster, executors.apply(originator.id()), "SyncComplete:" + epoch, (node, from, onDone) -> {
             node.onRemoteSyncComplete(originator.id(), epoch);
             onDone.accept(true);
         });
+    }
+
+    public synchronized void bootstrapComplete(Node originator, long epoch)
+    {
+        if (pendingBootstrap.isEmpty())
+            return;
+
+        Map<Node.Id, Ranges> pending = pendingBootstrap.get(epoch);
+        Invariants.checkState(pending != null && pending.remove(originator.id()) != null);
+
+        if (pending.isEmpty())
+            pendingBootstrap.remove(epoch);
     }
 
     public synchronized void epochClosed(Node originator, Collection<Node.Id> cluster, Ranges ranges, long epoch)
@@ -100,14 +115,16 @@ public class TopologyUpdates
 
     public boolean isPending(Range range, Node.Id id)
     {
-        return pendingTopologies.entrySet().stream().anyMatch(e -> {
-            Ranges ranges = e.getValue().get(id);
-            return ranges != null && ranges.intersects(range);
-        });
+        Predicate<Map<Node.Id, Ranges>> test = map -> {
+            Ranges rs = map.get(id);
+            return rs != null && rs.intersects(range);
+        };
+        return pendingSyncTopologies.values().stream().anyMatch(test)
+               || pendingBootstrap.values().stream().anyMatch(test);
     }
 
     public int pendingTopologies()
     {
-        return pendingTopologies.size();
+        return pendingSyncTopologies.size();
     }
 }

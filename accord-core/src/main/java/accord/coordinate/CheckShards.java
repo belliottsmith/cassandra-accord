@@ -44,23 +44,25 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
      */
     final long sourceEpoch;
     final IncludeInfo includeInfo;
+    final Infer.InvalidIf previouslyKnownToBeInvalidIf;
 
     protected CheckStatusOk merged;
     protected boolean truncated;
 
     // srcEpoch is either txnId.epoch() or executeAt.epoch()
-    protected CheckShards(Node node, TxnId txnId, U route, IncludeInfo includeInfo)
+    protected CheckShards(Node node, TxnId txnId, U route, IncludeInfo includeInfo, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
-        this(node, txnId, route, txnId.epoch(), includeInfo);
+        this(node, txnId, route, txnId.epoch(), includeInfo, previouslyKnownToBeInvalidIf);
         Invariants.checkState(txnId.isVisible());
     }
 
-    protected CheckShards(Node node, TxnId txnId, U route, long srcEpoch, IncludeInfo includeInfo)
+    protected CheckShards(Node node, TxnId txnId, U route, long srcEpoch, IncludeInfo includeInfo, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
         super(node, topologyFor(node, txnId, route, srcEpoch), txnId);
         this.sourceEpoch = srcEpoch;
         this.route = route;
         this.includeInfo = includeInfo;
+        this.previouslyKnownToBeInvalidIf = previouslyKnownToBeInvalidIf;
     }
 
     private static Topologies topologyFor(Node node, TxnId txnId, Unseekables<?> contact, long epoch)
@@ -112,7 +114,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     @Override
     protected void finishOnExhaustion()
     {
-        if (merged != null && merged.isTruncatedResponse()) finishOnFailure(new Truncated(txnId, null), false);
+        if (merged != null && merged.map.hasFullyTruncated(route)) finishOnFailure(new Truncated(txnId, null), false);
         else super.finishOnExhaustion();
     }
 }

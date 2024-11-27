@@ -39,6 +39,7 @@ import accord.utils.SortedArrays;
 
 import javax.annotation.Nullable;
 
+import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.primitives.Status.Accepted;
@@ -62,15 +63,18 @@ public class Invalidate implements Callback<InvalidateReply>
     private final Topology topology;
     private final InvalidationTracker tracker;
     private Throwable failure;
+    private final long reportLowEpoch, reportHighEpoch;
 
-    private Invalidate(Node node, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, BiConsumer<Outcome, Throwable> callback)
+    private Invalidate(Node node, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
         this.callback = callback;
         this.node = node;
         this.ballot = ballot;
         this.txnId = txnId;
-        this.transitivelyInvokedByPriorInvalidation = transitivelyInvokedByPriorInvalidation;
         this.invalidateWith = invalidateWith;
+        this.transitivelyInvokedByPriorInvalidation = transitivelyInvokedByPriorInvalidation;
+        this.reportLowEpoch = reportLowEpoch;
+        this.reportHighEpoch = reportHighEpoch;
         Topologies topologies = node.topology().forEpoch(invalidateWith, txnId.epoch());
         Invariants.checkState(topologies.size() == 1);
         this.tracker = new InvalidationTracker(topologies);
@@ -85,8 +89,13 @@ public class Invalidate implements Callback<InvalidateReply>
 
     public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, BiConsumer<Outcome, Throwable> callback)
     {
+        return invalidate(node, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, txnId.epoch(), txnId.epoch(), callback);
+    }
+
+    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, long commitLocalLowEpoch, long commitLocalHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    {
         Ballot ballot = new Ballot(node.uniqueNow());
-        Invalidate invalidate = new Invalidate(node, ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, callback);
+        Invalidate invalidate = new Invalidate(node, ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, commitLocalLowEpoch, commitLocalHighEpoch, callback);
         invalidate.start();
         return invalidate;
     }
@@ -207,7 +216,7 @@ public class Invalidate implements Callback<InvalidateReply>
                         if (!invalidateWith.containsAll(fullRoute))
                             witnessedByInvalidation = null;
                     }
-                    RecoverWithRoute.recover(node, ballot, txnId, fullRoute, witnessedByInvalidation, callback);
+                    RecoverWithRoute.recover(node, ballot, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
                     return;
 
                 case Invalidated:
@@ -286,14 +295,14 @@ public class Invalidate implements Callback<InvalidateReply>
         //  so we do not need to explicitly do so here before notifying the waiter
         Participants<?> commitTo = Participants.merge(route, (Participants) invalidateWith);
         Commit.Invalidate.commitInvalidate(node, txnId, commitTo, txnId);
-        commitInvalidateLocal(commitTo);
+        commitInvalidateLocal(commitTo, reportLowEpoch, reportHighEpoch);
     }
 
-    private void commitInvalidateLocal(Participants<?> commitTo)
+    private void commitInvalidateLocal(Participants<?> commitTo, long lowEpoch, long highEpoch)
     {
         // TODO (desired): merge with FetchData.InvalidateOnDone
         // TODO (desired): when sending to network, register a callback for when local application of commitInvalidate message ahs been performed, so no need to special-case
-        node.forEachLocal(contextFor(txnId), commitTo, txnId.epoch(), txnId.epoch(), safeStore -> {
+        node.forEachLocal(contextFor(txnId), commitTo, lowEpoch, highEpoch, safeStore -> {
             // TODO (expected): consid
             StoreParticipants participants = StoreParticipants.invalidate(safeStore, commitTo, txnId);
             Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), commitTo);

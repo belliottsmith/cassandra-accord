@@ -87,6 +87,17 @@ public abstract class SafeCommand
         return update;
     }
 
+    public Command updateParticipants(SafeCommandStore safeStore, StoreParticipants participants)
+    {
+        Command prev = current();
+        if (prev.participants() == participants)
+            return prev;
+
+        Command update = incidentalUpdate(prev.updateParticipants(participants));
+        safeStore.progressLog().update(safeStore, txnId, prev, update);
+        return update;
+    }
+
     public Command.PreAccepted preaccept(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)
     {
         return update(safeStore, Command.preaccept(current(), attrs, executeAt, ballot));

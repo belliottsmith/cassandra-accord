@@ -36,11 +36,12 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
+import javax.annotation.Nullable;
+
 import static accord.primitives.RoutingKeys.toRoutingKeys;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.*;
 import static accord.utils.Invariants.illegalArgument;
-import static accord.utils.Invariants.illegalState;
 import static accord.utils.RelationMultiMap.*;
 import static accord.utils.SortedArrays.Search.FAST;
 
@@ -208,6 +209,17 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         return select(toRoutingKeys(select));
     }
 
+    public @Nullable TxnId minTxnId(Unseekables<?> participants)
+    {
+        return Routables.foldl(keys, participants, (rk, min, index) -> {
+            int start = index == 0 ? keys.size() : keysToTxnIds[index - 1];
+            int end = keysToTxnIds[index];
+            if (start == end)
+                return min;
+            return TxnId.nonNullOrMin(min, txnIds[start]);
+        }, (TxnId)null);
+    }
+
     private KeyDeps select(RoutingKeys select)
     {
         // TODO (low priority, efficiency): can slice in parallel with selecting keyToTxnId contents to avoid duplicate merging
@@ -340,14 +352,14 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
     {
         int txnIdIndex = Arrays.binarySearch(txnIds, txnId);
         if (txnIdIndex < 0)
-            throw illegalState("Cannot create a RouteFragment without any keys");
+            return RoutingKeys.EMPTY;
 
         int[] txnIdsToKeys = txnIdsToKeys();
 
         int start = txnIdIndex == 0 ? txnIds.length : txnIdsToKeys[txnIdIndex - 1];
         int end = txnIdsToKeys[txnIdIndex];
         if (start == end)
-            throw illegalState("Cannot create a RouteFragment without any keys");
+            return RoutingKeys.EMPTY;
 
         RoutingKey[] result = new RoutingKey[end - start];
         result[0] = keys.get(txnIdsToKeys[start]).toUnseekable();

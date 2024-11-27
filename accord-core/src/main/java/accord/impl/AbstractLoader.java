@@ -29,8 +29,8 @@ import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
 
 import static accord.primitives.SaveStatus.Applying;
+import static accord.primitives.SaveStatus.PreApplied;
 import static accord.primitives.Status.Invalidated;
-import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 
@@ -50,25 +50,24 @@ public abstract class AbstractLoader implements Journal.Loader
                 case TRUNCATE_WITH_OUTCOME:
                 case TRUNCATE:
                 case ERASE:
-                    command = Commands.purge(command, command.participants(), cleanup);
+                    command = Commands.purge(safeStore, command, cleanup);
             }
         }
 
-        return safeStore.unsafeGet(txnId).update(safeStore, command);
+        return safeStore.unsafeGetNoCleanup(txnId).update(safeStore, command);
     }
 
-    protected void applyWrites(Command command, SafeCommandStore safeStore, BiConsumer<SafeCommand, Command> apply)
+    protected void applyWrites(TxnId txnId, SafeCommandStore safeStore, BiConsumer<SafeCommand, Command> apply)
     {
-        TxnId txnId = command.txnId();
         SafeCommand safeCommand = safeStore.unsafeGet(txnId);
-        Command local = safeCommand.current();
-        if (local.is(Stable) || local.is(PreApplied))
+        Command command = safeCommand.current();
+        if (command.is(Stable) || command.saveStatus() == PreApplied)
         {
-            Commands.maybeExecute(safeStore, safeCommand, local, true, true);
+            Commands.maybeExecute(safeStore, safeCommand, command, true, true);
         }
-        else if (local.saveStatus().compareTo(Applying) >= 0 && !local.hasBeen(Truncated))
+        else if (command.saveStatus().compareTo(Applying) >= 0 && !command.hasBeen(Truncated))
         {
-            apply.accept(safeCommand, local);
+            apply.accept(safeCommand, command);
         }
     }
 }

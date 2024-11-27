@@ -30,6 +30,7 @@ import accord.local.Node.Id;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.KnownMap.MinMax;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
@@ -53,8 +54,12 @@ import accord.utils.MapReduceConsume;
 import javax.annotation.Nonnull;
 
 import static accord.coordinate.Infer.InvalidIf.IfUncommitted;
+import static accord.coordinate.Infer.InvalidIf.IsInvalid;
 import static accord.coordinate.Infer.InvalidIf.IsNotInvalid;
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
+import static accord.primitives.Known.Definition.DefinitionKnown;
+import static accord.primitives.Known.Definition.DefinitionUnknown;
+import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Status.Durability;
 import static accord.primitives.Status.Durability.Local;
 import static accord.primitives.Status.Durability.Majority;
@@ -145,7 +150,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
 
-        Commands.updateParticipants(safeStore, safeCommand, participants);
+        Commands.supplementParticipants(safeStore, safeCommand, participants);
 
         boolean isCoordinating = isCoordinating(node, command);
         Durability durability = command.durability();
@@ -166,10 +171,29 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         }
     }
 
-    private KnownMap foundKnown(Command command, StoreParticipants participants)
+    private KnownMap foundKnown(Command command, StoreParticipants query)
     {
         SaveStatus saveStatus = command.saveStatus();
-        return KnownMap.create(participants.owns(), saveStatus.known);
+        if (query.owns() == command.participants().stillTouches() || (!saveStatus.known.deps.hasProposedOrDecidedDeps() && saveStatus.known.definition != DefinitionKnown))
+            return KnownMap.create(query.owns(), saveStatus.known);
+
+        Known known = saveStatus.known;
+        KnownMap result = KnownMap.EMPTY;
+        if (known.deps.hasProposedOrDecidedDeps())
+        {
+            Invariants.checkState(command.participants().touches().containsAll(command.partialDeps().covering));
+            result = KnownMap.create(command.partialDeps().covering, Known.Nothing.with(saveStatus.known.deps));
+            known = known.with(DepsUnknown);
+        }
+        if (known.definition == DefinitionKnown && !txnId.isSystemTxn())
+        {
+            Participants<?> participants = command.partialTxn().keys().toParticipants();
+            Invariants.checkState(command.participants().owns().containsAll(participants));
+            result = KnownMap.merge(result, KnownMap.create(participants, Known.DefinitionOnly));
+            known = known.with(DefinitionUnknown);
+        }
+        result = KnownMap.merge(result, KnownMap.create(query.owns(), known));
+        return result;
     }
 
     private InvalidIf invalidIf(Command command, StoreParticipants participants)
@@ -288,7 +312,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             return null;
         }
 
-        public CheckStatusOk finish(Unseekables<?> queried, Unseekables<?> routeOrParticipants, WithQuorum withQuorum)
+        public CheckStatusOk finish(Unseekables<?> queried, Unseekables<?> propagatingTo, Unseekables<?> routeOrParticipants, WithQuorum withQuorum, InvalidIf previouslyKnownToBeInvalidIf)
         {
             CheckStatusOk finished = this;
             if (withQuorum == HasQuorum)
@@ -310,19 +334,17 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             }
 
             Known validForAll = map.computeValidForAll(routeOrParticipants);
-            if (withQuorum == HasQuorum && invalidIf.inferInvalidWithQuorum(finished.minKnown(queried)))
-                validForAll = validForAll.atLeast(Known.Invalidated);
+            if (withQuorum == HasQuorum && (invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted) && queried.containsAll(propagatingTo))
+            {
+                Known minKnown = finished.minMaxKnown(queried), maxKnown = finished.maxKnown(queried);
+                InvalidIf invalidIf = this.invalidIf.inferWithQuorum(minKnown, maxKnown);
+                invalidIf = invalidIf.inferWithNewQuorum(previouslyKnownToBeInvalidIf, maxKnown);
+                if (invalidIf == IsInvalid)
+                    validForAll = validForAll.atLeast(Known.Invalidated);
+                finished = finished.with(invalidIf);
+            }
 
             return finished.with(map.with(validForAll));
-        }
-
-        /**
-         * NOTE: if the response is *incomplete* this does not detect possible truncation, it only indicates if the
-         * combination of the responses we received represents truncation
-         */
-        public boolean isTruncatedResponse()
-        {
-            return map.hasTruncated();
         }
 
         public Ranges truncatedResponse()
@@ -343,6 +365,14 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         {
             durability = Durability.merge(durability, this.durability);
             if (durability == this.durability)
+                return this;
+            return new CheckStatusOk(map, maxKnowledgeSaveStatus, maxSaveStatus, maxPromised, maxAcceptedOrCommitted, acceptedOrCommitted,
+                                     executeAt, isCoordinating, durability, route, homeKey, invalidIf);
+        }
+
+        CheckStatusOk with(InvalidIf invalidIf)
+        {
+            if (invalidIf == this.invalidIf)
                 return this;
             return new CheckStatusOk(map, maxKnowledgeSaveStatus, maxSaveStatus, maxPromised, maxAcceptedOrCommitted, acceptedOrCommitted,
                                      executeAt, isCoordinating, durability, route, homeKey, invalidIf);
@@ -447,9 +477,17 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             return map.foldl(Known::atLeast, Known.Nothing, i -> false);
         }
 
-        public Known minKnown(Unseekables<?> query)
+        public Known maxKnown(Unseekables<?> query)
         {
-            return map.foldlWithDefault(query, Known::nonNullOrMin, Known.Nothing, null);
+            return map.foldl(query, Known::atLeast, Known.Nothing, i -> false);
+        }
+
+        /**
+         * The minimum of all maximum knowns, i.e. what is the least state we are able to reach for the intersecting shards
+         */
+        public Known minMaxKnown(Unseekables<?> query)
+        {
+            return map.foldlWithDefault(query, Known::nonNullOrMin, MinMax.Nothing, null, i -> false);
         }
 
         @Override
@@ -487,9 +525,9 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             this.result = result;
         }
 
-        public CheckStatusOkFull finish(Unseekables<?> queried, Unseekables<?> routeOrParticipants, WithQuorum withQuorum)
+        public CheckStatusOkFull finish(Unseekables<?> queried, Unseekables<?> propagatingTo, Unseekables<?> routeOrParticipants, WithQuorum withQuorum, InvalidIf previouslyKnownToBeInvalidIf)
         {
-            return (CheckStatusOkFull) super.finish(queried, routeOrParticipants, withQuorum);
+            return (CheckStatusOkFull) super.finish(queried, propagatingTo, routeOrParticipants, withQuorum, previouslyKnownToBeInvalidIf);
         }
 
         public CheckStatusOkFull merge(@Nonnull Route<?> route)
@@ -505,6 +543,14 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         {
             durability = Durability.merge(durability, this.durability);
             if (durability == this.durability)
+                return this;
+            return new CheckStatusOkFull(map, maxKnowledgeSaveStatus, maxSaveStatus, maxPromised, maxAcceptedOrCommitted, acceptedOrCommitted,
+                                         executeAt, isCoordinating, durability, route, homeKey, invalidIf, partialTxn, stableDeps, writes, result);
+        }
+
+        CheckStatusOkFull with(InvalidIf invalidIf)
+        {
+            if (invalidIf == this.invalidIf)
                 return this;
             return new CheckStatusOkFull(map, maxKnowledgeSaveStatus, maxSaveStatus, maxPromised, maxAcceptedOrCommitted, acceptedOrCommitted,
                                          executeAt, isCoordinating, durability, route, homeKey, invalidIf, partialTxn, stableDeps, writes, result);

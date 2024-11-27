@@ -56,6 +56,8 @@ import accord.utils.SimpleBitSet;
 
 import javax.annotation.Nonnull;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import static accord.local.Command.AbstractCommand.validate;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
@@ -70,6 +72,9 @@ import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.utils.Invariants.Paranoia.LINEAR;
+import static accord.utils.Invariants.Paranoia.NONE;
+import static accord.utils.Invariants.ParanoiaCostFactor.LOW;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.SortedArrays.forEachIntersection;
@@ -282,7 +287,7 @@ public abstract class Command implements CommonAttributes
                         Invariants.checkState(partialTxn == null, "partialTxn is defined");
                         break;
                     case DefinitionKnown:
-                        Invariants.checkState(partialTxn != null, "partialTxn is null");
+                        Invariants.checkState(partialTxn != null || validate.participants().owns().isEmpty(), "partialTxn is null");
                         break;
                 }
             }
@@ -295,8 +300,8 @@ public abstract class Command implements CommonAttributes
                     case ExecuteAtUnknown:
                         Invariants.checkState(executeAt == null || executeAt.compareTo(validate.txnId()) >= 0);
                         break;
-                    case ExecuteAtProposed:
                     case ExecuteAtKnown:
+                    case ExecuteAtProposed:
                         Invariants.checkState(executeAt != null && executeAt.compareTo(validate.txnId()) >= 0);
                         break;
                     case NoExecuteAt:
@@ -355,6 +360,7 @@ public abstract class Command implements CommonAttributes
                 case Applied:
                 case Applying:
                 case WaitingToApply:
+                    Invariants.checkState(validate.participants().executes() != null);
                     Invariants.checkState(validate.asCommitted().waitingOn != null);
                     break;
             }
@@ -579,16 +585,15 @@ public abstract class Command implements CommonAttributes
     }
 
     public abstract Command updateAttributes(CommonAttributes attrs, Ballot promised);
-
     public final Command updateAttributes(CommonAttributes attrs)
     {
         return updateAttributes(attrs, promised());
     }
-
     public final Command updatePromised(Ballot promised)
     {
         return updateAttributes(this, promised);
     }
+    public abstract Command updateParticipants(StoreParticipants participants);
 
     public static class NotDefined extends AbstractCommand
     {
@@ -606,6 +611,12 @@ public abstract class Command implements CommonAttributes
         public Command updateAttributes(CommonAttributes attrs, Ballot promised)
         {
             return validate(new NotDefined(attrs, initialise(saveStatus()), promised));
+        }
+
+        @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            return new NotDefined(txnId(), SaveStatus.NotDefined, durability(), participants, promised());
         }
 
         public static NotDefined notDefined(CommonAttributes common, Ballot promised)
@@ -656,6 +667,8 @@ public abstract class Command implements CommonAttributes
 
         public Truncated(CommonAttributes commonAttributes, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable Writes writes, @Nullable Result result)
         {
+            // TODO (expected): is Ballot.MAX helpful or harmful here?
+            //  We have to special-case partial truncation anyway as we can infinite loop if we think there's a superseding recovery.
             super(commonAttributes, saveStatus, Ballot.MAX);
             this.executeAt = executeAt;
             this.writes = writes;
@@ -693,26 +706,24 @@ public abstract class Command implements CommonAttributes
             return validate(new Truncated(txnId, SaveStatus.Erased, durability, participants, null, null, null));
         }
 
-        public static Truncated erasedOrInvalidOrVestigial(Command command)
+        public static Truncated erasedOrVestigial(Command command)
         {
-            return erasedOrInvalidOrVestigial(command.txnId(), command.durability(), command.participants());
+            return erasedOrVestigial(command.txnId(), command.participants());
         }
 
-        public static Truncated erasedOrInvalidOrVestigial(TxnId txnId, Status.Durability durability, StoreParticipants participants)
+        public static Truncated erasedOrVestigial(TxnId txnId, StoreParticipants participants)
         {
-            return validate(new Truncated(txnId, SaveStatus.ErasedOrVestigial, durability, participants, null, null, null));
+            return validate(new Truncated(txnId, SaveStatus.ErasedOrVestigial, NotDurable, participants, null, null, null));
         }
 
         public static Truncated truncatedApply(Command command)
         {
-            return truncatedApply(command, null);
+            return truncatedApply(command, command.participants());
         }
 
-        public static Truncated truncatedApply(Command command, @Nullable StoreParticipants participants)
+        public static Truncated truncatedApply(Command command, @Nonnull StoreParticipants participants)
         {
             Invariants.checkArgument(command.known().executeAt.isDecidedAndKnownToExecute());
-            if (participants == null) participants = command.participants();
-            else participants = command.participants().supplement(participants);
             Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
             if (command.txnId().awaitsOnlyDeps())
             {
@@ -809,6 +820,12 @@ public abstract class Command implements CommonAttributes
         {
             return validate(new Truncated(txnId(), saveStatus(), attrs.durability(), attrs.participants(), executeAt, writes, result));
         }
+
+        @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            return validate(new Truncated(txnId(), saveStatus(), durability(), participants, executeAt, writes, result));
+        }
     }
 
     public static class TruncatedAwaitsOnlyDeps extends Truncated
@@ -842,6 +859,18 @@ public abstract class Command implements CommonAttributes
             if (!super.equals(o)) return false;
             return Objects.equals(executesAtLeast, ((TruncatedAwaitsOnlyDeps)o).executesAtLeast);
         }
+
+        @Override
+        public Command updateAttributes(CommonAttributes attrs, Ballot promised)
+        {
+            return validate(new TruncatedAwaitsOnlyDeps(txnId(), saveStatus(), attrs.durability(), attrs.participants(), executeAt, writes, result, executesAtLeast));
+        }
+
+        @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            return validate(new TruncatedAwaitsOnlyDeps(txnId(), saveStatus(), durability(), participants, executeAt, writes, result, executesAtLeast));
+        }
     }
 
     public static class PreAccepted extends AbstractCommand
@@ -871,6 +900,14 @@ public abstract class Command implements CommonAttributes
         private PreAccepted(CommonAttributes common, SaveStatus status, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
         {
             super(common, status, promised);
+            this.executeAt = executeAt;
+            this.partialTxn = partialTxn;
+            this.partialDeps = partialDeps;
+        }
+
+        private PreAccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
+        {
+            super(txnId, status, durability, participants, promised);
             this.executeAt = executeAt;
             this.partialTxn = partialTxn;
             this.partialDeps = partialDeps;
@@ -907,6 +944,12 @@ public abstract class Command implements CommonAttributes
         }
 
         @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            return new PreAccepted(txnId(), saveStatus(), durability(), participants, promised(), executeAt, partialTxn, partialDeps);
+        }
+
+        @Override
         public boolean equals(Object o)
         {
             if (this == o) return true;
@@ -934,6 +977,12 @@ public abstract class Command implements CommonAttributes
             this.accepted = accepted;
         }
 
+        private AcceptedInvalidateWithoutDefinition(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Ballot accepted)
+        {
+            super(txnId, status, durability, participants, promised);
+            this.accepted = accepted;
+        }
+
         @Override
         public Ballot acceptedOrCommitted()
         {
@@ -944,6 +993,12 @@ public abstract class Command implements CommonAttributes
         public Command updateAttributes(CommonAttributes attrs, Ballot promised)
         {
             return new AcceptedInvalidateWithoutDefinition(attrs, promised, accepted);
+        }
+
+        @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            return new AcceptedInvalidateWithoutDefinition(txnId(), saveStatus(), durability(), participants, promised(), accepted);
         }
 
         @Override
@@ -965,18 +1020,44 @@ public abstract class Command implements CommonAttributes
         {
             super(common, status, promised, executeAt);
             this.acceptedOrCommitted = acceptedOrCommitted;
+            validateDeps(participants(), partialDeps());
         }
 
         Accepted(CommonAttributes common, SaveStatus status, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
         {
             super(common, status, promised, executeAt, partialTxn, partialDeps);
             this.acceptedOrCommitted = acceptedOrCommitted;
+            validateDeps(participants(), partialDeps);
+        }
+
+        Accepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
+        {
+            super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps);
+            this.acceptedOrCommitted = acceptedOrCommitted;
+            validateDeps(participants(), partialDeps);
+        }
+
+        static void validateDeps(StoreParticipants participants, PartialDeps partialDeps)
+        {
+            if (Invariants.isParanoid() && Invariants.testParanoia(LINEAR, NONE, LOW))
+            {
+                Invariants.checkState(partialDeps == null
+                    || (participants.touches() == participants.stillTouches() && participants.touches().equals(partialDeps.covering))
+                    || (partialDeps.covers(participants.stillTouches()) && participants.touches().containsAll(partialDeps.covering))
+                );
+            }
         }
 
         @Override
         public Command updateAttributes(CommonAttributes attrs, Ballot promised)
         {
             return validate(new Accepted(attrs, saveStatus(), promised, executeAt(), acceptedOrCommitted()));
+        }
+
+        @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            return new Accepted(txnId(), saveStatus(), durability(), participants, promised(), executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted);
         }
 
         @Override
@@ -1017,13 +1098,19 @@ public abstract class Command implements CommonAttributes
     {
         public final WaitingOn waitingOn;
 
-        private Committed(CommonAttributes common, SaveStatus status, Timestamp executeAt, Ballot promised, Ballot accepted, WaitingOn waitingOn)
+        Committed(CommonAttributes common, SaveStatus status, Timestamp executeAt, Ballot promised, Ballot accepted, WaitingOn waitingOn)
         {
             super(common, status, promised, executeAt, accepted);
             this.waitingOn = waitingOn;
             Invariants.nonNull(common.participants());
             Invariants.nonNull(common.route());
             Invariants.checkState(common.route().kind().isFullRoute(), "Expected a full route but given %s", common.route().kind());
+        }
+
+        Committed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn)
+        {
+            super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
+            this.waitingOn = waitingOn;
         }
 
         @Override
@@ -1038,6 +1125,13 @@ public abstract class Command implements CommonAttributes
         public Command updateAttributes(CommonAttributes attrs, Ballot promised)
         {
             return validate(new Committed(attrs, saveStatus(), executeAt(), promised, acceptedOrCommitted(), waitingOn()));
+        }
+
+        @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            Invariants.checkState(partialDeps().covers(participants.stillTouches()));
+            return new Committed(txnId(), saveStatus(), durability(), participants, promised(), executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted(), waitingOn);
         }
 
         @Override
@@ -1101,10 +1195,24 @@ public abstract class Command implements CommonAttributes
             this.result = result;
         }
 
+        private Executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, Result result)
+        {
+            super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
+            Invariants.checkState(txnId().kind() != Txn.Kind.Write || writes != null);
+            this.writes = writes;
+            this.result = result;
+        }
+
         @Override
         public Command updateAttributes(CommonAttributes attrs, Ballot promised)
         {
             return validate(new Executed(attrs, saveStatus(), executeAt(), promised, acceptedOrCommitted(), waitingOn(), writes, result));
+        }
+
+        @Override
+        public Command updateParticipants(StoreParticipants participants)
+        {
+            return new Executed(txnId(), saveStatus(), durability(), participants, promised(), executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted(), waitingOn, writes, result);
         }
 
         @Override
@@ -1387,10 +1495,11 @@ public abstract class Command implements CommonAttributes
                         ranges = safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
                         if (!ranges.isEmpty())
                         {
-                            Unseekables<?> executionParticipants = participants.route.slice(ranges, Minimal);
-                            deps.rangeDeps.forEach(executionParticipants, update, (upd, idx) -> {
+                            deps.rangeDeps.forEach(participants.stillExecutes().slice(ranges, Minimal), update, (upd, idx) -> {
                                 TxnId id = upd.txnId(idx);
-                                if (id.epoch() >= epoch && id.epoch() < maxEpoch)
+                                // because we use RX as RedundantBefore bounds, we must not let an RX on a closing range
+                                // get ahead of one that isn't closed but has overlapping transactions (else we may erroneously treat as redundant)
+                                if (id.epoch() >= epoch && (id.is(Txn.Kind.ExclusiveSyncPoint) || id.epoch() < maxEpoch))
                                     update.initialise(idx);
                             });
                             int lbound = deps.rangeDeps.txnIdCount();
@@ -1408,15 +1517,15 @@ public abstract class Command implements CommonAttributes
                 else
                 {
                     Ranges executeRanges = participants.executeRanges(safeStore, txnId, executeAt);
-                    Unseekables<?> executionParticipants = participants.executes(safeStore, txnId, executeAt);
                     // TODO (expected): refactor this to operate only on participants, not ranges
-                    deps.rangeDeps.forEach(executionParticipants, update, Update::initialise);
+                    deps.rangeDeps.forEach(participants.stillExecutes(), update, Update::initialise);
                     deps.directKeyDeps.forEach(executeRanges, 0, deps.directKeyDeps.txnIdCount(), update, deps.rangeDeps, (upd, rdeps, index) -> upd.initialise(index + rdeps.txnIdCount()));
                     deps.keyDeps.keys().forEach(executeRanges, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), update);
                     return update;
                 }
             }
 
+            @VisibleForTesting
             public static Update unsafeInitialise(TxnId txnId, Ranges executeRanges, Route<?> route, Deps deps)
             {
                 Unseekables<?> executionParticipants = route.slice(executeRanges, Minimal);
@@ -1716,7 +1825,7 @@ public abstract class Command implements CommonAttributes
 
         boolean equals(WaitingOnWithExecuteAt other)
         {
-            return super.equals(other) && executeAtLeast == other.executeAtLeast;
+            return super.equals(other) && executeAtLeast.equals(other.executeAtLeast);
         }
     }
 

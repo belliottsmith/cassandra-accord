@@ -28,6 +28,7 @@ public interface SortedList<T extends Comparable<? super T>> extends List<T>, Se
 {
     int findNext(int i, Comparable<? super T> find);
     int find(Comparable<? super T> find);
+    int find(int from, int to, Comparable<? super T> find);
 
     default boolean contains(Comparable<? super T> find)
     {

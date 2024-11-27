@@ -46,6 +46,12 @@ public class CoordinateShardDurable extends ExecuteExclusive implements Callback
         });
     }
 
+    @Override
+    protected void sendApply(Node.Id to)
+    {
+        CoordinateSyncPoint.sendApply(node, to, syncPoint, tracker.topologies());
+    }
+
     public static AsyncResult<SyncPoint<Range>> coordinate(Node node, SyncPoint<Range> exclusiveSyncPoint)
     {
         CoordinateShardDurable coordinate = new CoordinateShardDurable(node, exclusiveSyncPoint);

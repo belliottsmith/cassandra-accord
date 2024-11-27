@@ -29,11 +29,15 @@ import javax.annotation.Nullable;
 import com.google.common.collect.ImmutableList;
 
 import accord.api.RoutingKey;
+import accord.primitives.Known.KnownDeps;
+import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
 import accord.utils.TriFunction;
 
+import static accord.primitives.Known.KnownDeps.DepsCommitted;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
+import static accord.primitives.Known.KnownDeps.DepsUnknown;
 
 public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 {
@@ -61,11 +65,11 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
     public static class AbstractEntry
     {
-        public final Known.KnownDeps known;
+        public final KnownDeps known;
         public final Ballot ballot;
         public final @Nullable Deps coordinatedDeps;
 
-        private AbstractEntry(Known.KnownDeps known, Ballot ballot, Deps coordinatedDeps)
+        private AbstractEntry(KnownDeps known, Ballot ballot, Deps coordinatedDeps)
         {
             this.known = known;
             this.ballot = ballot;
@@ -98,7 +102,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         // set only if DepsUnknown or DepsProposed
         public final @Nullable Deps localDeps;
 
-        public LatestEntry(Known.KnownDeps known, Ballot ballot, Deps coordinatedDeps, Deps localDeps)
+        public LatestEntry(KnownDeps known, Ballot ballot, Deps coordinatedDeps, Deps localDeps)
         {
             super(known, ballot, coordinatedDeps);
             this.localDeps = localDeps;
@@ -168,15 +172,15 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         return ReducingIntervalMap.mergeIntervals(a, b, Builder::new);
     }
 
-    public static LatestDeps create(Ranges ranges, Known.KnownDeps knownDeps, Ballot ballot, Deps coordinatedDeps, Deps localDeps)
+    public static LatestDeps create(Participants<?> participants, KnownDeps knownDeps, Ballot ballot, Deps coordinatedDeps, Deps localDeps)
     {
-        if (ranges.isEmpty())
+        if (participants.isEmpty())
             return new LatestDeps();
 
-        Builder builder = new Builder(ranges.get(0).endInclusive(), ranges.size() * 2);
-        for (int i = 0 ; i < ranges.size() ; ++i)
+        Builder builder = new Builder(participants.get(0).asRange().endInclusive(), participants.size() * 2);
+        for (int i = 0 ; i < participants.size() ; ++i)
         {
-            Range cur = ranges.get(i);
+            Range cur = participants.get(i).asRange();
             Ranges slice = Ranges.of(cur);
             builder.append(cur.start(), cur.end(), new LatestEntry(knownDeps, ballot, slice(slice, coordinatedDeps), slice(slice, localDeps)));
         }
@@ -224,11 +228,13 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         return merge.mergeProposal();
     }
 
-    public static <T> MergedCommitResult mergeCommit(TxnId txnId, Timestamp executeAt, List<T> list, Function<T, LatestDeps> getter)
+    // WARNING:
+    public static <T> MergedCommitResult mergeCommit(KnownDeps atLeast, TxnId txnId, Timestamp executeAt, List<T> list, Timestamp localDepsComputedUntil, Function<T, LatestDeps> getter)
     {
+        Invariants.checkState(atLeast.compareTo(DepsCommitted) >= 0 || executeAt.compareTo(localDepsComputedUntil) <= 0);
         // merge merge merge
         Merge merge = merge(list, getter);
-        return merge.mergeCommit(txnId, executeAt);
+        return merge.mergeForCommitOrStable(atLeast);
     }
 
     private static <T> Merge merge(List<T> list, Function<T, LatestDeps> getter)
@@ -253,7 +259,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         {
             final List<Deps> merge;
 
-            MergeEntry(Known.KnownDeps known, Ballot ballot, Deps coordinatedDeps, List<Deps> merge)
+            MergeEntry(KnownDeps known, Ballot ballot, Deps coordinatedDeps, List<Deps> merge)
             {
                 super(known, ballot, coordinatedDeps);
                 this.merge = merge;
@@ -316,16 +322,15 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             return new Deps(keyDeps, rangeDeps, directKeyDeps);
         }
 
-        MergedCommitResult mergeCommit(TxnId txnId, Timestamp executeAt)
+        MergedCommitResult mergeForCommitOrStable(KnownDeps atLeast)
         {
             if (size() == 0)
                 return new MergedCommitResult(Deps.NONE, Ranges.EMPTY);
 
             List<Range> sufficientFor = new ArrayList<>();
-            boolean useLocalDeps = txnId.equals(executeAt);
-            KeyDeps keyDeps =  KeyDeps.merge(stream(forCommit(useLocalDeps, sufficientFor), (d, r) -> d.keyDeps.slice(r)));
-            KeyDeps directKeyDeps =  KeyDeps.merge(stream(forCommit(useLocalDeps, sufficientFor), (d, r) -> d.directKeyDeps.slice(r)));
-            RangeDeps rangeDeps =  RangeDeps.merge(stream(forCommit(useLocalDeps, sufficientFor), (d, r) -> d.rangeDeps.slice(r)));
+            KeyDeps keyDeps =  KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.keyDeps.slice(r)));
+            KeyDeps directKeyDeps =  KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.directKeyDeps.slice(r)));
+            RangeDeps rangeDeps =  RangeDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.rangeDeps.slice(r)));
             return new MergedCommitResult(new Deps(keyDeps, rangeDeps, directKeyDeps), Ranges.of(sufficientFor.toArray(new Range[0])));
         }
 
@@ -350,14 +355,14 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             }
         }
 
-        private static <V> TriFunction<Ranges, MergeEntry, BiFunction<Deps, Ranges, V>, Stream<V>> forCommit(boolean acceptLocal, List<Range> success)
+        private static <V> TriFunction<Ranges, MergeEntry, BiFunction<Deps, Ranges, V>, Stream<V>> forCommitOrStable(KnownDeps atLeast, List<Range> success)
         {
             return (Ranges ranges, MergeEntry e, BiFunction<Deps, Ranges, V> getter) -> {
                 switch (e.known)
                 {
                     default: throw new AssertionError("Unhandled KnownDeps: " + e.known);
                     case DepsUnknown:
-                        if (!acceptLocal)
+                        if (atLeast != DepsUnknown)
                             return Stream.empty();
                         success.add(ranges.get(0));
                         return e.merge.stream().map(d -> getter.apply(d, ranges));
@@ -368,11 +373,14 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                         // However in the latter case to skip re-proposing for this shard  IFF txnId == executeAt we combine the coordinated/accepted deps
                         // with the computed deps from each response, as this is equivalent to the committed deps the prior coordinator
                         // would have committed using the accept responses.
-                        if (!acceptLocal)
+                        if (atLeast.compareTo(DepsProposed) > 0)
                             return Stream.empty();
                         success.add(ranges.get(0));
                         return Stream.concat(Stream.of(getter.apply(e.coordinatedDeps, ranges)), e.merge.stream().map(d -> getter.apply(d, ranges)));
-                    case DepsKnown: case DepsCommitted:
+                    case DepsCommitted:
+                        if (atLeast.compareTo(DepsCommitted) > 0)
+                            return Stream.empty();
+                    case DepsKnown:
                         success.add(ranges.get(0));
                         return Stream.of(getter.apply(e.coordinatedDeps, ranges));
                     case DepsErased: case NoDeps:

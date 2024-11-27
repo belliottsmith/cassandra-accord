@@ -18,6 +18,7 @@
 
 package accord.impl.basic;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -44,8 +45,10 @@ import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
+import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -91,6 +94,7 @@ import accord.local.ShardDistributor;
 import accord.local.StoreParticipants;
 import accord.local.TimeService;
 import accord.local.cfk.CommandsForKey;
+import accord.local.cfk.Serialize;
 import accord.messages.Message;
 import accord.messages.MessageType;
 import accord.messages.Reply;
@@ -111,7 +115,9 @@ import accord.topology.Topology;
 import accord.topology.TopologyRandomizer;
 import accord.utils.Gens;
 import accord.utils.Invariants;
+import accord.utils.LazyToString;
 import accord.utils.RandomSource;
+import accord.utils.ReflectionUtils;
 import accord.utils.Timestamped;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
@@ -121,9 +127,12 @@ import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
 import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
 import static accord.impl.basic.NodeSink.Action.DELIVER;
 import static accord.impl.basic.NodeSink.Action.DROP;
+import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.utils.AccordGens.keysInsideRanges;
 import static accord.utils.AccordGens.rangeInsideRange;
 import static accord.utils.Gens.mixedDistribution;
+import static accord.utils.Invariants.Paranoia.LINEAR;
+import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonMap;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -272,12 +281,17 @@ public class Cluster
 
     public void processAll()
     {
-        List<Object> pending = new ArrayList<>();
+        List<Pending> pending = new ArrayList<>();
         while (this.pending.size() > 0)
             pending.add(this.pending.poll());
 
-        for (Object next : pending)
+        for (Pending next : pending)
+        {
+            Pending.Global.setActiveOrigin(next);
             processNext(next);
+            Pending.Global.clearActiveOrigin();
+            checkFailures.run();
+        }
     }
 
     boolean hasNonRecurring()
@@ -395,7 +409,6 @@ public class Cluster
             RandomSource rnd = randomSupplier.get();
             timeoutDelays = progressDelays = coordinationDelays = () -> rnd.nextInt(100, 1000);
         }
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis);
         RandomSource nowRandom = randomSupplier.get();
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = nowRandom.fork();
@@ -408,9 +421,11 @@ public class Cluster
                                      .mapAsLong(j -> Math.max(0, queue.nowInMillis() + TimeUnit.NANOSECONDS.toMillis(j)))
                                      .asLongSupplier(forked);
         };
+        Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get());
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should never get a stale event");
-        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis));
+        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get()));
         TopologyFactory topologyFactory = new TopologyFactory(initialTopology.maxRf(), initialTopology.ranges().stream().toArray(Range[]::new))
         {
             @Override
@@ -430,7 +445,7 @@ public class Cluster
                                                             ignore -> {
                                                             },
                                                             randomSupplier,
-                                                            nowSupplier,
+                                                            timeServiceSupplier,
                                                             topologyFactory,
                                                             new Supplier<>()
                                                             {
@@ -447,7 +462,7 @@ public class Cluster
                                                                     if (!requestIterator.hasNext())
                                                                         return null;
                                                                     Node.Id id = rs.pick(nodes);
-                                                                    return new Packet(id, id, Long.MAX_VALUE, counter.incrementAndGet(), requestIterator.next());
+                                                                    return new Packet(id, id, Long.MAX_VALUE, counter.incrementAndGet(), requestIterator.next(), true);
                                                                 }
                                                             },
                                                             Runnable::run,
@@ -462,10 +477,135 @@ public class Cluster
         return stats;
     }
 
+    static class RandomLoader
+    {
+        private final BooleanSupplier cacheEmptyChance;
+        private final BooleanSupplier cacheFullChance;
+        private final BooleanSupplier commandLoadedChance;
+        private final BooleanSupplier cfkLoadedChance;
+        private final BooleanSupplier tfkLoadedChance;
+
+        final BooleanSupplier cmdCheckChance;
+        final BooleanSupplier cfkCheckChance;
+        static int cmdCounter, cfkCounter;
+
+        RandomLoader(RandomSource random)
+        {
+            this(random.nextBoolean() ? 1.0f : random.nextFloat(), random);
+        }
+
+        RandomLoader(float presentChance, RandomSource random)
+        {
+            this(Gens.supplier(Gens.bools().mixedDistribution().next(random), random),
+                 Gens.supplier(Gens.bools().mixedDistribution().next(random), random),
+                 random.biasedUniformBools(presentChance),
+                 random.biasedUniformBools(presentChance),
+                 random.biasedUniformBools(presentChance),
+                 Invariants.testParanoia(LINEAR, LINEAR, HIGH) ? Gens.supplier(Gens.bools().mixedDistribution().next(random), random) : () -> random.decide(0.001f),
+                 () -> random.decide(0.1f)
+            );
+        }
+
+        RandomLoader(BooleanSupplier cacheEmptyChance, BooleanSupplier cacheFullChance,
+                     BooleanSupplier commandLoadedChance, BooleanSupplier cfkLoadedChance, BooleanSupplier tfkLoadedChance,
+                     BooleanSupplier cmdCheckChance, BooleanSupplier cfkCheckChance)
+        {
+            this.cacheEmptyChance = cacheEmptyChance;
+            this.cacheFullChance = cacheFullChance;
+            this.commandLoadedChance = commandLoadedChance;
+            this.cfkLoadedChance = cfkLoadedChance;
+            this.tfkLoadedChance = tfkLoadedChance;
+            this.cmdCheckChance = cmdCheckChance;
+            this.cfkCheckChance = cfkCheckChance;
+        }
+
+        public boolean cacheEmpty() { return cacheEmptyChance.getAsBoolean();}
+        public boolean cacheFull() { return cacheFullChance.getAsBoolean(); }
+        public boolean commandLoaded() { return commandLoadedChance.getAsBoolean(); }
+        public boolean cfkLoaded() { return cfkLoadedChance.getAsBoolean(); }
+        public boolean tfkLoaded() { return tfkLoadedChance.getAsBoolean(); }
+
+        DelayedCommandStores.CacheLoading newLoader(Journal journal)
+        {
+            return new DelayedCommandStores.CacheLoading()
+            {
+                @Override
+                public boolean cacheEmpty()
+                {
+                    return cacheEmptyChance.getAsBoolean();
+                }
+
+                @Override
+                public boolean cacheFull()
+                {
+                    return cacheFullChance.getAsBoolean();
+                }
+
+                @Override
+                public boolean isLoaded(TxnId txnId)
+                {
+                    return commandLoadedChance.getAsBoolean();
+                }
+
+                @Override
+                public boolean isLoaded(RoutingKey key)
+                {
+                    return cfkLoadedChance.getAsBoolean();
+                }
+
+                @Override
+                public boolean tfkLoaded()
+                {
+                    return tfkLoadedChance.getAsBoolean();
+                }
+
+                @Override
+                public void validate(CommandStore commandStore, Command command)
+                {
+                    if (command.txnId().kind() == Txn.Kind.EphemeralRead
+                        || command.saveStatus() == SaveStatus.Uninitialised
+                        || command.saveStatus() == SaveStatus.ErasedOrVestigial
+                        || command.saveStatus() == SaveStatus.Erased)
+                        return;
+
+                    if (!cmdCheckChance.getAsBoolean())
+                        return;
+
+                    ++cmdCounter;
+                    command = command.updateParticipants(command.participants().filter(LOAD, commandStore.unsafeGetRedundantBefore(), command.txnId(), command.executeAtIfKnown()));
+                    // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
+                    Command reconstructed = journal.loadCommand(commandStore.id(), command.txnId(), commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
+                    List<ReflectionUtils.Difference<?>> diff = ReflectionUtils.recursiveEquals(command, reconstructed);
+                    if (!diff.isEmpty() && command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
+                        diff.removeIf(v -> v.path.equals(".participants."));
+                    Invariants.checkState(diff.isEmpty(), "Commands did not match: expected %s, given %s on s, diff %s", command, reconstructed, commandStore, new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
+                }
+
+                @Override
+                public void validate(CommandStore commandStore, CommandsForKey cfk)
+                {
+                    if (cfk == null) return;
+                    if (cfk.isLoadingPruned()) return;
+
+                    if (!cfkCheckChance.getAsBoolean())
+                        return;
+
+                    ++cfkCounter;
+                    cfk = cfk.maximalPrune();
+                    ByteBuffer encoded = Serialize.unsafeToBytesWithoutKey(cfk);
+                    CommandsForKey decoded = Serialize.fromBytes(cfk.key(), encoded);
+                    Invariants.checkState(cfk.equalContents(decoded));
+                }
+            };
+        }
+
+    }
+
     public static Map<MessageType, Stats> run(Id[] nodes, int[] prefixes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
                                               BiFunction<Id, BiConsumer<Timestamp, Ranges>, AgentExecutor> nodeExecutorSupplier,
                                               Runnable checkFailures, Consumer<Packet> responseSink,
-                                              Supplier<RandomSource> randomSupplier, Supplier<LongSupplier> nowSupplierSupplier,
+                                              Supplier<RandomSource> randomSupplier,
+                                              Supplier<TimeService> timeServiceSupplier,
                                               TopologyFactory topologyFactory, Supplier<Packet> in, Consumer<Runnable> noMoreWorkSignal,
                                               Consumer<Map<Id, Node>> readySignal, Function<Node.Id, Journal> journalFactory)
     {
@@ -489,6 +629,7 @@ public class Cluster
             NodeSink.TimeoutSupplier timeouts = new NodeSink.TimeoutSupplier()
             {
                 final RandomSource random = randomSupplier.get();
+                // TODO (expected): slow/expires should be broadly in sync with our link latency config
                 final LongSupplier slowAt, expiresAt, failsAt;
                 {
                     int medianSlowAt = random.nextInt(100, 200);
@@ -520,7 +661,7 @@ public class Cluster
             {
                 ClusterScheduler scheduler = sinks.new ClusterScheduler(id.id);
                 MessageSink messageSink = sinks.create(id, timeouts);
-                LongSupplier nowSupplier = nowSupplierSupplier.get();
+                TimeService timeService = timeServiceSupplier.get();
                 LocalConfig localConfig = LocalConfig.DEFAULT;
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
                 AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale);
@@ -528,44 +669,12 @@ public class Cluster
                 Journal journal = journalFactory.apply(id);
                 journalMap.put(id, journal);
                 BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
-                DelayedCommandStores.CacheLoadingChance isLoadedCheck = new DelayedCommandStores.CacheLoadingChance()
-                {
-                    final float presentChance = random.nextBoolean() ? 1.0f : random.nextFloat();
-                    private final BooleanSupplier cacheEmptyChance = Gens.supplier(Gens.bools().mixedDistribution().next(random), random);
-                    public boolean cacheEmpty()
-                    {
-                        return cacheEmptyChance.getAsBoolean();
-                    }
-
-                    private final BooleanSupplier cacheFullChance = Gens.supplier(Gens.bools().mixedDistribution().next(random), random);
-                    public boolean cacheFull()
-                    {
-                        return cacheFullChance.getAsBoolean();
-                    }
-
-                    private final BooleanSupplier commandLoadedChance = random.biasedUniformBools(presentChance);
-                    public boolean commandLoaded()
-                    {
-                        return commandLoadedChance.getAsBoolean();
-                    }
-
-                    private final BooleanSupplier cfkLoadedChance = random.biasedUniformBools(presentChance);
-                    public boolean cfkLoaded()
-                    {
-                        return cfkLoadedChance.getAsBoolean();
-                    }
-
-                    private final BooleanSupplier tfkLoadedChance = random.biasedUniformBools(presentChance);
-                    public boolean tfkLoaded()
-                    {
-                        return tfkLoadedChance.getAsBoolean();
-                    }
-                };
-                Node node = new Node(id, messageSink, configService, TimeService.ofNonMonotonic(nowSupplier, MILLISECONDS),
+                DelayedCommandStores.CacheLoading cacheLoading = new RandomLoader(random).newLoader(journal);
+                Node node = new Node(id, messageSink, configService, timeService,
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      nodeExecutor.agent(),
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
-                                     DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, isLoadedCheck, journal), new CoordinationAdapter.DefaultFactory(),
+                                     DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading, journal), new CoordinationAdapter.DefaultFactory(),
                                      DurableBefore.NOOP_PERSISTER, localConfig);
                 DurabilityScheduling durability = node.durabilityScheduling();
                 // TODO (desired): randomise
@@ -596,7 +705,10 @@ public class Cluster
             updateDurabilityRate.run();
             schemaApply.onUpdate(topology);
 
+            Pending.Global.setNoActiveOrigin();
             AsyncResult<?> startup = AsyncChains.reduce(nodeMap.values().stream().map(Node::unsafeStart).collect(toList()), (a, b) -> null).beginAsResult();
+            Pending.Global.clearActiveOrigin();
+
             while (sinks.processPending());
             Invariants.checkArgument(startup.isDone());
 
@@ -613,8 +725,11 @@ public class Cluster
             Purge purge = new Purge(clusterScheduler, random, nodesList, nodeMap, journalMap);
 
             Scheduled restart = clusterScheduler.recurring(() -> {
-                Id id = random.pick(nodes);
+                Id id = pickNodeNotBootstrapping(random, nodesList, nodeMap);
+                if (id == null)
+                    return;
                 CommandStore[] stores = nodeMap.get(id).commandStores().all();
+
                 ((DelayedCommandStore)stores[0]).unsafeRunIn(() -> {
                     Predicate<Pending> pred = getPendingPredicate(id.id, stores);
                     while (sinks.drain(pred));
@@ -638,8 +753,9 @@ public class Cluster
                     journal.replay(nodeMap.get(id).commandStores());
                     while (sinks.drain(pred));
                     CommandsForKey.enableLinearizabilityViolationsReporting();
-                    Invariants.checkState(listStore.equals(prevData));
                     verifyConsistentRestore(beforeStores, stores);
+                    // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
+                    listStore.checkAtLeast(stores, prevData);
                     trace.debug("Done with cleanup.");
                 });
             }, () -> random.nextInt(10, 30), SECONDS);
@@ -649,9 +765,9 @@ public class Cluster
 
             Runnable stop = () -> {
                 reconfigure.cancel();
+                durabilityScheduling.forEach(DurabilityScheduling::stop);
                 purge.cancel();
                 restart.cancel();
-                durabilityScheduling.forEach(DurabilityScheduling::stop);
                 services.forEach(Service::close);
             };
             noMoreWorkSignal.accept(stop);
@@ -745,6 +861,23 @@ public class Cluster
         return result;
     }
 
+    private static Id pickNodeNotBootstrapping(RandomSource random, List<Id> ids, Map<Id, Node> nodeMap)
+    {
+        List<Id> remaining = new ArrayList<>(ids);
+        while (!remaining.isEmpty())
+        {
+            int i = random.nextInt(remaining.size());
+            Id id = remaining.get(i);
+            CommandStore[] stores = nodeMap.get(id).commandStores().all();
+            if (!Stream.of(stores).anyMatch(CommandStore::isBootstrapping))
+                return id;
+
+            remaining.set(i, remaining.get(remaining.size() - 1));
+            remaining.remove(remaining.size() - 1);
+        }
+        return null;
+    }
+
     private static void verifyConsistentRestore(Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores, CommandStore[] stores)
     {
         for (CommandStore s : stores)
@@ -757,7 +890,7 @@ public class Cluster
                 Command afterCommand = e.getValue().value();
                 if (beforeCommand == null)
                 {
-                    Invariants.checkArgument(afterCommand.is(Status.NotDefined));
+                    Invariants.checkArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus() == SaveStatus.ErasedOrVestigial);
                     continue;
                 }
                 if (afterCommand.hasBeen(Status.Truncated))
@@ -1152,7 +1285,7 @@ public class Cluster
 
     public BlockingTransaction findMinUnstable()
     {
-        return findMin(null, SaveStatus.Committed, null);
+        return findMin(true, null, SaveStatus.Committed, null);
     }
 
     public BlockingTransaction findMinUnstable(@Nullable Txn.Kind first, Txn.Kind ... rest)

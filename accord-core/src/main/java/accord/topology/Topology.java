@@ -374,6 +374,8 @@ public class Topology
                         break;
 
                     bi = (int)(abi >>> 32);
+                    if (count == newSubset.length)
+                        newSubset = cachedInts.resize(newSubset, count, count * 2);
                     newSubset[count++] = this.supersetIndexes[bi];
 
                     ++bi;

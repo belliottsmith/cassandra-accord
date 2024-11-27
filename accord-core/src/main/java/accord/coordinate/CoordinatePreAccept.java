@@ -38,6 +38,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.utils.WrappableException;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.tracking.RequestStatus.Success;
@@ -163,11 +164,8 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     {
         // TODO (expected): we do not have to take max here if we have enough fast path votes (this may unnecessarily force us onto the slow path)
         Timestamp executeAt = foldl(oks, (ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
-        node.withEpoch(executeAt.epoch(), (ignored, withEpochFailure) -> {
-            if (withEpochFailure != null)
-                tryFailure(CoordinationFailed.wrap(withEpochFailure));
-            else
-                onPreAccepted(topologies, executeAt, oks);
+        node.withEpoch(executeAt.epoch(), this, t -> WrappableException.wrap(t), () -> {
+            onPreAccepted(topologies, executeAt, oks);
         });
     }
 

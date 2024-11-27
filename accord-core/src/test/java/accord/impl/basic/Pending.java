@@ -27,19 +27,28 @@ public interface Pending
     // a slightly hacky but easy way to track transitive recurring tasks
     class Global
     {
+        public static final Pending NONE = () -> null;
         private static Pending activeOrigin;
+
         public static void setActiveOrigin(Pending newActive)
         {
             Invariants.checkState(activeOrigin == null);
             activeOrigin = newActive.origin();
         }
+
         public static void clearActiveOrigin()
         {
             activeOrigin = null;
         }
+
+        public static void setNoActiveOrigin()
+        {
+            activeOrigin = NONE;
+        }
+
         public static Pending activeOrigin()
         {
-            return activeOrigin;
+            return Invariants.nonNull(activeOrigin);
         }
     }
 }

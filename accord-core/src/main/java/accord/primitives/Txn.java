@@ -36,6 +36,7 @@ import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.Kinds.ExclusiveSyncPoints;
 import static accord.primitives.Txn.Kind.Kinds.Nothing;
@@ -105,17 +106,14 @@ public interface Txn
         ExclusiveSyncPoint('X', true, true, true, true),
         ;
 
-        public enum Kinds
+        public static class Kinds
         {
-            Nothing(),
-            Ws(Write),
-            /**
-             * Any DURABLE read or write. This does not witness EphemeralReads.
-             */
-            RsOrWs(Write, Read),
-            WsOrSyncPoints(Write, SyncPoint, ExclusiveSyncPoint),
-            ExclusiveSyncPoints(ExclusiveSyncPoint),
-            AnyGloballyVisible(Write, Read, SyncPoint, ExclusiveSyncPoint);
+            public static final Kinds Nothing = new Kinds();
+            public static final Kinds Ws = new Kinds(Write);
+            public static final Kinds RsOrWs = new Kinds(Write, Read);
+            public static final Kinds WsOrSyncPoints = new Kinds(Write, SyncPoint, ExclusiveSyncPoint);
+            public static final Kinds ExclusiveSyncPoints = new Kinds(ExclusiveSyncPoint);
+            public static final Kinds AnyGloballyVisible = new Kinds(Write, Read, SyncPoint, ExclusiveSyncPoint);
 
             final int bitset;
             Kinds(Kind ... kinds)
@@ -124,6 +122,17 @@ public interface Txn
                 for (Kind kind : kinds)
                     bitset |= 1 << kind.ordinal();
                 this.bitset = bitset;
+            }
+
+            private Kinds(int bitset)
+            {
+                this.bitset = bitset;
+            }
+
+            public Kinds or(Kinds or)
+            {
+                int newBitset = bitset | or.bitset;
+                return newBitset == bitset ? this : newBitset == or.bitset ? or : new Kinds(newBitset);
             }
 
             public boolean test(Kind kind)
@@ -334,7 +343,7 @@ public interface Txn
         public PartialTxn slice(Ranges ranges, boolean includeQuery)
         {
             return new PartialTxn.InMemory(
-                kind(), keys().slice(ranges),
+                kind(), keys().slice(ranges, Minimal),
                 read().slice(ranges), includeQuery ? query() : null,
                 update() == null ? null : update().slice(ranges)
             );
@@ -345,7 +354,7 @@ public interface Txn
         public PartialTxn intersecting(Participants<?> participants, boolean includeQuery)
         {
             return new PartialTxn.InMemory(
-                kind(), keys().intersecting(participants),
+                kind(), keys().intersecting(participants, Minimal),
                 read().intersecting(participants), includeQuery ? query() : null,
                 update() == null ? null : update().intersecting(participants)
             );

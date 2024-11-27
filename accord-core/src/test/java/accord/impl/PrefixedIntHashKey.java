@@ -128,7 +128,23 @@ public class PrefixedIntHashKey implements RoutableKey
         @Override
         public RangeFactory rangeFactory()
         {
-            return (s, e) -> new Range((PrefixedIntRoutingKey) s, (PrefixedIntRoutingKey) e);
+            return new RangeFactory()
+            {
+                @Override
+                public accord.primitives.Range newRange(RoutingKey s, RoutingKey e)
+                {
+                    PrefixedIntRoutingKey start = (PrefixedIntRoutingKey) s;
+                    PrefixedIntRoutingKey end = (PrefixedIntRoutingKey) e;
+                    Invariants.checkState(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
+                    return new Range(start, end);
+                }
+
+                @Override
+                public accord.primitives.Range newAntiRange(RoutingKey s, RoutingKey e)
+                {
+                    return new Range((PrefixedIntRoutingKey) s, (PrefixedIntRoutingKey) e);
+                }
+            };
         }
     }
 
@@ -180,14 +196,22 @@ public class PrefixedIntHashKey implements RoutableKey
 
     public static class Range extends accord.primitives.Range.EndInclusive
     {
-        public Range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
+        private Range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
         {
             super(start, end);
-            assert start.prefix == end.prefix : String.format("Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
         }
 
         @Override
-        public accord.primitives.Range newRange(RoutingKey start, RoutingKey end)
+        public accord.primitives.Range newRange(RoutingKey s, RoutingKey e)
+        {
+            PrefixedIntRoutingKey start = (PrefixedIntRoutingKey) s;
+            PrefixedIntRoutingKey end = (PrefixedIntRoutingKey) e;
+            Invariants.checkState(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
+            return new Range(start, end);
+        }
+
+        @Override
+        public accord.primitives.Range newAntiRange(RoutingKey start, RoutingKey end)
         {
             return new Range((PrefixedIntRoutingKey) start, (PrefixedIntRoutingKey) end);
         }
@@ -253,19 +277,20 @@ public class PrefixedIntHashKey implements RoutableKey
         for (int i = 1; i < count; ++i)
         {
             Hash next = new Hash(prefix, (int) (startHash + i * delta));
-            result.add(new Range(prev, next));
+            result.add(range(prev, next));
             prev = next;
         }
-        result.add(new Range(prev, new Hash(prefix, endHash)));
+        result.add(range(prev, new Hash(prefix, endHash)));
         return toArray(result, accord.primitives.Range[]::new);
     }
 
-    public static accord.primitives.Range range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
+    public static Range range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
     {
+        Invariants.checkState(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
         return new Range(start, end);
     }
 
-    public static accord.primitives.Range range(int prefix, int start, int end)
+    public static Range range(int prefix, int start, int end)
     {
         return new Range(new Hash(prefix, start), new Hash(prefix, end));
     }

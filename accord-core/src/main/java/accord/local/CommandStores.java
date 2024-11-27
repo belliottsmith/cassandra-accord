@@ -139,6 +139,11 @@ public abstract class CommandStores
         }
     }
 
+    public interface RangesForEpochSupplier
+    {
+        RangesForEpoch ranges();
+    }
+
     // TODO (expected): merge with RedundantBefore, and standardise executeRanges() to treat removing stale ranges the same as adding new epoch ranges
     // We ONLY remove ranges to keep logic manageable; likely to only merge CommandStores into a new CommandStore via some kind of Bootstrap
     public static class RangesForEpoch
@@ -257,6 +262,11 @@ public abstract class CommandStores
             return ranges[0];
         }
 
+        public @Nonnull Ranges notRetired(SafeCommandStore safeStore)
+        {
+            return safeStore.redundantBefore().removeRetired(ranges[0]);
+        }
+
         public @Nonnull Ranges allBefore(long toExclusive)
         {
             int to = ceilIndex(toExclusive);
@@ -322,7 +332,7 @@ public abstract class CommandStores
         public Ranges removed(long presentIn, long removedByInclusive)
         {
             int i = Math.max(1, floorIndex(presentIn));
-            int maxi = Math.max(1, floorIndex(removedByInclusive));
+            int maxi = 1 + floorIndex(removedByInclusive);
             Ranges removed = Ranges.EMPTY;
             while (i < maxi)
             {
@@ -406,7 +416,7 @@ public abstract class CommandStores
 
         Topology newLocalTopology = newTopology.forNode(supplier.time.id()).trim();
         Ranges addedGlobal = newTopology.ranges().without(prev.global.ranges());
-        node.addNewRangesToDurableBefore(addedGlobal);
+        node.addNewRangesToDurableBefore(addedGlobal, epoch);
         if (!addedGlobal.isEmpty())
         {
             for (ShardHolder shard : prev.shards)
@@ -473,7 +483,7 @@ public abstract class CommandStores
             List<EpochReady> list = bootstrapUpdates.stream().map(Supplier::get).collect(toList());
             return new EpochReady(epoch,
                 AsyncChains.reduce(list.stream().map(b -> b.metadata).collect(toList()), (a, b) -> null).beginAsResult(),
-                AsyncChains.reduce(list.stream().map(b -> b.fastPath).collect(toList()), (a, b) -> null).beginAsResult(),
+                AsyncChains.reduce(list.stream().map(b -> b.coordinate).collect(toList()), (a, b) -> null).beginAsResult(),
                 AsyncChains.reduce(list.stream().map(b -> b.data).collect(toList()), (a, b) -> null).beginAsResult(),
                 AsyncChains.reduce(list.stream().map(b -> b.reads).collect(toList()), (a, b) -> null).beginAsResult()
             );

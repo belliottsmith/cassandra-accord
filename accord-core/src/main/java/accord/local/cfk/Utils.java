@@ -315,6 +315,14 @@ class Utils
         return to;
     }
 
+    static int missingTo(TxnId txnId, Timestamp depsKnownBefore, TxnId[] missingSource, int missingCount, int missingPosition, int missingLimit)
+    {
+        if (depsKnownBefore == txnId) return missingCount;
+        int to = Arrays.binarySearch(missingSource, 0, missingLimit, depsKnownBefore);
+        if (to < 0) to = -1 - to;
+        return to;
+    }
+
     /**
      * Insert the contents of {@code additions} up to {@code additionCount} into {@code current}, ignoring {@code skipAddition} if not null.
      * Only insert entries that would be witnessed by {@code owner}.
@@ -372,6 +380,7 @@ class Utils
 
     static TxnId[] selectUnmanaged(CommandsForKey.Unmanaged[] unmanageds, int start, int end)
     {
+        Invariants.checkArgument(end >= start);
         TxnId[] notifyNotWaiting = new TxnId[end - start];
         for (int i = start ; i < end ; ++i)
         {

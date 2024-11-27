@@ -21,11 +21,14 @@ package accord.impl.progresslog;
 import javax.annotation.Nullable;
 
 import accord.api.ProgressLog.BlockedUntil;
+import accord.coordinate.Infer;
 import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.LogGroupTimers;
 
+import static accord.coordinate.Infer.InvalidIf.IfUncommitted;
+import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 
@@ -43,18 +46,15 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
  */
 abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<BaseTxnState>
 {
-    private static final int PENDING_TIMER_SHIFT = HomeState.HOME_STATE_END_SHIFT;
+    private static final int CONTACT_ALL_SHIFT = 63; // TODO (desired): have separate contact all flags for recovery and waiting states
+    private static final int SCHEDULED_TIMER_SHIFT = CONTACT_ALL_SHIFT - 1;
+    private static final int INVALID_IF_UNCOMMITTED_SHIFT = SCHEDULED_TIMER_SHIFT - 1;
     private static final int PENDING_TIMER_BITS = 9;
+    private static final int PENDING_TIMER_SHIFT = INVALID_IF_UNCOMMITTED_SHIFT - PENDING_TIMER_BITS;
     private static final int PENDING_TIMER_LOW_BITS = PackedLogLinearInteger.validateLowBits(4, PENDING_TIMER_BITS);
     private static final long PENDING_TIMER_MASK = (1L << PENDING_TIMER_BITS) - 1;
     private static final long PENDING_TIMER_CLEAR_MASK = ~(PENDING_TIMER_MASK << PENDING_TIMER_SHIFT);
-    private static final int SCHEDULED_TIMER_SHIFT = 62;
-    private static final int CONTACT_ALL_SHIFT = 63;
-
-    static
-    {
-        Invariants.checkState(PENDING_TIMER_SHIFT + PENDING_TIMER_BITS <= SCHEDULED_TIMER_SHIFT);
-    }
+    static final long BASE_STATE_START_SHIFT = PENDING_TIMER_SHIFT;
 
     public final TxnId txnId;
 
@@ -71,7 +71,8 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
      * 3 bits for CoordinatePhase
      * 3 bits for retry counter
      * <p>
-     * bits [51..60) for pending timer delay
+     * bits [52..61) for pending timer delay
+     * bit 61 indicates if this transaction can be inferred invalid if a later quorum finds it not committed on any shard
      * bit 62 for which kind of timer is scheduled
      * bit 63 for whether we should contact all candidate replicas (rather than just our preferred group)
      */
@@ -166,6 +167,16 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
         return pendingTimerDelay == 0 ? 0 : deadline() + pendingTimerDelay;
     }
 
+    void setInvalidIfUncommitted()
+    {
+        encodedState |= 1L << INVALID_IF_UNCOMMITTED_SHIFT;
+    }
+
+    Infer.InvalidIf invalidIf()
+    {
+        return 0 == (encodedState & (1L << INVALID_IF_UNCOMMITTED_SHIFT)) ? NotKnownToBeInvalid : IfUncommitted;
+    }
+
     long scheduledTimerDeadline()
     {
         return deadline();
@@ -178,5 +189,5 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
 
     abstract void updateScheduling(SafeCommandStore safeStore, DefaultProgressLog instance, TxnStateKind updated, @Nullable BlockedUntil awaiting, Progress newProgress);
 
-    abstract void maybeRemove(DefaultProgressLog instance);
+    abstract boolean maybeRemove(DefaultProgressLog instance);
 }

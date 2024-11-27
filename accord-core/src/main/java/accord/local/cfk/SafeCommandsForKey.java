@@ -28,6 +28,7 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Status;
+import accord.primitives.TxnId;
 
 public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
 {
@@ -107,5 +108,10 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     public void refresh(SafeCommandStore safeStore)
     {
         updateRedundantBefore(safeStore, safeStore.redundantBefore().get(key));
+    }
+
+    public void setDurable(TxnId txnId)
+    {
+        set(current().setDurable(txnId));
     }
 }

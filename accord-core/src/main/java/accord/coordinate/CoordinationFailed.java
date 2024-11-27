@@ -22,11 +22,13 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.primitives.TxnId;
+import accord.utils.WrappableException;
 
 /**
  * Thrown when a transaction exceeds its specified timeout for obtaining a result for a client
+ * TODO (expected): usage is inconsistent; audit and cleanup
  */
-public abstract class CoordinationFailed extends RuntimeException
+public abstract class CoordinationFailed extends RuntimeException implements WrappableException<CoordinationFailed>
 {
     private @Nullable TxnId txnId;
     private @Nullable RoutingKey homeKey;
@@ -71,38 +73,8 @@ public abstract class CoordinationFailed extends RuntimeException
     }
 
     /**
-     * Wrap the exception without changing the type so asynchronous callbacks can add their own stack
+     * Create a new exception of the same type, keeping the original exception as a cause of the new exception,
+     * so that we can track the current stack trace as well as the origin stack trace.
      */
     public abstract CoordinationFailed wrap();
-
-    public static Throwable wrap(Throwable t)
-    {
-        if (t instanceof CoordinationFailed)
-        {
-            CoordinationFailed wrapped = ((CoordinationFailed)t).wrap();
-            if (wrapped.getClass() != t.getClass())
-            {
-                IllegalStateException ise = new IllegalStateException("Wrapping should not change type");
-                ise.addSuppressed(t);
-                throw ise;
-            }
-            return wrapped;
-        }
-        else if (t instanceof AssertionError)
-        {
-            return new AssertionError(t);
-        }
-        else if (t instanceof OutOfMemoryError)
-        {
-            return t;
-        }
-        else if (t instanceof Error)
-        {
-            return new Error(t);
-        }
-        else
-        {
-            return new RuntimeException(t);
-        }
-    }
 }

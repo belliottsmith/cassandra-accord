@@ -90,6 +90,7 @@ public class TopologyRandomizer
     private final List<Topology> epochs = new ArrayList<>();
     private final Function<Id, Node> nodeLookup;
     private final ConcurrentLinkedQueue<Integer> newPrefixes = new ConcurrentLinkedQueue<>();
+    // TODO (required): remove this restriction, we should be able to replicate previously owned ranges just fine
     private final Map<Id, Ranges> previouslyReplicated = new HashMap<>();
     private final TopologyUpdates topologyUpdates;
     private final Listener listener;
@@ -454,7 +455,7 @@ public class TopologyRandomizer
             state.shards = newShards;
             Shard[] testShards = type.apply(state, random);
             Arrays.sort(testShards, (a, b) -> a.range.compareTo(b.range));
-            if (!everyShardHasOverlaps(current.epoch, oldShards, testShards)
+            if (!everyShardHasOverlaps(oldShards, testShards)
                 || reassignsRanges(current, testShards, previouslyReplicated)
             )
             {
@@ -494,7 +495,7 @@ public class TopologyRandomizer
         return nextTopology;
     }
 
-    private boolean everyShardHasOverlaps(long prevEpoch, Shard[] in, Shard[] out)
+    private boolean everyShardHasOverlaps(Shard[] in, Shard[] out)
     {
         int i = 0, o = 0;
         while (i < in.length && o < out.length)

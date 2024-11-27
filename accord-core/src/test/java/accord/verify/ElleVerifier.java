@@ -63,7 +63,7 @@ public class ElleVerifier implements Verifier
     private final List<Event> events = new ArrayList<>();
 
     @Override
-    public Checker witness(int start, int end)
+    public Checker witness(Object description, int start, int end)
     {
         List<Action> invoked = new ArrayList<>();
         List<Action> witnessed = new ArrayList<>();

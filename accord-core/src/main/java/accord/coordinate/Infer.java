@@ -59,24 +59,52 @@ public class Infer
         /**
          * This command is known to be decided, so it is a logic bug if it is inferred elsewhere to be invalid.
          */
-        IsNotInvalid;
+        IsNotInvalid,
 
-        public static boolean isMax(InvalidIf that)
-        {
-            return that == IsNotInvalid;
-        }
+        /**
+         * This command is known to be invalid.
+         */
+        IsInvalid;
 
         public InvalidIf atLeast(InvalidIf that)
         {
+            if (this == that)
+                return this;
+            Invariants.checkState(this.compareTo(IsNotInvalid) < 0 || that.compareTo(IsNotInvalid) < 0);
             return this.compareTo(that) >= 0 ? this : that;
         }
 
-        public boolean inferInvalidWithQuorum(Known known)
+        public InvalidIf inferWithQuorum(Known minKnown, Known maxKnown)
         {
-            return this == IfUncommitted && (!known.isDecided() || !known.definition.isOrWasKnown());
+            if (this != IfUncommitted)
+                return this;
+
+            if (minKnown.isDecided())
+            {
+                // could be invalidated or committed, not important as should be derivable from minKnown
+                // if we can't, it's erased everywhere, so we already know the outcome else we are stale
+                return NotKnownToBeInvalid;
+            }
+
+            if (maxKnown.executeAt.hasDecision())
+            {
+                // could be invalidated or committed, but we definitely know which so we don't need to infer anything
+                return NotKnownToBeInvalid;
+            }
+
+            return IfUncommitted;
+        }
+
+        public InvalidIf inferWithNewQuorum(InvalidIf previouslyKnownToBeInvalidIf, Known minKnownByNewQuorum)
+        {
+            if (previouslyKnownToBeInvalidIf != IfUncommitted || minKnownByNewQuorum.isDecided())
+                return this.atLeast(previouslyKnownToBeInvalidIf);
+
+            return IsInvalid;
         }
     }
 
+    // TODO (required): audit all use cases
     private static abstract class CleanupAndCallback<T> implements MapReduceConsume<SafeCommandStore, Void>
     {
         final Node node;
@@ -139,7 +167,7 @@ public class Infer
 
         public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, EpochSupplier lowEpoch, EpochSupplier highEpoch, Participants<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
         {
-            new InvalidateAndCallback<T>(node, txnId, lowEpoch, highEpoch, someUnseekables, param, callback).start();
+            new InvalidateAndCallback<>(node, txnId, lowEpoch, highEpoch, someUnseekables, param, callback).start();
         }
 
         @Override

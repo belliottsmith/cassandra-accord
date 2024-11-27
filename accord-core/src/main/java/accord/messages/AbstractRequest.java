@@ -35,7 +35,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 public abstract class AbstractRequest<R extends Reply> implements PreLoadContext, Request, MapReduceConsume<SafeCommandStore, R>, Timeouts.Timeout
 {
-    static class Cancellation implements Cancellable
+    private static class Cancellation implements Cancellable
     {
         final RegisteredTimeout timeout;
         final Cancellable cancel;
@@ -54,7 +54,10 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
         }
     }
 
-    private static final Cancellation DONE = new Cancellation(null, null);
+    private static final class Done extends Cancellation { Done() { super(null, null); } }
+
+    private static final Done CANCEL = new Done();
+    private static final Done DONE = new Done();
     private static final Cancellation EMPTY = new Cancellation(null, null);
 
     public final TxnId txnId;
@@ -82,10 +85,10 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
             long expiresAt = node.agent().expiresAt(replyContext, MICROSECONDS);
             if (expiresAt > 0)
             {
-                RegisteredTimeout timeout = node.timeouts().registerWithDelay(this, expiresAt, MICROSECONDS);
+                RegisteredTimeout timeout = node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
                 Cancellation cancellation = new Cancellation(timeout, cancel);
                 if (!cancellationUpdater.compareAndSet(this, null, cancellation))
-                    cancellation.cancel();
+                    (this.cancellation == CANCEL ? cancellation : cancellation.timeout).cancel();
             }
         }
     }
@@ -117,13 +120,13 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
 
     protected @Nullable Cancellable timeoutInternal()
     {
-        return clearInternal().cancel;
+        return cancelInternal().cancel;
     }
 
     protected boolean cancel()
     {
-        Cancellation clear = clearInternal();
-        if (clear == DONE)
+        Cancellation clear = cancelInternal();
+        if (clear.getClass() == Done.class)
             return false;
 
         cleanup(clear);
@@ -139,17 +142,27 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
         cleanup(clearInternal());
     }
 
+    protected final Cancellation clearInternal()
+    {
+        return clearInternal(DONE);
+    }
+
+    protected final Cancellation cancelInternal()
+    {
+        return clearInternal(CANCEL);
+    }
+
     /**
      * invoked on any termination, to ensure state is cleared
      * @return
      */
-    protected Cancellation clearInternal()
+    protected final Cancellation clearInternal(Done done)
     {
         while (true)
         {
             // can loop at most once
             Cancellation cur = cancellation;
-            if (cur == DONE || cancellationUpdater.compareAndSet(this, cur, DONE))
+            if (cur == DONE || cur == CANCEL || cancellationUpdater.compareAndSet(this, cur, done))
                 return cur != null ? cur : EMPTY;
         }
     }

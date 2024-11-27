@@ -68,7 +68,7 @@ class CommandsTest
     {
         // could use AccordGens.nodes() but to make debugging easier limit the node ids to small values
         Gen<List<Node.Id>> nodeGen = Gens.ints().between(1, 10).map(size -> IntStream.range(1, size + 1).mapToObj(Node.Id::new).collect(Collectors.toList()));
-        qt().check(rs -> {
+        qt().withExamples(50).check(rs -> {
             List<Node.Id> nodes = nodeGen.next(rs);
             int rf = nodes.size() <= 3 ? nodes.size() : rs.nextInt(3, nodes.size());
             logger.info("Running with {} nodes and rf={}", nodes.size(), rf);

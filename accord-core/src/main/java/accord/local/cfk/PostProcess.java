@@ -275,31 +275,73 @@ abstract class PostProcess
         }
 
         {
-            Timestamp applyTo = null;
             if (newInfo != null && newInfo.is(APPLIED))
             {
                 TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
                 if (maxContiguousApplied != null && maxContiguousApplied.compareExecuteAt(newInfo) >= 0)
-                    applyTo = maxContiguousApplied.executeAt;
-            }
-            else if (newInfo == null)
-            {
-                TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
-                if (maxContiguousApplied != null)
-                    applyTo = maxContiguousApplied.executeAt;
-
-                applyTo = Timestamp.nonNullOrMax(applyTo, TxnId.nonNullOrMax(redundantBefore, bootstrappedAt));
-            }
-
-            if (applyTo != null)
-            {
-                int start = findFirstApply(unmanageds);
-                int end = findApply(unmanageds, start, applyTo);
-                if (start != end)
                 {
-                    TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
-                    unmanageds = removeUnmanaged(unmanageds, start, end);
-                    notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                    Timestamp applyTo = maxContiguousApplied.executeAt;
+                    int start = findFirstApply(unmanageds);
+                    int end = findApply(unmanageds, start, applyTo);
+                    if (start != end)
+                    {
+                        TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
+                        unmanageds = removeUnmanaged(unmanageds, start, end);
+                        notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                    }
+                }
+            }
+            else if (newInfo == null && isNewBoundsInfo)
+            {
+                int firstApply = findFirstApply(unmanageds);
+                {   // process unmanaged waiting on applies that may now not occur
+                    int start = firstApply;
+                    while (start > 0 && unmanageds[start - 1].waitingUntil.epoch() >= boundsInfo.endOwnershipEpoch)
+                        --start;
+
+                    if (start != firstApply)
+                    {
+                        // TODO (desired): we can recompute the waitingUntil here, instead of relying on notify unmanaged to do it for us
+                        //  however this should be rare, and probably fine to rely on renotifying
+                        TxnId[] notifyOfCommit = selectUnmanaged(unmanageds, start, firstApply);
+                        unmanageds = removeUnmanaged(unmanageds, start, firstApply);
+                        notifier = new PostProcess.NotifyUnmanagedOfCommit(notifier, notifyOfCommit);
+                        firstApply = start;
+                    }
+                }
+                {   // process unmanaged waiting on applies that may now not occur
+                    int start = firstApply;
+                    int end = start;
+                    int j = 1 + maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                    while (end < unmanageds.length && j < committedByExecuteAt.length)
+                    {
+                        int c = committedByExecuteAt[j].executeAt.compareTo(unmanageds[end].waitingUntil);
+                        if (c == 0)
+                        {
+                            if (start != end)
+                            {
+                                TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
+                                unmanageds = removeUnmanaged(unmanageds, start, end);
+                                end = start;
+                                notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                            }
+                            start = ++end;
+                        }
+                        else if (c < 0)
+                        {
+                            ++j;
+                        }
+                        else
+                        {
+                            ++end;
+                        }
+                    }
+                    if (start != unmanageds.length)
+                    {
+                        TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, unmanageds.length);
+                        unmanageds = removeUnmanaged(unmanageds, start, unmanageds.length);
+                        notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                    }
                 }
             }
         }
@@ -315,11 +357,16 @@ abstract class PostProcess
             Timestamp maxPreBootstrap;
             {
                 Timestamp tmp = bootstrappedAt;
-                for (int i = 0; i < byId.length; ++i)
+                for (TxnInfo txn : byId)
                 {
-                    TxnInfo txn = byId[i];
                     if (txn.compareTo(bootstrappedAt) > 0)
                         break;
+                    // while we can in principle exclude all transactions with a lower txnId regardless of their executeAt
+                    // for consistent handling with other transactions we don't leap ahead by executeAt as this permits
+                    // us to also exclude transactions with a higher txnId which is not consistent with other validity checks
+                    // which don't have this additional context
+                    if (txn.executeAt.compareTo(bootstrappedAt) > 0)
+                        continue;
                     tmp = Timestamp.nonNullOrMax(tmp, txn.executeAt);
                 }
                 maxPreBootstrap = tmp;
@@ -344,7 +391,12 @@ abstract class PostProcess
                         ++end;
 
                     // find committed predecessor, if any
-                    int predecessor = -2 - SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanageds[start].waitingUntil, (t, i) -> t.compareTo(i.executeAt), FAST);
+                    int predecessor = SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanageds[start].waitingUntil, (t, i) -> t.compareTo(i.executeAt), FAST);
+                    if (predecessor < 0) predecessor = -2 - predecessor;
+                    else predecessor = predecessor - 1;
+
+                    while (predecessor >= 0 && rescheduleOrNotifyIf.test(committedByExecuteAt[predecessor].executeAt))
+                        --predecessor;
 
                     if (predecessor >= 0)
                     {

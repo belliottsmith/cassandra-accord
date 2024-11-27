@@ -24,6 +24,9 @@ import java.util.stream.Collectors;
 
 import accord.api.Data;
 import accord.api.Key;
+import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
+import accord.utils.Invariants;
 import accord.utils.Timestamped;
 
 public class ListData extends TreeMap<Key, Timestamped<int[]>> implements Data
@@ -38,6 +41,16 @@ public class ListData extends TreeMap<Key, Timestamped<int[]>> implements Data
             });
         }
         return this;
+    }
+
+    @Override
+    public void validateReply(TxnId txnId, Timestamp executeAt)
+    {
+        if (txnId.awaitsOnlyDeps())
+            return;
+
+        for (Timestamped<int[]> v : values())
+            Invariants.checkState(v.timestamp.compareTo(executeAt) < 0);
     }
 
     @Override

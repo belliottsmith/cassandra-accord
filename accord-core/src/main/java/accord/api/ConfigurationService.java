@@ -74,9 +74,12 @@ public interface ConfigurationService
         public final AsyncResult<Void> metadata;
 
         /**
-         * The node has retrieved enough remote information to become a fast path coordinator for the new epoch.
+         * The node has retrieved enough remote information to answer coordination decisions for the epoch
+         * (including fast path decisions).
+         * Once a quorum of the new epoch has achieved this, earlier epochs do not need to be contacted
+         * by coordinators of transactions started in the new epoch (or later).
          */
-        public final AsyncResult<Void> fastPath;
+        public final AsyncResult<Void> coordinate;
 
         /**
          * The node has successfully replicated the underlying DataStore information for the new epoch, but may need
@@ -90,11 +93,11 @@ public interface ConfigurationService
          */
         public final AsyncResult<Void> reads;
 
-        public EpochReady(long epoch, AsyncResult<Void> metadata, AsyncResult<Void> fastPath, AsyncResult<Void> data, AsyncResult<Void> reads)
+        public EpochReady(long epoch, AsyncResult<Void> metadata, AsyncResult<Void> coordinate, AsyncResult<Void> data, AsyncResult<Void> reads)
         {
             this.epoch = epoch;
             this.metadata = metadata;
-            this.fastPath = fastPath;
+            this.coordinate = coordinate;
             this.data = data;
             this.reads = reads;
         }
@@ -110,7 +113,7 @@ public interface ConfigurationService
             return "EpochReady{" +
                    "epoch=" + epoch +
                    ", metadata=" + metadata +
-                   ", fastPath=" + fastPath +
+                   ", fastPath=" + coordinate +
                    ", data=" + data +
                    ", reads=" + reads +
                    '}';

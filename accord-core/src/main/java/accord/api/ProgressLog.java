@@ -154,6 +154,9 @@ public interface ProgressLog
      */
     void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after);
 
+    /**
+     * Process a remote asynchronous callback.
+     */
     void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from);
 
     /**
@@ -182,12 +185,20 @@ public interface ProgressLog
      */
     void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, @Nullable Route<?> blockedOnRoute, @Nullable Participants<?> blockedOnParticipants, @Nullable StoreParticipants participants);
 
+    void invalidIfUncommitted(TxnId txnId);
+
     /**
      * We have finished processing this transaction; ensure its state is cleared
      */
     void clear(TxnId txnId);
 
     void clear();
+
+    /**
+     * We have finished locally processing all transactions with lower {@code TxnId} so ensure their waiting states are cleared.
+     * If an owned transaction is undecided it should be cleaned up and any listeners notified.
+     */
+    void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore);
 
     /**
      * Should be thread-safe
@@ -199,7 +210,9 @@ public interface ProgressLog
         @Override public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after) {}
         @Override public void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from) {}
         @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants participants) {}
+        @Override public void invalidIfUncommitted(TxnId txnId) {}
         @Override public void clear(TxnId txnId) {}
+        @Override public void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore) {}
         @Override public void clear() {}
     }
 }

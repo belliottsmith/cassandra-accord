@@ -454,8 +454,13 @@ public class DefaultLocalListeners implements LocalListeners
             {
                 // listener registrations were changed by this listener's notify invocation, so reset our cursor
                 txnListeners = this.txnListeners;
-                start = BTree.findIndex(txnListeners, TxnListeners::compareListeners, notify);
                 end = -1 - BTree.findIndex(txnListeners, compareAfter.get(saveStatus), txnId);
+                start = BTree.findIndex(txnListeners, TxnListeners::compareListeners, notify);
+                if (start < 0)
+                {
+                    start = -1 - start;
+                    continue;
+                }
                 // we only permit callers to insert into this collection, so we do not have to consider
                 // the case where the listener we are processing has been deleted under us
             }
@@ -476,4 +481,22 @@ public class DefaultLocalListeners implements LocalListeners
         });
     }
 
+    @Override
+    public void clearBefore(CommandStore commandStore, TxnId clearBefore)
+    {
+        while (!BTree.isEmpty(txnListeners))
+        {
+            TxnListeners entry = BTree.findByIndex(txnListeners, 0);
+            if (entry.compareTo(clearBefore) >= 0)
+                return;
+
+            commandStore.execute(PreLoadContext.contextFor(entry), safeStore -> {
+                SafeCommand safeCommand = safeStore.unsafeGet(entry);
+                SaveStatus saveStatus = safeCommand.current().saveStatus();
+                Invariants.checkState(saveStatus.compareTo(entry.await) >= 0);
+                entry.notify(notifySink, safeStore, safeCommand);
+            }).begin(commandStore.agent());
+            txnListeners = BTreeRemoval.remove(txnListeners, TxnListeners::compareListeners, entry);
+        }
+    }
 }

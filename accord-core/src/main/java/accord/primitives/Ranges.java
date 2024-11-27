@@ -129,7 +129,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
             case Range: return slice((AbstractRanges) intersecting, slice);
-            case Key: return intersecting((Keys) intersecting, this, null, (i1, i2, rs) -> i1.ranges == rs ? i1 : new Ranges(rs));
+            case Key: return intersecting((Keys) intersecting, this, null, (i1, i2, rs) -> i1.ranges == rs ? i1 : new Ranges(rs), slice);
         }
     }
 
@@ -146,7 +146,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
             case Range: return slice((AbstractRanges) intersecting, slice);
-            case Key: return intersecting((AbstractUnseekableKeys) intersecting, this, null, (i1, i2, rs) -> i1.ranges == rs ? i1 : new Ranges(rs));
+            case Key: return intersecting((AbstractUnseekableKeys) intersecting, this, null, (i1, i2, rs) -> i1.ranges == rs ? i1 : new Ranges(rs), slice);
         }
     }
 

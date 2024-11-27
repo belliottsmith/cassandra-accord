@@ -32,7 +32,7 @@ import accord.topology.Topologies;
 import accord.utils.SortedListMap;
 
 import static accord.api.ProtocolModifiers.Faults;
-import static accord.coordinate.CoordinationAdapter.Factory.Step.Continue;
+import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 
 class ProposeTxn extends Propose<Result>
 {
@@ -53,6 +53,6 @@ class ProposeTxn extends Propose<Result>
 
     protected CoordinationAdapter<Result> adapter()
     {
-        return node.coordinationAdapter(txnId, Continue);
+        return node.coordinationAdapter(txnId, Standard);
     }
 }

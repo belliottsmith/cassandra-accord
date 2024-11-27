@@ -47,6 +47,7 @@ import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
+import accord.utils.WrappableException;
 import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.messages.Apply.ApplyReply.Insufficient;
@@ -56,7 +57,12 @@ import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableResult<SyncPoint<U>> implements Callback<ReadReply>
 {
-    public static class SyncPointErased extends Throwable {}
+    public static class SyncPointErased extends Throwable implements WrappableException
+    {
+        public SyncPointErased() {}
+        public SyncPointErased(Throwable cause) { super(cause); }
+        @Override public Throwable wrap() { return new SyncPointErased(this); }
+    }
 
     public static class ExecuteInclusive<U extends Unseekable> extends ExecuteSyncPoint<U>
     {
@@ -88,8 +94,9 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
 
         private void onDurableSuccess(Node.Id from)
         {
+            // TODO (desired): defer until we have all replies or Timeouts and send Universal?
             if (durableTracker.recordSuccess(from) == RequestStatus.Success)
-                InformDurable.informHome(node, tracker.topologies(), syncPoint.syncId, syncPoint.route, executeAt, Majority);
+                InformDurable.informDefault(node, tracker.topologies(), syncPoint.syncId, syncPoint.route, executeAt, Majority);
         }
 
         private static boolean isDurableReply(ReadReply reply)
@@ -126,7 +133,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
                     @Override public void onCallbackFailure(Node.Id from, Throwable failure) {}
                 };
             }
-            CoordinateSyncPoint.sendApply(node, to, syncPoint, insufficientCallback);
+            CoordinateSyncPoint.sendApply(node, to, syncPoint, tracker.topologies(), insufficientCallback);
         }
 
         @Override
@@ -161,8 +168,17 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         protected void start()
         {
             SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
-            if (contact == null) tryFailure(new Exhausted(syncPoint.syncId, syncPoint.route.homeKey(), null));
-            else node.send(contact, to -> new WaitUntilApplied(to, tracker.topologies(), syncPoint.syncId, syncPoint.route, syncPoint.syncId.epoch()), this);
+            if (contact == null)
+            {
+                tryFailure(new Exhausted(syncPoint.syncId, syncPoint.route.homeKey(), null));
+                return;
+            }
+
+            for (Node.Id to : contact)
+            {
+                WaitUntilApplied request = new WaitUntilApplied(to, tracker.topologies(), syncPoint.syncId, syncPoint.route, syncPoint.syncId.epoch());
+                node.send(to, request, this);
+            }
         }
 
         @Override
@@ -179,12 +195,14 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         {
             if (retryInFutureEpoch > tracker.topologies().currentEpoch())
             {
-                ExecuteExclusive continuation = new ExecuteExclusive(node, syncPoint, trackerSupplier, trackerSupplier.apply(node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch)));
-                continuation.addCallback((success, failure) -> {
-                    if (failure == null) trySuccess(success);
-                    else tryFailure(failure);
+                node.withEpoch(retryInFutureEpoch, (ignore, failure) -> tryFailure(WrappableException.wrap(failure)), () -> {
+                    ExecuteExclusive continuation = new ExecuteExclusive(node, syncPoint, trackerSupplier, trackerSupplier.apply(node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch)));
+                    continuation.addCallback((success, failure) -> {
+                        if (failure == null) trySuccess(success);
+                        else tryFailure(failure);
+                    });
+                    continuation.start();
                 });
-                continuation.start();
             }
             else
             {
@@ -253,7 +271,6 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         }
         else
         {
-            // TODO (required, consider): do we need to handle ranges not being safe to read
             if (tracker.recordSuccess(from) == RequestStatus.Success)
                 onSuccess();
         }
@@ -266,7 +283,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
 
     protected void sendApply(Node.Id to)
     {
-        CoordinateSyncPoint.sendApply(node, to, syncPoint);
+        CoordinateSyncPoint.sendApply(node, to, syncPoint, tracker.topologies());
     }
 
     @Override
