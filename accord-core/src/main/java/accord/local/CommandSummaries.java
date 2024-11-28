@@ -44,13 +44,15 @@ public interface CommandSummaries
 {
     enum SummaryStatus
     {
-        // preaccepted or accepted invalidated
+        NOT_DIRECTLY_WITNESSED,
         NOT_ACCEPTED,
         ACCEPTED,
         COMMITTED,
         STABLE,
         APPLIED,
-        INVALIDATED
+        INVALIDATED;
+
+        public static final SummaryStatus NONE = null;
     }
 
     enum IsDep { IS_DEP, NOT_ELIGIBLE, IS_NOT_DEP }
@@ -206,7 +208,7 @@ public interface CommandSummaries
                 IsDep isDep = null;
                 if (findAsDep != null)
                 {
-                    if (!isEligibleDep(summaryStatus, findAsDep, txnId, executeAt))
+                    if (partialDeps == null || !isEligibleDep(summaryStatus, findAsDep, txnId, executeAt))
                     {
                         isDep = IsDep.NOT_ELIGIBLE;
                     }

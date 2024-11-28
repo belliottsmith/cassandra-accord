@@ -34,7 +34,7 @@ import accord.utils.btree.BulkIterator;
 import accord.utils.btree.UpdateFunction;
 import org.agrona.collections.Long2ObjectHashMap;
 
-import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
+import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
 import static accord.local.cfk.CommandsForKey.bootstrappedAt;
@@ -232,7 +232,8 @@ public class Pruning
             }
             int newPrunedBeforeId = cfk.prunedBeforeById - prunedCount;
             return new CommandsForKey(cfk.key, cfk.boundsInfo, false, newById, cfk.committedByExecuteAt,
-                                      nextUndecided(newById, 0, cfk), cfk.maxAppliedWriteByExecuteAt, cfk.loadingPruned, newPrunedBeforeId, cfk.unmanageds);
+                                      nextUndecided(newById, 0, cfk), cfk.maxAppliedWriteByExecuteAt, cfk.maxHlc,
+                                      cfk.loadingPruned, newPrunedBeforeId, cfk.unmanageds);
         }
         int pos = cfk.insertPos(pruneBefore);
         if (pos == 0)
@@ -323,6 +324,7 @@ public class Pruning
                         break;
 
                     case TRANSITIVE:
+                    case TRANSITIVE_VISIBLE:
                     case PREACCEPTED_OR_ACCEPTED_INVALIDATE:
                     case ACCEPTED:
                         newByIdBuffer[pos - ++retainCount] = txn;
@@ -330,7 +332,9 @@ public class Pruning
                             minUndecidedByIdDelta = retainCount;
                         break;
 
-                    case APPLIED:
+                    case APPLIED_NOT_DURABLE:
+                    case APPLIED_DURABLE:
+                    case APPLIED_NOT_EXECUTED:
                         long epoch = txn.epoch();
                         if (epoch != activePruneEpoch && epochPrunedBefores != null)
                         {
@@ -436,7 +440,7 @@ public class Pruning
         cachedAny().forceDiscard(removedExecuteAts, removedExecuteAtCount);
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
         Invariants.checkState(newById[retainCount] == newPrunedBefore);
-        return new CommandsForKey(cfk.key, cfk.boundsInfo, newById, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.loadingPruned, retainCount, cfk.unmanageds);
+        return new CommandsForKey(cfk.key, cfk.boundsInfo, newById, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.maxHlc, cfk.loadingPruned, retainCount, cfk.unmanageds);
     }
 
     /**

@@ -27,7 +27,6 @@ import accord.api.DataStore;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
-import accord.impl.SafeTimestampsForKey;
 import accord.local.CommandStores.RangesForEpochSupplier;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;
@@ -223,9 +222,6 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     protected abstract SafeCommandsForKey getInternal(RoutingKey key);
     /** Get if available */
     protected abstract SafeCommandsForKey ifLoadedInternal(RoutingKey key);
-
-    // TODO (required): to be deprecated
-    public abstract SafeTimestampsForKey timestampsForKey(RoutingKey key);
 
     public final boolean canExecuteWith(PreLoadContext context) { return canExecute(context) == context; }
 

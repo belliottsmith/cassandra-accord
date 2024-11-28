@@ -25,7 +25,6 @@ import java.util.stream.Collectors;
 
 import com.google.common.collect.Sets;
 
-import accord.impl.*;
 import accord.primitives.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,7 +54,6 @@ public class ListWrite extends TreeMap<Key, int[]> implements Write
         ListStore s = (ListStore) store;
         if (!containsKey(key))
             return Writes.SUCCESS;
-        TimestampsForKeys.updateLastExecutionTimestamps(safeStore, ((Key)key).toUnseekable(), txnId, executeAt, true);
 
         logger.trace("submitting WRITE on {} at {} key:{}", s.node, executeAt, key);
         return executor.apply(safeStore.commandStore()).submit(() -> {
@@ -72,7 +70,6 @@ public class ListWrite extends TreeMap<Key, int[]> implements Write
         if (!containsKey(key))
             return;
 
-        TimestampsForKeys.updateLastExecutionTimestamps(safeStore, ((Key)key).toUnseekable(), txnId, executeAt, true);
         logger.trace("unsafe applying WRITE on {} at {} key:{}", s.node, executeAt, key);
         int[] data = get(key);
         s.writeUnsafe((Key)key, executeAt, data);

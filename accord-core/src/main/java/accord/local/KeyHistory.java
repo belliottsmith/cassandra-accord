@@ -25,8 +25,6 @@ package accord.local;
 public enum KeyHistory
 {
     NONE,
-    // TODO (required): deprecate
-    TIMESTAMPS,
 
     /**
      * This command will likely need to use the provided keys, but can be processed before they are loaded;
@@ -69,7 +67,6 @@ public enum KeyHistory
             case NONE:
                 return true;
             case RECOVER:
-            case TIMESTAMPS:
                 return this == that;
             case ASYNC:
             case INCR:

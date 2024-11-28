@@ -39,13 +39,10 @@ import accord.primitives.Unseekables;
 
 import static accord.api.Journal.FieldUpdates;
 import static accord.local.CommandStores.RangesForEpoch;
-import static accord.local.KeyHistory.TIMESTAMPS;
-import static accord.utils.Invariants.illegalArgument;
 
 public abstract class AbstractSafeCommandStore<C extends SafeCommand,
-                                              TFK extends SafeTimestampsForKey,
                                               CFK extends SafeCommandsForKey,
-                                              Caches extends AbstractSafeCommandStore.CommandStoreCaches<C, TFK, CFK>>
+                                              Caches extends AbstractSafeCommandStore.CommandStoreCaches<C, CFK>>
 extends SafeCommandStore
 {
     protected final PreLoadContext context;
@@ -65,22 +62,17 @@ extends SafeCommandStore
         return commandStore;
     }
 
-    public interface CommandStoreCaches<C, TFK, CFK> extends AutoCloseable
+    public interface CommandStoreCaches<C, CFK> extends AutoCloseable
     {
         void close();
 
         C acquireIfLoaded(TxnId txnId);
         CFK acquireIfLoaded(RoutingKey key);
-        TFK acquireTfkIfLoaded(RoutingKey key);
     }
 
     protected abstract Caches tryGetCaches();
     protected abstract C add(C safeCommand, Caches caches);
     protected abstract CFK add(CFK safeCfk, Caches caches);
-    protected abstract TFK add(TFK safeTfk, Caches caches);
-
-    // get anything we've already loaded and referenced
-    protected abstract TFK timestampsForKeyInternal(RoutingKey key);
 
     @Override
     public PreLoadContext canExecute(PreLoadContext with)
@@ -121,29 +113,14 @@ extends SafeCommandStore
             for (int i = 0 ; i < keys.size() ; ++i)
             {
                 RoutingKey key = (RoutingKey) keys.get(i);
-                if (keyHistory == TIMESTAMPS)
-                {
-                    if (null != timestampsForKeyInternal(key))
-                        continue; // already in working set
+                if (null != getInternal(key))
+                    continue; // already in working set
 
-                    TFK safeTfk = caches.acquireTfkIfLoaded(key);
-                    if (safeTfk != null)
-                    {
-                        add(safeTfk, caches);
-                        continue;
-                    }
-                }
-                else
+                CFK safeCfk = caches.acquireIfLoaded(key);
+                if (safeCfk != null)
                 {
-                    if (null != getInternal(key))
-                        continue; // already in working set
-
-                    CFK safeCfk = caches.acquireIfLoaded(key);
-                    if (safeCfk != null)
-                    {
-                        add(safeCfk, caches);
-                        continue;
-                    }
+                    add(safeCfk, caches);
+                    continue;
                 }
                 if (unavailable == null)
                     unavailable = new ArrayList<>();
@@ -196,15 +173,6 @@ extends SafeCommandStore
 
             return add(cfk, caches);
         }
-    }
-
-    @Override
-    public TFK timestampsForKey(RoutingKey key)
-    {
-        TFK safeTfk = timestampsForKeyInternal(key);
-        if (safeTfk == null)
-            throw illegalArgument("%s not referenced in %s", key, context);
-        return safeTfk;
     }
 
     public void postExecute()

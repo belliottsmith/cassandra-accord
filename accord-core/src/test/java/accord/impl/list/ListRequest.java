@@ -210,7 +210,11 @@ public class ListRequest implements Request
                         return;
                     }
                     // some arbitrarily large limit to attempts
-                    if (attempt < 1000 && (f instanceof Timeout || f instanceof SimulatedFault || f instanceof Exhausted)) checkOnResult(finalHomeKey, txnId, attempt + 1, f);
+                    if (attempt < 1000 && (f instanceof Timeout || f instanceof SimulatedFault || f instanceof Exhausted))
+                    {
+                        if (attempt < 100) checkOnResult(finalHomeKey, txnId, attempt + 1, f);
+                        else node.scheduler().once(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), 5L, TimeUnit.MINUTES);
+                    }
                     else
                     {
                         node.reply(client, replyContext, ListResult.failure(client, ((Packet)replyContext).requestId, txnId), null);

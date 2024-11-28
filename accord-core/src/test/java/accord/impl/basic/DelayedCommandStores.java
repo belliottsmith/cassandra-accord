@@ -39,7 +39,6 @@ import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.InMemorySafeCommand;
 import accord.impl.InMemorySafeCommandsForKey;
-import accord.impl.InMemorySafeTimestampsForKey;
 import accord.impl.PrefixedIntHashKey;
 import accord.impl.basic.TaskExecutorService.Task;
 import accord.local.Command;
@@ -273,9 +272,9 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
 
         @Override
-        protected InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
+        protected InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
         {
-            return new DelayedSafeStore(this, ranges, context, commands, timestampsForKey, commandsForKeys, cacheLoading);
+            return new DelayedSafeStore(this, ranges, context, commands, commandsForKeys, cacheLoading);
         }
 
         @Override
@@ -294,11 +293,10 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                                 RangesForEpoch ranges,
                                 PreLoadContext context,
                                 Map<TxnId, InMemorySafeCommand> commands,
-                                Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey,
                                 Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey,
                                 CacheLoading cacheLoading)
         {
-            super(commandStore, ranges, context, commands, timestampsForKey, commandsForKey);
+            super(commandStore, ranges, context, commands, commandsForKey);
             this.commandStore = commandStore;
             this.cacheLoading = cacheLoading;
         }
@@ -334,14 +332,6 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                     {
                         if (cacheFull || cacheLoading.isLoaded(txnId))
                             return super.acquireIfLoaded(txnId);
-                        return null;
-                    }
-
-                    @Override
-                    public InMemorySafeTimestampsForKey acquireTfkIfLoaded(RoutingKey key)
-                    {
-                        if (cacheFull || cacheLoading.tfkLoaded())
-                            return super.acquireTfkIfLoaded(key);
                         return null;
                     }
 

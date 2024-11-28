@@ -592,7 +592,7 @@ public class Cluster
 
                     ++cfkCounter;
                     cfk = cfk.maximalPrune();
-                    ByteBuffer encoded = Serialize.unsafeToBytesWithoutKey(cfk);
+                    ByteBuffer encoded = Serialize.toBytesWithoutKey(cfk);
                     CommandsForKey decoded = Serialize.fromBytes(cfk.key(), encoded);
                     Invariants.checkState(cfk.equalContents(decoded));
                 }
@@ -769,6 +769,8 @@ public class Cluster
                 purge.cancel();
                 restart.cancel();
                 services.forEach(Service::close);
+                chaos.cancel();
+                sinks.links = sinks.linkConfig.defaultLinks;
             };
             noMoreWorkSignal.accept(stop);
             readySignal.accept(nodeMap);
@@ -780,7 +782,6 @@ public class Cluster
             while (sinks.processPending());
 
             stop.run();
-            sinks.links = sinks.linkConfig.defaultLinks;
 
             // give progress log et al a chance to finish
             // TODO (desired, testing): would be nice to make this more certain than an arbitrary number of additional rounds

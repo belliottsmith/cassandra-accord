@@ -65,7 +65,7 @@ import static accord.local.Command.Truncated.invalidated;
 import static accord.local.Command.Truncated.truncatedApply;
 import static accord.local.Command.Truncated.truncatedApplyWithOutcome;
 import static accord.local.KeyHistory.INCR;
-import static accord.local.KeyHistory.TIMESTAMPS;
+import static accord.local.KeyHistory.SYNC;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
@@ -534,7 +534,7 @@ public class Commands
         CommandStore unsafeStore = safeStore.commandStore();
         TxnId txnId = command.txnId();
         // TODO (expected): there is some coupling going on here - concept of TIMESTAMPS only needed if implementation tracks on apply
-        PreLoadContext context = contextFor(command.txnId(), executes, TIMESTAMPS);
+        PreLoadContext context = contextFor(command.txnId(), executes, SYNC);
         // this is sometimes called from a listener update, which will not have the keys in context
         if (safeStore.canExecuteWith(context))
         {
@@ -925,7 +925,7 @@ public class Commands
             case SHARD_REDUNDANT:
             case GC_BEFORE:
             case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-                Invariants.checkState(!command.hasBeen(PreCommitted));
+                Invariants.paranoid(!command.hasBeen(PreCommitted) || command.participants().stillExecutes().isEmpty());
             case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
             case PRE_BOOTSTRAP_OR_STALE:
             case NOT_OWNED:

@@ -38,8 +38,9 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
      */
     private static final int MERGE_FLAGS = 0x8000;
     // TODO (testing): is this the correct set of identity bits?
-    private static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF001FL;
-    public static final int IDENTITY_FLAGS = 0x00000000_0000001F;
+    private static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF007FL;
+    public static final int IDENTITY_FLAGS = 0x00000000_0000007F;
+    public static final int KIND_AND_DOMAIN_FLAGS = 0x00000000_0000001F;
     public static final long MAX_EPOCH = (1L << 48) - 1;
     private static final long HLC_INCR = 1L << 16;
     static final long MAX_FLAGS = HLC_INCR - 1;

@@ -51,7 +51,6 @@ import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultLocalListeners.DefaultNotifySink;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.IntKey;
-import accord.impl.SafeTimestampsForKey;
 import accord.local.Command;
 import accord.local.Command.AbstractCommand;
 import accord.local.CommandStore;
@@ -783,12 +782,6 @@ public class CommandsForKeyTest
         {
             if (key.equals(cfk.key()))
                 return cfk;
-            return null;
-        }
-
-        @Override
-        public SafeTimestampsForKey timestampsForKey(RoutingKey key)
-        {
             return null;
         }
 

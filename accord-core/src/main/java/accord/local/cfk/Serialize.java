@@ -65,9 +65,6 @@ public class Serialize
     private static final int RAW_FLAG_BITS = 0;
     private static final int TIMESTAMP_BASE_SIZE = 16;
     private static final InternalStatus[] DECODE_STATUS = InternalStatus.values();
-    private static final int APPLIED_INDEX = InternalStatus.APPLIED.ordinal();
-    private static final int DURABLE_APPLIED_INDEX = InternalStatus.PRUNED.ordinal();
-    static { DECODE_STATUS[DURABLE_APPLIED_INDEX] = InternalStatus.APPLIED; }
 
     private static final int HAS_MISSING_DEPS_HEADER_BIT = 0x1;
     private static final int HAS_MISSING_DEPS_HEADER_BIT_SHIFT = 0;
@@ -75,11 +72,15 @@ public class Serialize
     private static final int HAS_EXECUTE_AT_HEADER_BIT_SHIFT = 1;
     private static final int HAS_BALLOT_HEADER_BIT = 0x4;
     private static final int HAS_BALLOT_HEADER_BIT_SHIFT = 2;
-    private static final int HAS_STATUS_OVERRIDES_HEAD_BIT = 0x8;
+    private static final int HAS_STATUS_OVERRIDES_HEADER_BIT = 0x8;
     private static final int HAS_STATUS_OVERRIDES_HEADER_BIT_SHIFT = 3;
     private static final int HAS_NON_STANDARD_FLAGS_HEADER_BIT = 0x10;
     private static final int HAS_NON_STANDARD_FLAGS_HEADER_BIT_SHIFT = 4;
-    private static final int HEADER_BIT_FLAGS_MASK = 0x1f;
+    private static final int COMMAND_HEADER_BIT_FLAGS_MASK = 0x1f;
+    private static final int HAS_BOOTSTRAPPED_AT_HEADER_BIT = 0x20;
+    private static final int HAS_BOUNDS_FLAGS_HEADER_BIT = 0x40;
+    private static final int HAS_MAX_HLC_HEADER_BIT = 0x80;
+
 
     /**
      * We read/write a fixed number of intial bytes for each command, with an initial flexible number of flag bits
@@ -133,7 +134,7 @@ public class Serialize
         return unsafeToBytesWithoutKey(cfk);
     }
 
-    public static ByteBuffer unsafeToBytesWithoutKey(CommandsForKey cfk)
+    private static ByteBuffer unsafeToBytesWithoutKey(CommandsForKey cfk)
     {
         Invariants.checkState(!cfk.isLoadingPruned());
 
@@ -147,7 +148,7 @@ public class Serialize
             // first compute the unique Node Ids and some basic characteristics of the data, such as
             // whether we have any missing transactions to encode, any executeAt that are not equal to their TxnId
             // and whether there are any non-standard flag bits to encode
-            boolean hasNonStandardFlags = false;
+            boolean hasExtendedFlags = false;
             int nodeIdCount, missingIdCount = 0, executeAtCount = 0, ballotCount = 0, overrideCount = 0;
             int bitsPerExecuteAtEpoch = 0, bitsPerExecuteAtFlags = 0, bitsPerExecuteAtHlc = 1; // to permit us to use full 64 bits and encode in 5 bits we force at least one hlc bit
             {
@@ -170,7 +171,7 @@ public class Serialize
                     TxnInfo txn = cfk.get(i);
                     Invariants.checkState(!txn.is(InternalStatus.PRUNED));
                     overrideCount += txn.statusOverrides();
-                    hasNonStandardFlags |= hasNonStandardFlags(txn);
+                    hasExtendedFlags |= hasExtendedFlags(txn);
                     nodeIds[nodeIdCount++] = txn.node.id;
 
                     if (txn.executeAt != txn)
@@ -217,10 +218,11 @@ public class Serialize
             // We can now use this information to calculate the fixed header size, compute the amount
             // of additional space we'll need to store the TxnId and its basic info
             int bitsPerNodeId = numberOfBitsToRepresent(nodeIdCount);
-            int minHeaderBits = 8 + bitsPerNodeId + (hasNonStandardFlags ? 1 : 0) + (overrideCount > 0 ? 1 : 0);
-            int executeAtHeaderBits = (executeAtCount > 0 ? 1 : 0);
-            int missingIdHeaderBits = (missingIdCount > 0 ? 1 : 0);
-            int ballotHeaderBits = (ballotCount > 0 ? 1 : 0);
+            int minHeaderBits = 9 + bitsPerNodeId + (hasExtendedFlags ? 1 : 0) + (overrideCount > 0 ? 1 : 0);
+            int headerFlags = (executeAtCount > 0 ? 1 : 0)
+                            | (missingIdCount > 0 ? 2 : 0)
+                            | (ballotCount > 0 ? 4 : 0);
+
             int maxHeaderBits = minHeaderBits;
             int totalBytes = 0;
 
@@ -262,16 +264,15 @@ public class Serialize
                     prevHlc = hlc;
                 }
 
-                if (txnIdFlagsBits(txn, hasNonStandardFlags) == RAW_FLAG_BITS)
+                if (txnIdFlagsBits(txn, hasExtendedFlags) == RAW_FLAG_BITS)
                     totalBytes += 2;
 
-                Invariants.checkState(!txn.isDurable() || txn.is(InternalStatus.APPLIED));
                 if (txn.hasExecuteAt())
-                    headerBits += executeAtHeaderBits;
+                    headerBits += headerFlags & 0x1;
                 if (txn.hasDeps())
-                    headerBits += missingIdHeaderBits;
+                    headerBits += (headerFlags >>> 1) & 0x1;
                 if (txn.hasBallot())
-                    headerBits += ballotHeaderBits;
+                    headerBits += (headerFlags >>> 2);
                 maxHeaderBits = Math.max(headerBits, maxHeaderBits);
                 int basicBytes = (headerBits + payloadBits + 7)/8;
                 bytesHistogram[basicBytes]++;
@@ -287,14 +288,18 @@ public class Serialize
             for (int i = minBasicBytes + 1 ; i <= maxBasicBytes ; ++i)
                 bytesHistogram[i] += bytesHistogram[i-1];
 
-            int flags =   (missingIdCount > 0  ? HAS_MISSING_DEPS_HEADER_BIT       : 0)
-                        | (executeAtCount > 0  ? HAS_EXECUTE_AT_HEADER_BIT         : 0)
-                        | (ballotCount > 0     ? HAS_BALLOT_HEADER_BIT             : 0)
-                        | (hasNonStandardFlags ? HAS_NON_STANDARD_FLAGS_HEADER_BIT : 0)
-                        | (overrideCount > 0   ? HAS_STATUS_OVERRIDES_HEAD_BIT     : 0);
+            int globalFlags =   (missingIdCount          > 0  ? HAS_MISSING_DEPS_HEADER_BIT       : 0)
+                              | (executeAtCount          > 0  ? HAS_EXECUTE_AT_HEADER_BIT         : 0)
+                              | (ballotCount             > 0  ? HAS_BALLOT_HEADER_BIT             : 0)
+                              | (hasExtendedFlags             ? HAS_NON_STANDARD_FLAGS_HEADER_BIT : 0)
+                              | (overrideCount           > 0  ? HAS_STATUS_OVERRIDES_HEADER_BIT   : 0)
+                              | (cfk.bootstrappedAt() != null ? HAS_BOOTSTRAPPED_AT_HEADER_BIT    : 0)
+                              | (hasBoundsFlags(cfk)          ? HAS_BOUNDS_FLAGS_HEADER_BIT       : 0)
+                              | (hasMaxHlc(cfk)               ? HAS_MAX_HLC_HEADER_BIT            : 0)
+            ;
 
             int headerBytes = (maxHeaderBits+7)/8;
-            flags |= Invariants.checkArgument(headerBytes - 1, headerBytes <= 4) << 6;
+            globalFlags |= Invariants.checkArgument(headerBytes - 1, headerBytes <= 4) << 14;
 
             int hlcBytesLookup;
             {   // 2bits per size, first value may be zero and remainder may be increments of 1-4;
@@ -312,7 +317,7 @@ public class Serialize
                 while (l3-l2 > 4) ++l2;
                 while (l2-l1 > 4) ++l1;
                 hlcBytesLookup = setHlcBytes(l0, l1, l2, l3);
-                flags |= (l0 | ((l1-(1+l0))<<2) | ((l2-(1+l1))<<4) | ((l3-(1+l2))<<6)) << 8;
+                globalFlags |= (l0 | ((l1-(1+l0))<<2) | ((l2-(1+l1))<<4) | ((l3-(1+l2))<<6)) << 16;
             }
             int hlcFlagLookup = hlcBytesLookupToHlcFlagLookup(hlcBytesLookup);
 
@@ -324,7 +329,7 @@ public class Serialize
             totalBytes += sizeOfUnsignedVInt(nodeIds[0]);
             for (int i = 1 ; i < nodeIdCount ; ++i)
                 totalBytes += sizeOfUnsignedVInt(nodeIds[i] - nodeIds[i - 1]);
-            totalBytes += 2;
+            totalBytes += 3;
 
             cachedInts().forceDiscard(bytesHistogram);
 
@@ -337,20 +342,25 @@ public class Serialize
                     RedundantBefore.Entry boundsInfo = cfk.boundsInfo();
                     long start = boundsInfo.startOwnershipEpoch;
                     long end = boundsInfo.endOwnershipEpoch;
-                    totalBytes += sizeOfUnsignedVInt(start);
-                    totalBytes += sizeOfUnsignedVInt(end == Long.MAX_VALUE ? 0 : (1 + end - start));
-                    totalBytes += sizeOfUnsignedVInt(((prevEpoch == 0 ? 0 : (1 + prevEpoch - start)) << 1) | (bootstrappedAt == null ? 0 : 1));
+                    totalBytes += sizeOfUnsignedVInt(start * 2 + (end == Long.MAX_VALUE ? 0 : 1));
+                    if (end != Long.MAX_VALUE)
+                        totalBytes += sizeOfUnsignedVInt(end - start);
+                    totalBytes += sizeOfUnsignedVInt(prevEpoch - start);
                 }
                 totalBytes += sizeOfUnsignedVInt(prevHlc);
-                totalBytes += sizeOfUnsignedVInt(redundantBefore.flags());
+                if (0 != (globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT))
+                    totalBytes += sizeOfUnsignedVInt(redundantBefore.flags());
                 totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, redundantBefore.node.id));
                 if (bootstrappedAt != null)
                 {
                     totalBytes += sizeOfUnsignedVInt(bootstrappedAt.epoch() - prevEpoch);
                     totalBytes += sizeOfVInt(bootstrappedAt.hlc() - prevHlc);
-                    totalBytes += sizeOfUnsignedVInt(bootstrappedAt.flags());
+                    if (0 != (globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT))
+                        totalBytes += sizeOfUnsignedVInt(bootstrappedAt.flags());
                     totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, bootstrappedAt.node.id));
                 }
+                if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
+                    totalBytes += sizeOfUnsignedVInt(cfk.maxHlc - prevHlc);
             }
             totalBytes += sizeOfUnsignedVInt(prunedBeforeIndex + 1);
 
@@ -418,7 +428,7 @@ public class Serialize
             VIntCoding.writeUnsignedVInt32(nodeIds[0], out);
             for (int i = 1 ; i < nodeIdCount ; ++i) // TODO (desired): can encode more efficiently as a stream of N bit integers
                 VIntCoding.writeUnsignedVInt32(nodeIds[i] - nodeIds[i-1], out);
-            out.putShort((short)flags);
+            writeLeastSignificantBytes(globalFlags, 3, out);
 
             {
                 TxnId redundantBefore = cfk.redundantBefore();
@@ -426,33 +436,34 @@ public class Serialize
                 RedundantBefore.Entry boundsInfo = cfk.boundsInfo();
                 long start = boundsInfo.startOwnershipEpoch;
                 long end = boundsInfo.endOwnershipEpoch;
-                VIntCoding.writeUnsignedVInt(start, out);
-                VIntCoding.writeUnsignedVInt(end == Long.MAX_VALUE ? 0 : (1 + end - start), out);
-                VIntCoding.writeUnsignedVInt(((prevEpoch == 0 ? 0 : (1 + prevEpoch - start)) << 1) | (bootstrappedAt == null ? 0 : 1), out);
+                VIntCoding.writeUnsignedVInt((start << 1) | (end != Long.MAX_VALUE ? 1 : 0), out);
+                if (end != Long.MAX_VALUE)
+                    VIntCoding.writeUnsignedVInt(end - start, out);
+                VIntCoding.writeUnsignedVInt(prevEpoch - start, out);
                 VIntCoding.writeUnsignedVInt(prevHlc, out);
-                VIntCoding.writeUnsignedVInt32(redundantBefore.flags(), out);
+                if (0 != (globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT))
+                    VIntCoding.writeUnsignedVInt32(redundantBefore.flags(), out);
                 VIntCoding.writeUnsignedVInt32(Arrays.binarySearch(nodeIds, 0, nodeIdCount, redundantBefore.node.id), out);
                 if (bootstrappedAt != null)
                 {
                     VIntCoding.writeUnsignedVInt(bootstrappedAt.epoch() - prevEpoch, out);
                     VIntCoding.writeVInt(bootstrappedAt.hlc() - prevHlc, out);
-                    VIntCoding.writeUnsignedVInt(bootstrappedAt.flags(), out);
+                    if (0 != (globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT))
+                        VIntCoding.writeUnsignedVInt(bootstrappedAt.flags(), out);
                     VIntCoding.writeUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, bootstrappedAt.node.id), out);
                 }
+                if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
+                    VIntCoding.writeUnsignedVInt(cfk.maxHlc - prevHlc, out);
             }
             VIntCoding.writeUnsignedVInt32(prunedBeforeIndex + 1, out);
 
-            int flagsPlus = (flags & HEADER_BIT_FLAGS_MASK) + (2 << HAS_NON_STANDARD_FLAGS_HEADER_BIT_SHIFT);
+            int flagsPlus = (globalFlags & COMMAND_HEADER_BIT_FLAGS_MASK) + (2 << HAS_NON_STANDARD_FLAGS_HEADER_BIT_SHIFT);
             // TODO (desired): check this loop compiles correctly to only branch on epoch case, for binarySearch and flushing
             for (int i = 0 ; i < commandCount ; ++i)
             {
                 TxnInfo txn = cfk.get(i);
-                int statusOrdinal = txn.status().ordinal();
-                if (statusOrdinal == APPLIED_INDEX && txn.isDurable())
-                    statusOrdinal = DURABLE_APPLIED_INDEX;
-
-                long bits = statusOrdinal;
-                int bitIndex = 3;
+                long bits = txn.status().ordinal();
+                int bitIndex = 4;
 
                 int statusHasExecuteAt = txn.hasExecuteAt() ? 1 : 0;
                 int statusHasDeps = txn.hasDeps() ? 1 : 0;
@@ -475,7 +486,7 @@ public class Serialize
                 bits |= hasBallot << bitIndex;
                 bitIndex += statusHasBallot & (flagsPlus >>> HAS_BALLOT_HEADER_BIT_SHIFT);
 
-                long flagBits = txnIdFlagsBits(txn, hasNonStandardFlags);
+                long flagBits = txnIdFlagsBits(txn, hasExtendedFlags);
                 boolean writeFullFlags = flagBits == RAW_FLAG_BITS;
                 bits |= flagBits << bitIndex;
                 bitIndex += flagsPlus >>> HAS_NON_STANDARD_FLAGS_HEADER_BIT_SHIFT;
@@ -566,9 +577,9 @@ public class Serialize
                 Invariants.checkState(bitsPerExecuteAtEpoch < 64);
                 Invariants.checkState(bitsPerExecuteAtHlc <= 64);
                 Invariants.checkState(bitsPerExecuteAtFlags <= 16);
-                if (0 != (flags & HAS_EXECUTE_AT_HEADER_BIT)) // we encode both 15 and 16 bits for flag length as 15 to fit in a short
+                if (0 != (globalFlags & HAS_EXECUTE_AT_HEADER_BIT)) // we encode both 15 and 16 bits for flag length as 15 to fit in a short
                     out.putShort((short) ((bitsPerExecuteAtEpoch << 10) | ((bitsPerExecuteAtHlc-1) << 4) | (Math.min(15, bitsPerExecuteAtFlags))));
-                if (0 != (flags & HAS_BALLOT_HEADER_BIT)) // we encode both 15 and 16 bits for flag length as 15 to fit in a short
+                if (0 != (globalFlags & HAS_BALLOT_HEADER_BIT)) // we encode both 15 and 16 bits for flag length as 15 to fit in a short
                     out.putShort((short) ((bitsPerBallotEpoch << 10) | ((bitsPerBallotHlc-1) << 4) | (Math.min(15, bitsPerBallotFlags))));
                 long buffer = 0L;
                 int bufferCount = 0;
@@ -690,7 +701,7 @@ public class Serialize
             return new CommandsForKey(key);
 
         TxnId[] txnIds = cachedTxnIds().get(commandCount);
-        int[] decodeFlags = cachedInts().getInts(commandCount);
+        int[] commandFlags = cachedInts().getInts(commandCount);
         TxnInfo[] txns = new TxnInfo[commandCount];
         int nodeIdCount = VIntCoding.readUnsignedVInt32(in);
         int bitsPerNodeId = numberOfBitsToRepresent(nodeIdCount);
@@ -703,48 +714,46 @@ public class Serialize
                 nodeIds[i] = new Node.Id(prev += VIntCoding.readUnsignedVInt32(in));
         }
 
-        int missingDepsMasks, executeAtMasks, ballotMasks, txnIdFlagsMask, overrideMask;
+        int globalFlags = (int) readLeastSignificantBytes(3, in);
+        int txnIdFlagsMask;
         int headerByteCount, hlcBytesLookup;
         {
-            int flags = in.getShort();
-            missingDepsMasks = 0 != (flags & HAS_MISSING_DEPS_HEADER_BIT) ? 1 : 0;
-            executeAtMasks = 0 != (flags & HAS_EXECUTE_AT_HEADER_BIT) ? 1 : 0;
-            ballotMasks = 0 != (flags & HAS_BALLOT_HEADER_BIT) ? 1 : 0;
-            overrideMask = 0 != (flags & HAS_STATUS_OVERRIDES_HEAD_BIT) ? 1 : 0;
-            txnIdFlagsMask = 0 != (flags & HAS_NON_STANDARD_FLAGS_HEADER_BIT) ? 7 : 3;
-            headerByteCount = 1 + ((flags >>> 6) & 0x3);
-            hlcBytesLookup = setHlcByteDeltas((flags >>> 8) & 0x3, (flags >>> 10) & 0x3, (flags >>> 12) & 0x3, (flags >>> 14) & 0x3);
+            txnIdFlagsMask = 0 != (globalFlags & HAS_NON_STANDARD_FLAGS_HEADER_BIT) ? 7 : 3;
+            headerByteCount = 1 + ((globalFlags >>> 14) & 0x3);
+            hlcBytesLookup = setHlcByteDeltas((globalFlags >>> 16) & 0x3, (globalFlags >>> 18) & 0x3, (globalFlags >>> 20) & 0x3, (globalFlags >>> 22) & 0x3);
         }
 
-        long minEpoch = VIntCoding.readUnsignedVInt(in);
-        long maxEpoch; {
-            long offset = VIntCoding.readUnsignedVInt(in);
-            maxEpoch = offset == 0 ? Long.MAX_VALUE : minEpoch + offset - 1;
-        }
-        RedundantBefore.Entry boundsInfo = NO_BOUNDS_INFO.withEpochs(minEpoch, maxEpoch);
-        long prevEpoch, prevHlc;
+        RedundantBefore.Entry boundsInfo;
+        long prevEpoch, prevHlc, maxHlc;
         {
-            boolean hasBootstrappedAt;
+            long startEpoch, endEpoch;
             {
-                long v = VIntCoding.readUnsignedVInt(in);
-                hasBootstrappedAt = 0 != (v & 1);
-                v >>= 1;
-                prevEpoch = v == 0 ? 0 : minEpoch + (v - 1);
+                startEpoch = VIntCoding.readUnsignedVInt(in);
+                boolean hasEndEpoch = (startEpoch & 1) == 1;
+                startEpoch /= 2;
+                if (hasEndEpoch) endEpoch = startEpoch + VIntCoding.readUnsignedVInt(in);
+                else endEpoch = Long.MAX_VALUE;
             }
+
+            boundsInfo = NO_BOUNDS_INFO.withEpochs(startEpoch, endEpoch);
+            prevEpoch = startEpoch + VIntCoding.readUnsignedVInt(in);
             prevHlc = VIntCoding.readUnsignedVInt(in);
             {
-                int flags = VIntCoding.readUnsignedVInt32(in);
+                int flags = ((globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT) == 0) ? RX_FLAGS : VIntCoding.readUnsignedVInt32(in);
                 Node.Id node = nodeIds[VIntCoding.readUnsignedVInt32(in)];
                 boundsInfo = boundsInfo.withGcBeforeBeforeAtLeast(TxnId.fromValues(prevEpoch, prevHlc, flags, node));
             }
-            if (hasBootstrappedAt)
+            if (0 != (globalFlags & HAS_BOOTSTRAPPED_AT_HEADER_BIT))
             {
                 long epoch = prevEpoch + VIntCoding.readUnsignedVInt(in);
                 long hlc = prevHlc + VIntCoding.readVInt(in);
-                int flags = VIntCoding.readUnsignedVInt32(in);
+                int flags = ((globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT) == 0) ? RX_FLAGS : VIntCoding.readUnsignedVInt32(in);
                 Node.Id node = nodeIds[VIntCoding.readUnsignedVInt32(in)];
                 boundsInfo = boundsInfo.withBootstrappedAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
             }
+            maxHlc = boundsInfo.gcBefore.hlc();
+            if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
+                maxHlc += VIntCoding.readUnsignedVInt(in);
         }
         int prunedBeforeIndex = VIntCoding.readUnsignedVInt32(in) - 1;
 
@@ -752,27 +761,28 @@ public class Serialize
         {
             long header = readLeastSignificantBytes(headerByteCount, in);
             header |= 1L << (8 * headerByteCount); // marker so we know where to shift-left most-significant bytes to
-            int commandDecodeFlags = (int)(header & 0x7);
+            int commandDecodeFlags = (int)(header & 0xF);
             InternalStatus status = DECODE_STATUS[commandDecodeFlags];
-            header >>>= 3;
+            header >>>= 4;
             commandDecodeFlags <<= 6;
 
             {
+                int overrideMask = (globalFlags >>> HAS_STATUS_OVERRIDES_HEADER_BIT_SHIFT) & 0x1;
                 int statusOverrides = (int) (header & overrideMask);
                 header >>>= overrideMask;
                 commandDecodeFlags |= statusOverrides << 3;
 
                 int statusFlags = status.flags ^ statusOverrides;
-                int hasExecuteAt = (statusFlags >>> 1) & executeAtMasks;
-                int hasMissingDeps = statusFlags & missingDepsMasks;
+                int hasExecuteAt = (statusFlags >>> 1) & (globalFlags >>> HAS_EXECUTE_AT_HEADER_BIT_SHIFT);
+                int hasMissingDeps = (statusFlags & 0x1) & (globalFlags >>> HAS_MISSING_DEPS_HEADER_BIT_SHIFT);
                 commandDecodeFlags |= ((int)header & hasExecuteAt) << 1;
                 header >>>= hasExecuteAt;
                 commandDecodeFlags |= ((int)header & hasMissingDeps);
                 header >>>= hasMissingDeps;
-                int ballotMask = status.hasBallot ? ballotMasks : 0;
+                int ballotMask = status.hasBallot ? ((globalFlags >>> HAS_BALLOT_HEADER_BIT_SHIFT) & 0x1) : 0;
                 commandDecodeFlags |= ((int)header & ballotMask) << 2;
                 header >>>= ballotMask;
-                decodeFlags[i] = commandDecodeFlags;
+                commandFlags[i] = commandDecodeFlags;
             }
 
             Txn.Kind kind; Domain domain; {
@@ -855,7 +865,7 @@ public class Serialize
             }
         }
 
-        if ((executeAtMasks | missingDepsMasks | ballotMasks) > 0)
+        if (((globalFlags & HAS_EXECUTE_AT_HEADER_BIT) | (globalFlags & HAS_MISSING_DEPS_HEADER_BIT) | (globalFlags & HAS_BALLOT_HEADER_BIT)) != 0)
         {
             TxnId[] missingIdBuffer = cachedTxnIds().get(8);
             int missingIdCount = 0, maxIdBufferCount = 0;
@@ -863,7 +873,7 @@ public class Serialize
             int txnIdMask = (1 << bitsPerTxnId) - 1;
             int bitsPerMissingId = bitsPerTxnId + 1;
 
-            int decodeExecuteAtBits = executeAtMasks > 0 ? in.getShort() & 0xffff : 0;
+            int decodeExecuteAtBits = (globalFlags & HAS_EXECUTE_AT_HEADER_BIT) != 0 ? in.getShort() & 0xffff : 0;
             int bitsPerExecuteAtEpoch = decodeExecuteAtBits >>> 10;
             int bitsPerExecuteAtHlc = 1 + ((decodeExecuteAtBits >>> 4) & 0x3f);
             int bitsPerExecuteAtFlags = decodeExecuteAtBits & 0xf;
@@ -874,7 +884,7 @@ public class Serialize
             long executeAtHlcMask = (-1L >>> (64 - bitsPerExecuteAtHlc));
             long executeAtFlagsMask = bitsPerExecuteAtFlags == 0 ? 0 : (-1L >>> (64 - bitsPerExecuteAtFlags));
 
-            int decodeBallotBits = ballotMasks > 0 ? in.getShort() & 0xffff : 0;
+            int decodeBallotBits = (globalFlags & HAS_BALLOT_HEADER_BIT) != 0 ? in.getShort() & 0xffff : 0;
             int bitsPerBallotEpoch = decodeBallotBits >>> 10;
             int bitsPerBallotHlc = 1 + ((decodeBallotBits >>> 4) & 0x3f);
             int bitsPerBallotFlags = decodeBallotBits & 0xf;
@@ -890,7 +900,7 @@ public class Serialize
             for (int i = 0 ; i < commandCount ; ++i)
             {
                 TxnId txnId = txnIds[i];
-                int commandDecodeFlags = decodeFlags[i];
+                int commandDecodeFlags = commandFlags[i];
                 Timestamp executeAt = txnId;
                 if ((commandDecodeFlags & HAS_EXECUTE_AT_HEADER_BIT) != 0)
                 {
@@ -982,7 +992,7 @@ public class Serialize
                 int statusIndex = commandDecodeFlags >>> 6;
                 InternalStatus status = DECODE_STATUS[statusIndex];
                 int statusOverrides = (commandDecodeFlags >>> 3) & 0x1;
-                txns[i] = create(boundsInfo, txnId, status, statusIndex == DURABLE_APPLIED_INDEX, statusOverrides, executeAt, missing, ballot);
+                txns[i] = create(boundsInfo, txnId, status, statusOverrides, executeAt, missing, ballot);
             }
 
             cachedTxnIds().forceDiscard(missingIdBuffer, maxIdBufferCount);
@@ -991,23 +1001,23 @@ public class Serialize
         {
             for (int i = 0 ; i < commandCount ; ++i)
             {
-                int commandDecodeFlags = decodeFlags[i];
+                int commandDecodeFlags = commandFlags[i];
                 int statusIndex = commandDecodeFlags >>> 6;
                 InternalStatus status = DECODE_STATUS[statusIndex];
                 int statusOverrides = (commandDecodeFlags >>> 3) & 0x1;
-                txns[i] = create(boundsInfo, txnIds[i], status, statusIndex == DURABLE_APPLIED_INDEX, statusOverrides, txnIds[i], NO_TXNIDS, Ballot.ZERO);
+                txns[i] = create(boundsInfo, txnIds[i], status, statusOverrides, txnIds[i], NO_TXNIDS, Ballot.ZERO);
             }
         }
         cachedTxnIds().forceDiscard(txnIds, commandCount);
 
-        return CommandsForKey.SerializerSupport.create(key, txns, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], boundsInfo);
+        return CommandsForKey.SerializerSupport.create(key, txns, maxHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], boundsInfo);
     }
 
-    private static TxnInfo create(RedundantBefore.Entry boundsInfo, @Nonnull TxnId txnId, InternalStatus status, boolean isDurable, int statusOverrides, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
+    private static TxnInfo create(RedundantBefore.Entry boundsInfo, @Nonnull TxnId txnId, InternalStatus status, int statusOverrides, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
     {
         boolean mayExecute = status.isCommittedToExecute() ? CommandsForKey.executes(boundsInfo, txnId, executeAt)
                                                            : CommandsForKey.mayExecute(boundsInfo, txnId);
-        return TxnInfo.create(txnId, status, isDurable, mayExecute, statusOverrides, executeAt, missing, ballot);
+        return TxnInfo.create(txnId, status, mayExecute, statusOverrides, executeAt, missing, ballot);
     }
 
     private static int getHlcBytes(int lookup, int index)
@@ -1031,6 +1041,22 @@ public class Serialize
     private static int getHlcFlag(int flagsLookup, int bytes)
     {
         return (flagsLookup >>> (bytes * 2)) & 0x3;
+    }
+
+    private static boolean hasBoundsFlags(CommandsForKey cfk)
+    {
+        Timestamp bootstrappedAt = cfk.bootstrappedAt();
+        Timestamp redundantBefore = cfk.redundantBefore();
+        return (bootstrappedAt != null && bootstrappedAt.flags() != RX_FLAGS) || (redundantBefore.flags() != RX_FLAGS);
+    }
+
+    private static final int RX_FLAGS = new TxnId(0, 0, ExclusiveSyncPoint, Domain.Range, Node.Id.NONE).flags();
+
+    private static boolean hasMaxHlc(CommandsForKey cfk)
+    {
+        long maxHlc = cfk.maxHlc;
+        TxnInfo maxWrite = cfk.maxAppliedWrite();
+        return cfk.redundantBefore().hlc() < maxHlc && (maxWrite == null || maxWrite.hlc() < maxHlc);
     }
 
     private static int hlcBytesLookupToHlcFlagLookup(int bytesLookup)
@@ -1060,10 +1086,10 @@ public class Serialize
         return count;
     }
 
-    private static boolean hasNonStandardFlags(TxnId txnId)
+    private static boolean hasExtendedFlags(TxnId txnId)
     {
-        if (txnId.flags() > Timestamp.IDENTITY_FLAGS)
-            return false;
+        if (txnId.flags() > Timestamp.KIND_AND_DOMAIN_FLAGS)
+            return false; // will be encoded raw, so not non-standard
 
         int flagBits = txnIdFlagsBits(txnId, true);
         return flagBits > 3;
@@ -1078,13 +1104,13 @@ public class Serialize
      * 5 => RX (Range Exclusive SyncPoint)
      * 6, 7 => UNUSED
      */
-    private static int txnIdFlagsBits(TxnId txnId, boolean permitNonStandardFlags)
+    private static int txnIdFlagsBits(TxnId txnId, boolean extended)
     {
-        Txn.Kind kind = txnId.kind();
-        Domain domain = txnId.domain();
-        if (!permitNonStandardFlags && domain == Domain.Range)
+        if (txnId.flags() > Timestamp.KIND_AND_DOMAIN_FLAGS)
             return 0;
 
+        Txn.Kind kind = txnId.kind();
+        Domain domain = txnId.domain();
         switch (domain)
         {
             case Key:
@@ -1096,6 +1122,9 @@ public class Serialize
                     default: return 0;
                 }
             case Range:
+                if (!extended)
+                    return 0;
+
                 switch (kind)
                 {
                     case Read: return 4;

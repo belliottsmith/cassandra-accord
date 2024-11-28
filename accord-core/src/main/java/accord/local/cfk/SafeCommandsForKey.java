@@ -58,10 +58,10 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         update(safeStore, nextCommand, prevCfk, prevCfk.update(nextCommand, isOutOfRange));
     }
 
-    public void update(SafeCommandStore safeStore, Command nextCommand)
+    void callback(SafeCommandStore safeStore, Command nextCommand)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.update(nextCommand));
+        update(safeStore, nextCommand, prevCfk, prevCfk.callback(nextCommand));
     }
 
     private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk)

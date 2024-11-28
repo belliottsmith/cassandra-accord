@@ -48,11 +48,11 @@ import accord.utils.RelationMultiMap;
 import accord.utils.SortedArrays;
 import accord.utils.SortedCursor;
 
+import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.KeyHistory.SYNC;
-import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
-import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE;
+import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE_VISIBLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
 import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
@@ -102,11 +102,11 @@ class Updating
         }
     }
 
-    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Command command)
+    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command command)
     {
         Invariants.checkArgument(loadingPrunedFor(cfk.loadingPruned, plainTxnId, null) == null);
         // TODO (expected): do not calculate any deps or additions if we're transitioning from Stable to Applied; wasted effort and might trigger LoadPruned
-        Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, isDurable, mayExecute, command);
+        Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, mayExecute, command);
         if (newInfoObj.getClass() != InfoWithAdditions.class)
             return insertOrUpdate(cfk, insertPos, plainTxnId, curInfo, (TxnInfo)newInfoObj, false, null);
 
@@ -183,14 +183,15 @@ class Updating
         if (curInfo == null && insertPos <= cfk.prunedBeforeById)
             ++newPrunedBeforeById;
 
-        return LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
+        long newMaxHlc = updateMaxHlc(cfk, newInfo);
+        return LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
     }
 
-    static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Command command)
+    static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, InternalStatus newStatus, boolean mayExecute, Command command)
     {
-        Invariants.checkState(newStatus.hasExecuteAtAndDeps);
+        Invariants.checkState(newStatus.hasDeps);
         Timestamp executeAt = command.executeAt();
-        if (executeAt.equals(txnId)) executeAt = txnId;
+        if (!newStatus.hasExecuteAt || executeAt.equals(txnId)) executeAt = txnId;
         Ballot ballot = Ballot.ZERO;
         if (newStatus.hasBallot)
             ballot = command.acceptedOrCommitted();
@@ -199,14 +200,14 @@ class Updating
         SortedCursor<TxnId> deps = command.partialDeps().txnIds(cfk.key());
         deps.find(cfk.redundantBefore());
 
-        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, isDurable, mayExecute, ballot, executeAt, depsKnownBefore, deps);
+        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, mayExecute, ballot, executeAt, depsKnownBefore, deps);
     }
 
     /**
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean isDurable, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, SortedCursor<TxnId> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, SortedCursor<TxnId> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -237,7 +238,7 @@ class Updating
             {
                 // we expect to be missing ourselves
                 // we also permit any transaction we have recorded as COMMITTED or later to be missing, as recovery will not need to consult our information
-                if (txnIdsIndex != updatePos && txnIdsIndex < depsKnownBeforePos && t.status().compareTo(COMMITTED) < 0 && plainTxnId.kind().witnesses(t))
+                if (txnIdsIndex != updatePos && txnIdsIndex < depsKnownBeforePos && t.compareTo(COMMITTED) < 0 && plainTxnId.kind().witnesses(t))
                 {
                     if (missingCount == missing.length)
                         missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount * 2));
@@ -294,7 +295,7 @@ class Updating
             }
         }
 
-        TxnInfo info = TxnInfo.create(plainTxnId, newStatus, isDurable, mayExecute, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount), ballot);
+        TxnInfo info = TxnInfo.create(plainTxnId, newStatus, mayExecute, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount), ballot);
         if (additionCount == 0)
             return info;
 
@@ -369,7 +370,8 @@ class Updating
         if (curInfo == null && pos <= cfk.prunedBeforeById)
             ++newPrunedBeforeById;
 
-        return cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo);
+        long newMaxHlc = updateMaxHlc(cfk, newInfo);
+        return cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo);
     }
 
     /**
@@ -468,7 +470,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j++];
-                newById[count] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 ++missingCount;
             }
             else
@@ -485,7 +487,7 @@ class Updating
                 while (count < targetInsertPos)
                 {
                     TxnId txnId = additions[j++];
-                    newById[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                    newById[count++] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 }
                 newById[targetInsertPos] = newInfo;
                 count = targetInsertPos + 1;
@@ -493,7 +495,7 @@ class Updating
             while (j < additionCount)
             {
                 TxnId txnId = additions[j++];
-                newById[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count++] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
             }
         }
         else if (count == targetInsertPos)
@@ -558,7 +560,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j];
-                newInfos[count] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newInfos[count] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
                 ++j;
                 ++missingCount;
             }
@@ -572,7 +574,7 @@ class Updating
         while (j < additionCount)
         {
             TxnId txnId = additions[j];
-            newInfos[count++] = TxnInfo.create(txnId, TRANSITIVE, false, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+            newInfos[count++] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
             j++;
         }
 
@@ -705,6 +707,26 @@ class Updating
 
             ++pos;
         }
+    }
+
+    private static long updateMaxHlc(CommandsForKey cfk, TxnInfo newInfo)
+    {
+        long maxHlc = cfk.maxHlc;
+        if (newInfo.is(APPLIED) && newInfo.is(Write))
+        {
+            long newHlc = newInfo.executeAt.hlc();
+            if (maxHlc < newHlc)
+            {
+                maxHlc = newHlc;
+            }
+            else
+            {
+                TxnInfo prevApplied = cfk.maxAppliedWrite();
+                if (prevApplied == null || !prevApplied.equals(newInfo))
+                    ++maxHlc;
+            }
+        }
+        return maxHlc;
     }
 
     static void updateUnmanagedAsync(CommandStore commandStore, TxnId txnId, RoutingKey key, NotifySink notifySink)
@@ -978,7 +1000,7 @@ class Updating
                 {
                     int prunedBeforeById = cfk.prunedBeforeById;
                     Invariants.checkState(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
-                    newCfk = new CommandsForKey(cfk.key(), cfk.boundsInfo, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, newLoadingPruned, prunedBeforeById, newUnmanaged);
+                    newCfk = new CommandsForKey(cfk.key(), cfk.boundsInfo, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, cfk.maxHlc, newLoadingPruned, prunedBeforeById, newUnmanaged);
                 }
 
                 CommandsForKeyUpdate result = newCfk;
