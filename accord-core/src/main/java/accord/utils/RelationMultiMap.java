@@ -95,8 +95,7 @@ public class RelationMultiMap
         int[] keyLimits;
         // txnId -> Offset
         V[] keysToValues;
-        int keyCount;
-        int keyOffset;
+        int keyCount, keyOffset, keySize;
         int totalCount;
         boolean hasOrderedKeys = true;
         boolean hasOrderedValues = true;
@@ -109,6 +108,7 @@ public class RelationMultiMap
             this.keys = cachedKeys.get(16);
             this.keyLimits = cachedInts.getInts(keys.length);
             this.keysToValues = cachedValues.get(16);
+            this.keySize = Math.min(keys.length, keyLimits.length);
         }
 
         public boolean isEmpty()
@@ -128,16 +128,23 @@ public class RelationMultiMap
 
             finishKey();
 
-            if (keyCount == keys.length)
+            if (keyCount == keySize)
             {
-                K[] newKeys = cachedKeys.get(keyCount * 2);
-                System.arraycopy(keys, 0, newKeys, 0, keyCount);
-                cachedKeys.forceDiscard(keys, keyCount);
-                keys = newKeys;
-                int[] newKeyLimits = cachedInts.getInts(keyCount * 2);
-                System.arraycopy(keyLimits, 0, newKeyLimits, 0, keyCount);
-                cachedInts.forceDiscard(keyLimits);
-                keyLimits = newKeyLimits;
+                if (keyCount == keys.length)
+                {
+                    K[] newKeys = cachedKeys.get(keyCount * 2);
+                    System.arraycopy(keys, 0, newKeys, 0, keyCount);
+                    cachedKeys.forceDiscard(keys, keyCount);
+                    keys = newKeys;
+                }
+                if (keyCount == keyLimits.length)
+                {
+                    int[] newKeyLimits = cachedInts.getInts(keyCount * 2);
+                    System.arraycopy(keyLimits, 0, newKeyLimits, 0, keyCount);
+                    cachedInts.forceDiscard(keyLimits);
+                    keyLimits = newKeyLimits;
+                }
+                keySize = Math.min(keys.length, keyLimits.length);
             }
             keys[keyCount++] = key;
             hasOrderedValues = true;
@@ -264,8 +271,16 @@ public class RelationMultiMap
         @Override
         public void close()
         {
-            cachedInts.forceDiscard(keyLimits);
-            cachedValues.forceDiscard(keysToValues, totalCount);
+            if (keyLimits != null)
+            {
+                cachedInts.forceDiscard(keyLimits);
+                keyLimits = null;
+            }
+            if (keysToValues != null)
+            {
+                cachedValues.forceDiscard(keysToValues, totalCount);
+                keysToValues = null;
+            }
         }
     }
 
@@ -464,11 +479,22 @@ public class RelationMultiMap
         @Override
         public int find(Comparable<? super T> find)
         {
+            return findInternal(startIndex, endIndex, find);
+        }
+
+        @Override
+        public final int find(int from, int to, Comparable<? super T> find)
+        {
+            return findInternal(startIndex + from, startIndex + to, find);
+        }
+
+        private int findInternal(int from, int to, Comparable<? super T> find)
+        {
             int valueIdx = Arrays.binarySearch(values, 0, values.length, find);
             boolean found = valueIdx >= 0;
             if (!found) valueIdx = -1 -valueIdx;
             // TODO (desired): use interpolation search (or binarySearch)
-            return normalise(found, Arrays.binarySearch(ids, startIndex, endIndex, valueIdx));
+            return normalise(found, Arrays.binarySearch(ids, from, to, valueIdx));
         }
 
         private int normalise(boolean foundValue, int searchResult)

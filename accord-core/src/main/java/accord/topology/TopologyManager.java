@@ -701,10 +701,10 @@ public class TopologyManager
 
     public Topologies withUncompletedEpochs(Unseekables<?> select, @Nullable EpochSupplier min, EpochSupplier max)
     {
-        return withSufficientEpochsAtMost(select,
+        return withSufficientEpochsAtLeast(select,
                                           min == null ? Long.MIN_VALUE : min.epoch(),
                                           max == null ? Long.MAX_VALUE : max.epoch(),
-                                          (prev, cur) -> prev.complete);
+                                          prev -> prev.complete);
     }
 
     private Topologies withSufficientEpochsAtLeast(Unseekables<?> select, long minEpoch, long maxEpoch, Function<EpochState, Ranges> isSufficientFor)

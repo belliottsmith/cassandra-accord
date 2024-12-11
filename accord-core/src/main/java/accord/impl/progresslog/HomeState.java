@@ -152,7 +152,9 @@ abstract class HomeState extends WaitingState
         ProgressToken maxProgressToken = instance.savedProgressToken(txnId).merge(command);
 
         CallbackInvoker<ProgressToken, Outcome> invoker = invokeHomeCallback(instance, txnId, maxProgressToken, HomeState::recoverCallback);
-        instance.debugActive(MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, invoker), invoker);
+        long lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnId.epoch(), command.participants().hasTouched());
+        long highEpoch = safeStore.ranges().earliestLaterEpochThatFullyCovers(command.executeAtIfKnownElseTxnId().epoch(), command.participants().hasTouched());
+        instance.debugActive(MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, lowEpoch, highEpoch, invoker), invoker);
         set(safeStore, instance, ReadyToExecute, Querying);
     }
 

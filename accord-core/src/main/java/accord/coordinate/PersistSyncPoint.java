@@ -40,7 +40,6 @@ public class PersistSyncPoint extends Persist
     @Override
     public void start(Apply.Factory factory, Apply.Kind kind, Topologies all, Writes writes, Result result)
     {
-        factory = Apply.wrapForExclusiveSyncPoint(factory);
         SortedArrays.SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
         if (contact == null)
         {

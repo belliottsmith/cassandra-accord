@@ -27,6 +27,8 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.utils.ReducingRangeMap;
 
+import static accord.utils.SortedArrays.Search.FAST;
+
 public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
 {
     public static final class MinMax extends Known
@@ -73,6 +75,8 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
             return new KnownMap(inclusiveEnds, ends, values);
         }
     }
+
+    public static final KnownMap EMPTY = new KnownMap();
 
     private transient final Known validForAll;
 
@@ -213,7 +217,21 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
     {
         return foldlWithDefaultAndBounds(expect, (known, prev, start, end) -> {
             if (known == null || !required.isSatisfiedBy(known))
-                return prev.without(Ranges.of(start.rangeFactory().newRange(start, end)));
+            {
+                if (end != null)
+                    return prev.without(Ranges.of(start.rangeFactory().newRange(start, end)));
+
+                int i = prev.find(start, FAST);
+                if (i < 0)
+                    return prev.slice(0, -1 - i);
+
+                if (prev.domain() == Routable.Domain.Key)
+                    return prev.slice(0, i + 1);
+
+                Range r = prev.get(i).asRange();
+                Range newR = r.start().equals(start) ? start.asRange() : r.newRange(r.start(), start);
+                return prev.slice(0, i).with((Participants)Ranges.of(newR));
+            }
             return prev;
         }, null, expect, i -> false);
     }

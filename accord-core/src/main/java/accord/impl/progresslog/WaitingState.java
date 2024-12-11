@@ -232,7 +232,7 @@ abstract class WaitingState extends BaseTxnState
     /*
      * Ranges may have moved between command stores locally so extend to a later epoch to invoke those command stores
      */
-    private static EpochSupplier lowEpoch(SafeCommandStore safeStore, TxnId txnId, Command command)
+    static EpochSupplier lowEpoch(SafeCommandStore safeStore, TxnId txnId, Command command)
     {
         EpochSupplier result = txnId;
         StoreParticipants participants = command.participants();
@@ -242,7 +242,7 @@ abstract class WaitingState extends BaseTxnState
         return result;
     }
 
-    private static EpochSupplier highEpoch(SafeCommandStore safeStore, TxnId txnId, BlockedUntil blockedUntil, Command command, Timestamp executeAt)
+    static EpochSupplier highEpoch(SafeCommandStore safeStore, TxnId txnId, BlockedUntil blockedUntil, Command command, Timestamp executeAt)
     {
         long epoch = blockedUntil.fetchEpoch(txnId, executeAt);
         epoch = Math.max(epoch, safeStore.ranges().earliestLaterEpochThatFullyCovers(epoch, command.participants().hasTouched()));

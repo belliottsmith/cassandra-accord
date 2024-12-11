@@ -192,10 +192,10 @@ public interface ProgressLog
     void clear();
 
     /**
-     * We have finished processing all transactions with lower TxnId; ensure their states are cleared;
+     * We have finished locally processing all transactions with lower TxnId; ensure their waiting states are cleared;
      * if an owned transaction is undecided it should be cleaned up and any listeners notified.
      */
-    void clearBefore(TxnId txnId);
+    void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore);
 
     /**
      * Should be thread-safe
@@ -209,7 +209,7 @@ public interface ProgressLog
         @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants participants) {}
         @Override public void invalidIfUncommitted(TxnId txnId) {}
         @Override public void clear(TxnId txnId) {}
-        @Override public void clearBefore(TxnId txnId) {}
+        @Override public void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore) {}
         @Override public void clear() {}
     }
 }

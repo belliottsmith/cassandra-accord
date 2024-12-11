@@ -192,6 +192,12 @@ public class ListRequest implements Request
         }
 
         private void checkOnResult(@Nullable RoutingKey homeKey, TxnId txnId, int attempt, Throwable t) {
+            if (node.epoch() < txnId.epoch())
+            {
+                RoutingKey hk = homeKey;
+                node.withEpoch(txnId.epoch(), (success, fail) -> checkOnResult(hk, txnId, attempt + 1, t));
+                return;
+            }
             if (homeKey == null)
                 homeKey = node.computeRoute(txnId, txn.keys()).homeKey();
             RoutingKey finalHomeKey = homeKey;

@@ -75,6 +75,7 @@ import accord.impl.list.ListUpdate;
 import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.TimeService;
 import accord.messages.MessageType;
 import accord.messages.Reply;
 import accord.primitives.Keys;
@@ -101,6 +102,7 @@ import static accord.impl.PrefixedIntHashKey.range;
 import static accord.impl.PrefixedIntHashKey.ranges;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.utils.Utils.toArray;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public class BurnTestBase
 {
@@ -321,7 +323,6 @@ public class BurnTestBase
             progressDelays = delayGenerator(rnd, 1, 100, 100, 1000);
             timeoutDelays = delayGenerator(rnd, 500, 800, 1000, 10000);
         }
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis);
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
@@ -329,15 +330,16 @@ public class BurnTestBase
             return FrequentLargeRange.builder(forked)
                                      .ratio(1, 5)
                                      .small(50, 5000, TimeUnit.MICROSECONDS)
-                                     .large(1, 10, TimeUnit.MILLISECONDS)
+                                     .large(1, 10, MILLISECONDS)
                                      .build()
                                      .mapAsLong(j -> Math.max(0, queue.nowInMillis() + TimeUnit.NANOSECONDS.toMillis(j)))
                                      .asLongSupplier(forked);
         };
-
+        Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get());
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should enver get a stale event");
-        }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis));
+        }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get()));
         Verifier verifier = createVerifier(keyCount * prefixCount);
         Function<CommandStore, AsyncExecutor> executor = ignore -> globalExecutor;
 
@@ -425,7 +427,7 @@ public class BurnTestBase
                 // the current logic for add keyspace only knows what is there, so a ABA problem exists where keyspaces
                 // may come back... logically this is a problem as the history doesn't get reset, but practically that
                 // is fine as the backing map and the validator are consistent
-                Verifier.Checker check = verifier.witness(start, end);
+                Verifier.Checker check = verifier.witness(reply, start, end);
                 for (int i = 0 ; i < reply.read.length ; ++i)
                 {
                     Key key = reply.responseKeys.get(i);
@@ -457,7 +459,7 @@ public class BurnTestBase
             messageStatsMap = Cluster.run(toArray(nodes, Id[]::new), newPrefixes, listener, () -> queue,
                                           (id, onStale) -> globalExecutor.withAgent(agentSupplier.apply(onStale)),
                                           queue::checkFailures,
-                                          responseSink, random::fork, nowSupplier,
+                                          responseSink, random::fork, timeServiceSupplier,
                                           topologyFactory, initialRequests::poll,
                                           onSubmitted::set,
                                           ignore -> {},

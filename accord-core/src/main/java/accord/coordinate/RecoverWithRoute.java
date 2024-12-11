@@ -61,10 +61,13 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
     final @Nullable Ballot promisedBallot; // if non-null, has already been promised by some shard
     final BiConsumer<Outcome, Throwable> callback;
     final Status witnessedByInvalidation;
+    final long reportLowEpoch, reportHighEpoch;
 
-    private RecoverWithRoute(Node node, Topologies topologies, @Nullable Ballot promisedBallot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, BiConsumer<Outcome, Throwable> callback)
+    private RecoverWithRoute(Node node, Topologies topologies, @Nullable Ballot promisedBallot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
         super(node, txnId, route, IncludeInfo.All, invalidIf);
+        this.reportLowEpoch = reportLowEpoch;
+        this.reportHighEpoch = reportHighEpoch;
         // if witnessedByInvalidation == AcceptedInvalidate then we cannot assume its definition was known, and our comparison with the status is invalid
         Invariants.checkState(witnessedByInvalidation != Status.AcceptedInvalidate);
         // if witnessedByInvalidation == Invalidated we should anyway not be recovering
@@ -75,24 +78,24 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         assert topologies.oldestEpoch() == topologies.currentEpoch() && topologies.currentEpoch() == txnId.epoch();
     }
 
-    public static RecoverWithRoute recover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, BiConsumer<Outcome, Throwable> callback)
+    public static RecoverWithRoute recover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, node.topology().forEpoch(route, txnId.epoch()), txnId, invalidIf, route, witnessedByInvalidation, callback);
+        return recover(node, node.topology().forEpoch(route, txnId.epoch()), txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
     }
 
-    private static RecoverWithRoute recover(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, BiConsumer<Outcome, Throwable> callback)
+    private static RecoverWithRoute recover(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, topologies, null, txnId, invalidIf, route, witnessedByInvalidation, callback);
+        return recover(node, topologies, null, txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
     }
 
-    public static RecoverWithRoute recover(Node node, @Nullable Ballot promisedBallot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, BiConsumer<Outcome, Throwable> callback)
+    public static RecoverWithRoute recover(Node node, @Nullable Ballot promisedBallot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, node.topology().forEpoch(route, txnId.epoch()), promisedBallot, txnId, invalidIf, route, witnessedByInvalidation, callback);
+        return recover(node, node.topology().forEpoch(route, txnId.epoch()), promisedBallot, txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
     }
 
-    private static RecoverWithRoute recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, BiConsumer<Outcome, Throwable> callback)
+    private static RecoverWithRoute recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        RecoverWithRoute recover = new RecoverWithRoute(node, topologies, ballot, txnId, invalidIf, route, witnessedByInvalidation, callback);
+        RecoverWithRoute recover = new RecoverWithRoute(node, topologies, ballot, txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
         recover.start();
         return recover;
     }
@@ -231,7 +234,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         propagate = full;
                     }
 
-                    Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, route, route, null, propagate, (s, f) -> callback.accept(f == null ? propagate.toProgressToken() : null, f));
+                    Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, reportLowEpoch, reportHighEpoch, success.withQuorum, route, route, null, propagate, (s, f) -> callback.accept(f == null ? propagate.toProgressToken() : null, f));
                     break;
                 }
 
@@ -254,12 +257,12 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 if (witnessedByInvalidation != null && witnessedByInvalidation.hasBeen(Status.PreCommitted))
                     throw illegalState("We previously invalidated, finding a status that should be recoverable");
 
-                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, route, route, null, full, (s, f) -> callback.accept(f == null ? INVALIDATED : null, f));
+                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, reportLowEpoch, reportHighEpoch, success.withQuorum, route, route, null, full, (s, f) -> callback.accept(f == null ? INVALIDATED : null, f));
                 break;
 
             case Erased:
                 // we should only be able to hit the Erased case if every participating shard has advanced past this TxnId, so we don't need to recover it
-                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, route, route, null, full, (s, f) -> callback.accept(f == null ? TRUNCATED_DURABLE_OR_INVALIDATED : null, f));
+                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, reportLowEpoch, reportHighEpoch, success.withQuorum, route, route, null, full, (s, f) -> callback.accept(f == null ? TRUNCATED_DURABLE_OR_INVALIDATED : null, f));
                 break;
         }
     }

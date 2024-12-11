@@ -18,8 +18,6 @@
 
 package accord.coordinate;
 
-import javax.annotation.Nullable;
-
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.CheckStatus;

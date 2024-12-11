@@ -24,36 +24,41 @@ import javax.annotation.Nullable;
 import accord.api.Result;
 import accord.local.*;
 import accord.local.Node.Id;
+import accord.local.CommandSummaries.IsDep;
+import accord.local.CommandSummaries.SummaryStatus;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.Known;
 import accord.primitives.LatestDeps;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
+import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
-import static accord.local.SafeCommandStore.TestDep.WITHOUT;
-import static accord.local.SafeCommandStore.TestDep.WITH_OR_INVALIDATED;
-import static accord.local.SafeCommandStore.TestStartedAt.ANY;
-import static accord.local.SafeCommandStore.TestStartedAt.STARTED_AFTER;
-import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
-import static accord.local.SafeCommandStore.TestStatus.IS_PROPOSED;
-import static accord.local.SafeCommandStore.TestStatus.IS_STABLE;
+import static accord.local.CommandSummaries.IsDep.IS_NOT_DEP;
+import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
+import static accord.local.CommandSummaries.ComputeIsDep.EITHER;
+import static accord.local.CommandSummaries.TestStartedAt.ANY;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Retired;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Truncated;
 import static accord.messages.PreAccept.calculateDeps;
 import static accord.primitives.EpochSupplier.constant;
+import static accord.primitives.Known.KnownDeps.DepsUnknown;
+import static accord.primitives.Known.KnownDeps.NoDeps;
 import static accord.primitives.Status.Accepted;
 import static accord.primitives.Status.Phase;
 import static accord.primitives.Status.PreAccepted;
@@ -124,19 +129,26 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         }
 
         Command command = safeCommand.current();
-        PartialDeps coordinatedDeps = command.partialDeps();
-        Deps localDeps = null;
-        if (!command.known().deps.hasCommittedOrDecidedDeps())
-        {
-            // TODO (required): consider owns vs touches - should be touches?
-            localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), txnId, false);
-        }
 
-        LatestDeps deps = LatestDeps.create(participants.owns(), command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, localDeps);
+        LatestDeps deps; {
+            PartialDeps coordinatedDeps = command.partialDeps();
+            Deps localDeps = null;
+            if (!command.known().deps.hasCommittedOrDecidedDeps())
+                localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), txnId, false);
+            if (localDeps != null && coordinatedDeps != null && !participants.touches().equals(coordinatedDeps.covering))
+            {
+                deps = LatestDeps.create(coordinatedDeps.covering, command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, null);
+                deps = LatestDeps.merge(deps, LatestDeps.create(participants.touches(), DepsUnknown, Ballot.ZERO, null, localDeps));
+            }
+            else
+            {
+                Participants<?> knownFor = coordinatedDeps == null ? participants.touches() : coordinatedDeps.covering;
+                deps = LatestDeps.create(knownFor, command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, localDeps);
+            }
+        }
 
         boolean supersedingRejects;
         Deps earlierCommittedWitness, earlierAcceptedNoWitness;
-
         if (command.hasBeen(Accepted))
         {
             supersedingRejects = false;
@@ -144,31 +156,101 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         }
         else
         {
-            // Check for superseding commands that should have witnessed us but have not, and that therefore permit
-            // us to infer that we have not executed.
-            // Note: We cannot simply check if there exists a future command that has not witnessed us,
-            // because we perform "transitive dependency elision" where a later command may exclude an earlier command
-            // as a dependency because it is durably the dependency of some intervening stable command.
-            // This can lead to a non-overlapping quorum problem on recovery, where the command we are recovering is only
-            // committed to a minority, and not witnessed at all on at least one replica; the quorum that is used to
-            // compute the dependencies of the future command contacts the minority that has the command durably before
-            // some intervening command plus the replica that has not witnessed it at all; on recovery however we contact
-            // the opposite quorum that has not committed the command (or has not witnessed it).
-            // To avoid this problem, we find the minimum superseding command that decides this - for which we consider
-            // all proposed transactions that reject (exclude) the command, but only stable transactions that accept
-            // (include) the command. This way, any stable command that has witnessed this command as a dependency must
-            // be reported by one of the quorum we contact, or else the command's own commit record must be encountered
-            // and it does not matter.
             // TODO (expected): modify the mapReduce API to perform this check in a single pass
-            supersedingRejects = supersedingAcceptedOrCommittedStartedAfterRejects(safeStore, txnId, participants)
-                              || supersedingExecutesAfterRejects(safeStore, txnId, participants);
+            class Visitor implements CommandSummaries.AllCommandVisitor, AutoCloseable
+            {
+                Deps.Builder nowait;
+                Deps.Builder wait;
+                boolean supersedingRejects;
 
-            // TODO (expected, testing): introduce some good unit tests for verifying these two functions in a real repair scenario
-            // committed txns with an earlier txnid and have our txnid as a dependency
-            earlierCommittedWitness = stableStartedBeforeAndWitnessedOrInvalidated(safeStore, txnId, participants);
+                @Override
+                public boolean visit(Unseekable keyOrRange, TxnId testTxnId, Timestamp testExecuteAt, SummaryStatus status, @Nullable IsDep dep)
+                {
+                    if (testTxnId.compareTo(txnId) < 0)
+                    {
+                        if (status == INVALIDATED)
+                        {
+                            ensureNoWait().add(keyOrRange, testTxnId);
+                        }
+                        else if (testExecuteAt.compareTo(txnId) > 0)
+                        {
+                            switch (dep)
+                            {
+                                default: throw new AssertionError("Unhandled SummaryDep: " + dep);
+                                case IS_DEP:
+                                    ensureNoWait().add(keyOrRange, testTxnId);
+                                    break;
 
-            // accepted txns with an earlier txnid that don't have our txnid as a dependency
-            earlierAcceptedNoWitness = acceptedOrCommittedNotStableStartedBeforeWithoutWitnessing(safeStore, txnId, participants);
+                                case IS_NOT_DEP:
+                                    /*
+                                     * The idea here is to discover those transactions that have been decided to execute after us
+                                     * and did not witness us as part of their pre-accept or accept round, as this means that we CANNOT have
+                                     * taken the fast path. This is central to safe recovery, as if every transaction that executes later has
+                                     * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
+                                     * has not witnessed us we can safely invalidate it.
+                                     */
+                                    supersedingRejects = true;
+                                    break;
+
+                                case NOT_ELIGIBLE:
+                                    Invariants.checkState(status.compareTo(ACCEPTED) <= 0);
+                                    if (status == ACCEPTED)
+                                        ensureWait().add(keyOrRange, testTxnId);
+                            }
+                        }
+                    }
+                    else if (dep == IS_NOT_DEP)
+                    {
+                        /*
+                         * The idea here is to discover those transactions that were started after us and have been Accepted
+                         * and did not witness us as part of their pre-accept round, as this means that we CANNOT have taken
+                         * the fast path. This is central to safe recovery, as if every transaction that executes later has
+                         * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
+                         * has not witnessed us we can safely invalidate (us).
+                         */
+                        supersedingRejects = true;
+                    }
+
+                    return !supersedingRejects;
+                }
+
+                private Deps.Builder ensureNoWait()
+                {
+                    if (nowait == null)
+                        nowait = new Deps.Builder(true);
+                    return nowait;
+                }
+
+                private Deps.Builder ensureWait()
+                {
+                    if (wait == null)
+                        wait = new Deps.Builder(true);
+                    return wait;
+                }
+
+                @Override
+                public void close()
+                {
+                    if (nowait != null)
+                    {
+                        nowait.close();
+                        nowait = null;
+                    }
+                    if (wait != null)
+                    {
+                        wait.close();
+                        wait = null;
+                    }
+                }
+            }
+
+            try (Visitor visitor = new Visitor())
+            {
+                safeStore.visit(participants.owns(), txnId, txnId.witnessedBy(), ANY, txnId, EITHER, visitor);
+                supersedingRejects = visitor.supersedingRejects;
+                earlierCommittedWitness = visitor.nowait == null ? Deps.NONE : visitor.nowait.build();
+                earlierAcceptedNoWitness = visitor.wait == null ? Deps.NONE : visitor.wait.build();
+            }
         }
 
         Status status = command.status();
@@ -362,61 +444,5 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                    "supersededBy:" + supersededBy +
                    '}';
         }
-    }
-
-    private static Deps acceptedOrCommittedNotStableStartedBeforeWithoutWitnessing(SafeCommandStore safeStore, TxnId startedBefore, StoreParticipants participants)
-    {
-        try (Deps.Builder builder = Deps.builder())
-        {
-            // any transaction that started
-            safeStore.mapReduceFull(participants.owns(), startedBefore, startedBefore.witnessedBy(), STARTED_BEFORE, WITHOUT, IS_PROPOSED,
-                                    (startedBefore0, keyOrRange, txnId, executeAt, prev) -> {
-                        if (executeAt.compareTo(startedBefore0) > 0)
-                            builder.add(keyOrRange, txnId);
-                        return builder;
-                    }, startedBefore, builder);
-            return builder.build();
-        }
-    }
-
-    private static Deps stableStartedBeforeAndWitnessedOrInvalidated(SafeCommandStore safeStore, TxnId startedBefore, StoreParticipants participants)
-    {
-        try (Deps.Builder builder = Deps.builder())
-        {
-            safeStore.mapReduceFull(participants.owns(), startedBefore, startedBefore.witnessedBy(), STARTED_BEFORE, WITH_OR_INVALIDATED, IS_STABLE,
-                                    (p1, keyOrRange, txnId, executeAt, prev) -> builder.add(keyOrRange, txnId), null, (Deps.AbstractBuilder<Deps>)builder);
-            return builder.build();
-        }
-    }
-
-    private static boolean supersedingAcceptedOrCommittedStartedAfterRejects(SafeCommandStore safeStore, TxnId startedAfter, StoreParticipants participants)
-    {
-        /*
-         * The idea here is to discover those transactions that were started after us and have been Accepted
-         * and did not witness us as part of their pre-accept round, as this means that we CANNOT have taken
-         * the fast path. This is central to safe recovery, as if every transaction that executes later has
-         * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
-         * has not witnessed us we can safely invalidate (us).
-         *
-         * TODO (required): consider carefully how _adding_ ranges to a CommandStore affects this
-         */
-        return safeStore.mapReduceFull(participants.owns(), startedAfter, startedAfter.witnessedBy(), STARTED_AFTER, WITHOUT, IS_PROPOSED,
-                                       (p1, keyOrRange, txnId, executeAt, prev) -> true, null, false);
-    }
-
-    private static boolean supersedingExecutesAfterRejects(SafeCommandStore safeStore, TxnId executesAfter, StoreParticipants participants)
-    {
-        /*
-         * The idea here is to discover those transactions that have been decided to execute after us
-         * and did not witness us as part of their pre-accept or accept round, as this means that we CANNOT have
-         * taken the fast path. This is central to safe recovery, as if every transaction that executes later has
-         * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
-         * has not witnessed us we can safely invalidate it.
-         *
-         * TODO (desired): visit in executeAt order, so we can abort a key early
-         * TODO (desured): reduce merge costs
-         */
-        return safeStore.mapReduceFull(participants.owns(), executesAfter, executesAfter.witnessedBy(), ANY, WITHOUT, IS_STABLE,
-                                       (p1, keyOrRange, txnId, executeAt, prev) -> true, null, false);
     }
 }

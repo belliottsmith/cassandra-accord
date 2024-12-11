@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import accord.local.AgentExecutor;
+import accord.utils.Invariants;
 import accord.utils.async.AsyncResults;
 
 public abstract class TaskExecutorService extends AbstractExecutorService implements AgentExecutor
@@ -38,6 +39,7 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
         public Task(Callable<T> fn)
         {
             super(fn);
+            Invariants.checkState(origin != null);
         }
 
         public Pending origin()

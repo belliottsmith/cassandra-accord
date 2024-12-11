@@ -103,6 +103,7 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     @Override
     public final boolean containsAll(Routables<?> keysOrRanges)
     {
+        // TODO (required): this is incorrect for ranges, it's effectively intersectsAll
         return keysOrRanges.size() == Routables.foldl(keysOrRanges, this, (k, p, v, i) -> v + 1, 0, 0, 0);
     }
 

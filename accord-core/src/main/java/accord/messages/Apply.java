@@ -33,7 +33,6 @@ import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
-import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -58,31 +57,6 @@ public class Apply extends TxnRequest<ApplyReply>
     public interface Factory
     {
         Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, Route<?> scope, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute);
-    }
-
-    public static Factory wrapForExclusiveSyncPoint(Factory factory)
-    {
-        return (kind, to, participates, txnId, sendTo, txn, executeAt, deps, writes, result, fullRoute) -> {
-            while (true)
-            {
-                long minEpoch = participates.oldestEpoch();
-                Ranges ranges = participates.computeRangesForNode(to);
-                // TODO (desired): simply compute the min TxnId covered by the ranges
-                Deps slicedDeps = deps.intersecting(ranges);
-                long newMinEpoch = slicedDeps.minTxnId(txnId).epoch();
-                if (minEpoch >= newMinEpoch)
-                    break;
-
-                participates = participates.forEpochs(newMinEpoch, participates.currentEpoch());
-                if (!participates.nodes().contains(to))
-                    return null;
-
-                if (newMinEpoch == participates.currentEpoch())
-                    break;
-            }
-
-            return factory.create(kind, to, participates, txnId, sendTo, txn, executeAt, deps, writes, result, fullRoute);
-        };
     }
 
     public final Kind kind;
@@ -170,7 +144,7 @@ public class Apply extends TxnRequest<ApplyReply>
     public ApplyReply apply(SafeCommandStore safeStore)
     {
         Route<?> route = fullRoute != null ? fullRoute : scope;
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, executeAt.epoch());
+        StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, executeAt.epoch());
         return apply(safeStore, participants);
     }
 

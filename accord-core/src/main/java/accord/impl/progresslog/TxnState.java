@@ -133,10 +133,13 @@ final class TxnState extends HomeState
         }
     }
 
-    void maybeRemove(DefaultProgressLog instance)
+    boolean maybeRemove(DefaultProgressLog instance)
     {
-        if (isWaitingDone() && isHomeDoneOrUninitialised())
-            instance.remove(txnId);
+        if (!(isWaitingDone() && isHomeDoneOrUninitialised()))
+            return false;
+
+        instance.remove(txnId);
+        return true;
     }
 
     HomeState home()

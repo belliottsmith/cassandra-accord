@@ -168,6 +168,12 @@ public class BurnTestConfigurationService extends AbstractConfigurationService.M
     }
 
     @Override
+    protected void localBootstrapsComplete(Topology topology)
+    {
+        topologyUpdates.bootstrapComplete(lookup.apply(localId), topology.epoch());
+    }
+
+    @Override
     protected void topologyUpdatePostListenerNotify(Topology topology)
     {
         FetchTopology fetch = pendingEpochs.remove(topology.epoch());

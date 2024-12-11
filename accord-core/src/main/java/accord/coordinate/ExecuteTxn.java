@@ -106,8 +106,15 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     @Override
     public void contact(Id to)
     {
-        if (SEND_MINIMUM_STABLE_MESSAGES && path != RECOVER) Commit.stableAndRead(to, node, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, stableDeps, this, false);
-        else node.send(to, new ReadTxnData(to, topologies(), txnId, readScope, executeAt.epoch()), this);
+        if (SEND_MINIMUM_STABLE_MESSAGES && path != RECOVER)
+        {
+            // we are always sending to a replica in the latest epoch and requesting a read, so onlyContactOldAndReadSet is a redundant parameter
+            Commit.stableAndRead(to, node, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, stableDeps, this, false);
+        }
+        else
+        {
+            node.send(to, new ReadTxnData(to, topologies(), txnId, readScope, executeAt.epoch()), this);
+        }
     }
 
     @Override

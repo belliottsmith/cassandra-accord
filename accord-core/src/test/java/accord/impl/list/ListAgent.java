@@ -27,7 +27,6 @@ import java.util.function.LongSupplier;
 import accord.api.Agent;
 import accord.api.ProgressLog;
 import accord.api.Result;
-import accord.coordinate.EpochTimeout;
 import accord.coordinate.ExecuteSyncPoint;
 import accord.coordinate.Timeout;
 import accord.impl.basic.Packet;
@@ -35,6 +34,7 @@ import accord.impl.mock.Network;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.local.TimeService;
 import accord.messages.ReplyContext;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
@@ -60,9 +60,10 @@ public class ListAgent implements Agent
     final IntSupplier coordinationDelays;
     final IntSupplier progressDelays;
     final IntSupplier timeoutDelays;
-    final LongSupplier nowExact;
+    final LongSupplier queueTimeMillis;
+    final TimeService time;
 
-    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier nowExact)
+    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time)
     {
         this.rnd = rnd;
         this.timeout = timeout;
@@ -72,7 +73,8 @@ public class ListAgent implements Agent
         this.coordinationDelays = coordinationDelays;
         this.progressDelays = progressDelays;
         this.timeoutDelays = timeoutDelays;
-        this.nowExact = nowExact;
+        this.queueTimeMillis = queueTimeMillis;
+        this.time = time;
     }
 
     @Override
@@ -181,10 +183,9 @@ public class ListAgent implements Agent
     public long expiresAt(ReplyContext replyContext, TimeUnit unit)
     {
         long expiresAt = ((Packet)replyContext).expiresAt;
-        long now = nowExact.getAsLong();
-        expiresAt -= now;
+        expiresAt -= queueTimeMillis.getAsLong();
         expiresAt *= 1.8f - rnd.nextFloat();
-        expiresAt += now;
+        expiresAt += time.elapsed(MILLISECONDS);
         return unit.convert(expiresAt, MILLISECONDS);
     }
 

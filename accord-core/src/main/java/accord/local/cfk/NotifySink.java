@@ -22,7 +22,6 @@ import accord.api.ProgressLog.BlockedUntil;
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Commands;
-import accord.local.CommonAttributes;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -35,6 +34,7 @@ import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
 import static accord.local.KeyHistory.SYNC;
+import static accord.primitives.Status.Truncated;
 
 interface NotifySink
 {
@@ -83,12 +83,11 @@ interface NotifySink
             safeCommand.initialise();
             Command command = safeCommand.current();
             StoreParticipants participants = command.participants();
-            if (!participants.touches(key))
+            if (!participants.hasTouched(key))
             {
                 Invariants.checkState(txnId.is(Routable.Domain.Key));
                 // make sure we will notify the CommandsForKey that's waiting
-                CommonAttributes.Mutable attrs = command.mutable().updateParticipants(participants.supplement(RoutingKeys.of(key)));
-                safeCommand.update(safeStore, command.updateAttributes(attrs));
+                safeCommand.updateParticipants(safeStore, command.participants().supplementHasTouched(RoutingKeys.of(key)));
             }
             if (command.saveStatus().compareTo(waitingOnStatus) >= 0)
             {
@@ -98,7 +97,7 @@ interface NotifySink
                 //    This should be revisited at the same time as we resolve epoch changes with Recovery, as we expect
                 //    to have earlier epochs continue to maintain recovery state until the new epoch is fully ready
                 //    as this simplifies recovery and makes it more deterministic (avoiding epoch chasing).
-                Invariants.checkState(command.saveStatus() == SaveStatus.Invalidated || command.participants().touches(key));
+                Invariants.checkState(command.saveStatus().hasBeen(Truncated) || command.participants().touches(key));
                 // if we're committed but not invalidated, that means EITHER we have raced with a commit+
                 // OR we adopted as a dependency a <...?>
                 if (notifyCfk)

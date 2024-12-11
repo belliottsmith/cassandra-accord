@@ -31,6 +31,7 @@ import accord.local.KeyHistory;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.RangeDeps;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.messages.TxnRequest.WithUnsynced;
@@ -48,6 +49,7 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
+import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
@@ -251,33 +253,31 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, StoreParticipants participants, EpochSupplier minEpoch, Timestamp executeAt, boolean nullIfRedundant)
     {
         // TODO (expected): do not build covering ranges; no longer especially valuable given use of FullRoute
-        // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute after it.
-        //       This is necessary for reporting to a bootstrapping replica which TxnId it must not prune from dependencies
-        //       i.e. the source replica reports to the target replica those TxnId that STARTED_BEFORE and EXECUTES_AFTER.
+        // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
 
-        try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder();
-             Deps.AbstractBuilder<Deps> redundantBuilder = new Deps.Builder())
+        try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder(true);
+             RangeDeps.BuilderByRange redundantBuilder = RangeDeps.builderByRange())
         {
-            Deps redundant = safeStore.redundantBefore().collectDeps(participants.touches(), redundantBuilder, minEpoch, executeAt).build();
-            if (nullIfRedundant && !txnId.awaitsOnlyDeps())
+            RangeDeps redundant = safeStore.redundantBefore().collectDeps(participants.touches(), redundantBuilder, minEpoch, executeAt).build();
+            if (nullIfRedundant && !txnId.is(EphemeralRead))
             {
-                TxnId maxRedundantBefore = redundant.maxTxnId(txnId);
-                if (maxRedundantBefore.compareTo(executeAt) > 0)
+                TxnId maxRedundantBefore = redundant.maxTxnId(null);
+                if (maxRedundantBefore != null && maxRedundantBefore.compareTo(executeAt) >= 0)
                 {
                     Invariants.checkState(maxRedundantBefore.is(ExclusiveSyncPoint));
                     return null;
                 }
             }
 
-            safeStore.mapReduceActive(participants.touches(), executeAt, txnId.witnesses(),
-                                      (p1, keyOrRange, testTxnId, testExecuteAt, in) -> {
-                                          if (p1 == null || !testTxnId.equals(p1))
-                                              in.add(keyOrRange, testTxnId);
-                                          return in;
-                                      }, executeAt.equals(txnId) ? null : txnId, builder);
+            safeStore.visit(participants.touches(), executeAt, txnId.witnesses(),
+                            (p1, in, keyOrRange, testTxnId) -> {
+                                if (p1 == null || !testTxnId.equals(p1))
+                                    in.add(keyOrRange, testTxnId);
+                                }, executeAt.equals(txnId) ? null : txnId, builder);
 
             // TODO (required): make sure any sync point is in the past
-            Deps result = builder.build().with(redundant);
+            Deps result = builder.build();
+            result = new Deps(result.keyDeps, result.rangeDeps.with(redundant), result.directKeyDeps);
             Invariants.checkState(!result.contains(txnId));
             return result;
         }

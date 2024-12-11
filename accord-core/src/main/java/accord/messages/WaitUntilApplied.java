@@ -18,8 +18,6 @@
 
 package accord.messages;
 
-import java.util.function.ToLongFunction;
-
 import accord.api.Data;
 import accord.local.Command;
 import accord.local.Node;
@@ -30,7 +28,7 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
 import static accord.primitives.SaveStatus.Applied;
-import static accord.primitives.SaveStatus.TruncatedApply;
+import static accord.primitives.SaveStatus.ErasedOrVestigial;
 
 /**
  * Wait until the transaction has been applied locally
@@ -45,7 +43,7 @@ public class WaitUntilApplied extends ReadData
         }
     }
 
-    private static final ExecuteOn EXECUTE_ON = new ExecuteOn(Applied, TruncatedApply);
+    private static final ExecuteOn EXECUTE_ON = new ExecuteOn(Applied, ErasedOrVestigial);
     private final long minEpoch;
     private long retryInLaterEpoch;
 

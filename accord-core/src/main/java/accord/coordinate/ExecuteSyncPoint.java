@@ -177,7 +177,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
             for (Node.Id to : contact)
             {
                 WaitUntilApplied request = new WaitUntilApplied(to, tracker.topologies(), syncPoint.syncId, syncPoint.route, syncPoint.syncId.epoch());
-                node.send(to, request);
+                node.send(to, request, this);
             }
         }
 
@@ -195,12 +195,14 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         {
             if (retryInFutureEpoch > tracker.topologies().currentEpoch())
             {
-                ExecuteExclusive continuation = new ExecuteExclusive(node, syncPoint, trackerSupplier, trackerSupplier.apply(node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch)));
-                continuation.addCallback((success, failure) -> {
-                    if (failure == null) trySuccess(success);
-                    else tryFailure(failure);
+                node.withEpoch(retryInFutureEpoch, (ignore, failure) -> tryFailure(WrappableException.wrap(failure)), () -> {
+                    ExecuteExclusive continuation = new ExecuteExclusive(node, syncPoint, trackerSupplier, trackerSupplier.apply(node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch)));
+                    continuation.addCallback((success, failure) -> {
+                        if (failure == null) trySuccess(success);
+                        else tryFailure(failure);
+                    });
+                    continuation.start();
                 });
-                continuation.start();
             }
             else
             {
@@ -269,7 +271,6 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         }
         else
         {
-            // TODO (required, consider): do we need to handle ranges not being safe to read
             if (tracker.recordSuccess(from) == RequestStatus.Success)
                 onSuccess();
         }
@@ -282,7 +283,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
 
     protected void sendApply(Node.Id to)
     {
-        CoordinateSyncPoint.sendApply(node, to, syncPoint);
+        CoordinateSyncPoint.sendApply(node, to, syncPoint, tracker.topologies());
     }
 
     @Override

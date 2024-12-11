@@ -305,7 +305,7 @@ abstract class PostProcess
                         {
                             TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
                             unmanageds = removeUnmanaged(unmanageds, start, end);
-                            end -= (end - start);
+                            end = start;
                             notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
                         }
                         start = ++end;

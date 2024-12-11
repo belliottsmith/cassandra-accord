@@ -50,7 +50,6 @@ import accord.utils.async.AsyncResults;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.Invalidate.proposeAndCommitInvalidate;
 import static accord.messages.Apply.Kind.Maximal;
-import static accord.messages.Apply.executes;
 import static accord.messages.Apply.participates;
 import static accord.primitives.Timestamp.mergeMax;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
@@ -189,11 +188,6 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates)
     {
         sendApply(node, to, syncPoint, participates, null);
-    }
-
-    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, @Nullable Callback<Apply.ApplyReply> callback)
-    {
-        sendApply(node, to, syncPoint, participates(node, syncPoint.route, syncPoint.syncId, syncPoint.executeAt), callback);
     }
 
     public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates, @Nullable Callback<Apply.ApplyReply> callback)

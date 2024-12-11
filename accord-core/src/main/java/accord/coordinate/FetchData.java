@@ -22,7 +22,6 @@ import javax.annotation.Nullable;
 
 import accord.coordinate.Infer.InvalidIf;
 import accord.local.Node;
-import accord.messages.Commit;
 import accord.primitives.Status;
 import accord.primitives.Known;
 import accord.messages.CheckStatus;

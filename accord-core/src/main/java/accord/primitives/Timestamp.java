@@ -136,6 +136,12 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return flags(lsb);
     }
 
+    // if caller masks no need to mask before returning
+    final int flagsUnmasked()
+    {
+        return (int)lsb;
+    }
+
     public boolean isRejected()
     {
         return (lsb & REJECTED_FLAG) != 0;

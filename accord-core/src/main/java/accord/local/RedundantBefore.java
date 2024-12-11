@@ -24,6 +24,7 @@ import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -55,11 +56,11 @@ import static accord.local.RedundantStatus.LIVE;
 import static accord.local.RedundantStatus.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.NOT_OWNED;
 import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE;
-import static accord.local.RedundantStatus.GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.SHARD_REDUNDANT;
 import static accord.local.RedundantStatus.SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.WAS_OWNED;
 import static accord.local.RedundantStatus.WAS_OWNED_CLOSED;
+import static accord.local.RedundantStatus.WAS_OWNED_PARTIALLY_RETIRED;
 import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
@@ -79,7 +80,18 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         }
     }
 
-    public enum PreBootstrapOrStale { NOT_OWNED, FULLY, PARTIALLY, POST_BOOTSTRAP }
+    public enum PreBootstrapOrStale
+    {
+        NOT_OWNED,
+        FULLY,
+        PARTIALLY,
+        POST_BOOTSTRAP;
+
+        public boolean isAny()
+        {
+            return this == PARTIALLY || this == FULLY;
+        }
+    }
 
     // TODO (required): rationalise the various bounds we maintain; make merge idempotent and apply any filtering by superseding bounds on access
     public static class Entry
@@ -173,7 +185,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             this.bootstrappedAt = bootstrappedAt;
             this.staleUntilAtLeast = staleUntilAtLeast;
             checkNoneOrRX(locallyWitnessedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore,
-                          shardAppliedOrInvalidatedBefore, gcBefore);checkPartiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
+                          shardAppliedOrInvalidatedBefore, gcBefore);
+            checkPartiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
             checkPartiallyOrdered(shardAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
             checkPartiallyOrdered(gcBefore, shardAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore);
         }
@@ -267,6 +280,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return new Entry(range, start, end, locallyWitnessedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore, shardAppliedOrInvalidatedBefore, gcBefore, bootstrappedAt, staleUntilAtLeast);
         }
 
+        static @Nonnull Boolean isShardOnlyRedundant(Entry entry, @Nonnull Boolean prev, TxnId txnId)
+        {
+            return entry == null ? prev : entry.shardOnlyAppliedOrInvalidatedBefore.compareTo(txnId) >= 0;
+        }
+
         static @Nonnull RedundantStatus getAndMerge(Entry entry, @Nonnull RedundantStatus prev, TxnId txnId, Object ignore)
         {
             if (entry == null)
@@ -291,7 +309,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
             long epoch = txnId.epoch();
             if (entry.startOwnershipEpoch > epoch || entry.endOwnershipEpoch <= epoch)
-                return false;
+                return prev;
 
             return predicate.test(entry.getIgnoringOwnership(txnId), test);
         }
@@ -307,6 +325,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         static @Nonnull Boolean isAnyOnAnyEpoch(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus status)
         {
             return isAnyOnAnyEpoch(entry, prev, txnId, status, (a, b) -> a == b);
+        }
+
+        static @Nonnull Boolean isAnyOnAnyEpoch(Entry entry, @Nonnull Boolean prev, TxnId txnId, Predicate<RedundantStatus> testStatus)
+        {
+            if (entry == null || prev)
+                return prev;
+
+            return testStatus.test(entry.get(txnId));
         }
 
         static @Nonnull Boolean isAnyOnAnyEpochAtLeast(Entry entry, @Nonnull Boolean prev, TxnId txnId, RedundantStatus status)
@@ -328,7 +354,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 return prev;
 
             // TODO (required): consider all call-sites and confirm the answers when wasOwned and willBeOwned are reasonable
-            if (entry.wasOwned(txnId) && entry.isRetired())
+            if (entry.wasOwned(txnId) && entry.isLocallyRetired())
                 return prev;
 
             boolean isPreBootstrapOrStale = entry.staleUntilAtLeast != null || entry.bootstrappedAt.compareTo(txnId) > 0;
@@ -336,7 +362,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                                          : prev == FULLY          ? PARTIALLY : POST_BOOTSTRAP;
         }
 
-        static <T extends Deps> Deps.AbstractBuilder<T> collectDep(Entry entry, @Nonnull Deps.AbstractBuilder<T> prev, @Nonnull EpochSupplier minEpoch, @Nonnull EpochSupplier executeAt)
+        static RangeDeps.BuilderByRange collectDep(Entry entry, @Nonnull RangeDeps.BuilderByRange prev, @Nonnull EpochSupplier minEpoch, @Nonnull EpochSupplier executeAt)
         {
             if (entry == null)
                 return prev;
@@ -378,58 +404,98 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return TxnId.nonNullOrMax(max, get.apply(entry));
         }
 
-        static Participants<?> expectToExecuteParticipants(Entry entry, @Nonnull Participants<?> execute, TxnId txnId, @Nullable Timestamp executeAt)
+        static Participants<?> participantsWithoutStaleOrPreBootstrap(Entry entry, @Nonnull Participants<?> execute, TxnId txnId, @Nullable EpochSupplier executeAt)
         {
-            return expectToExecute(entry, execute, txnId, executeAt, Participants::without);
+            return withoutStaleOrPreBootstrap(entry, execute, txnId, executeAt, Participants::without);
         }
 
-        static Ranges expectToExecuteRanges(Entry entry, @Nonnull Ranges execute, TxnId txnId, @Nullable Timestamp executeAt)
+        static Ranges rangesWithoutStaleOrPreBootstrap(Entry entry, @Nonnull Ranges execute, TxnId txnId, @Nullable EpochSupplier executeAt)
         {
-            return expectToExecute(entry, execute, txnId, executeAt, Ranges::without);
+            return withoutStaleOrPreBootstrap(entry, execute, txnId, executeAt, Ranges::without);
         }
 
-        static <P extends Participants<?>> P expectToExecute(Entry entry, @Nonnull P execute, TxnId txnId, @Nullable Timestamp executeAt, BiFunction<P, Ranges, P> without)
+        static <P extends Participants<?>> P withoutStaleOrPreBootstrap(Entry entry, @Nonnull P execute, TxnId txnId, @Nullable EpochSupplier executeAt, BiFunction<P, Ranges, P> without)
         {
-            if (entry == null || (executeAt == null ? entry.outOfBounds(txnId) : entry.outOfBounds(txnId, executeAt)))
+            if (entry == null)
                 return execute;
 
+            Invariants.checkState(executeAt == null ? !entry.outOfBounds(txnId) : !entry.outOfBounds(txnId, executeAt));
             if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
                 return without.apply(execute, Ranges.of(entry.range));
 
             return execute;
         }
 
-        static Participants<?> expectToExecuteRX(Entry entry, @Nonnull Participants<?> execute, TxnId txnId)
+        static Participants<?> withoutStaleOrPreBootstrapOrLocallyRetired(Entry entry, @Nonnull Participants<?> execute, TxnId txnId)
         {
             if (entry == null)
                 return execute;
 
-            if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
+            if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null || entry.isLocallyRetired())
                 return execute.without(Ranges.of(entry.range));
 
             return execute;
         }
 
-        static Ranges removeGcBefore(Entry entry, @Nonnull Ranges notRedundant, TxnId txnId, @Nullable Timestamp executeAt)
+        static Participants<?> withoutRedundantAnd_StaleOrPreBootstrap(Entry entry, @Nonnull Participants<?> execute, TxnId txnId, @Nullable EpochSupplier executeAt)
+        {
+            if (entry == null)
+                return execute;
+
+            Invariants.checkState(executeAt == null ? !entry.outOfBounds(txnId) : !entry.outOfBounds(txnId, executeAt));
+            if (txnId.compareTo(entry.shardOnlyAppliedOrInvalidatedBefore) < 0
+                && (txnId.compareTo(entry.bootstrappedAt) < 0
+                    || entry.staleUntilAtLeast != null))
+                return execute.without(Ranges.of(entry.range));
+
+            return execute;
+        }
+
+        static Participants<?> withoutRedundantAnd_StaleOrPreBootstrapOrRetired(Entry entry, @Nonnull Participants<?> execute, TxnId txnId)
+        {
+            if (entry == null)
+                return execute;
+
+            if (txnId.compareTo(entry.shardOnlyAppliedOrInvalidatedBefore) < 0
+                && (entry.endOwnershipEpoch <= txnId.epoch()
+                    || txnId.compareTo(entry.bootstrappedAt) < 0
+                    || entry.staleUntilAtLeast != null))
+                return execute.without(Ranges.of(entry.range));
+
+            return execute;
+        }
+
+        static Ranges withoutGarbage(Entry entry, @Nonnull Ranges notGarbage, TxnId txnId, @Nullable Timestamp executeAt)
         {
             if (entry == null || (executeAt == null ? entry.outOfBounds(txnId) : entry.outOfBounds(txnId, executeAt)))
-                return notRedundant;
+                return notGarbage;
 
             if (txnId.compareTo(entry.gcBefore) < 0)
-                return notRedundant.without(Ranges.of(entry.range));
+                return notGarbage.without(Ranges.of(entry.range));
 
-            return notRedundant;
+            return notGarbage;
         }
 
-        static Ranges removeRetired(Entry entry, @Nonnull Ranges notRedundant)
+        static Participants<?> withoutRetired(Entry entry, @Nonnull Participants<?> notRetired, TxnId txnId)
+        {
+            if (entry == null)
+                return notRetired;
+
+            if (txnId.compareTo(entry.shardOnlyAppliedOrInvalidatedBefore) < 0 && entry.endOwnershipEpoch <= txnId.epoch())
+                return notRetired.without(Ranges.of(entry.range));
+
+            return notRetired;
+        }
+
+        static Ranges withoutAnyRetired(Entry entry, @Nonnull Ranges notRetired)
         {
             if (entry == null || entry.endOwnershipEpoch > entry.shardAppliedOrInvalidatedBefore.epoch())
-                return notRedundant;
+                return notRetired;
 
-            return notRedundant.without(Ranges.of(entry.range));
+            return notRetired.without(Ranges.of(entry.range));
         }
 
-        static Ranges removePreBootstrap(Entry entry, @Nonnull Ranges notPreBootstrap, TxnId txnId, Object ignore)
+        static Ranges withoutPreBootstrap(Entry entry, @Nonnull Ranges notPreBootstrap, TxnId txnId, Object ignore)
         {
             if (entry == null)
                 return notPreBootstrap;
@@ -443,7 +509,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         RedundantStatus get(TxnId txnId)
         {
             if (wasOwned(txnId))
-                return isRetired() ? WAS_OWNED_RETIRED : isClosed() ? WAS_OWNED_CLOSED : WAS_OWNED;
+                return isShardRetired() ? WAS_OWNED_RETIRED :
+                       isLocallyRetired() ? WAS_OWNED_PARTIALLY_RETIRED :
+                       isClosed() ? WAS_OWNED_CLOSED : WAS_OWNED;
             return getIgnoringOwnership(txnId);
         }
 
@@ -452,14 +520,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             // we have to first check bootstrappedAt, since we are not locally redundant for the covered range
             // if the txnId is partially pre-bootstrap (since we may not have applied it for this range)
             if (staleUntilAtLeast != null || bootstrappedAt.compareTo(txnId) > 0)
-                return shardAppliedOrInvalidatedBefore.compareTo(txnId) > 0
+                return shardOnlyAppliedOrInvalidatedBefore.compareTo(txnId) > 0
                        ? SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE : PRE_BOOTSTRAP_OR_STALE;
 
             if (locallyAppliedOrInvalidatedBefore.compareTo(txnId) > 0)
             {
                 if (gcBefore.compareTo(txnId) > 0)
                     return GC_BEFORE;
-                if (shardAppliedOrInvalidatedBefore.compareTo(txnId) > 0)
+                if (shardOnlyAppliedOrInvalidatedBefore.compareTo(txnId) > 0)
                     return SHARD_REDUNDANT;
                 return LOCALLY_REDUNDANT;
             }
@@ -514,10 +582,16 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         }
 
         // TODO (required): do we still need this, or can we stick to just the explicit endOwnershipEpoch
-        private boolean isRetired()
+        private boolean isShardRetired()
         {
             // TODO (required): carefully consider whether we should ALSO expect some local property to be met here
             return endOwnershipEpoch <= shardAppliedOrInvalidatedBefore.epoch();
+        }
+
+        private boolean isLocallyRetired()
+        {
+            // TODO (required): carefully consider whether we should ALSO expect some local property to be met here
+            return endOwnershipEpoch <= locallyAppliedOrInvalidatedBefore.epoch();
         }
 
         private boolean isClosed()
@@ -577,20 +651,24 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     public static RedundantBefore EMPTY = new RedundantBefore();
 
     private final Ranges staleRanges;
-    private final Timestamp maxBootstrap, maxGcBefore;
+    private final TxnId maxBootstrap, maxGcBefore, minShardRedundantBefore;
+    private final long maxRetiredEpoch;
 
     private RedundantBefore()
     {
         staleRanges = Ranges.EMPTY;
-        maxBootstrap = Timestamp.NONE;
-        maxGcBefore = Timestamp.NONE;
+        maxBootstrap = TxnId.NONE;
+        maxGcBefore = TxnId.NONE;
+        minShardRedundantBefore = TxnId.MAX;
+        maxRetiredEpoch = 0;
     }
 
     RedundantBefore(boolean inclusiveEnds, RoutingKey[] starts, Entry[] values)
     {
         super(inclusiveEnds, starts, values);
         staleRanges = extractStaleRanges(values);
-        Timestamp maxBootstrap = Timestamp.NONE, maxGcBefore = Timestamp.NONE;
+        TxnId maxBootstrap = TxnId.NONE, maxGcBefore = TxnId.NONE, minShardRedundantBefore = TxnId.MAX;
+        long maxRetiredEpoch = 0;
         for (Entry entry : values)
         {
             if (entry == null) continue;
@@ -598,9 +676,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 maxBootstrap = entry.bootstrappedAt;
             if (entry.gcBefore.compareTo(maxGcBefore) > 0)
                 maxGcBefore = entry.gcBefore;
+            if (entry.shardRedundantBefore().compareTo(minShardRedundantBefore) < 0)
+                minShardRedundantBefore = entry.shardRedundantBefore();
+            if (entry.isLocallyRetired() && entry.endOwnershipEpoch >= maxRetiredEpoch)
+                maxRetiredEpoch = entry.endOwnershipEpoch;
         }
         this.maxBootstrap = maxBootstrap;
         this.maxGcBefore = maxGcBefore;
+        this.minShardRedundantBefore = minShardRedundantBefore;
+        this.maxRetiredEpoch = maxRetiredEpoch;
         checkParanoid(starts, values);
     }
 
@@ -699,6 +783,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         return foldl(participants, Entry::isAnyOnCoordinationEpoch, false, txnId, status, isDone -> isDone);
     }
 
+    public boolean isShardOnlyRedundant(TxnId txnId, Unseekables<?> participants)
+    {
+        return foldl(participants, Entry::isShardOnlyRedundant, false, txnId, ignore -> false);
+    }
+
     public boolean isAnyOnCoordinationEpochAtLeast(TxnId txnId, Unseekables<?> participants, RedundantStatus status)
     {
         return foldl(participants, Entry::isAnyOnCoordinationEpochAtLeast, false, txnId, status, isDone -> isDone);
@@ -707,6 +796,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     public boolean isAnyOnAnyEpoch(TxnId txnId, Unseekables<?> participants, RedundantStatus status)
     {
         return foldl(participants, Entry::isAnyOnAnyEpoch, false, txnId, status, isDone -> isDone);
+    }
+
+    public boolean isAnyOnAnyEpoch(TxnId txnId, Unseekables<?> participants, Predicate<RedundantStatus> testStatus)
+    {
+        return foldl(participants, Entry::isAnyOnAnyEpoch, false, txnId, testStatus, isDone -> isDone);
     }
 
     public boolean isAnyOnAnyEpochAtLeast(TxnId txnId, Unseekables<?> participants, RedundantStatus status)
@@ -723,7 +817,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         return foldl(participants, Entry::getAndMerge, PreBootstrapOrStale.NOT_OWNED, txnId, null, r -> r == PARTIALLY);
     }
 
-    public <T extends Deps> Deps.AbstractBuilder<T> collectDeps(Routables<?> participants, Deps.AbstractBuilder<T> builder, EpochSupplier minEpoch, EpochSupplier executeAt)
+    public <T extends Deps> RangeDeps.BuilderByRange collectDeps(Routables<?> participants, RangeDeps.BuilderByRange builder, EpochSupplier minEpoch, EpochSupplier executeAt)
     {
         return foldl(participants, Entry::collectDep, builder, minEpoch, executeAt, ignore -> false);
     }
@@ -751,7 +845,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         Invariants.checkArgument(executeAt != null, "executeAt must not be null");
         if (txnId.compareTo(maxGcBefore) >= 0)
             return ranges;
-        return foldl(ranges, Entry::removeGcBefore, ranges, txnId, executeAt, r -> false);
+        return foldl(ranges, Entry::withoutGarbage, ranges, txnId, executeAt, r -> false);
     }
 
     /**
@@ -759,12 +853,12 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
      */
     public Ranges removeRetired(Ranges ranges)
     {
-        return foldl(ranges, Entry::removeRetired, ranges, r -> false);
+        return foldl(ranges, Entry::withoutAnyRetired, ranges, r -> false);
     }
 
     public TxnId minShardRedundantBefore()
     {
-        return foldl((e, v) -> e == null || e.shardAppliedOrInvalidatedBefore.compareTo(v) >= 0 ? v : e.shardAppliedOrInvalidatedBefore, TxnId.MAX, i -> false);
+        return minShardRedundantBefore;
     }
 
     /**
@@ -774,44 +868,95 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
     {
         if (maxBootstrap.compareTo(txnId) <= 0)
             return ranges;
-        return foldl(ranges, Entry::removePreBootstrap, ranges, txnId, null, r -> false);
+        return foldl(ranges, Entry::withoutPreBootstrap, ranges, txnId, null, r -> false);
+    }
+
+    /**
+     * Subtract anything we don't need to coordinate (because they are known to be shard durable),
+     * and we don't execute locally, i.e. are pre-bootstrap or stale (or for RX are on ranges that are already retired)
+     */
+    public Participants<?> expectToOwn(TxnId txnId, @Nullable EpochSupplier executeAt, Participants<?> participants)
+    {
+        if (txnId.is(ExclusiveSyncPoint))
+        {
+            if (!mayFilterStaleOrPreBootstrapOrRetired(txnId, participants))
+                return participants;
+
+            return foldl(participants, Entry::withoutRedundantAnd_StaleOrPreBootstrapOrRetired, participants, txnId, i -> false);
+        }
+        else
+        {
+            if (!mayFilterStaleOrPreBootstrap(txnId, participants))
+                return participants;
+
+            return foldl(participants, Entry::withoutRedundantAnd_StaleOrPreBootstrap, participants, txnId, executeAt, r -> false);
+        }
+    }
+
+    /**
+     * Subtract anything we won't execute locally, i.e. are pre-bootstrap or stale (or for RX are on ranges that are already retired)
+     */
+    public Participants<?> expectToExecute(TxnId txnId, @Nullable EpochSupplier executeAt, Participants<?> participants)
+    {
+        if (txnId.is(ExclusiveSyncPoint))
+        {
+            if (!mayFilterStaleOrPreBootstrapOrRetired(txnId, participants))
+                return participants;
+
+            return foldl(participants, Entry::withoutStaleOrPreBootstrapOrLocallyRetired, participants, txnId, i -> false);
+        }
+        else
+        {
+            if (!mayFilterStaleOrPreBootstrap(txnId, participants))
+                return participants;
+
+            return foldl(participants, Entry::participantsWithoutStaleOrPreBootstrap, participants, txnId, executeAt, r -> false);
+        }
+    }
+
+    public boolean mayFilter(TxnId txnId, Participants<?> participants)
+    {
+        return mayFilterStaleOrPreBootstrapOrRetired(txnId, participants);
+    }
+
+    private boolean mayFilterStaleOrPreBootstrapOrRetired(TxnId txnId, Participants<?> participants)
+    {
+        return maxRetiredEpoch > txnId.epoch() || mayFilterStaleOrPreBootstrap(txnId, participants);
+    }
+
+    private boolean mayFilterStaleOrPreBootstrap(TxnId txnId, Participants<?> participants)
+    {
+        return maxBootstrap.compareTo(txnId) > 0 || (staleRanges != null && staleRanges.intersects(participants));
+    }
+
+    /**
+     * Subtract any ranges we consider stale, pre-bootstrap, or that were previously owned and have been retired
+     */
+    public Participants<?> expectToCalculateDependenciesOrConsultOnRecovery(TxnId txnId, Participants<?> participants)
+    {
+        if (!mayFilterStaleOrPreBootstrapOrRetired(txnId, participants))
+            return participants;
+        return foldl(participants, Entry::withoutRetired, participants, txnId, i -> false);
+    }
+
+    /**
+     * Subtract any ranges we consider stale, pre-bootstrap, or that were previously owned and have been retired
+     */
+    public Participants<?> expectToOwnOrExecuteOrConsultOnRecovery(TxnId txnId, Participants<?> participants)
+    {
+        if (!mayFilterStaleOrPreBootstrapOrRetired(txnId, participants))
+            return participants;
+        return foldl(participants, Entry::withoutRedundantAnd_StaleOrPreBootstrapOrRetired, participants, txnId, i -> false);
     }
 
     /**
      * Subtract any ranges we consider stale or pre-bootstrap
      */
-    public Participants<?> expectToExecute(TxnId txnId, @Nonnull Timestamp executeAt, Participants<?> keysOrRanges)
+    public Ranges expectToOwnOrExecute(TxnId txnId, Ranges ranges)
     {
-        if (txnId.is(ExclusiveSyncPoint))
-        {
-            return foldl(keysOrRanges, Entry::expectToExecuteRX, keysOrRanges, txnId, i -> false);
-        }
-        else
-        {
-            Invariants.checkArgument(executeAt != null, "executeAt must not be null");
-            if (maxBootstrap.compareTo(txnId) <= 0 && (staleRanges == null || !staleRanges.intersects(keysOrRanges)))
-                return keysOrRanges;
-            return foldl(keysOrRanges, Entry::expectToExecuteParticipants, keysOrRanges, txnId, executeAt, r -> false);
-        }
-    }
-
-    /**
-     * Subtract any ranges we consider stale or pre-bootstrap at any point
-     */
-    public Ranges everExpectToExecute(TxnId txnId, Ranges ranges)
-    {
-        if (maxBootstrap.compareTo(txnId) <= 0 && (staleRanges == null || !staleRanges.intersects(ranges)))
+        if (!mayFilterStaleOrPreBootstrap(txnId, ranges))
             return ranges;
-        return foldl(ranges, Entry::expectToExecuteRanges, ranges, txnId, null, r -> false);
-    }
-
-    /**
-     * RedundantStatus.REDUNDANT overrides PRE_BOOTSTRAP; to avoid complicating that state machine,
-     * for cases where we care independently about the overall pre-bootstrap state we have a separate mechanism
-     */
-    public Ranges staleRanges()
-    {
-        return staleRanges;
+        return foldl(ranges, Entry::rangesWithoutStaleOrPreBootstrap, ranges, txnId, null, r -> false);
     }
 
     public static class Builder extends AbstractIntervalBuilder<RoutingKey, Entry, RedundantBefore>

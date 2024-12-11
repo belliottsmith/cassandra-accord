@@ -53,12 +53,6 @@ public class SyncPoint<U extends Unseekable>
         this.route = route;
     }
 
-    // TODO (required): this is not safe to use as a "sourceEpoch", as a transaction in the dependencies may execute in a future epoch
-    public long sourceEpoch()
-    {
-        return syncId.epoch();
-    }
-
     public FullRoute<U> route()
     {
         return route;

@@ -249,7 +249,8 @@ public class CoordinateTransactionTest
                 })));
 
 
-            AsyncResult<SyncPoint<Range>> syncInclusiveSyncFuture = CoordinateSyncPoint.inclusiveAndAwaitQuorum(node, ranges);
+            TxnId blockingSyncId = node.nextTxnId(Txn.Kind.SyncPoint, Range);
+            AsyncResult<SyncPoint<Range>> syncInclusiveSyncFuture = CoordinateSyncPoint.inclusiveAndAwaitQuorum(node, blockingSyncId, (FullRoute<Range>)node.computeRoute(blockingSyncId, ranges));
             // Shouldn't complete because it is blocked waiting for the dependency just created to apply
             sleep(500);
             assertFalse(syncInclusiveSyncFuture.isDone());
@@ -270,10 +271,10 @@ public class CoordinateTransactionTest
             // Move to preapplied in order to test that Barrier will find the transaction and add a listener
             for (Node n : cluster)
                 getUninterruptibly(n.unsafeForKey(key).execute(context, safeStore ->  {
-                    StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
+                    StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
                     SafeCommand safeCommand = safeStore.get(txnId, participants);
                     Command command = safeCommand.current();
-                    PartialDeps.Builder depsBuilder = PartialDeps.builder(safeStore.ranges().currentRanges());
+                    PartialDeps.Builder depsBuilder = PartialDeps.builder(safeStore.ranges().currentRanges(), true);
                     depsBuilder.add(key, blockingTxnId);
                     PartialDeps partialDeps = depsBuilder.build();
                     Commands.commit(safeStore, safeCommand, participants, SaveStatus.Stable, Ballot.ZERO, txnId, route, command.partialTxn(), txnId, partialDeps);
@@ -291,10 +292,10 @@ public class CoordinateTransactionTest
             // Apply the blockingTxn to unblock the rest
             for (Node n : cluster)
                 assertEquals(ApplyOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(blockingTxnContext, safeStore -> {
-                    StoreParticipants participants = StoreParticipants.update(safeStore, route, blockingTxnId.epoch(), blockingTxnId, blockingTxnId.epoch());
-                    return Commands.apply(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, route, blockingTxnId, PartialDeps.builder(route).build(), blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId.epoch()), true), blockingTxn.execute(blockingTxnId, blockingTxnId, null), blockingTxn.query().compute(blockingTxnId, blockingTxnId, keys, null, null, null));
+                    StoreParticipants participants = StoreParticipants.execute(safeStore, route, blockingTxnId.epoch(), blockingTxnId, blockingTxnId.epoch());
+                    return Commands.apply(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, route, blockingTxnId, PartialDeps.builder(route, true).build(), blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId.epoch()), true), blockingTxn.execute(blockingTxnId, blockingTxnId, null), blockingTxn.query().compute(blockingTxnId, blockingTxnId, keys, null, null, null));
                 })));
-            // Global sync should be unblocked
+            DefaultProgressLogs.unsafePauseForTesting(false);
             syncPoint = getUninterruptibly(syncInclusiveSyncFuture);
             assertEquals(node.epoch(), syncPoint.syncId.epoch());
             // Command listener for local sync transaction should get notified

@@ -46,6 +46,7 @@ import accord.api.RoutingKey;
 import accord.impl.LocalListenersTest.TestSafeCommand;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
+import accord.local.CommandSummaries;
 import accord.local.Node;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
@@ -435,8 +436,8 @@ public class RemoteListenersTest
             unsafeUpsertRedundantBefore(addRedundantBefore);
         }
 
-        @Override public <P1, T> T mapReduceActive(Unseekables<?> keys, @Nullable Timestamp withLowerTxnId, Txn.Kind.Kinds kinds, CommandFunction<P1, T, T> map, P1 p1, T initialValue) { return null; }
-        @Override public <P1, T> T mapReduceFull(Unseekables<?> keys, TxnId testTxnId, Txn.Kind.Kinds testKind, TestStartedAt testStartedAt, TestDep testDep, TestStatus testStatus, CommandFunction<P1, T, T> map, P1 p1, T initialValue) { return null; }
+        @Override public <P1, P2> void visit(Unseekables<?> keys, @Nullable Timestamp withLowerTxnId, Txn.Kind.Kinds kinds, ActiveCommandVisitor<P1, P2> visit, P1 p1, P2 p2) { }
+        @Override public boolean visit(Unseekables<?> keys, TxnId testTxnId, Txn.Kind.Kinds testKind, CommandSummaries.TestStartedAt testStartedAt, Timestamp testStartedAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit) { return true; }
         @Override public DataStore dataStore() { return null; }
         @Override public Agent agent() { return null; }
         @Override public ProgressLog progressLog() { return null; }

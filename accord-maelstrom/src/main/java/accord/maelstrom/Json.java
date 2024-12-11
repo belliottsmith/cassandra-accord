@@ -403,7 +403,7 @@ public class Json
                     break;
                     case "rangeDeps":
                     {
-                        try (RangeDeps.Builder builder = RangeDeps.builder())
+                        try (RangeDeps.BuilderByRange builder = RangeDeps.builderByRange())
                         {
                             in.beginArray();
                             while (in.hasNext())

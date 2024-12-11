@@ -39,7 +39,6 @@ import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
-import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -57,10 +56,12 @@ import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.VESTIGIAL;
 import static accord.local.Commands.purge;
+import static accord.local.StoreParticipants.Filter.UPDATE;
+import static accord.primitives.Known.KnownDeps.DepsUnknown;
+import static accord.primitives.Known.Nothing;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
-import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.WithQuorum.HasQuorum;
 import static accord.utils.Invariants.illegalState;
 
@@ -137,20 +138,15 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.callback = callback;
     }
 
-    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, WithQuorum withQuorum, Route<?> route, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
-    {
-        propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, txnId.epoch(), sourceEpoch, withQuorum, route, propagateTo, target, full, callback);
-    }
-
     public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, long lowEpoch, long highEpoch, WithQuorum withQuorum, Route<?> queried, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
     {
         if (full.maxKnowledgeSaveStatus.status == NotDefined && full.invalidIf == NotKnownToBeInvalid)
         {
-            callback.accept(new FetchResult(Known.Nothing, propagateTo.slice(0, 0), propagateTo), null);
+            callback.accept(new FetchResult(Nothing, propagateTo.slice(0, 0), propagateTo), null);
             return;
         }
 
-        Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.maxKnowledgeSaveStatus == SaveStatus.Erased || full.maxKnowledgeSaveStatus == SaveStatus.ErasedOrVestigial);
+        Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.maxSaveStatus == SaveStatus.Erased || full.maxSaveStatus == SaveStatus.ErasedOrVestigial);
 
         // TODO (required): consider and document whether it is safe to infer that we are stale if we have not received responses from all shards we know of
         //  (in principle, we should at least require responses from our own shard, and the home shard if we know it); if we only hear from a remote shard it may have fully Erased
@@ -181,70 +177,66 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         // TODO (required): rework low and high epoch handling; we should replicate coordination quorum intersections here,
         //  and then we can safely compute our participants based on this. right now we're ignoring low/high epoch except for
         //  deciding which commandStores to notify
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, executeAtEpoch);
+        StoreParticipants participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, highEpoch, committedExecuteAt != null);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
 
         Timestamp executeAtIfKnown = command.executeAtIfKnown(committedExecuteAt);
-        if (executeAtIfKnown != null && executeAtIfKnown.epoch() != executeAtEpoch)
+        if (participants.executes() == null && executeAtIfKnown != null)
         {
             executeAtEpoch = executeAtIfKnown.epoch();
-            StoreParticipants newParticipants = participants.supplement(StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, executeAtEpoch));
-            if (participants != newParticipants)
-            {
-                participants = newParticipants;
-                if (Commands.maybeCleanup(safeStore, safeCommand, command, participants))
-                    command = safeCommand.current();
-            }
+            participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, highEpoch, true);
         }
 
         switch (command.saveStatus().phase)
         {
             // Already know the outcome, waiting on durability so maybe update with new durability information which can also trigger cleanup
             case Persist: return updateDurability(safeStore, safeCommand, participants);
-            case Cleanup: return null;
+            case Cleanup:
+            case Invalidate:
+                return null;
         }
 
-        participants = participants.supplement(command.participants());
-        Known found = known.knownFor(participants.owns(), participants.touches());
+        participants = participants.supplement(command.participants())
+                                   .filter(UPDATE, safeStore, txnId, executeAtIfKnown);
+        Known found = known.knownFor(participants.stillOwns(), participants.stillTouches());
 
         PartialTxn partialTxn = null;
         if (found.hasDefinition())
-            partialTxn = this.partialTxn.intersecting(participants.owns(), true).reconstitutePartial(participants.owns());
+            partialTxn = this.partialTxn.intersecting(participants.stillOwns(), true).reconstitutePartial(participants.stillOwns());
 
         PartialDeps stableDeps = null;
         if (found.hasDecidedDeps())
-            stableDeps = this.stableDeps.intersecting(participants.touches()).reconstitutePartial(participants.touches());
+            stableDeps = this.stableDeps.intersecting(participants.stillTouches()).reconstitutePartial(participants.stillTouches());
 
-        // TODO (required): is it safe to use owns() here when pulling - or do we need to compute a new touches() as though we were coordinating the transaction?
-        //   i.e. can we ignore dependencies for earlier epochs that haven't been closed yet, since this isn't a coordinated/distributed action
-        boolean isShardTruncated = withQuorum == HasQuorum && known.hasAnyFullyTruncated(participants.owns());
+        boolean isShardTruncated = withQuorum == HasQuorum && known.hasAnyFullyTruncated(participants.stillTouches());
         if (isShardTruncated)
         {
             // TODO (required): do not markShardStale for reads; in general optimise handling of case where we cannot recover a known no-op transaction
             // TODO (required): permit staleness to be gated by some configuration state
-            found = applyOrUpgradeTruncated(safeStore, safeCommand, participants, command, executeAtIfKnown);
+            found = tryUpgradeTruncated(safeStore, safeCommand, participants, command, executeAtIfKnown);
             if (found == null)
             {
-                updateFetchResult(Known.Nothing, participants.owns());
+                // TODO (expected): should be ownsOrExecutes()?
+                updateFetchResult(Nothing, participants.owns());
                 return null;
             }
 
-            Participants<?> needed = participants.owns();
+            Participants<?> txnNeeds = participants.stillOwnsOrMayExecute(txnId);
             if (found.isDefinitionKnown() && partialTxn == null && this.partialTxn != null)
             {
                 PartialTxn existing = command.partialTxn();
-                Participants<?> neededExtra = needed;
+                Participants<?> neededExtra = txnNeeds;
                 if (existing != null) neededExtra = neededExtra.without(existing.keys().toParticipants());
                 partialTxn = this.partialTxn.intersecting(neededExtra, true).reconstitutePartial(neededExtra);
             }
 
-            needed = participants.touches();
+            Participants<?> depsNeeds = participants.stillTouches();
             if (found.hasDecidedDeps() && stableDeps == null && this.stableDeps != null)
             {
                 Invariants.checkState(executeAtIfKnown != null);
                 // we don't subtract existing partialDeps, as they cannot be committed deps; we only permit committing deps covering all participating ranges
-                stableDeps = this.stableDeps.intersecting(needed).reconstitutePartial(needed);
+                stableDeps = this.stableDeps.intersecting(depsNeeds).reconstitutePartial(depsNeeds);
             }
         }
 
@@ -330,73 +322,62 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     {
         FetchResult current = fetchResult;
         if (current == null)
-            return new FetchResult(Known.Nothing, propagateTo.slice(0, 0), propagateTo);
+            return new FetchResult(Nothing, propagateTo.slice(0, 0), propagateTo);
 
         Unseekables<?> missed = propagateTo.without(current.achievedTarget);
         if (missed.isEmpty())
             return current;
 
-        return new FetchResult(Known.Nothing, current.achievedTarget, Unseekables.merge(missed, (Unseekables) current.didNotAchieveTarget));
+        return new FetchResult(Nothing, current.achievedTarget, Unseekables.merge(missed, (Unseekables) current.didNotAchieveTarget));
     }
 
     // if can only propagate Truncated, we might be stale; try to upgrade for this command store only, even partially if necessary
-    private Known applyOrUpgradeTruncated(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Command command, Timestamp executeAtIfKnown)
+    private Known tryUpgradeTruncated(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Command command, Timestamp executeAtIfKnown)
     {
         // if our peers have truncated this command, then either:
         // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
         Invariants.checkState(!maxKnowledgeSaveStatus.is(Status.Invalidated));
 
-        Participants<?> ownsOrMayExecute = participants.ownsOrMayExecute(txnId);
-        if (ownsOrMayExecute.isEmpty())
+        Participants<?> stillTouches = participants.stillTouches();
+        if (stillTouches.isEmpty())
             return known.knownForAny();
 
-        RedundantStatus status = safeStore.redundantBefore().status(txnId, ownsOrMayExecute);
+        RedundantStatus status = safeStore.redundantBefore().status(txnId, stillTouches);
         // try to see if we can safely purge the full command
         if (tryPurge(safeStore, safeCommand, status))
             return null;
 
-        // if our peers have truncated this command, then either:
-        // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
-        if (executeAtIfKnown == null)
-        {
-            Ranges ranges = safeStore.ranges().allSince(txnId.epoch());
-            ranges = safeStore.redundantBefore().everExpectToExecute(txnId, ranges);
-            if (!ranges.isEmpty())
-            {
-                // we don't even know the execution time, so we cannot possibly proceed besides erasing the command state and marking ourselves stale
-                // (even though command stores only lose ranges, we still adopt ranges as of some epoch, and re-bootstrap.)
-                safeStore.commandStore().markShardStale(safeStore, txnId, route.slice(ranges, Minimal).toRanges(), false);
-            }
-            Commands.setErased(safeStore, safeCommand);
-            return null;
-        }
-
-        Participants<?> executes = participants.executes(safeStore, txnId, executeAtIfKnown);
-        RedundantStatus executeStatus = safeStore.redundantBefore().status(txnId, executes);
-        if (tryPurge(safeStore, safeCommand, executeStatus))
-            return null;
-
-        Participants<?> ownsOrExecutes = participants.ownsOrExecutes(safeStore, txnId, executeAtIfKnown);
         // if the command has been truncated globally, then we should expect to apply it
         // if we cannot obtain enough information from a majority to do so then we have been left behind
         Known required = PreApplied.minKnown;
         Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
-        Participants<?> notStale = known.knownFor(requireExtra, ownsOrExecutes); // the ranges for which we can already successfully achieve this
+
+        Participants<?> stillOwnsOrMayExecute = participants.stillOwnsOrMayExecute(txnId);
+        Participants<?> notStaleTouches = known.knownFor(Nothing.with(requireExtra.deps), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
+        Participants<?> notStaleOwnsOrMayExecutes = known.knownFor(requireExtra.with(DepsUnknown), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
 
         // any ranges we execute but cannot achieve the pre-applied status for have been left behind and are stale
-        Participants<?> stale = ownsOrExecutes.without(notStale);
-        if (stale.isEmpty())
+        Participants<?> staleTouches = stillTouches.without(notStaleTouches);
+        Participants<?> staleOwnsOrMayExecutes = stillOwnsOrMayExecute.without(notStaleOwnsOrMayExecutes);
+        if (staleOwnsOrMayExecutes.isEmpty() && staleTouches.isEmpty())
         {
-            Invariants.checkState(notStale.containsAll(ownsOrExecutes));
+            Invariants.checkState(notStaleTouches.containsAll(stillTouches));
+            Invariants.checkState(notStaleOwnsOrMayExecutes.containsAll(stillOwnsOrMayExecute));
             return required;
         }
 
-        if (!known.hasFullyTruncated(stale))
+        if (!known.hasFullyTruncated(staleOwnsOrMayExecutes) || !known.hasFullyTruncated(staleTouches))
+            return null;
+
+        Participants<?> stale = staleTouches.with((Participants) staleOwnsOrMayExecutes);
+        // TODO (required): fetch redundant before information, it should be available
+        // wait until we know the shard is ahead and we are behind
+        if (!safeStore.redundantBefore().isShardOnlyRedundant(txnId, stale))
             return null;
 
         // TODO (required): if the above last ditch doesn't work, see if only the stale ranges can't apply and so some shenanigans to apply partially and move on
-        safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown, stale.toRanges(), true);
-        if (!stale.containsAll(ownsOrExecutes))
+        safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown == null ? txnId : executeAtIfKnown, stale.toRanges(), true);
+        if (!stale.containsAll(stillTouches) || !stale.containsAll(stillOwnsOrMayExecute))
             return required;
 
         // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
@@ -410,17 +391,23 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         {
             default: throw new AssertionError("Unhandled RedundantStatus: " + status);
             case NOT_OWNED:
-            case WAS_OWNED_RETIRED:
             case LOCALLY_REDUNDANT:
             case PARTIALLY_LOCALLY_REDUNDANT:
             case SHARD_REDUNDANT:
             case PARTIALLY_SHARD_REDUNDANT:
+            case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
             case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
             case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
             case GC_BEFORE:
             case PRE_BOOTSTRAP_OR_STALE:
-                purge(safeStore, safeCommand, null, ERASE, true, true);
+                purge(safeStore, safeCommand, ERASE, true, true);
                 return true;
+
+            case WAS_OWNED_PARTIALLY_RETIRED:
+            case WAS_OWNED_RETIRED:
+                purge(safeStore, safeCommand, VESTIGIAL, true, true);
+                return true;
+
             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
             case LIVE:
             case WAS_OWNED:
