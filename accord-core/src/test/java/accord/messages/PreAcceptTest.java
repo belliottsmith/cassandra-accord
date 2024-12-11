@@ -34,6 +34,7 @@ import accord.impl.mock.Network;
 import accord.impl.mock.RecordingMessageSink;
 import accord.local.Command;
 import accord.local.CommandStore;
+import accord.primitives.Deps;
 import accord.primitives.SaveStatus;
 import accord.local.cfk.CommandsForKey;
 import accord.local.Node;
@@ -44,7 +45,6 @@ import accord.primitives.Ballot;
 import accord.primitives.FullRoute;
 import accord.primitives.KeyDeps;
 import accord.primitives.Keys;
-import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
@@ -58,9 +58,9 @@ import static accord.Utils.createNode;
 import static accord.Utils.id;
 import static accord.Utils.writeTxn;
 import static accord.impl.InMemoryCommandStore.inMemory;
-import static accord.impl.IntKey.range;
 import static accord.impl.IntKey.routing;
 import static accord.impl.mock.MockCluster.configService;
+import static accord.local.KeyHistory.SYNC;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Utils.listOf;
@@ -103,7 +103,7 @@ public class PreAcceptTest
             clock.increment(10);
             preAccept.process(node, ID2, REPLY_CONTEXT);
 
-            commandStore.execute(PreLoadContext.contextFor(txnId, txn.keys().toParticipants()), safeStore -> {
+            commandStore.execute(PreLoadContext.contextFor(txnId, txn.keys().toParticipants(), SYNC), safeStore -> {
                 CommandsForKey cfk = safeStore.get(key.toUnseekable()).current();
                 TxnId commandId = cfk.get(0).plainTxnId();
                 Command command = safeStore.ifInitialised(commandId).current();
@@ -112,7 +112,7 @@ public class PreAcceptTest
 
             messageSink.assertHistorySizes(0, 1);
             Assertions.assertEquals(ID2, messageSink.responses.get(0).to);
-            PartialDeps expectedDeps = new PartialDeps(Ranges.of(range(0, 12)), KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
             Assertions.assertEquals(new PreAccept.PreAcceptOk(txnId, txnId, expectedDeps),
                                     messageSink.responses.get(0).payload);
         }
@@ -207,7 +207,7 @@ public class PreAcceptTest
 
             messageSink.assertHistorySizes(0, 1);
             Assertions.assertEquals(ID3, messageSink.responses.get(0).to);
-            PartialDeps expectedDeps = new PartialDeps(Ranges.of(range(0, 12)), KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
             Timestamp expectedTs = Timestamp.fromValues(1, 110, ID1);
             Assertions.assertEquals(new PreAccept.PreAcceptOk(txnId2, expectedTs, expectedDeps),
                                     messageSink.responses.get(0).payload);
@@ -239,7 +239,7 @@ public class PreAcceptTest
 
             messageSink.assertHistorySizes(0, 1);
             Assertions.assertEquals(ID2, messageSink.responses.get(0).to);
-            PartialDeps expectedDeps = new PartialDeps(Ranges.of(range(0, 12)), KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
             Assertions.assertEquals(new PreAccept.PreAcceptOk(txnId, txnId, expectedDeps),
                                     messageSink.responses.get(0).payload);
         }
@@ -272,7 +272,7 @@ public class PreAcceptTest
             clock.increment(10);
             preAccept.process(node, ID2, REPLY_CONTEXT);
 
-            commandStore.execute(PreLoadContext.contextFor(txnId, txn.keys().toParticipants()), safeStore -> {
+            commandStore.execute(PreLoadContext.contextFor(txnId, txn.keys().toParticipants(), SYNC), safeStore -> {
                 CommandsForKey cfk = safeStore.get(key.toUnseekable()).current();
                 TxnId commandId = cfk.get(0).plainTxnId();
                 Command command = safeStore.ifInitialised(commandId).current();
@@ -281,7 +281,7 @@ public class PreAcceptTest
 
             messageSink.assertHistorySizes(0, 1);
             Assertions.assertEquals(ID2, messageSink.responses.get(0).to);
-            PartialDeps expectedDeps = new PartialDeps(Ranges.of(range(0, 12)), KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
             Assertions.assertEquals(new PreAccept.PreAcceptOk(txnId, Timestamp.fromValues(2, 110, ID1), expectedDeps),
                                     messageSink.responses.get(0).payload);
         }

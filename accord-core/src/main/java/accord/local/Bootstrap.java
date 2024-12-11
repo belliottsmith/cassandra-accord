@@ -30,7 +30,6 @@ import accord.api.DataStore.FetchRanges;
 import accord.api.DataStore.FetchResult;
 import accord.api.DataStore.StartingRangeFetch;
 import accord.coordinate.CoordinateSyncPoint;
-import accord.coordinate.CoordinationFailed;
 import accord.coordinate.FetchMaxConflict;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
@@ -38,7 +37,6 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
-import accord.utils.WrappableException;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 

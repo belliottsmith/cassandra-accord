@@ -26,7 +26,6 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.SaveStatus;
 import accord.primitives.TxnId;
 
 import static accord.primitives.SaveStatus.Applying;
@@ -51,7 +50,7 @@ public abstract class AbstractLoader implements Journal.Loader
                 case TRUNCATE_WITH_OUTCOME:
                 case TRUNCATE:
                 case ERASE:
-                    command = Commands.purge(safeStore, command, command.participants(), cleanup);
+                    command = Commands.purge(safeStore, command, cleanup);
             }
         }
 

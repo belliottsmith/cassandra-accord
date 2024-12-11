@@ -19,7 +19,6 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
-import accord.api.ProtocolModifiers;
 import accord.local.Commands;
 import accord.local.KeyHistory;
 import accord.local.Node;

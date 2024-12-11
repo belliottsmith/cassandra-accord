@@ -305,10 +305,25 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
      * Returns the inputs that intersect with any of the members of the keysOrRanges.
      * DOES NOT MODIFY THE INPUT.
      */
-    static <I extends AbstractRanges, P> I intersecting(AbstractKeys<?> intersecting, I input, P param, SliceConstructor<I, P, I> constructor)
+    static <I extends AbstractRanges, P> I intersecting(AbstractKeys<?> intersecting, I input, P param, SliceConstructor<I, P, I> constructor, Slice slice)
     {
-        Range[] result = SortedArrays.intersectWithMultipleMatches(input.ranges, input.ranges.length, intersecting.keys, intersecting.keys.length, Range::compareTo, cachedRanges());
-        return result == input.ranges ? input : constructor.construct(input, param, result);
+        switch (slice)
+        {
+            default: throw new AssertionError("Unhandled Slice: " + slice);
+            case Minimal:
+                RoutableKey[] newKeys = SortedArrays.sliceWithMultipleMatches(intersecting.keys, input.ranges, RoutableKey[]::new, (k, r) -> -r.compareTo(k), Range::compareTo);
+                if (newKeys.length == 0)
+                    return constructor.construct(input, param, Ranges.NO_RANGES);
+                Range[] newRanges = new Range[newKeys.length];
+                for (int i = 0 ; i < newKeys.length ; ++i)
+                    newRanges[i] = newKeys[i].toUnseekable().asRange();
+                return constructor.construct(input, param, newRanges);
+
+            case Maximal:
+            case Overlapping:
+                Range[] result = SortedArrays.intersectWithMultipleMatches(input.ranges, input.ranges.length, intersecting.keys, intersecting.keys.length, Range::compareTo, cachedRanges());
+                return result == input.ranges ? input : constructor.construct(input, param, result);
+        }
     }
 
     interface SliceConstructor<I extends AbstractRanges, P, RS>

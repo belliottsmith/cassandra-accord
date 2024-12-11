@@ -130,14 +130,14 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     @Override
     public Void apply(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.execute(safeStore, scope, txnId, minAwaitEpoch, maxAwaitEpoch);
+        StoreParticipants participants = StoreParticipants.update(safeStore, scope, minAwaitEpoch, txnId, maxAwaitEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
         Invariants.checkState(minAwaitEpoch >= txnId.epoch());
         if (command.saveStatus().compareTo(blockedUntil.minSaveStatus) >= 0)
             return null;
 
-        Commands.enrichParticipants(safeStore, safeCommand, participants);
+        Commands.supplementParticipants(safeStore, safeCommand, participants);
 
         if (callbackId >= 0)
         {

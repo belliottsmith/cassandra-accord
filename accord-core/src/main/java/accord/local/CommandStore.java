@@ -312,7 +312,7 @@ public abstract class CommandStore implements AgentExecutor
         if (prev != null && prev.executeAt() != null && prev.executeAt().compareTo(executeAt) >= 0) return;
 
 
-        MaxConflicts updatedMaxConflicts = maxConflicts.update(updated.participants().hasTouched, executeAt);
+        MaxConflicts updatedMaxConflicts = maxConflicts.update(updated.participants().hasTouched(), executeAt);
         if (++maxConflictsUpdates >= agent.maxConflictsPruneInterval())
         {
             int initialSize = updatedMaxConflicts.size();
@@ -582,9 +582,10 @@ public abstract class CommandStore implements AgentExecutor
 
     protected void updatedRedundantBefore(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
-        TxnId clearBefore = redundantBefore.minShardRedundantBefore();
-        progressLog.clearBefore(clearBefore);
-        listeners.clearBefore(this, clearBefore);
+        TxnId clearWaitingBefore = redundantBefore.minShardRedundantBefore();
+        TxnId clearAnyBefore = durableBefore().min.majorityBefore;
+        progressLog.clearBefore(clearWaitingBefore, clearAnyBefore);
+        listeners.clearBefore(this, clearWaitingBefore);
     }
 
     protected void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)

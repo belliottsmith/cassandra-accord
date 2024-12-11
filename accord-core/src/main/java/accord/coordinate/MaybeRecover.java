@@ -39,18 +39,21 @@ public class MaybeRecover extends CheckShards<Route<?>>
 {
     final ProgressToken prevProgress;
     final BiConsumer<Outcome, Throwable> callback;
+    final long reportLowEpoch, reportHighEpoch;
 
-    MaybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, BiConsumer<Outcome, Throwable> callback)
+    MaybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
         // we only want to enquire with the home shard, but we prefer maximal route information for running Invalidation against, if necessary
         super(node, txnId, someRoute.withHomeKey(), IncludeInfo.Route, invalidIf);
         this.prevProgress = prevProgress;
         this.callback = callback;
+        this.reportLowEpoch = reportLowEpoch;
+        this.reportHighEpoch = reportHighEpoch;
     }
 
-    public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, BiConsumer<Outcome, Throwable> callback)
+    public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, invalidIf, someRoute, prevProgress, callback);
+        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, invalidIf, someRoute, prevProgress, reportLowEpoch, reportHighEpoch, callback);
         maybeRecover.start();
         return maybeRecover;
     }
@@ -118,7 +121,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     else
                     {
                         Invariants.checkState(Route.isFullRoute(someRoute), "Require a full route but given %s", full.route);
-                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute)).addCallback(callback);
+                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportLowEpoch, reportHighEpoch).addCallback(callback);
                     }
                     break;
 

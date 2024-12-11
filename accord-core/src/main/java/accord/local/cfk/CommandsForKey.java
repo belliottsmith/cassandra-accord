@@ -21,6 +21,7 @@ package accord.local.cfk;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Objects;
+import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -31,16 +32,16 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
-import accord.impl.CommandsSummary;
 import accord.local.Command;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.local.SafeCommandStore.CommandFunction;
-import accord.local.SafeCommandStore.TestDep;
-import accord.local.SafeCommandStore.TestStartedAt;
-import accord.local.SafeCommandStore.TestStatus;
-import accord.primitives.Routables;
+import accord.local.CommandSummaries.ActiveCommandVisitor;
+import accord.local.CommandSummaries.AllCommandVisitor;
+import accord.local.CommandSummaries.IsDep;
+import accord.local.CommandSummaries.SummaryStatus;
+import accord.local.CommandSummaries.ComputeIsDep;
+import accord.local.CommandSummaries.TestStartedAt;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.cfk.PostProcess.NotifyUnmanagedResult;
@@ -57,7 +58,10 @@ import accord.utils.btree.BTree;
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
-import static accord.local.SafeCommandStore.TestDep.WITHOUT;
+import static accord.local.CommandSummaries.IsDep.IS_DEP;
+import static accord.local.CommandSummaries.IsDep.IS_NOT_DEP;
+import static accord.local.CommandSummaries.IsDep.NOT_ELIGIBLE;
+import static accord.local.CommandSummaries.SummaryStatus.NOT_ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
@@ -73,8 +77,7 @@ import static accord.local.cfk.Pruning.pruneById;
 import static accord.local.cfk.Pruning.prunedBeforeId;
 import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Updating.insertOrUpdate;
-import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
-import static accord.local.SafeCommandStore.TestDep.WITH_OR_INVALIDATED;
+import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.Write;
@@ -203,7 +206,7 @@ import static accord.utils.SortedArrays.Search.FAST;
  * TODO (desired): introduce a new status or other fast and simple mechanism for filtering treatment of range or unmanaged transactions
  * TODO (desired): store missing transactions against the highest known transaction only (this should also permit us to prune better by ignoring the missing collection contents)
  */
-public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSummary
+public class CommandsForKey extends CommandsForKeyUpdate
 {
     private static final Logger logger = LoggerFactory.getLogger(CommandsForKey.class);
 
@@ -307,7 +310,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     {
         InternalStatus prev = InternalStatus.from(prevStatus);
         InternalStatus updated = InternalStatus.from(updatedStatus);
-        return updated != prev || (updated != null && updated.hasExecuteAtOrDeps && !prevAcceptedOrCommitted.equals(updatedAcceptedOrCommitted));
+        return updated != prev || (updated != null && updated.hasDeps() && !prevAcceptedOrCommitted.equals(updatedAcceptedOrCommitted));
     }
 
     public static class SerializerSupport
@@ -333,8 +336,10 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         static final int MAY_EXECUTE = 0x10;
         static final int MANAGED = 0x20;
         static final int COMMITTED_TO_EXECUTE = 0x40;
-        static final int HAS_DEPS = 0x80;
+        static final int INTERNAL_STATUS_FLAGS_SHIFT = 7;
+        static final int HAS_EXECUTE_AT_AND_DEPS = 0x80; // deps and executeAt (maybe not committed)
         static final int DEPS_KNOWN_UNTIL_EXECUTE_AT = 0x100;
+        static final int HAS_BALLOT = 0x400;
         static final int COMMITTED_AND_EXECUTES = MAY_EXECUTE | COMMITTED_TO_EXECUTE;
         static final int NOTIFIED_READY = 0x1000;
         static final int NOTIFIED_WAITING = 0x2000;
@@ -366,9 +371,9 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         {
             return create(txnId, status, isDurable, mayExecute, 0, executeAt, ballot);
         }
-        public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean isDurable, boolean mayExecute, int overrideFlags, @Nonnull Timestamp executeAt, @Nonnull Ballot ballot)
+        public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean isDurable, boolean mayExecute, int statusOverrideXor, @Nonnull Timestamp executeAt, @Nonnull Ballot ballot)
         {
-            return create(txnId, status, isDurable, mayExecute, overrideFlags, executeAt, NO_TXNIDS, ballot);
+            return create(txnId, status, isDurable, mayExecute, statusOverrideXor, executeAt, NO_TXNIDS, ballot);
         }
 
         public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean isDurable, boolean mayExecute, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
@@ -376,20 +381,20 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             return create(txnId, status, isDurable, mayExecute, 0, executeAt, missing, ballot);
         }
 
-        public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean isDurable, boolean mayExecute, int overrideFlags, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
+        public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean isDurable, boolean mayExecute, int statusOverrideXor, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
         {
             Invariants.checkState(executeAt == txnId || !executeAt.equals(txnId));
-            Invariants.checkState(status.hasExecuteAtOrDeps || executeAt == txnId);
+            Invariants.checkState(status.hasExecuteAtAndDeps || executeAt == txnId);
+            Invariants.checkState(status.hasExecuteAtAndDeps || missing == NO_TXNIDS);
             Invariants.checkState(status.hasBallot || ballot == Ballot.ZERO);
-            Invariants.checkState(status.hasExecuteAtOrDeps || missing == NO_TXNIDS);
-            int encodedStatus = encode(txnId, status, isDurable, mayExecute, ((overrideFlags & 1) != 0) ^ status.hasDeps(), ((overrideFlags & 2) != 0) ^ status.depsKnownUntilExecuteAt());
+            int encodedStatus = encode(txnId, status, isDurable, mayExecute, statusOverrideXor);
             if (missing == NO_TXNIDS && (!status.hasBallot || ballot == Ballot.ZERO))
                 return new TxnInfo(txnId, encodedStatus, executeAt);
             Invariants.checkState(missing.length > 0 || missing == NO_TXNIDS);
             return new TxnInfoExtra(txnId, encodedStatus, executeAt, missing, ballot);
         }
 
-        boolean is(InternalStatus status)
+        public boolean is(InternalStatus status)
         {
             return (encodedStatus & 0x7) == status.ordinal();
         }
@@ -409,43 +414,44 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             return (encodedStatus & 0x7) - status.ordinal();
         }
 
-        boolean is(TestStatus testStatus)
-        {
-            InternalStatus status = status();
-            switch (testStatus)
-            {
-                default: throw new AssertionError("Unhandled TestStatus: " + testStatus);
-                case IS_PROPOSED:
-                    return status.isProposed();
-                case IS_STABLE:
-                    return status.isStable();
-                case IS_STABLE_OR_INVALIDATED:
-                    return status.isStableOrInvalidated();
-                case ANY_STATUS:
-                    return status != TRANSITIVE;
-            }
-        }
-
         // TODO (expected): document the reason for this, and the justification for why it is safe
         //      At least, ensure and explain how we guarantee that we do not break the calculation of the W set from the protocol.
         //      (Since we only compute W on the coordination epoch, and we should never have a statusOverride for that epoch, this should be safe)
         // bits 0 or 1 may be set.
         public int statusOverrides()
         {
-            return   (hasDeps() != status().hasDeps() ? 1 : 0)
-                   | (depsKnownUntilExecuteAt() != status().depsKnownUntilExecuteAt() ? 2 : 0);
+            return status().flags ^ statusFlags();
         }
 
-        // this field may differ from status().hasDeps()
+        public int statusFlags()
+        {
+            return (encodedStatus >>> INTERNAL_STATUS_FLAGS_SHIFT) & 0x3;
+        }
+
         public boolean isDurable()
         {
             return 0 != (encodedStatus & IS_DURABLE);
         }
 
-        // this field may differ from status().hasDeps()
+        // This field may differ from status().hasDeps(), in the event that the key is out of range for the transaction when committed.
+        // this might happen if we are contacted in a future epoch than the one it commits in, or if we are contacted for a vote
+        // from a future epoch that has yet to fully take ownership.
+        // This is required at least for computing rejected fast path decisions in retired epochs.
+        // TODO (required): formalise and test this more completely, especially wrt interplay with status (e.g. if the deps are from accepted but then treated as committed).
+        //
         public boolean hasDeps()
         {
-            return 0 != (encodedStatus & HAS_DEPS);
+            return 0 != (encodedStatus & HAS_EXECUTE_AT_AND_DEPS);
+        }
+
+        public boolean hasExecuteAtAndDeps()
+        {
+            return hasDeps();
+        }
+
+        public boolean hasBallot()
+        {
+            return 0 != (encodedStatus & HAS_BALLOT);
         }
 
         public boolean isManaged()
@@ -479,6 +485,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             return InternalStatus.get(encodedStatus & 0x7);
         }
 
+        public SummaryStatus summaryStatus()
+        {
+            return InternalStatus.TO_SIMPLE_STATUS[encodedStatus & 0x7];
+        }
+
         Timestamp depsKnownBefore()
         {
             return depsKnownUntilExecuteAt() ? executeAt : this;
@@ -486,7 +497,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
         public TxnInfo withMissing(TxnId[] newMissing)
         {
-            Invariants.checkState(status().hasExecuteAtOrDeps);
+            Invariants.checkState(status().hasExecuteAtAndDeps);
             return newMissing == NO_TXNIDS
                    ? new TxnInfo(this, encodedStatus, executeAt)
                    : new TxnInfoExtra(this, encodedStatus, executeAt, newMissing, Ballot.ZERO);
@@ -578,23 +589,29 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             return Long.compare(this.executeAt.epoch(), that.executeAt.epoch());
         }
 
-        private static int encode(TxnId txnId, InternalStatus internalStatus, boolean isDurable, boolean mayExecute)
+        private static int preencode(InternalStatus internalStatus)
         {
-            int encoded = internalStatus.ordinal() | (mayExecute ? MAY_EXECUTE : 0) | (isDurable ? IS_DURABLE : 0);
-            if (txnId.is(Key)) encoded |= MANAGED;
-            if (internalStatus.isCommittedToExecute()) encoded |= COMMITTED_TO_EXECUTE;
-            if (internalStatus.hasExecuteAtOrDeps) encoded |= HAS_DEPS;
+            int encoded = internalStatus.ordinal();
+            if (internalStatus.hasExecuteAtAndDeps) encoded |= HAS_EXECUTE_AT_AND_DEPS;
+            if (internalStatus.isCommittedToExecute) encoded |= COMMITTED_TO_EXECUTE;
             if (internalStatus.depsKnownUntilExecuteAt()) encoded |= DEPS_KNOWN_UNTIL_EXECUTE_AT;
+            if (internalStatus.hasBallot) encoded |= HAS_BALLOT;
             return encoded;
         }
 
-        private static int encode(TxnId txnId, InternalStatus internalStatus, boolean isDurable, boolean mayExecute, boolean hasDeps, boolean depsKnownUntilExecuteAt)
+        private static int encode(TxnId txnId, InternalStatus internalStatus, boolean isDurable, boolean mayExecute)
         {
-            int encoded = internalStatus.ordinal() | (mayExecute ? MAY_EXECUTE : 0) | (isDurable ? IS_DURABLE : 0);
+            int encoded = internalStatus.txnInfoEncoded | (mayExecute ? MAY_EXECUTE : 0) | (isDurable ? IS_DURABLE : 0);
             if (txnId.is(Key)) encoded |= MANAGED;
-            if (internalStatus.isCommittedToExecute()) encoded |= COMMITTED_TO_EXECUTE;
-            if (hasDeps) encoded |= HAS_DEPS;
-            if (depsKnownUntilExecuteAt) encoded |= DEPS_KNOWN_UNTIL_EXECUTE_AT;
+            return encoded;
+        }
+
+        // statusOverrides is the bitmask we xor, not the new values of the flag (so providing zero has no effect, and providing the base value sets to zero)
+        private static int encode(TxnId txnId, InternalStatus internalStatus, boolean isDurable, boolean mayExecute, int statusOverrideXor)
+        {
+            int encoded = internalStatus.txnInfoEncoded | (mayExecute ? MAY_EXECUTE : 0) | (isDurable ? IS_DURABLE : 0);
+            if (txnId.is(Key)) encoded |= MANAGED;
+            encoded ^= statusOverrideXor << INTERNAL_STATUS_FLAGS_SHIFT;
             return encoded;
         }
 
@@ -744,64 +761,84 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     public enum InternalStatus
     {
-        // TODO (expected): collapse historical and transitively known into a single concept;
-        //  no reason to not witness transitive deps, and then registerHistorical can rely on ExclusiveSyncPoints.
-        TRANSITIVE(false, false),
-        PREACCEPTED_OR_ACCEPTED_INVALIDATE(false, true),
-        ACCEPTED(true, true),
-        COMMITTED(true, true),
-        STABLE(true, false),
-        APPLIED(true, false),
-        INVALIDATED(false, false),
-        PRUNED(false, false)
+        TRANSITIVE(false, false, false),
+        PREACCEPTED_OR_ACCEPTED_INVALIDATE(false, true, false),
+        ACCEPTED(true, true, false),
+        COMMITTED(true, true, true),
+        STABLE(true, false, true),
+        // TODO (required): do not encode missing collection for APPLIED transactions,
+        //  as anything they should have witnessed can be treated as supersedingRejected
+        //  NOTE: this only applies for transactions we execute. We need a new state for transactions
+        //  that have been APPLIED but we don't execute as we want to retain the missing collection there.
+        APPLIED(true, false, true),
+        INVALIDATED(false, false, false),
+        PRUNED(false, false, false)
         ;
 
-        static final EnumMap<SaveStatus, InternalStatus> convert = new EnumMap<>(SaveStatus.class);
+        static final EnumMap<SaveStatus, InternalStatus> FROM_SAVE_STATUS = new EnumMap<>(SaveStatus.class);
         static final InternalStatus[] VALUES = values();
+        static final SummaryStatus[] TO_SIMPLE_STATUS = new SummaryStatus[VALUES.length];
 
         static
         {
-            convert.put(SaveStatus.PreAccepted, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
-            convert.put(SaveStatus.AcceptedInvalidateWithDefinition, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
-            convert.put(SaveStatus.Accepted, ACCEPTED);
-            convert.put(SaveStatus.AcceptedWithDefinition, ACCEPTED);
-            convert.put(SaveStatus.PreCommittedWithDefinition, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
-            convert.put(SaveStatus.PreCommittedWithAcceptedDeps, ACCEPTED);
-            convert.put(SaveStatus.PreCommittedWithDefinitionAndAcceptedDeps, ACCEPTED);
-            convert.put(SaveStatus.Committed, COMMITTED);
-            convert.put(SaveStatus.Stable, STABLE);
-            convert.put(SaveStatus.ReadyToExecute, STABLE);
-            convert.put(SaveStatus.PreApplied, STABLE);
-            convert.put(SaveStatus.Applying, STABLE);
-            convert.put(SaveStatus.Applied, APPLIED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreAccepted, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidateWithDefinition, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.Accepted, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.AcceptedWithDefinition, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefinition, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithAcceptedDeps, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefinitionAndAcceptedDeps, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.Committed, COMMITTED);
+            FROM_SAVE_STATUS.put(SaveStatus.Stable, STABLE);
+            FROM_SAVE_STATUS.put(SaveStatus.ReadyToExecute, STABLE);
+            FROM_SAVE_STATUS.put(SaveStatus.PreApplied, STABLE);
+            FROM_SAVE_STATUS.put(SaveStatus.Applying, STABLE);
+            FROM_SAVE_STATUS.put(SaveStatus.Applied, APPLIED);
             // We don't map TruncatedApplyX or Erased as we want to retain them as APPLIED
             // esp. to support pruning where we expect the prunedBefore entr*ies* to be APPLIED
             // Note importantly that we have multiple logical pruned befores - the last APPLIED
             // write per epoch is retained to cleanly support
             // TODO (desired): can we improve our semantics here to at least PRUNE truncated commands if there's a
             //  superseding APPLIED command?
-            convert.put(SaveStatus.Invalidated, INVALIDATED);
+            // TODO (expected): if we truncate (but don't invalidate) a command that had not been decided, we should probably erase it?
+            FROM_SAVE_STATUS.put(SaveStatus.Invalidated, INVALIDATED);
+
+            TO_SIMPLE_STATUS[TRANSITIVE.ordinal()] = NOT_ACCEPTED;
+            TO_SIMPLE_STATUS[PREACCEPTED_OR_ACCEPTED_INVALIDATE.ordinal()] = NOT_ACCEPTED;
+            TO_SIMPLE_STATUS[ACCEPTED.ordinal()] = SummaryStatus.ACCEPTED;
+            TO_SIMPLE_STATUS[COMMITTED.ordinal()] = SummaryStatus.COMMITTED;
+            TO_SIMPLE_STATUS[STABLE.ordinal()] = SummaryStatus.STABLE;
+            TO_SIMPLE_STATUS[APPLIED.ordinal()] = SummaryStatus.APPLIED;
+            TO_SIMPLE_STATUS[INVALIDATED.ordinal()] = SummaryStatus.INVALIDATED;
         }
 
-        public final boolean hasInfo;
-        public final boolean hasExecuteAtOrDeps;
-        public final boolean hasBallot;
+        public static final int HAS_EXECUTE_AT_AND_DEPS = 1;
+        public static final int DEPS_KNOWN_UNTIL_EXECUTE_AT = 2;
 
-        InternalStatus(boolean hasExecuteAtOrDeps, boolean hasBallot)
+        public final boolean hasExecuteAtAndDeps;
+        public final boolean hasBallot;
+        public final boolean isCommittedToExecute;
+        public final int flags;
+        final int txnInfoEncoded;
+
+        InternalStatus(boolean hasExecuteAtAndDeps, boolean hasBallot, boolean isCommittedToExecute)
         {
-            this.hasExecuteAtOrDeps = hasExecuteAtOrDeps;
             this.hasBallot = hasBallot;
-            this.hasInfo = hasExecuteAtOrDeps | hasBallot;
+            this.hasExecuteAtAndDeps = hasExecuteAtAndDeps;
+            this.isCommittedToExecute = isCommittedToExecute;
+            this.flags =   (hasExecuteAtAndDeps       ? HAS_EXECUTE_AT_AND_DEPS     : 0)
+                         | (depsKnownUntilExecuteAt() ? DEPS_KNOWN_UNTIL_EXECUTE_AT : 0);
+            this.txnInfoEncoded = TxnInfo.preencode(this);
         }
 
         boolean hasExecuteAt()
         {
-            return hasExecuteAtOrDeps;
+            return hasExecuteAtAndDeps;
         }
 
         private boolean hasDeps()
         {
-            return hasExecuteAtOrDeps;
+            return hasExecuteAtAndDeps;
         }
 
         public boolean isProposed()
@@ -821,7 +858,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
         public boolean isCommittedToExecute()
         {
-            return this == COMMITTED | this == STABLE | this == APPLIED;
+            return isCommittedToExecute;
         }
 
         public Timestamp depsKnownBefore(TxnId txnId, Timestamp executeAt)
@@ -837,7 +874,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         @VisibleForTesting
         public static InternalStatus from(SaveStatus status)
         {
-            return convert.get(status);
+            return FROM_SAVE_STATUS.get(status);
         }
 
         public static InternalStatus get(int ordinal)
@@ -1094,16 +1131,17 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
      * being unwitnessed by some following/dependent command.
      * <p>
      * Note that {@code testDep} applies only to commands that MAY have the command in their deps; if specified any
-     * commands that do not know any deps will be ignored, as will any with an executeAt prior to the txnId.
+     * commands that do not know any deps will be ignored, as will any whose deps do not cover the txnId
+     * (either executeAt is before, or txnId is before and command is not committed so deps do not extend to executeAt)
      * <p>
      */
-    public <P1, T> T mapReduceFull(Routables<?> keysOrRanges,
-                                   TxnId testTxnId,
-                                   Kinds testKind,
-                                   TestStartedAt testStartedAt,
-                                   TestDep testDep,
-                                   TestStatus testStatus,
-                                   CommandFunction<P1, T, T> map, P1 p1, T initialValue)
+    public boolean visit(TxnId testTxnId,
+                         Kinds testKind,
+                         TestStartedAt testStartedAt,
+                         Timestamp testStartedAtTimestamp,
+                         ComputeIsDep computeIsDep,
+                         Predicate<SummaryStatus> testStatus,
+                         AllCommandVisitor visitor)
     {
         int start, end, loadingIndex = 0;
         // if this is null the TxnId is known in byId
@@ -1111,33 +1149,18 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         TxnId prunedBefore = prunedBefore();
         TxnId[] loadingFor = null;
         {
-            int insertPos = Arrays.binarySearch(byId, testTxnId);
+            int insertPos = Arrays.binarySearch(byId, testStartedAtTimestamp);
             if (insertPos < 0)
             {
                 loadingFor = NO_TXNIDS;
                 insertPos = -1 - insertPos;
-                switch (testDep)
-                {
-                    default: throw new AssertionError("Unhandled TestDep: " + testDep);
-                    case ANY_DEPS:
-                        break;
-
-                    case WITH_OR_INVALIDATED:
-                        if (testTxnId.compareTo(prunedBefore) >= 0)
-                            return initialValue;
-
-                        loadingFor = loadingPrunedFor(loadingPruned, testTxnId, NO_TXNIDS);
-                        break;
-
-                    case WITHOUT:
-                        if (testTxnId.compareTo(prunedBefore) < 0)
-                            loadingFor = loadingPrunedFor(loadingPruned, testTxnId, NO_TXNIDS);
-                }
+                if (computeIsDep != IGNORE && testTxnId.compareTo(prunedBefore) < 0)
+                    loadingFor = loadingPrunedFor(loadingPruned, testTxnId, NO_TXNIDS);
             }
 
             switch (testStartedAt)
             {
-                default: throw new AssertionError("Unhandled TestStartedAt: " + testTxnId);
+                default: throw new AssertionError("Unhandled TestStartedAt: " + testStartedAt);
                 case STARTED_BEFORE: start = 0; end = insertPos; break;
                 case STARTED_AFTER: start = insertPos; end = byId.length; break;
                 case ANY: start = 0; end = byId.length;
@@ -1148,20 +1171,19 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         {
             TxnInfo txn = byId[i];
             if (!txn.is(testKind)) continue;
-            if (!txn.is(testStatus)) continue;
+            SummaryStatus summaryStatus = txn.summaryStatus();
+            if (summaryStatus == null || (testStatus != null && !testStatus.test(summaryStatus))) continue;
 
             Timestamp executeAt = txn.executeAt;
-            if (testDep != ANY_DEPS)
+            IsDep dep = null;
+            if (computeIsDep != IGNORE)
             {
-                if (!txn.hasDeps())
+                if (!txn.hasDeps() || (summaryStatus == SummaryStatus.ACCEPTED ? txn : executeAt).compareTo(testTxnId) <= 0)
                 {
-                    if (!(testDep == WITH_OR_INVALIDATED && txn.is(INVALIDATED)))
-                        continue;
+                    dep = NOT_ELIGIBLE;
                 }
                 else
                 {
-                    if (executeAt.compareTo(testTxnId) <= 0)
-                        continue;
 
                     boolean hasAsDep;
                     if (loadingFor == null)
@@ -1182,24 +1204,34 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                         else loadingIndex = -1 - loadingIndex;
                     }
 
-                    if (testDep == WITHOUT && hasAsDep)
-                        continue;
+                    dep = hasAsDep ? IS_DEP : IS_NOT_DEP;
                 }
             }
 
-            initialValue = map.apply(p1, key, txn.plainTxnId(), executeAt, initialValue);
+            if (!visitor.visit(key, txn.plainTxnId(), executeAt, summaryStatus, dep))
+                return false;
         }
-        return initialValue;
+
+        return true;
     }
 
-    public <P1, T> T mapReduceActive(Routables<?> keysOrRanges,
-                                     Timestamp startedBefore,
-                                     Kinds testKind,
-                                     CommandFunction<P1, T, T> map, P1 p1, T initialValue)
+    public <P1, P2> void visit(Timestamp startedBefore,
+                               Kinds testKind,
+                               ActiveCommandVisitor<P1, P2> visitor,
+                               P1 p1, P2 p2)
     {
         TxnId prunedBefore = prunedBefore();
         int end = insertPos(startedBefore);
-        Timestamp maxCommittedWriteBefore;
+        // We only filter durable transactions less than BOTH the txnId and executeAt of our max preceding write.
+        // This is to avoid the following pre-bootstrap edge case, so this filtering can be made stricter in future:
+        // A replica is bootstrapping so that includes all transactions before the bootstrap point, but our latest
+        // transaction occurs before the bootstrap by TxnId, and some of its dependencies occur after.
+        // Because the replica is pre-bootstrap, it happily participates in an RX including these keys without
+        // actually witnessing any of the dependencies that have higher TxnId than the RX. The RX applies and
+        // the range is marked as durable. If now the replica then witnesses one of these transactions it will
+        // consider that they must be invalidated, as it had not witnessed them, they were not pre-bootstrap and
+        // they were pre-RX.
+        TxnInfo maxCommittedWriteBefore;
         {
             int from = 0, to = committedByExecuteAt.length;
             if (maxAppliedWriteByExecuteAt >= 0)
@@ -1211,9 +1243,10 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             if (i < 0) i = -2 - i;
             else --i;
             while (i >= 0 && !committedByExecuteAt[i].is(Write)) --i;
-            maxCommittedWriteBefore = i < 0 ? null : committedByExecuteAt[i].executeAt;
+            maxCommittedWriteBefore = i < 0 ? null : committedByExecuteAt[i];
         }
 
+        TxnInfo maxCommittedWriteForEpoch = null;
         for (int i = 0; i < end ; ++i)
         {
             TxnInfo txn = byId[i];
@@ -1222,7 +1255,6 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
             switch (txn.status())
             {
-                case TRANSITIVE:
                 case INVALIDATED:
                 case PRUNED:
                     continue;
@@ -1230,45 +1262,86 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 case COMMITTED:
                 case STABLE:
                 case APPLIED:
-                    if (maxCommittedWriteBefore == null || txn.executeAt.compareTo(maxCommittedWriteBefore) >= 0 || !Write.witnesses(txn))
+                    if (maxCommittedWriteBefore == null
+                        || txn.compareTo(maxCommittedWriteBefore) >= 0
+                        || txn.executeAt.compareTo(maxCommittedWriteBefore.executeAt) >= 0
+                        || !Write.witnesses(txn))
                         break;
 
                     switch (dependencyElision())
                     {
-                        case ON: continue;
                         case IF_DURABLE:
-                            if (txn.isDurable())
+                            if (!txn.isDurable())
+                                break;
+
+                        case ON:
+                            if (testKind != AnyGloballyVisible)
+                                continue;
+
+                            // cannot be the max known write for the epoch, so no need to return it
+                            if (!txn.isWrite())
+                                break;
+
+                            // if we witness everything we assume we're coordinating an ExclusiveSyncPoint
+                            // which must execute in all epochs, so for ease of processing we return a dependency
+                            // from all epochs we know
+
+                            long epoch = txn.epoch();
+                            if (epoch == maxCommittedWriteBefore.epoch())
+                                continue;
+
+                            if (maxCommittedWriteForEpoch != null && epoch != maxCommittedWriteForEpoch.epoch())
+                                maxCommittedWriteForEpoch = null;
+
+                            if (maxCommittedWriteForEpoch == null)
+                            {
+                                for (int j = i ; j < end ; ++j)
+                                {
+                                    TxnInfo t = byId[j];
+                                    if (t.epoch() != epoch)
+                                        break;
+                                    if (!t.isWrite() || t.executeAt != t)
+                                        continue;
+
+                                    if (maxCommittedWriteForEpoch == null || t.compareExecuteAt(maxCommittedWriteForEpoch) > 0)
+                                        maxCommittedWriteForEpoch = t;
+                                }
+                                if (maxCommittedWriteForEpoch == null)
+                                    maxCommittedWriteForEpoch = txn;
+                            }
+
+                            if (txn.compareTo(maxCommittedWriteForEpoch) < 0
+                                && txn.executeAt.compareTo(maxCommittedWriteBefore.executeAt) < 0)
                                 continue;
                     }
             }
 
-            initialValue = map.apply(p1, key, txn.plainTxnId(), txn.executeAt, initialValue);
+
+            visitor.visit(p1, p2, key, txn.plainTxnId());
         }
 
         if (startedBefore.compareTo(prunedBefore) <= 0)
         {
-            // in the event we have pruned transactions that may execute before us, we take the earliest future dependency we can in their place.
-            // in practice this only has an effect on ExclusiveSyncPoints because they do not agree an execution time
-            // and only take dependencies on TxnId lower than them. Other transactions will propose a timestamp that
-            // occurs after any dependencies witnessed here, or will be invalidated, or have already been agreed
-            // and their dependencies are known.
+            // In the event we have pruned transactions that may execute before us, we take the earliest future dependency we can in their place.
+            // This may occur for any transaction that isn't witnessed by a Write (so, sync points and exclusive sync points).
+            // In the former case, this can only happen on recovery, as the original coordinator would propose a later executeAt than any dependency it may witness.
             int i = SortedArrays.binarySearch(committedByExecuteAt, 0, maxAppliedWriteByExecuteAt, startedBefore, (f, v) -> f.compareTo(v.executeAt), FAST);
             if (i < 0) i = -1 - i;
             while (i < committedByExecuteAt.length)
             {
-                if (committedByExecuteAt[i].epoch() > startedBefore.epoch())
+                TxnInfo txn = committedByExecuteAt[i];
+                if (txn.epoch() > startedBefore.epoch())
                     break;
 
-                if (committedByExecuteAt[i].is(Write))
+                if (txn.is(Write))
                 {
-                    initialValue = map.apply(p1, key, committedByExecuteAt[i].plainTxnId(), committedByExecuteAt[i].executeAt, initialValue);
-                    break;
+                    visitor.visit(p1, p2, key, committedByExecuteAt[i].plainTxnId());
+                    if (txn.compareTo(startedBefore) > 0)
+                        break;
                 }
                 ++i;
             }
         }
-
-        return initialValue;
     }
 
     // NOTE: prev MAY NOT be the version that last updated us due to various possible race conditions
@@ -1301,10 +1374,31 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     CommandsForKeyUpdate updatePruned(Command next)
     {
+        boolean wasPruned;
         InternalStatus newStatus = InternalStatus.from(next.saveStatus());
         // cannot use original status unless we also populate deps (which we don't for pruned items)
-        newStatus = newStatus == null || newStatus.compareTo(InternalStatus.COMMITTED) < 0 ? TRANSITIVE : PRUNED;
-        return update(newStatus, next, false, true);
+        if (newStatus == null)
+            newStatus = TRANSITIVE;
+        switch (newStatus)
+        {
+            default: throw new AssertionError("Unhandled InternalStatus: " + newStatus);
+            case PRUNED: throw illegalState("Invalid InternalStatus: " + newStatus);
+            case APPLIED:
+            case INVALIDATED:
+                newStatus = PRUNED;
+            case TRANSITIVE:
+                wasPruned = true;
+                break;
+            case ACCEPTED:
+            case STABLE:
+            case COMMITTED:
+            case PREACCEPTED_OR_ACCEPTED_INVALIDATE:
+                // either we're loading a command we wouldn't have visited directly, or we've raced with the update on arrival
+                // TODO (expected): tighten semantics here, we shouldn't permit any race condition (and indeed already may not)
+                wasPruned = !manages(next.txnId());
+                if (wasPruned) newStatus = TRANSITIVE;
+        }
+        return update(newStatus, next, false, wasPruned);
     }
 
     private CommandsForKeyUpdate update(InternalStatus newStatus, Command next, boolean isOutOfRange, boolean wasPruned)
@@ -1320,6 +1414,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         if (isOutOfRange && newStatus.compareTo(INVALIDATED) >= 0) isOutOfRange = false; // invalidated is safe to use anywhere, and erases deps
 
         TxnId[] loadingAsPrunedFor = loadingPrunedFor(loadingPruned, txnId, null); // we default to null to distinguish between no match, and a match with NO_TXNIDS
+        if (wasPruned && loadingAsPrunedFor == null)
+        {
+            //we may have received the command since we started loading pruned, in which case the pruned status will be faulty
+            return this;
+        }
         wasPruned |= loadingAsPrunedFor != null;
 
         int pos = Arrays.binarySearch(byId, txnId);
@@ -1331,7 +1430,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
             pos = -1 - pos;
             if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, null, newStatus, isDurable, mayExecute, wasPruned, loadingAsPrunedFor);
-            else if (newStatus.hasExecuteAtOrDeps && !wasPruned) result = insert(pos, txnId, newStatus, isDurable, mayExecute, next);
+            else if (newStatus.hasDeps() && !wasPruned) result = insert(pos, txnId, newStatus, isDurable, mayExecute, next);
             else result = insert(pos, txnId, TxnInfo.create(txnId, newStatus, isDurable, mayExecute, next), wasPruned, loadingAsPrunedFor);
         }
         else
@@ -1351,7 +1450,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                     }
                     else
                     {
-                        if (!newStatus.hasInfo)
+                        if (!newStatus.hasExecuteAtAndDeps)
                             return this;
 
                         if (next.acceptedOrCommitted().compareTo(cur.ballot()) <= 0)
@@ -1361,7 +1460,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             }
 
             if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, cur, newStatus, isDurable, mayExecute, wasPruned, loadingAsPrunedFor);
-            else if (newStatus.hasExecuteAtOrDeps && !wasPruned) result = update(pos, txnId, cur, newStatus, isDurable, mayExecute, next);
+            else if (newStatus.hasDeps() && !wasPruned) result = update(pos, txnId, cur, newStatus, isDurable, mayExecute, next);
             else result = update(pos, txnId, cur, TxnInfo.create(txnId, newStatus, isDurable, mayExecute, next), wasPruned, loadingAsPrunedFor);
         }
 
@@ -1395,9 +1494,9 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     {
         Invariants.checkArgument(!mayExecute);
         TxnInfo baseInfo = curInfo == null ? NO_INFO : curInfo;
-        boolean hasDeps = baseInfo.hasDeps();
-        boolean depsKnownUntilExecuteAt = baseInfo.depsKnownUntilExecuteAt();
-        TxnInfo newInfo = baseInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, isDurable, false, hasDeps, depsKnownUntilExecuteAt));
+        // out of range means we have no deps, we're just marking committed, so we set both flags to zero
+        TxnInfo newInfo = baseInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, isDurable, false, newStatus.flags))
+                                  .withMissing(NO_TXNIDS);
         return insertOrUpdate(this, updatePos, plainTxnId, curInfo, newInfo, wasPruned, loadingAsPrunedFor);
     }
 
@@ -1473,7 +1572,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         CommandsForKeyUpdate result = newCfk;
         if (notifyUnmanaged != null)
             result = new CommandsForKeyUpdateWithPostProcess(newCfk, notifyUnmanaged.postProcess);
-        if (newInfo != null && newInfo.is(STABLE) && !newInfo.mayExecute())
+        if (newInfo != null && newInfo.is(STABLE) && !newInfo.mayExecute() && managesExecution(newInfo))
             result = new CommandsForKeyUpdateWithPostProcess(newCfk, new PostProcess.NotifyNotWaiting(result.postProcess(), new TxnId[] { newInfo.plainTxnId() }));
         return result;
     }
@@ -1772,7 +1871,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     public CommandsForKey maximalPrune()
     {
-        return Pruning.maybePrune(this, 0, 0);
+        return Pruning.maximalPrune(this);
     }
 
     int insertPos(Timestamp timestamp)
@@ -1905,7 +2004,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 Invariants.checkArgument(SortedArrays.isSortedUnique(byId));
                 Invariants.checkArgument(SortedArrays.isSortedUnique(committedByExecuteAt, TxnInfo::compareExecuteAt));
 
-                for (TxnInfo txn : byId) Invariants.checkState(mayExecute(txn) == txn.mayExecute());
+                for (TxnInfo txn : byId)
+                {
+                    Invariants.checkState(mayExecute(txn) == txn.mayExecute());
+                    Invariants.checkState(txn.hasDeps() || txn.missing() == NO_TXNIDS);
+                }
                 for (TxnInfo txn : committedByExecuteAt) Invariants.checkState(txn.mayExecute());
 
                 if (minUndecidedById >= 0) for (int i = 0 ; i < minUndecidedById ; ++i) Invariants.checkState(byId[i].status().compareTo(InternalStatus.COMMITTED) >= 0 || !mayExecute(byId[i]) || isPreBootstrap(byId[i]));
@@ -1922,6 +2025,8 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                         Invariants.checkState(txn.kind() != Kind.Write || txn.status().compareTo(APPLIED) < 0 && mayExecute(txn));
                 }
                 Invariants.checkState(BTree.size(loadingPruned) == 0 || redundantBefore().compareTo(BTree.findByIndex(loadingPruned, 0)) <= 0);
+                for (Unmanaged unmanaged : unmanageds)
+                    Invariants.checkState(unmanaged.waitingUntil.epoch() < boundsInfo.endOwnershipEpoch);
             }
             if (testParanoia(SUPERLINEAR, NONE, LOW))
             {
@@ -1931,6 +2036,9 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 }
                 for (TxnInfo txn : byId)
                 {
+                    if (txn.isCommittedAndExecutes())
+                        Invariants.checkState(Arrays.binarySearch(committedByExecuteAt, txn, TxnInfo::compareExecuteAt) >= 0);
+
                     for (TxnId missingId : txn.missing())
                     {
                         Invariants.checkState(txn.kind().witnesses(missingId));
@@ -1976,13 +2084,13 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                             int byIdIndex = Arrays.binarySearch(byId, unmanaged.waitingUntil);
                             if (byIdIndex < 0)
                                 byIdIndex = -1 - byIdIndex;
-                            Invariants.checkState(byIdIndex >= decidedBefore || unmanaged.waitingUntil.epoch() >= boundsInfo.endOwnershipEpoch || isAnyPredecessorWaitingOnPruned(loadingPruned, unmanaged.txnId));
+                            Invariants.checkState(byIdIndex >= decidedBefore || isAnyPredecessorWaitingOnPruned(loadingPruned, unmanaged.txnId));
                             break;
                         }
                         case APPLY:
                         {
                             int byExecuteAtIndex = SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanaged.waitingUntil, (f, i) -> f.compareTo(i.executeAt), FAST);
-                            Invariants.checkState(byExecuteAtIndex >= 0 && (byExecuteAtIndex >= appliedBefore || unmanaged.waitingUntil.epoch() >= boundsInfo.endOwnershipEpoch));
+                            Invariants.checkState(byExecuteAtIndex >= 0 && byExecuteAtIndex >= appliedBefore);
                             break;
                         }
                     }

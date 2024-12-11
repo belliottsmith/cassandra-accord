@@ -265,7 +265,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     public synchronized CommitOrReadNack apply(SafeCommandStore safeStore)
     {
         Route<?> route = this.route != null ? this.route : scope;
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, executeAt.epoch());
+        StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
 
         switch (Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps))

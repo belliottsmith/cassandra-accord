@@ -218,7 +218,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
             return;
         }
 
-        SafeCallback sc = callbacks.remove(replyingToMessage);
+        SafeCallback sc = reply.isFinal() ? callbacks.remove(replyingToMessage) : callbacks.get(replyingToMessage);
 
         if (networkFilter.shouldDiscard(from, replyingToNode, reply))
         {

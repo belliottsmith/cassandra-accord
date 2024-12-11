@@ -57,6 +57,9 @@ import static accord.coordinate.Infer.InvalidIf.IfUncommitted;
 import static accord.coordinate.Infer.InvalidIf.IsInvalid;
 import static accord.coordinate.Infer.InvalidIf.IsNotInvalid;
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
+import static accord.primitives.Known.Definition.DefinitionKnown;
+import static accord.primitives.Known.Definition.DefinitionUnknown;
+import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Status.Durability;
 import static accord.primitives.Status.Durability.Local;
 import static accord.primitives.Status.Durability.Majority;
@@ -147,7 +150,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
 
-        Commands.enrichParticipants(safeStore, safeCommand, participants);
+        Commands.supplementParticipants(safeStore, safeCommand, participants);
 
         boolean isCoordinating = isCoordinating(node, command);
         Durability durability = command.durability();
@@ -168,10 +171,29 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         }
     }
 
-    private KnownMap foundKnown(Command command, StoreParticipants participants)
+    private KnownMap foundKnown(Command command, StoreParticipants query)
     {
         SaveStatus saveStatus = command.saveStatus();
-        return KnownMap.create(participants.owns(), saveStatus.known);
+        if (query.owns() == command.participants().stillTouches() || (!saveStatus.known.deps.hasProposedOrDecidedDeps() && saveStatus.known.definition != DefinitionKnown))
+            return KnownMap.create(query.owns(), saveStatus.known);
+
+        Known known = saveStatus.known;
+        KnownMap result = KnownMap.EMPTY;
+        if (known.deps.hasProposedOrDecidedDeps())
+        {
+            Invariants.checkState(command.participants().touches().containsAll(command.partialDeps().covering));
+            result = KnownMap.create(command.partialDeps().covering, Known.Nothing.with(saveStatus.known.deps));
+            known = known.with(DepsUnknown);
+        }
+        if (known.definition == DefinitionKnown && !txnId.isSystemTxn())
+        {
+            Participants<?> participants = command.partialTxn().keys().toParticipants();
+            Invariants.checkState(command.participants().owns().containsAll(participants));
+            result = KnownMap.merge(result, KnownMap.create(participants, Known.DefinitionOnly));
+            known = known.with(DefinitionUnknown);
+        }
+        result = KnownMap.merge(result, KnownMap.create(query.owns(), known));
+        return result;
     }
 
     private InvalidIf invalidIf(Command command, StoreParticipants participants)

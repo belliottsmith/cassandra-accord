@@ -56,6 +56,7 @@ import accord.primitives.Writes;
 import accord.utils.Invariants;
 import org.agrona.collections.Int2ObjectHashMap;
 
+import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.SaveStatus.NotDefined;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
@@ -88,7 +89,7 @@ public class InMemoryJournal implements Journal
         if (saved == null)
             return null;
 
-        return reconstruct(saved);
+        return reconstruct(redundantBefore, saved);
     }
 
     @Override
@@ -187,7 +188,7 @@ public class InMemoryJournal implements Journal
             {
                 List<Diff> diffs = e2.getValue();
                 if (diffs.isEmpty()) continue;
-                Command command =  reconstruct(diffs);
+                Command command =  reconstruct(commandStore.unsafeGetRedundantBefore(), diffs);
                 if (command.status() == Truncated || command.status() == Invalidated)
                     continue; // Already truncated
                 Cleanup cleanup = Cleanup.shouldCleanup(commandStore.agent(), command, commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
@@ -199,7 +200,7 @@ public class InMemoryJournal implements Journal
                     case TRUNCATE_WITH_OUTCOME:
                     case TRUNCATE:
                     case ERASE:
-                        command = Commands.purgeUnsafe(commandStore, command, command.participants(), cleanup);
+                        command = Commands.purgeUnsafe(commandStore, command, cleanup);
                         Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised);
                         Diff diff = diff(null, command);
                         e2.setValue(cleanup == Cleanup.ERASE ? new ErasedList(diff) : new TruncatedList(diff));
@@ -236,7 +237,7 @@ public class InMemoryJournal implements Journal
             for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
             {
                 if (e.getValue().isEmpty()) continue;
-                Command command = reconstruct(e.getValue());
+                Command command = reconstruct(commandStore.unsafeGetRedundantBefore(), e.getValue());
                 Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
                                       "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
                 loader.load(command, sync);
@@ -316,7 +317,7 @@ public class InMemoryJournal implements Journal
         }
     }
 
-    private Command reconstruct(List<Diff> diffs)
+    private Command reconstruct(RedundantBefore redundantBefore, List<Diff> diffs)
     {
         Invariants.checkState(diffs != null && !diffs.isEmpty());
 
@@ -395,7 +396,7 @@ public class InMemoryJournal implements Journal
             attrs.partialTxn(partialTxn);
         if (durability != null)
             attrs.durability(durability);
-        if (participants != null) attrs.setParticipants(participants);
+        if (participants != null) attrs.setParticipants(participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.executeAt.isDecidedAndKnownToExecute() ? executeAt : null));
         else attrs.setParticipants(StoreParticipants.empty(txnId));
 
         // TODO (desired): we can simplify this logic if, instead of diffing, we will infer the diff from the status
@@ -463,8 +464,9 @@ public class InMemoryJournal implements Journal
             case TruncatedApply:
                 return Command.Truncated.truncatedApply(attrs, status, executeAt, writes, result, executesAtLeast);
             case ErasedOrVestigial:
-                return Command.Truncated.erasedOrInvalidOrVestigial(attrs.txnId(), attrs.durability(), attrs.participants());
+                return Command.Truncated.erasedOrVestigial(attrs.txnId(), attrs.participants());
             case Erased:
+                // TODO (expected): why are we saving Durability here for erased commands?
                 return Command.Truncated.erased(attrs.txnId(), attrs.durability(), attrs.participants());
             case Invalidated:
                 return Command.Truncated.invalidated(attrs.txnId());

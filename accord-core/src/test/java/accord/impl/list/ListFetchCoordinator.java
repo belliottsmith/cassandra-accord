@@ -36,7 +36,6 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.utils.Timestamped;
 import accord.utils.async.AsyncResult;
 
 public class ListFetchCoordinator extends AbstractFetchCoordinator
@@ -64,7 +63,7 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
 
         ListData listData = (ListData) data;
         persisting.add(commandStore.execute(PreLoadContext.empty(), safeStore -> {
-            listData.forEach((key, value) -> listStore.data.merge(key, value, Timestamped::merge));
+            listData.forEach((key, value) -> listStore.writeUnsafe(key, value));
         }).flatMap(ignore -> listStore.snapshot(true, received, syncPoint.syncId)).addCallback((success, fail) -> {
             if (fail == null) success(from, received);
             else fail(from, received, fail);

@@ -273,12 +273,17 @@ public class Cluster
 
     public void processAll()
     {
-        List<Object> pending = new ArrayList<>();
+        List<Pending> pending = new ArrayList<>();
         while (this.pending.size() > 0)
             pending.add(this.pending.poll());
 
-        for (Object next : pending)
+        for (Pending next : pending)
+        {
+            Pending.Global.setActiveOrigin(next);
             processNext(next);
+            Pending.Global.clearActiveOrigin();
+            checkFailures.run();
+        }
     }
 
     boolean hasNonRecurring()
@@ -396,7 +401,6 @@ public class Cluster
             RandomSource rnd = randomSupplier.get();
             timeoutDelays = progressDelays = coordinationDelays = () -> rnd.nextInt(100, 1000);
         }
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis);
         RandomSource nowRandom = randomSupplier.get();
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = nowRandom.fork();
@@ -409,9 +413,11 @@ public class Cluster
                                      .mapAsLong(j -> Math.max(0, queue.nowInMillis() + TimeUnit.NANOSECONDS.toMillis(j)))
                                      .asLongSupplier(forked);
         };
+        Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get());
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should never get a stale event");
-        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis));
+        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get()));
         TopologyFactory topologyFactory = new TopologyFactory(initialTopology.maxRf(), initialTopology.ranges().stream().toArray(Range[]::new))
         {
             @Override
@@ -431,7 +437,7 @@ public class Cluster
                                                             ignore -> {
                                                             },
                                                             randomSupplier,
-                                                            nowSupplier,
+                                                            timeServiceSupplier,
                                                             topologyFactory,
                                                             new Supplier<>()
                                                             {
@@ -448,7 +454,7 @@ public class Cluster
                                                                     if (!requestIterator.hasNext())
                                                                         return null;
                                                                     Node.Id id = rs.pick(nodes);
-                                                                    return new Packet(id, id, Long.MAX_VALUE, counter.incrementAndGet(), requestIterator.next());
+                                                                    return new Packet(id, id, Long.MAX_VALUE, counter.incrementAndGet(), requestIterator.next(), true);
                                                                 }
                                                             },
                                                             Runnable::run,
@@ -466,7 +472,8 @@ public class Cluster
     public static Map<MessageType, Stats> run(Id[] nodes, int[] prefixes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
                                               BiFunction<Id, BiConsumer<Timestamp, Ranges>, AgentExecutor> nodeExecutorSupplier,
                                               Runnable checkFailures, Consumer<Packet> responseSink,
-                                              Supplier<RandomSource> randomSupplier, Supplier<LongSupplier> nowSupplierSupplier,
+                                              Supplier<RandomSource> randomSupplier,
+                                              Supplier<TimeService> timeServiceSupplier,
                                               TopologyFactory topologyFactory, Supplier<Packet> in, Consumer<Runnable> noMoreWorkSignal,
                                               Consumer<Map<Id, Node>> readySignal, Function<Node.Id, Journal> journalFactory)
     {
@@ -522,7 +529,7 @@ public class Cluster
             {
                 ClusterScheduler scheduler = sinks.new ClusterScheduler(id.id);
                 MessageSink messageSink = sinks.create(id, timeouts);
-                LongSupplier nowSupplier = nowSupplierSupplier.get();
+                TimeService timeService = timeServiceSupplier.get();
                 LocalConfig localConfig = LocalConfig.DEFAULT;
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
                 AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale);
@@ -563,7 +570,7 @@ public class Cluster
                         return tfkLoadedChance.getAsBoolean();
                     }
                 };
-                Node node = new Node(id, messageSink, configService, TimeService.ofNonMonotonic(nowSupplier, MILLISECONDS),
+                Node node = new Node(id, messageSink, configService, timeService,
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      nodeExecutor.agent(),
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
@@ -598,7 +605,10 @@ public class Cluster
             updateDurabilityRate.run();
             schemaApply.onUpdate(topology);
 
+            Pending.Global.setNoActiveOrigin();
             AsyncResult<?> startup = AsyncChains.reduce(nodeMap.values().stream().map(Node::unsafeStart).collect(toList()), (a, b) -> null).beginAsResult();
+            Pending.Global.clearActiveOrigin();
+
             while (sinks.processPending());
             Invariants.checkArgument(startup.isDone());
 
@@ -645,7 +655,7 @@ public class Cluster
                     CommandsForKey.enableLinearizabilityViolationsReporting();
                     verifyConsistentRestore(beforeStores, stores);
                     // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
-                    listStore.checkAtLeast(prevData);
+                    listStore.checkAtLeast(stores, prevData);
                     trace.debug("Done with cleanup.");
                 });
             }, () -> random.nextInt(10, 30), SECONDS);
@@ -655,6 +665,7 @@ public class Cluster
 
             Runnable stop = () -> {
                 reconfigure.cancel();
+                durabilityScheduling.forEach(DurabilityScheduling::stop);
                 purge.cancel();
                 restart.cancel();
                 services.forEach(Service::close);
@@ -779,7 +790,7 @@ public class Cluster
                 Command afterCommand = e.getValue().value();
                 if (beforeCommand == null)
                 {
-                    Invariants.checkArgument(afterCommand.is(Status.NotDefined));
+                    Invariants.checkArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus() == SaveStatus.ErasedOrVestigial);
                     continue;
                 }
                 if (afterCommand.hasBeen(Status.Truncated))

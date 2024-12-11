@@ -151,7 +151,7 @@ class ReadDataTest
                 CheckedCommands.accept(safe, state.txnId, Ballot.ZERO, state.partialRoute, state.executeAt, state.deps);
 
                 SafeCommand safeCommand = safe.ifInitialised(state.txnId);
-                safeCommand.stable(safe, safeCommand.current(), Ballot.ZERO, state.executeAt, Command.WaitingOn.empty(state.txnId.domain()));
+                safeCommand.stable(safe, safeCommand.current().updateParticipants(StoreParticipants.execute(safe, state.route, state.txnId, state.txnId.epoch())), Ballot.ZERO, state.executeAt, Command.WaitingOn.empty(state.txnId.domain()));
             })));
 
             ReplyContext replyContext = state.process();
@@ -264,7 +264,7 @@ class ReadDataTest
             this.route = keys.toRoute(key.toUnseekable());
             this.partialRoute = route.slice(RANGES);
             this.executeAt = txnId;
-            this.deps = PartialDeps.builder(partialRoute).build();
+            this.deps = PartialDeps.builder(partialRoute, true).build();
             this.readResult = readResult;
         }
 

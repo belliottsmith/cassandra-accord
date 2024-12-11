@@ -33,7 +33,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import javax.annotation.Nonnull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
@@ -59,7 +58,6 @@ import accord.coordinate.CoordinateTransaction;
 import accord.coordinate.CoordinationAdapter;
 import accord.coordinate.CoordinationAdapter.Factory.Kind;
 import accord.coordinate.Infer.InvalidIf;
-import accord.coordinate.MaybeRecover;
 import accord.coordinate.Outcome;
 import accord.coordinate.RecoverWithRoute;
 import accord.impl.DurabilityScheduling;
@@ -71,11 +69,9 @@ import accord.messages.TxnRequest;
 import accord.primitives.Ballot;
 import accord.primitives.EpochSupplier;
 import accord.primitives.FullRoute;
-import accord.primitives.ProgressToken;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Routables;
-import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -767,7 +763,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route)
+    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, long reportLowEpoch, long reportHighEpoch)
     {
         {
             AsyncResult<? extends Outcome> result = coordinating.get(txnId);
@@ -777,24 +773,12 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
         AsyncResult<Outcome> result = withEpoch(txnId.epoch(), () -> {
             RecoverFuture<Outcome> future = new RecoverFuture<>();
-            RecoverWithRoute.recover(this, txnId, invalidIf, route, null, future);
+            RecoverWithRoute.recover(this, txnId, invalidIf, route, null, reportLowEpoch, reportHighEpoch, future);
             return future;
         }).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
         result.addCallback((success, fail) -> coordinating.remove(txnId, result));
         return result;
-    }
-
-    // TODO (low priority, API/efficiency): coalesce maybeRecover calls? perhaps have mutable knownStatuses so we can inject newer ones?
-    public AsyncResult<? extends Outcome> maybeRecover(TxnId txnId, InvalidIf invalidIf,  @Nonnull Route<?> someRoute, ProgressToken prevProgress)
-    {
-        AsyncResult<? extends Outcome> result = coordinating.get(txnId);
-        if (result != null)
-            return result;
-
-        RecoverFuture<Outcome> future = new RecoverFuture<>();
-        MaybeRecover.maybeRecover(this, txnId, invalidIf, someRoute, prevProgress, future);
-        return future;
     }
 
     public void receive(Request request, Id from, ReplyContext replyContext)

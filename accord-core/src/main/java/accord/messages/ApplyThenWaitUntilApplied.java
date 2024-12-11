@@ -99,7 +99,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     @Override
     public CommitOrReadNack apply(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, executeAtEpoch);
+        StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, executeAtEpoch);
         ApplyReply applyReply = Apply.apply(safeStore, participants, txn, txnId, executeAt, deps, route, writes, result);
         switch (applyReply)
         {

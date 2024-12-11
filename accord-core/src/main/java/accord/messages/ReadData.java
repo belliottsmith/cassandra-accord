@@ -53,7 +53,6 @@ import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.messages.MessageType.READ_RSP;
 import static accord.messages.ReadData.CommitOrReadNack.Insufficient;
-import static accord.messages.ReadData.CommitOrReadNack.Invalid;
 import static accord.messages.ReadData.CommitOrReadNack.Redundant;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -335,6 +334,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     static Ranges unavailable(SafeCommandStore safeStore, Command command)
     {
         Timestamp executeAt = command.executesAtLeast();
+        if (executeAt == null) executeAt = command.executeAtOrTxnId();
         // TODO (required): for awaitsOnlyDeps commands, if we cannot infer an actual executeAtLeast we should confirm no situation where txnId is not an adequately conservative value for unavailable/unsafeToRead
         return safeStore.unsafeToReadAt(executeAt);
     }

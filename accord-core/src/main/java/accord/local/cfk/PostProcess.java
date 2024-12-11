@@ -26,6 +26,7 @@ import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
+import accord.local.CommandStore;
 import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
@@ -305,7 +306,7 @@ abstract class PostProcess
                         {
                             TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
                             unmanageds = removeUnmanaged(unmanageds, start, end);
-                            end -= (end - start);
+                            end = start;
                             notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
                         }
                         start = ++end;
@@ -339,11 +340,16 @@ abstract class PostProcess
             Timestamp maxPreBootstrap;
             {
                 Timestamp tmp = bootstrappedAt;
-                for (int i = 0; i < byId.length; ++i)
+                for (TxnInfo txn : byId)
                 {
-                    TxnInfo txn = byId[i];
                     if (txn.compareTo(bootstrappedAt) > 0)
                         break;
+                    // while we can in principle exclude all transactions with a lower txnId regardless of their executeAt
+                    // for consistent handling with other transactions we don't leap ahead by executeAt as this permits
+                    // us to also exclude transactions with a higher txnId which is not consistent with other validity checks
+                    // which don't have this additional context
+                    if (txn.executeAt.compareTo(bootstrappedAt) > 0)
+                        continue;
                     tmp = Timestamp.nonNullOrMax(tmp, txn.executeAt);
                 }
                 maxPreBootstrap = tmp;
@@ -368,7 +374,12 @@ abstract class PostProcess
                         ++end;
 
                     // find committed predecessor, if any
-                    int predecessor = -2 - SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanageds[start].waitingUntil, (t, i) -> t.compareTo(i.executeAt), FAST);
+                    int predecessor = SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanageds[start].waitingUntil, (t, i) -> t.compareTo(i.executeAt), FAST);
+                    if (predecessor < 0) predecessor = -2 - predecessor;
+                    else predecessor = predecessor - 1;
+
+                    while (predecessor >= 0 && rescheduleOrNotifyIf.test(committedByExecuteAt[predecessor].executeAt))
+                        --predecessor;
 
                     if (predecessor >= 0)
                     {

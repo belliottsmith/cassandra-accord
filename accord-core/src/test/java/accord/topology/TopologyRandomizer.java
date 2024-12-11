@@ -455,7 +455,7 @@ public class TopologyRandomizer
             state.shards = newShards;
             Shard[] testShards = type.apply(state, random);
             Arrays.sort(testShards, (a, b) -> a.range.compareTo(b.range));
-            if (!everyShardHasOverlaps(current.epoch, oldShards, testShards)
+            if (!everyShardHasOverlaps(oldShards, testShards)
                 || reassignsRanges(current, testShards, previouslyReplicated)
             )
             {
@@ -495,7 +495,7 @@ public class TopologyRandomizer
         return nextTopology;
     }
 
-    private boolean everyShardHasOverlaps(long prevEpoch, Shard[] in, Shard[] out)
+    private boolean everyShardHasOverlaps(Shard[] in, Shard[] out)
     {
         int i = 0, o = 0;
         while (i < in.length && o < out.length)

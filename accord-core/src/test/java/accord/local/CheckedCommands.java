@@ -76,7 +76,7 @@ public class CheckedCommands
 
     public static void commit(SafeCommandStore safeStore, SaveStatus saveStatus, Ballot ballot, TxnId txnId, Route<?> route, @Nullable PartialTxn partialTxn, Timestamp executeAt, PartialDeps partialDeps, BiConsumer<Command, Command> consumer)
     {
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, executeAt.epoch());
+        StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command before = safeCommand.current();
         Commands.CommitOutcome result = Commands.commit(safeStore, safeCommand, participants, saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps);
@@ -92,7 +92,7 @@ public class CheckedCommands
 
     public static void apply(SafeCommandStore safeStore, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable PartialTxn partialTxn, Writes writes, Result result, BiConsumer<Command, Command> consumer)
     {
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, executeAt.epoch());
+        StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command before = safeCommand.current();
         Commands.ApplyOutcome outcome = Commands.apply(safeStore, safeCommand, participants, txnId, route, executeAt, partialDeps, partialTxn, writes, result);

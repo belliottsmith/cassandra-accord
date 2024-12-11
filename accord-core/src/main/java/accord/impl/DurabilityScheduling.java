@@ -34,7 +34,6 @@ import org.slf4j.LoggerFactory;
 import accord.api.ConfigurationService;
 import accord.api.Scheduler;
 import accord.coordinate.CoordinateGloballyDurable;
-import accord.coordinate.CoordinationFailed;
 import accord.coordinate.ExecuteSyncPoint.SyncPointErased;
 import accord.local.Node;
 import accord.local.ShardDistributor;
@@ -465,6 +464,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
             if (currentGlobalTopology == null || currentGlobalTopology.size() == 0)
                 return;
 
+            // TODO (required): cap number of running global syncs
             startGlobalSync();
         }
         finally
@@ -638,7 +638,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
         long targetTimeInCurrentRound = startOfCurrentRound + ourOffsetInRound;
         long targetTime = targetTimeInCurrentRound;
         // If our time to run in the current round already passed then schedule it in the next round
-        if (targetTimeInCurrentRound < nowMicros)
+        if (targetTimeInCurrentRound <= nowMicros)
             targetTime += totalRoundDuration;
 
         return targetTime;

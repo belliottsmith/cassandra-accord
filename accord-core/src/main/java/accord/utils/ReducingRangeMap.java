@@ -24,8 +24,6 @@ import java.util.Arrays;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
 
-import javax.annotation.Nullable;
-
 import static accord.utils.SortedArrays.Search.FAST;
 import static accord.utils.SortedArrays.exponentialSearch;
 
@@ -69,9 +67,12 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return foldl(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], self.starts[k+1]), accumulator, fold, this, terminate);
     }
 
+    // note: last end bound may be null
+    // TODO (required): should there be a call where start bound is null? Should we always provide null end bound if we match to the end?
+    //  I don't think it should functionally matter in caller, but for symmetry should probably be one or the other
     public <V2> V2 foldlWithDefaultAndBounds(Routables<?> routables, QuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V defaultValue, V2 accumulator, Predicate<V2> terminate)
     {
-        return foldlWithDefault(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], self.starts[k+1]), defaultValue, accumulator, fold, this, terminate);
+        return foldlWithDefault(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], k + 1 >= self.starts.length ? null : self.starts[k+1]), defaultValue, accumulator, fold, this, terminate);
     }
 
     public <R extends Routable, V2> V2 foldlWithInputAndBounds(Routables<R> routables, IndexedRangeQuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V2 accumulator, Predicate<V2> terminate)

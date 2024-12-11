@@ -35,7 +35,6 @@ import accord.local.cfk.SafeCommandsForKey;
 import accord.local.cfk.UpdateUnmanagedMode;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.KeyDeps;
-import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.RoutingKeys;
@@ -43,9 +42,7 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind;
-import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.SimpleBitSet;
@@ -53,6 +50,7 @@ import accord.utils.SortedList;
 import accord.utils.async.AsyncChain;
 
 import static accord.local.KeyHistory.INCR;
+import static accord.local.KeyHistory.NONE;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Range;
@@ -67,36 +65,8 @@ import static accord.utils.Invariants.illegalState;
  *
  * Method implementations may therefore be single threaded, without volatile access or other concurrency control
  */
-public abstract class SafeCommandStore implements RangesForEpochSupplier, RedundantBeforeSupplier
+public abstract class SafeCommandStore implements RangesForEpochSupplier, RedundantBeforeSupplier, CommandSummaries
 {
-    public interface CommandFunction<P1, I, O>
-    {
-        O apply(P1 p1, Unseekable keyOrRange, TxnId txnId, Timestamp executeAt, I in);
-    }
-
-    public enum TestStartedAt
-    {
-        STARTED_BEFORE,
-        STARTED_AFTER,
-        ANY
-    }
-
-    public enum TestDep
-    {
-        // special variant that matches the same as WITH or if the command is Invalidated
-        // this is useful when we care about establishing whether later transactions durably witness the command
-        // (since invalidated commands can be treated as witnessing the command for progress purposes)
-        WITH_OR_INVALIDATED,
-
-        // filter to only those commands with deps, but without the parameter as a dependency
-        WITHOUT,
-
-        // don't test deps
-        ANY_DEPS;
-    }
-
-    public enum TestStatus { ANY_STATUS, IS_PROPOSED, IS_STABLE, IS_STABLE_OR_INVALIDATED }
-
     /**
      * If the transaction exists (with some associated data) in the CommandStore, return it. Otherwise return null.
      *
@@ -139,7 +109,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (safeCommand == null)
             throw notFound(txnId);
 
-        return maybeCleanup(safeCommand, safeCommand.current(), participants);
+        return maybeCleanup(safeCommand, participants);
     }
 
     protected SafeCommand get(TxnId txnId)
@@ -148,7 +118,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (safeCommand == null)
             throw notFound(txnId);
 
-        return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
+        return maybeCleanup(safeCommand);
     }
 
     public SafeCommand unsafeGet(TxnId txnId)
@@ -169,11 +139,15 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     protected SafeCommand maybeCleanup(SafeCommand safeCommand)
     {
-        return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(safeCommand.txnId()));
+        Command command = safeCommand.current();
+        Commands.maybeCleanup(this, safeCommand, command, command.participants());
+        return safeCommand;
     }
 
-    protected SafeCommand maybeCleanup(SafeCommand safeCommand, Command command, @Nonnull StoreParticipants participants)
+    protected SafeCommand maybeCleanup(SafeCommand safeCommand, @Nonnull StoreParticipants supplemental)
     {
+        Command command = safeCommand.current();
+        StoreParticipants participants = command.participants().supplementOrMerge(command.saveStatus(), supplemental);
         Commands.maybeCleanup(this, safeCommand, command, participants);
         return safeCommand;
     }
@@ -197,7 +171,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (safeCommand.isUnset() || safeCommand.current().saveStatus() == Uninitialised)
             return null;
 
-        return maybeCleanup(safeCommand, safeCommand.current(), StoreParticipants.empty(txnId));
+        return maybeCleanup(safeCommand);
     }
 
     protected SafeCommandsForKey maybeCleanup(SafeCommandsForKey safeCfk)
@@ -232,7 +206,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (safeCfk != null)
             return maybeCleanup(safeCfk);
 
-        if (context().keys().contains(key)) throw illegalState("%s was specified in %s but was not returned by getInternal(key)", key, context().keys());
+        if (context().keyHistory() != NONE && context().keys().contains(key)) throw illegalState("%s was specified in %s but was not returned by getInternal(key)", key, context().keys());
         else throw illegalArgument("%s was not specified in %s", key, context());
     }
 
@@ -357,7 +331,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command prev, Command next)
     {
         StoreParticipants participants = next.participants().supplement(prev.participants());
-        Participants<?> update = next.hasBeen(Status.Committed) ? participants.hasTouched : participants.touches;
+        Participants<?> update = next.hasBeen(Status.Committed) ? participants.hasTouched() : participants.stillTouches();
         if (update.isEmpty())
             return;
 
@@ -384,7 +358,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     {
         for (RoutingKey key : (AbstractUnseekableKeys)update)
         {
-            safeStore.get(key).update(safeStore, next, update != participants.touches && !participants.touches(key));
+            safeStore.get(key).update(safeStore, next, update != participants.stillTouches() && !participants.stillTouches(key));
         }
     }
 
@@ -420,14 +394,17 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                     case NOT_OWNED:
                     case WAS_OWNED:
                     case WAS_OWNED_CLOSED:
+                    case WAS_OWNED_PARTIALLY_RETIRED: // means fully locally redundant in this case
                     case LIVE:
                     case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
                     case PRE_BOOTSTRAP_OR_STALE:
                     case PARTIALLY_LOCALLY_REDUNDANT:
                     case LOCALLY_REDUNDANT:
+                        // we need to record transitive dependencies for coordination decisions
                         select.set(i);
                     case WAS_OWNED_RETIRED:
                     case PARTIALLY_SHARD_REDUNDANT:
+                    case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
                     case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
                     case SHARD_REDUNDANT:
                     case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
@@ -486,26 +463,11 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     private static void registerTransitive(SafeCommandStore safeStore, TxnId txnId, Command next)
     {
         CommandStore commandStore = safeStore.commandStore();
-        Ranges ranges = next.participants().touches.toRanges();
+        Ranges ranges = next.participants().touches().toRanges();
         commandStore.registerTransitive(safeStore, next.partialDeps().rangeDeps);
         if (txnId.is(Kind.ExclusiveSyncPoint))
             commandStore.markSynced(safeStore, txnId, ranges);
     }
-
-    /**
-     * Visits keys first and then ranges, both in ascending order.
-     * Within each key or range visits all visible txnids needed for the given scope in ascending order of queried timestamp.
-     */
-    public abstract <P1, T> T mapReduceActive(Unseekables<?> keys, @Nullable Timestamp withLowerTxnId, Kinds kinds, CommandFunction<P1, T, T> map, P1 p1, T initialValue);
-
-    public abstract <P1, T> T mapReduceFull(Unseekables<?> keys,
-                                            TxnId testTxnId,
-                                            Kinds testKind,
-                                            TestStartedAt testStartedAt,
-                                            TestDep testDep,
-                                            TestStatus testStatus,
-                                            CommandFunction<P1, T, T> map,
-                                            P1 p1, T initialValue);
 
     public abstract CommandStore commandStore();
     public abstract DataStore dataStore();

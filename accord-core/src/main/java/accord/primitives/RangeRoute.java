@@ -114,7 +114,7 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
         switch (intersecting.domain())
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
-            case Key: return intersecting((AbstractUnseekableKeys)intersecting, this, homeKey, (ignore, hk, ranges) -> new PartialRangeRoute(hk, ranges));
+            case Key: return intersecting((AbstractUnseekableKeys)intersecting, this, homeKey, (ignore, hk, ranges) -> new PartialRangeRoute(hk, ranges), slice);
             case Range: return slice((AbstractRanges)intersecting, slice, this, homeKey, (ignore, homeKey, ranges) -> new PartialRangeRoute(homeKey, ranges));
         }
     }
@@ -131,7 +131,7 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
         switch (intersecting.domain())
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
-            case Key: return intersecting((Keys)intersecting, this, homeKey, (ignore, hk, ranges) -> new PartialRangeRoute(hk, ranges));
+            case Key: return intersecting((Keys)intersecting, this, homeKey, (ignore, hk, ranges) -> new PartialRangeRoute(hk, ranges), slice);
             case Range: return slice((AbstractRanges)intersecting, slice, this, homeKey, (ignore, homeKey, ranges) -> new PartialRangeRoute(homeKey, ranges));
         }
     }

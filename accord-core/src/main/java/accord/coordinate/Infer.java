@@ -104,6 +104,7 @@ public class Infer
         }
     }
 
+    // TODO (required): audit all use cases
     private static abstract class CleanupAndCallback<T> implements MapReduceConsume<SafeCommandStore, Void>
     {
         final Node node;

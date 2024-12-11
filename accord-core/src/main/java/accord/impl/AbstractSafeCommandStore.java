@@ -232,7 +232,7 @@ extends SafeCommandStore
     @Override
     public final void upsertRedundantBefore(RedundantBefore addRedundantBefore)
     {
-        // TODO (required): fix RedundantBefore sorting issue and switch to upsert mode
+        // TODO (expected): fix RedundantBefore sorting issue and switch to upsert mode
         ensureFieldUpdates().newRedundantBefore = RedundantBefore.merge(redundantBefore(), addRedundantBefore);
         unsafeUpsertRedundantBefore(addRedundantBefore);
     }

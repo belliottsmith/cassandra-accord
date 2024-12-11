@@ -353,14 +353,14 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
     {
         int txnIdIndex = Arrays.binarySearch(txnIds, txnId);
         if (txnIdIndex < 0)
-            throw illegalState("Cannot create a RouteFragment without any keys");
+            return RoutingKeys.EMPTY;
 
         int[] txnIdsToKeys = txnIdsToKeys();
 
         int start = txnIdIndex == 0 ? txnIds.length : txnIdsToKeys[txnIdIndex - 1];
         int end = txnIdsToKeys[txnIdIndex];
         if (start == end)
-            throw illegalState("Cannot create a RouteFragment without any keys");
+            return RoutingKeys.EMPTY;
 
         RoutingKey[] result = new RoutingKey[end - start];
         result[0] = keys.get(txnIdsToKeys[start]).toUnseekable();

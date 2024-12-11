@@ -24,11 +24,9 @@ import accord.local.Node;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
-import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekable;
 import accord.topology.Topologies;
 
 public class StabiliseSyncPoint<R> extends Stabilise<R>

@@ -23,6 +23,7 @@ import java.util.BitSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -741,6 +742,11 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         return ranges.length;
     }
 
+    public TxnId maxTxnId(TxnId orElse)
+    {
+        return txnIdCount() == 0 ? orElse : txnId(txnIdCount() - 1);
+    }
+
     public Ranges covering()
     {
         if (covering == null)
@@ -756,7 +762,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
 
     public boolean equals(RangeDeps that)
     {
-        return testEquality(this.ranges, this.txnIds, this.rangesToTxnIds, that.ranges, that.txnIds, that.rangesToTxnIds);
+        return Objects.equals(covering, that.covering) && testEquality(this.ranges, this.txnIds, this.rangesToTxnIds, that.ranges, that.txnIds, that.rangesToTxnIds);
     }
 
     @Override
@@ -937,16 +943,31 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         }
     }
 
-    public static Builder builder()
+    public static BuilderByRange builderByRange()
     {
-        return new Builder();
+        return new BuilderByRange();
     }
 
-    public static class Builder extends AbstractBuilder<Range, TxnId, RangeDeps>
+    public static abstract class AbstractRangeBuilder<K, V> extends AbstractBuilder<K, V, RangeDeps>
     {
-        public Builder()
+        AbstractRangeBuilder(Adapter<K, V> adapter)
+        {
+            super(adapter);
+        }
+        public abstract void add(Range range, TxnId txnId);
+    }
+
+    public static final class BuilderByRange extends AbstractRangeBuilder<Range, TxnId>
+    {
+        public BuilderByRange()
         {
             super(ADAPTER);
+        }
+
+        @Override
+        public void add(Range range, TxnId txnId)
+        {
+            super.add(range, txnId);
         }
 
         @Override
@@ -967,7 +988,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         return new BuilderByTxnId();
     }
 
-    public static class BuilderByTxnId extends AbstractBuilder<TxnId, Range, RangeDeps>
+    public static final class BuilderByTxnId extends AbstractRangeBuilder<TxnId, Range>
     {
         public BuilderByTxnId()
         {
@@ -984,6 +1005,12 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         protected RangeDeps build(TxnId[] txnIds, Range[] ranges, int[] txnIdsToRanges)
         {
             return new RangeDeps(ranges, txnIds, invert(txnIdsToRanges, txnIdsToRanges.length, txnIds.length, ranges.length), txnIdsToRanges);
+        }
+
+        @Override
+        public void add(Range range, TxnId txnId)
+        {
+            add(txnId, range);
         }
     }
 

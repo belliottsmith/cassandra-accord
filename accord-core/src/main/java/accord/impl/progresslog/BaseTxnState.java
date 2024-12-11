@@ -189,5 +189,5 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
 
     abstract void updateScheduling(SafeCommandStore safeStore, DefaultProgressLog instance, TxnStateKind updated, @Nullable BlockedUntil awaiting, Progress newProgress);
 
-    abstract void maybeRemove(DefaultProgressLog instance);
+    abstract boolean maybeRemove(DefaultProgressLog instance);
 }

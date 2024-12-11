@@ -37,7 +37,6 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommonAttributes;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
@@ -67,6 +66,7 @@ import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.PreLoadContext.contextFor;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
@@ -260,6 +260,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         if (after.hasBeen(PreApplied))
             return state;
 
+        // TODO (required): (LHF) this does not appear to correctly compute for an ExclusiveSyncPoint, but equally
+        //   executes() may not be set for only PreCommitted transactions.
         Ranges executeRanges = after.hasBeen(PreCommitted) ? safeStore.ranges().allAt(after.executeAt())
                                                            : safeStore.ranges().allSince(after.txnId().epoch());
         if (executeRanges.intersects(after.participants().owns()))
@@ -297,20 +299,23 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     }
 
     @Override
-    public void clearBefore(TxnId clearBefore)
+    public void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore)
     {
-        if (clearBefore.equals(Timestamp.NONE))
-            return;
-
-        Invariants.checkState(clearBefore.is(ExclusiveSyncPoint));
-
-        while (!BTree.isEmpty(stateMap))
+        int index = 0;
+        while (index < BTree.size(stateMap))
         {
-            TxnState state = BTree.findByIndex(stateMap, 0);
-            if (state.txnId.compareTo(clearBefore) >= 0)
-                return;
-
-            clear(state);
+            TxnState state = BTree.findByIndex(stateMap, index);
+            if (state.txnId.compareTo(clearAnyBefore) < 0)
+            {
+                clear(state);
+            }
+            else if (state.txnId.compareTo(clearWaitingBefore) < 0)
+            {
+                state.setWaitingDone(this);
+                if (!state.maybeRemove(this))
+                    ++index;
+            }
+            else return;
         }
     }
 
@@ -365,18 +370,37 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         // ensure we have a record to work with later; otherwise may think has been truncated
         // TODO (expected): we shouldn't rely on this anymore
         blockedBy.initialise();
-        Invariants.checkState(blockedBy.current().saveStatus().compareTo(blockedUntil.minSaveStatus) < 0);
-        Invariants.checkState(blockedOnParticipants == null || safeStore.ranges().all().containsAll(blockedOnParticipants)); // more permissive than strictly necessary, but just to cheaply catch errors
+        Command command = blockedBy.current();
+        SaveStatus saveStatus = command.saveStatus();
+        Invariants.checkState(saveStatus.compareTo(blockedUntil.minSaveStatus) < 0);
+
+        StoreParticipants blockedOnStoreParticipants2 = null;
+        if (blockedOnParticipants != null || blockedOnRoute != null)
+        {
+            Participants<?> owns, touches;
+            Ranges coordinateRanges = safeStore.ranges().allAt(blockedBy.txnId().epoch());
+            if (blockedOnRoute == null)
+            {
+                touches = blockedOnParticipants;
+                owns = blockedOnParticipants.slice(coordinateRanges, Minimal);
+            }
+            else
+            {
+                owns = blockedOnRoute.slice(coordinateRanges, Minimal);
+                touches = owns;
+            }
+            blockedOnStoreParticipants2 = StoreParticipants.create(blockedOnRoute, owns, null, touches, touches);
+        }
 
         // first save the route/participant info into the Command if it isn't already there
-        Command command = blockedBy.current();
 
         CommonAttributes update = blockedBy.current();
         StoreParticipants participants = update.participants();
-        StoreParticipants updatedParticipants = participants.supplement(blockedOnRoute, null, blockedOnParticipants);
-        if (blockedOnStoreParticipants != null) updatedParticipants = updatedParticipants.supplement(blockedOnStoreParticipants);
+        StoreParticipants updatedParticipants = participants;
+        if (blockedOnStoreParticipants != null) updatedParticipants = updatedParticipants.supplementOrMerge(saveStatus, blockedOnStoreParticipants);
+        if (blockedOnStoreParticipants2 != null) updatedParticipants = updatedParticipants.supplementOrMerge(saveStatus, blockedOnStoreParticipants2);
         if (participants != updatedParticipants)
-            update = update.mutable().updateParticipants(updatedParticipants);
+            update = update.mutable().setParticipants(updatedParticipants);
 
         if (update != command)
             command = blockedBy.updateAttributes(safeStore, update);
@@ -386,13 +410,13 @@ public class DefaultProgressLog implements ProgressLog, Runnable
                                                                       : safeStore.ranges().allSince(command.txnId().epoch())
                               ).intersects(command.participants().hasTouched()));
 
-        // TODO (consider): consider triggering a preemption of existing coordinator (if any) in some circumstances;
+        // TODO (desired):  consider triggering a preemption of existing coordinator (if any) in some circumstances;
         //                  today, an LWT can pre-empt more efficiently (i.e. instantly) a failed operation whereas Accord will
         //                  wait for some progress interval before taking over; there is probably some middle ground where we trigger
         //                  faster preemption once we're blocked on a transaction, while still offering some amount of time to complete.
-        // TODO (desirable, efficiency): forward to local progress shard for processing (if known)
-        // TODO (desirable, efficiency): if we are co-located with the home shard, don't need to do anything unless we're in a
-        //                               later topology that wasn't covered by its coordination
+        // TODO (desired, efficiency): forward to local progress shard for processing (if known)
+        // TODO (desired, efficiency): if we are co-located with the home shard, don't need to do anything unless we're in a
+        //                             later topology that wasn't covered by its coordination
         TxnState state = ensure(blockedBy.txnId());
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
     }

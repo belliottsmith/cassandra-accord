@@ -63,9 +63,9 @@ public class Invalidate implements Callback<InvalidateReply>
     private final Topology topology;
     private final InvalidationTracker tracker;
     private Throwable failure;
-    private final long commitLocalLowEpoch, commitLocalHighEpoch;
+    private final long reportLowEpoch, reportHighEpoch;
 
-    private Invalidate(Node node, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, long commitLocalLowEpoch, long commitLocalHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    private Invalidate(Node node, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
         this.callback = callback;
         this.node = node;
@@ -73,8 +73,8 @@ public class Invalidate implements Callback<InvalidateReply>
         this.txnId = txnId;
         this.invalidateWith = invalidateWith;
         this.transitivelyInvokedByPriorInvalidation = transitivelyInvokedByPriorInvalidation;
-        this.commitLocalLowEpoch = commitLocalLowEpoch;
-        this.commitLocalHighEpoch = commitLocalHighEpoch;
+        this.reportLowEpoch = reportLowEpoch;
+        this.reportHighEpoch = reportHighEpoch;
         Topologies topologies = node.topology().forEpoch(invalidateWith, txnId.epoch());
         Invariants.checkState(topologies.size() == 1);
         this.tracker = new InvalidationTracker(topologies);
@@ -216,7 +216,7 @@ public class Invalidate implements Callback<InvalidateReply>
                         if (!invalidateWith.containsAll(fullRoute))
                             witnessedByInvalidation = null;
                     }
-                    RecoverWithRoute.recover(node, ballot, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, callback);
+                    RecoverWithRoute.recover(node, ballot, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
                     return;
 
                 case Invalidated:
@@ -295,7 +295,7 @@ public class Invalidate implements Callback<InvalidateReply>
         //  so we do not need to explicitly do so here before notifying the waiter
         Participants<?> commitTo = Participants.merge(route, (Participants) invalidateWith);
         Commit.Invalidate.commitInvalidate(node, txnId, commitTo, txnId);
-        commitInvalidateLocal(commitTo, commitLocalLowEpoch, commitLocalHighEpoch);
+        commitInvalidateLocal(commitTo, reportLowEpoch, reportHighEpoch);
     }
 
     private void commitInvalidateLocal(Participants<?> commitTo, long lowEpoch, long highEpoch)

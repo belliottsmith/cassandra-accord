@@ -267,8 +267,7 @@ public interface CoordinationAdapter<R>
             @Override
             Topologies forExecution(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Deps deps)
             {
-                TxnId minId = TxnId.nonNullOrMin(txnId, deps.minTxnId());
-                return node.topology().withUncompletedEpochs(route, minId, txnId);
+                return node.topology().withUncompletedEpochs(route, txnId, txnId);
             }
 
             @Override
@@ -339,7 +338,7 @@ public interface CoordinationAdapter<R>
          * point is being executed and that eventually information will be known locally everywhere about the last
          * sync point for the keys/ranges this sync point covered.
          */
-        static class AsyncInclusiveSyncPointAdapter<U extends Unseekable> extends AbstractInitiateInclusiveSyncPointAdapter<U>
+        public static class AsyncInclusiveSyncPointAdapter<U extends Unseekable> extends AbstractInitiateInclusiveSyncPointAdapter<U>
         {
             private static final AsyncInclusiveSyncPointAdapter INSTANCE = new AsyncInclusiveSyncPointAdapter();
 
@@ -348,7 +347,7 @@ public interface CoordinationAdapter<R>
             }
         }
 
-        static class InclusiveSyncPointBlockingAdapter<U extends Unseekable> extends AbstractInitiateInclusiveSyncPointAdapter<U>
+        public static class InclusiveSyncPointBlockingAdapter<U extends Unseekable> extends AbstractInitiateInclusiveSyncPointAdapter<U>
         {
             private static final InclusiveSyncPointBlockingAdapter INSTANCE = new InclusiveSyncPointBlockingAdapter();
 

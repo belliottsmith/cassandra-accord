@@ -29,11 +29,10 @@ import accord.api.LocalListeners;
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.KeyHistory;
+import accord.local.CommandSummaries;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.local.SafeCommandStore.TestDep;
-import accord.local.SafeCommandStore.TestStartedAt;
 import accord.primitives.Seekables;
 import accord.primitives.Status;
 import accord.primitives.FullRoute;
@@ -43,15 +42,20 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekable;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 import accord.utils.TriFunction;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import static accord.local.PreLoadContext.contextFor;
-import static accord.local.SafeCommandStore.TestStatus.IS_STABLE;
+import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
+import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
+import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
+import static accord.local.CommandSummaries.TestStartedAt.STARTED_AFTER;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.checkState;
@@ -271,32 +275,17 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
      * For Applied we can return success immediately with the executeAt epoch. For PreApplied we can add
      * a listener for when it transitions to Applied and then return success.
      */
-    class ExistingTransactionCheck extends AsyncResults.AbstractResult<BarrierTxn> implements MapReduceConsume<SafeCommandStore, BarrierTxn>
+    class ExistingTransactionCheck extends AsyncResults.AbstractResult<BarrierTxn> implements MapReduceConsume<SafeCommandStore, BarrierTxn>, CommandSummaries.AllCommandVisitor
     {
         @Override
         public BarrierTxn apply(SafeCommandStore safeStore)
         {
-            // TODO (required, consider): consider these semantics
-            BarrierTxn found = safeStore.mapReduceFull(
-            route,
+            // TODO (required): consider these semantics carefully
             // Barriers are trying to establish that committed transactions are applied before the barrier (or in this case just minEpoch)
             // so all existing transaction types should ensure that at this point. An earlier txnid may have an executeAt that is after
             // this barrier or the transaction we listen on and that is fine
-            TxnId.minForEpoch(minEpoch),
-            AnyGloballyVisible,
-            TestStartedAt.STARTED_AFTER,
-            TestDep.ANY_DEPS,
-            IS_STABLE,
-            (p1, keyOrRange, txnId, executeAt, barrierTxn) -> {
-                if (barrierTxn != null)
-                    return barrierTxn;
-                if (keyOrRange.domain() == Domain.Key)
-                    return new BarrierTxn(txnId, executeAt, keyOrRange.asRoutingKey());
-                return null;
-            },
-            null,
-            null);
-            // It's not applied so add a listener to find out when it is applied
+            TxnId startedAfter = TxnId.minForEpoch(minEpoch);
+            safeStore.visit(route, startedAfter, AnyGloballyVisible, STARTED_AFTER, startedAfter, IGNORE, this);
             if (found != null)
             {
                 //noinspection SillyAssignment,ConstantConditions
@@ -306,6 +295,20 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
                          .begin(node.agent());
             }
             return found;
+        }
+
+        private BarrierTxn found;
+
+        @Override
+        public boolean visit(Unseekable keyOrRange, TxnId txnId, Timestamp executeAt, CommandSummaries.SummaryStatus status, @Nullable CommandSummaries.IsDep dep)
+        {
+            if (status.compareTo(COMMITTED) < 0 || status == INVALIDATED)
+                return true;
+
+            Invariants.checkState(found == null);
+            if (keyOrRange.domain() == Domain.Key)
+                found = new BarrierTxn(txnId, executeAt, keyOrRange.asRoutingKey());
+            return found == null;
         }
 
         @Override
