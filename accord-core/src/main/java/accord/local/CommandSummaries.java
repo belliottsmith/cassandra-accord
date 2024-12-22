@@ -66,7 +66,7 @@ public interface CommandSummaries
         public final TxnId findAsDep;
 
         @VisibleForTesting
-        Summary(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, @Nonnull SummaryStatus status, @Nonnull Unseekables<?> participants, IsDep dep, TxnId findAsDep)
+        public Summary(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, @Nonnull SummaryStatus status, @Nonnull Unseekables<?> participants, IsDep dep, TxnId findAsDep)
         {
             this.txnId = txnId;
             this.executeAt = executeAt;
@@ -96,13 +96,18 @@ public interface CommandSummaries
 
         public static class Loader
         {
-            final Unseekables<?> searchKeysOrRanges;
-            final RedundantBefore redundantBefore;
+            public interface Factory<L extends Loader>
+            {
+                L create(Unseekables<?> searchKeysOrRanges, RedundantBefore redundantBefore, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep);
+            }
+
+            protected final Unseekables<?> searchKeysOrRanges;
+            protected final RedundantBefore redundantBefore;
             // TODO (desired): separate out Kinds we need before/after primaryTxnId/executeAt
-            final Kinds testKind;
-            final TxnId minTxnId;
-            final Timestamp maxTxnId;
-            @Nullable final TxnId findAsDep;
+            protected final Kinds testKind;
+            protected final TxnId minTxnId;
+            protected final Timestamp maxTxnId;
+            @Nullable protected final TxnId findAsDep;
 
             // TODO (desired): provide executeAt to PreLoadContext so we can more aggressively filter what we load, esp. by Kind
             public static Loader loader(RedundantBefore redundantBefore, PreLoadContext context)
@@ -112,11 +117,16 @@ public interface CommandSummaries
 
             public static Loader loader(RedundantBefore redundantBefore, @Nullable TxnId primaryTxnId, KeyHistory keyHistory, Unseekables<?> keysOrRanges)
             {
+                return loader(redundantBefore, primaryTxnId, keyHistory, keysOrRanges, Loader::new);
+            }
+
+            public static <L extends Loader> L loader(RedundantBefore redundantBefore, @Nullable TxnId primaryTxnId, KeyHistory keyHistory, Unseekables<?> keysOrRanges, Factory<L> factory)
+            {
                 TxnId minTxnId = redundantBefore.min(keysOrRanges, e -> e.gcBefore);
                 Timestamp maxTxnId = primaryTxnId == null || keyHistory == KeyHistory.RECOVER || !primaryTxnId.is(ExclusiveSyncPoint) ? Timestamp.MAX : primaryTxnId;
                 TxnId findAsDep = primaryTxnId != null && keyHistory == KeyHistory.RECOVER ? primaryTxnId : null;
                 Kinds kinds = primaryTxnId == null ? AnyGloballyVisible : primaryTxnId.witnesses().or(keyHistory == KeyHistory.RECOVER ? primaryTxnId.witnessedBy() : Kinds.Nothing);
-                return new Loader(keysOrRanges, redundantBefore, kinds, minTxnId, maxTxnId, findAsDep);
+                return factory.create(keysOrRanges, redundantBefore, kinds, minTxnId, maxTxnId, findAsDep);
             }
 
             public Loader(Unseekables<?> searchKeysOrRanges, RedundantBefore redundantBefore, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep)

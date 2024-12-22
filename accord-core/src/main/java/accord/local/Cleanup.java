@@ -234,7 +234,7 @@ public enum Cleanup
                 if (saveStatus.hasBeen(PreCommitted))
                 {
                     // special case coordination-only commands
-                    Participants<?> executes = participants.executes();
+                    Participants<?> executes = participants.stillExecutes();
                     if (executes != null && executes.isEmpty() && saveStatus.compareTo(ReadyToExecute) >= 0)
                     {
                         Durability test = Durability.max(durability, durableBefore.min(txnId, participants.route()));
@@ -252,7 +252,7 @@ public enum Cleanup
                     if (!saveStatus.hasBeen(PreCommitted))
                         return INVALIDATE;
 
-                    Participants<?> executes = participants.executes();
+                    Participants<?> executes = participants.stillExecutes();
                     if (!saveStatus.hasBeen(Applied) && (executes == null || (!executes.isEmpty() && redundantBefore.preBootstrapOrStale(txnId, executes) != FULLY)))
                     {
                         // if we should execute this transaction locally, and we have not done so by the time we reach a GC point, something has gone wrong

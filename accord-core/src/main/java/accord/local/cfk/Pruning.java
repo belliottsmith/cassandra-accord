@@ -42,8 +42,8 @@ import static accord.local.cfk.CommandsForKey.insertPos;
 import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.CommandsForKey.redundantBefore;
+import static accord.local.cfk.Updating.nextUndecided;
 import static accord.local.cfk.Utils.removeRedundantMissing;
-import static accord.primitives.Timestamp.min;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedAny;
@@ -215,12 +215,24 @@ public class Pruning
         TxnInfo pruneBefore = newPruneBefore(cfk, 0, 0);
         if (pruneBefore == null)
         {
-            boolean hasPruned = false;
-            for (int i = 0 ; !hasPruned && i < cfk.size() ; ++i)
-                hasPruned = cfk.get(i).is(PRUNED);
-            if (!hasPruned)
+            int prunedCount = 0;
+            for (int i = 0 ; i < cfk.size() ; ++i)
+                prunedCount += cfk.get(i).is(PRUNED) ? 1 : 0;
+
+            if (prunedCount == 0)
                 return cfk;
-            pruneBefore = cfk.prunedBefore();
+
+            TxnInfo[] newById = new TxnInfo[cfk.byId.length - prunedCount];
+            int count = 0;
+            for (int i = 0 ; i < cfk.size() ; ++i)
+            {
+                TxnInfo txn = cfk.get(i);
+                if (!txn.is(PRUNED))
+                    newById[count++] = txn;
+            }
+            int newPrunedBeforeId = cfk.prunedBeforeById - prunedCount;
+            return new CommandsForKey(cfk.key, cfk.boundsInfo, false, newById, cfk.committedByExecuteAt,
+                                      nextUndecided(newById, 0, cfk), cfk.maxAppliedWriteByExecuteAt, cfk.loadingPruned, newPrunedBeforeId, cfk.unmanageds);
         }
         int pos = cfk.insertPos(pruneBefore);
         if (pos == 0)

@@ -43,5 +43,9 @@ public interface Data
      * This method may modify the current object and return itself.
      */
     Data merge(Data data);
+
+    /**
+     * Optionally perform some validity checks prior to sending this object as a read reply
+     */
     default void validateReply(TxnId txnId, Timestamp executeAt) {}
 }

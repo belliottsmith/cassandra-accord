@@ -518,7 +518,7 @@ public class Commands
     {
         CommandStore unsafeStore = safeStore.commandStore();
         Command.Executed executed = command.asExecuted();
-        Participants<?> executes = executed.participants().executes();
+        Participants<?> executes = executed.participants().stillExecutes();
         if (!executes.isEmpty())
             return command.writes().apply(safeStore, executes, command.partialTxn())
                           .flatMap(unused -> unsafeStore.submit(context, ss -> {
@@ -598,7 +598,7 @@ public class Commands
             case PreApplied:
                 Command.Executed executed = command.asExecuted();
                 Participants<?> executes = txnId.is(Read) ? null
-                                                          : executed.participants().executes()
+                                                          : executed.participants().stillExecutes()
                                                                     .intersecting(executed.writes().keys);
                 if (executes == null || executes.isEmpty())
                 {
@@ -698,7 +698,7 @@ public class Commands
         else
         {
             Participants<?> participants = waiting.partialDeps().participants(dependency.txnId());
-            Participants<?> executes = participants.intersecting(waiting.participants().executes(), Minimal);
+            Participants<?> executes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
             RedundantStatus status = safeStore.redundantBefore().status(dependencyId, executes);
             switch (status)
             {
@@ -864,7 +864,7 @@ public class Commands
                               || participants.route() == null   // TODO (expected): tighten this e.g. with && participants.owns.isEmpty()
                               || validateSafeToCleanup(store.redundantBefore(), command, participants)
                               || store.redundantBefore().preBootstrapOrStale(command.txnId(), participants.owns()) == FULLY
-                              || (force && participants.executes() != null && participants.executes().isEmpty())
+                              || (force && participants.executes() != null && participants.stillExecutes().isEmpty())
         , "Command %s could not be purged", command);
         Invariants.checkState(cleanup != VESTIGIAL || participants.stillOwns().isEmpty() || store.redundantBefore().status(command.txnId(), participants.owns()).compareTo(WAS_OWNED_RETIRED) <= 0);
 
@@ -944,7 +944,7 @@ public class Commands
             if (cleanupParticipants == newParticipants)
                 return false;
 
-            safeStore.update(command, command.updateParticipants(cleanupParticipants));
+            safeCommand.updateParticipants(safeStore, cleanupParticipants);
             return true;
         }
 
@@ -1123,7 +1123,7 @@ public class Commands
                     {
                         // TODO (desired): slightly costly to invert a large partialDeps collection
                         participants = waiting.partialDeps().participants(dep.txnId());
-                        Participants<?> executes = participants.intersecting(waiting.participants().executes(), Minimal);
+                        Participants<?> executes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
 
                         RedundantStatus redundantStatus = safeStore.redundantBefore().status(dep.txnId(), executes);
                         switch (redundantStatus)

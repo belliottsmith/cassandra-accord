@@ -30,6 +30,9 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsy
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
 import static accord.api.ProtocolModifiers.Toggles.InformOfDurability.ALL;
 
+/**
+ * Configure various protocol behaviours. Many of these switches are correctness impacting, and should not be touched.
+ */
 public class ProtocolModifiers
 {
     public static class QuorumEpochIntersections

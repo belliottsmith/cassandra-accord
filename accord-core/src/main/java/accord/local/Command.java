@@ -1495,7 +1495,7 @@ public abstract class Command implements CommonAttributes
                         ranges = safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
                         if (!ranges.isEmpty())
                         {
-                            deps.rangeDeps.forEach(participants.executes().slice(ranges, Minimal), update, (upd, idx) -> {
+                            deps.rangeDeps.forEach(participants.stillExecutes().slice(ranges, Minimal), update, (upd, idx) -> {
                                 TxnId id = upd.txnId(idx);
                                 // because we use RX as RedundantBefore bounds, we must not let an RX on a closing range
                                 // get ahead of one that isn't closed but has overlapping transactions (else we may erroneously treat as redundant)
@@ -1518,7 +1518,7 @@ public abstract class Command implements CommonAttributes
                 {
                     Ranges executeRanges = participants.executeRanges(safeStore, txnId, executeAt);
                     // TODO (expected): refactor this to operate only on participants, not ranges
-                    deps.rangeDeps.forEach(participants.executes(), update, Update::initialise);
+                    deps.rangeDeps.forEach(participants.stillExecutes(), update, Update::initialise);
                     deps.directKeyDeps.forEach(executeRanges, 0, deps.directKeyDeps.txnIdCount(), update, deps.rangeDeps, (upd, rdeps, index) -> upd.initialise(index + rdeps.txnIdCount()));
                     deps.keyDeps.keys().forEach(executeRanges, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), update);
                     return update;

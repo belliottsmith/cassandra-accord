@@ -634,6 +634,7 @@ public class InMemoryJournal implements Journal
         if (l.equals(r))
             return null;
 
+        // TODO (expected): do we need to wrap this in a value object if we also have flags?
         return NewValue.of(r);
     }
 

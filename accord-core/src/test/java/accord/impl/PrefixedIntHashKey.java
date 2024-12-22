@@ -25,7 +25,6 @@ import javax.annotation.Nonnull;
 
 import accord.api.RoutingKey;
 import accord.local.ShardDistributor;
-import accord.primitives.Range;
 import accord.primitives.RangeFactory;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
@@ -285,13 +284,13 @@ public class PrefixedIntHashKey implements RoutableKey
         return toArray(result, accord.primitives.Range[]::new);
     }
 
-    public static accord.primitives.Range range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
+    public static Range range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
     {
         Invariants.checkState(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
         return new Range(start, end);
     }
 
-    public static accord.primitives.Range range(int prefix, int start, int end)
+    public static Range range(int prefix, int start, int end)
     {
         return new Range(new Hash(prefix, start), new Hash(prefix, end));
     }

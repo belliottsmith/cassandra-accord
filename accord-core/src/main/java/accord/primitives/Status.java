@@ -84,7 +84,7 @@ public enum Status
     // TODO (required): TruncatedApply should be treated as APPLIED for summary status; when computing recovery decisions
     //  anything already APPLIED should be treated as not witnessing anything being recovered from preaccept status
     //  EXCEPT this cannot apply for touches \notin owns... consider some more how we handle this case
-    Truncated         (Cleanup,    null, Maybe, DefinitionErased,  ExecuteAtErased,  DepsErased,   Outcome.Erased),
+    Truncated         (Cleanup,    null, Maybe, DefinitionErased,  ExecuteAtErased,  DepsErased, Outcome.Erased),
     Invalidated       (Invalidate, INVALIDATED, Maybe, NoOp,              NoExecuteAt,      NoDeps,       Outcome.Invalidated),
     ;
 

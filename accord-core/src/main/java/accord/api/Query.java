@@ -28,7 +28,7 @@ import accord.primitives.TxnId;
 /**
  * The computational/transformation part of a client query
  */
-public interface Query
+public interface /**/Query
 {
     /**
      * Perform some transformation on the complete {@link Data} result of a {@link Read}

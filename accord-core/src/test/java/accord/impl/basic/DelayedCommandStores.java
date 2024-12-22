@@ -29,8 +29,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-import com.google.common.collect.Iterables;
-
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.Journal;
@@ -53,18 +51,15 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.local.ShardDistributor;
+import accord.local.cfk.CommandsForKey;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.utils.Invariants;
-import accord.utils.LazyToString;
 import accord.utils.RandomSource;
-import accord.utils.ReflectionUtils;
-import accord.utils.ReflectionUtils.Difference;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
@@ -75,12 +70,12 @@ import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 
 public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 {
-    private DelayedCommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ShardDistributor shardDistributor, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, SimulatedDelayedExecutorService executorService, CacheLoadingChance isLoadedCheck, Journal journal)
+    private DelayedCommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ShardDistributor shardDistributor, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, SimulatedDelayedExecutorService executorService, CacheLoading isLoadedCheck, Journal journal)
     {
         super(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, DelayedCommandStore.factory(executorService, isLoadedCheck, journal));
     }
 
-    public static CommandStores.Factory factory(PendingQueue pending, CacheLoadingChance isLoadedCheck, Journal journal)
+    public static CommandStores.Factory factory(PendingQueue pending, CacheLoading isLoadedCheck, Journal journal)
     {
         return (time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory) ->
                new DelayedCommandStores(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, new SimulatedDelayedExecutorService(pending, agent), isLoadedCheck, journal);
@@ -136,14 +131,14 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
         private final SimulatedDelayedExecutorService executor;
         private final Queue<Task<?>> pending = new LinkedList<>();
-        private final CacheLoadingChance cacheLoadingChance;
+        private final CacheLoading cacheLoading;
         private final Journal journal;
 
-        public DelayedCommandStore(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, SimulatedDelayedExecutorService executor, CacheLoadingChance cacheLoadingChance, Journal journal)
+        public DelayedCommandStore(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, SimulatedDelayedExecutorService executor, CacheLoading cacheLoading, Journal journal)
         {
             super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
             this.executor = executor;
-            this.cacheLoadingChance = cacheLoadingChance;
+            this.cacheLoading = cacheLoading;
             this.journal = journal;
         }
 
@@ -180,28 +175,24 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
 
         @Override
-        public void validateRead(Command current)
+        public void onRead(Command current)
         {
-            if (!Invariants.testParanoia(LINEAR, LINEAR, HIGH))
-                return;
+            cacheLoading.validate(this, current);
+        }
 
-            // "loading" the command doesn't make sense as we don't "store" the command...
-            if (current.txnId().kind() == Txn.Kind.EphemeralRead)
-                return;
-
-            // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
-            Command reconstructed = journal.loadCommand(id, current.txnId(), unsafeGetRedundantBefore(), durableBefore());
-            List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed);
-            Invariants.checkState(diff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, node, id(), new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
+        @Override
+        public void onRead(CommandsForKey current)
+        {
+            cacheLoading.validate(this, current);
         }
 
         @Override
         protected boolean canExposeUnloaded()
         {
-            return !cacheLoadingChance.cacheEmpty();
+            return !cacheLoading.cacheEmpty();
         }
 
-        private static CommandStore.Factory factory(SimulatedDelayedExecutorService executor, CacheLoadingChance isLoadedCheck, Journal journal)
+        private static CommandStore.Factory factory(SimulatedDelayedExecutorService executor, CacheLoading isLoadedCheck, Journal journal)
         {
             return (id, node, agent, store, progressLogFactory, listenersFactory, rangesForEpoch) -> new DelayedCommandStore(id, node, agent, store, progressLogFactory, listenersFactory, rangesForEpoch, executor, isLoadedCheck, journal);
         }
@@ -284,7 +275,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         protected InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
         {
-            return new DelayedSafeStore(this, ranges, context, commands, timestampsForKey, commandsForKeys, cacheLoadingChance);
+            return new DelayedSafeStore(this, ranges, context, commands, timestampsForKey, commandsForKeys, cacheLoading);
         }
 
         @Override
@@ -297,7 +288,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
     public static class DelayedSafeStore extends InMemoryCommandStore.InMemorySafeStore
     {
         private final DelayedCommandStore commandStore;
-        private final CacheLoadingChance cacheLoadingChance;
+        private final CacheLoading cacheLoading;
 
         public DelayedSafeStore(DelayedCommandStore commandStore,
                                 RangesForEpoch ranges,
@@ -305,11 +296,11 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                                 Map<TxnId, InMemorySafeCommand> commands,
                                 Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey,
                                 Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey,
-                                CacheLoadingChance cacheLoadingChance)
+                                CacheLoading cacheLoading)
         {
             super(commandStore, ranges, context, commands, timestampsForKey, commandsForKey);
             this.commandStore = commandStore;
-            this.cacheLoadingChance = cacheLoadingChance;
+            this.cacheLoading = cacheLoading;
         }
 
         @Override
@@ -326,7 +317,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 Command before = safe.original();
                 Command after = safe.current();
                 commandStore.journal.saveCommand(commandStore.id(), new CommandUpdate(before, after), () -> {});
-                commandStore.validateRead(safe.current());
+                commandStore.onRead(safe.current());
             });
             super.postExecute();
         }
@@ -334,14 +325,14 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         protected InMemoryCommandStore.InMemoryCommandStoreCaches tryGetCaches()
         {
-            if (!cacheLoadingChance.cacheEmpty())
+            if (!cacheLoading.cacheEmpty())
             {
-                boolean cacheFull = cacheLoadingChance.cacheFull();
+                boolean cacheFull = cacheLoading.cacheFull();
                 return commandStore.new InMemoryCommandStoreCaches() {
                     @Override
                     public InMemorySafeCommand acquireIfLoaded(TxnId txnId)
                     {
-                        if (cacheFull || cacheLoadingChance.commandLoaded())
+                        if (cacheFull || cacheLoading.isLoaded(txnId))
                             return super.acquireIfLoaded(txnId);
                         return null;
                     }
@@ -349,7 +340,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                     @Override
                     public InMemorySafeTimestampsForKey acquireTfkIfLoaded(RoutingKey key)
                     {
-                        if (cacheFull || cacheLoadingChance.tfkLoaded())
+                        if (cacheFull || cacheLoading.tfkLoaded())
                             return super.acquireTfkIfLoaded(key);
                         return null;
                     }
@@ -357,7 +348,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                     @Override
                     public InMemorySafeCommandsForKey acquireIfLoaded(RoutingKey key)
                     {
-                        if (cacheFull || cacheLoadingChance.cfkLoaded())
+                        if (cacheFull || cacheLoading.isLoaded(key))
                             return super.acquireIfLoaded(key);
                         return null;
                     }
@@ -376,12 +367,14 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         return stores;
     }
 
-    public interface CacheLoadingChance
+    public interface CacheLoading
     {
         boolean cacheEmpty();
         boolean cacheFull();
-        boolean commandLoaded();
-        boolean cfkLoaded();
+        boolean isLoaded(TxnId txnId);
+        boolean isLoaded(RoutingKey key);
         boolean tfkLoaded();
+        void validate(CommandStore commandStore, Command command);
+        void validate(CommandStore commandStore, CommandsForKey cfk);
     }
 }

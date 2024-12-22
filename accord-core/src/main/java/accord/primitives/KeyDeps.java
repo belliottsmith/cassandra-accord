@@ -42,7 +42,6 @@ import static accord.primitives.RoutingKeys.toRoutingKeys;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.*;
 import static accord.utils.Invariants.illegalArgument;
-import static accord.utils.Invariants.illegalState;
 import static accord.utils.RelationMultiMap.*;
 import static accord.utils.SortedArrays.Search.FAST;
 

@@ -74,6 +74,11 @@ public class StoreParticipants
             return executes;
         }
 
+        @Nullable public Participants<?> stillExecutes()
+        {
+            return executes;
+        }
+
         public Participants<?> touches()
         {
             return touches;
@@ -87,13 +92,14 @@ public class StoreParticipants
 
     public static class FilteredStoreParticipants extends FullStoreParticipants
     {
-        final Participants<?> stillOwns, stillTouches;
+        final Participants<?> stillOwns, stillTouches, stillExecutes;
 
-        FilteredStoreParticipants(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, Participants<?> touches, Participants<?> hasTouched, Participants<?> stillOwns, Participants<?> stillTouches)
+        FilteredStoreParticipants(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, Participants<?> touches, Participants<?> hasTouched, Participants<?> stillOwns, Participants<?> stillTouches, Participants<?> stillExecutes)
         {
             super(route, owns, executes, touches, hasTouched);
             this.stillOwns = stillOwns;
             this.stillTouches = stillTouches;
+            this.stillExecutes = stillExecutes;
         }
 
         @Override
@@ -108,14 +114,20 @@ public class StoreParticipants
             return stillTouches;
         }
 
+        @Override
+        public Participants<?> stillExecutes()
+        {
+            return stillExecutes;
+        }
+
         StoreParticipants update(Route<?> route, Participants<?> hasTouched)
         {
-            return new FilteredStoreParticipants(route, owns(), executes(), touches(), hasTouched, stillOwns, stillTouches);
+            return new FilteredStoreParticipants(route, owns(), executes(), touches(), hasTouched, stillOwns, stillTouches, stillExecutes);
         }
 
         StoreParticipants update(Route<?> route, Participants<?> owns, Participants<?> executes, Participants<?> touches, Participants<?> hasTouched)
         {
-            return new FilteredStoreParticipants(route, owns, executes, touches, hasTouched, stillOwns, stillTouches);
+            return new FilteredStoreParticipants(route, owns, executes, touches, hasTouched, stillOwns, stillTouches, stillExecutes);
         }
     }
 
@@ -238,6 +250,15 @@ public class StoreParticipants
         return executesIsNull ? null : owns;
     }
 
+    /**
+     * If set, the keys we are known to execute (i.e. excluding any that are pre-bootstrap or stale)
+     * @return
+     */
+    public @Nullable Participants<?> stillExecutes()
+    {
+        return executesIsNull ? null : owns;
+    }
+
     public Participants<?> stillOwnsOrMayExecute(TxnId txnId)
     {
         return txnId.is(ExclusiveSyncPoint) ? stillTouches() : stillOwns();
@@ -266,14 +287,10 @@ public class StoreParticipants
 
         Participants<?> curStillOwns = stillOwns();
         Participants<?> stillOwns = redundantBefore.expectToOwn(txnId, executeAt, curStillOwns);
-        Participants<?> executes = executes();
-        if (executes != null)
-        {
-            Participants<?> curExecutes = executes;
-            executes = redundantBefore.expectToExecute(txnId, executeAt, executes);
-            if (executes != curExecutes && owns() == curExecutes && executes.equals(owns))
-                executes = owns;
-        }
+
+        Participants<?> curStillExecutes = stillExecutes(), stillExecutes = curStillExecutes;
+        if (stillExecutes != null)
+            stillExecutes = redundantBefore.expectToExecute(txnId, executeAt, stillExecutes);
 
         Participants<?> curTouches = touches();
         Participants<?> touches = curTouches;
@@ -285,11 +302,11 @@ public class StoreParticipants
         if (stillTouches != curStillTouches && owns() == curStillTouches && stillTouches.equals(owns))
             stillTouches = owns;
 
-        if (curStillOwns != stillOwns || curStillTouches != stillTouches)
-            return new FilteredStoreParticipants(route, owns, executes, touches, hasTouched(), stillOwns, stillTouches);
+        if (curStillOwns != stillOwns || curStillTouches != stillTouches || curStillExecutes != stillExecutes)
+            return new FilteredStoreParticipants(route, owns, executes(), touches, hasTouched(), stillOwns, stillTouches, stillExecutes);
 
-        if (executes != executes() || curTouches != touches)
-            return update(route, owns, executes, touches, hasTouched());
+        if (curTouches != touches)
+            return update(route, owns, executes(), touches, hasTouched());
 
         return this;
     }

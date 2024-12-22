@@ -242,11 +242,6 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return executes(boundsInfo, txnId, executeAt);
     }
 
-    public boolean executes(Timestamp executeAt)
-    {
-        return executes(boundsInfo, executeAt);
-    }
-
     public boolean mayExecute(TxnId txnId)
     {
         return mayExecute(boundsInfo, txnId);
@@ -262,10 +257,14 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return mayExecute(txnId, status.isCommittedToExecute() ? command.executeAt() : null);
     }
 
+    public static boolean mayExecute(RedundantBefore.Entry boundsInfo, TxnId txnId)
+    {
+        return executes(boundsInfo, txnId, txnId);
+    }
+
     public boolean mayExecute(TxnId txnId, @Nullable Timestamp committedToExecuteAt)
     {
-        if (!mayExecute(boundsInfo, txnId)) return false;
-        return committedToExecuteAt == null || executes(boundsInfo, committedToExecuteAt);
+        return executes(boundsInfo, txnId, committedToExecuteAt != null ? committedToExecuteAt : txnId);
     }
 
     public static boolean executes(RedundantBefore.Entry boundsInfo, TxnId txnId, Timestamp executeAt)
@@ -273,19 +272,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return managesExecution(txnId)
                && boundsInfo.bootstrappedAt.compareTo(txnId) < 0
                && boundsInfo.endOwnershipEpoch > executeAt.epoch()
-               && boundsInfo.startOwnershipEpoch <= executeAt.epoch();
-    }
-
-    private static boolean executes(RedundantBefore.Entry boundsInfo, Timestamp executeAt)
-    {
-        return boundsInfo.endOwnershipEpoch > executeAt.epoch() && boundsInfo.startOwnershipEpoch <= executeAt.epoch();
-    }
-
-    public static boolean mayExecute(RedundantBefore.Entry boundsInfo, TxnId txnId)
-    {
-        return managesExecution(txnId)
-               && boundsInfo.endOwnershipEpoch > txnId.epoch()
-               && boundsInfo.bootstrappedAt.compareTo(txnId) < 0;
+               && boundsInfo.startOwnershipEpoch <= txnId.epoch(); // if we don't own from txnId.epoch() we will learn of this transaction via bootstrap
     }
 
     public static boolean needsUpdate(Command prev, Command updated)
@@ -337,8 +324,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
         static final int MANAGED = 0x20;
         static final int COMMITTED_TO_EXECUTE = 0x40;
         static final int INTERNAL_STATUS_FLAGS_SHIFT = 7;
-        static final int HAS_EXECUTE_AT_AND_DEPS = 0x80; // deps and executeAt (maybe not committed)
-        static final int DEPS_KNOWN_UNTIL_EXECUTE_AT = 0x100;
+        static final int HAS_DEPS = 0x80; // deps and executeAt (maybe not committed)
+        static final int HAS_EXECUTE_AT = 0x100;
+        static final int DEPS_KNOWN_UNTIL_EXECUTE_AT = 0x200;
         static final int HAS_BALLOT = 0x400;
         static final int COMMITTED_AND_EXECUTES = MAY_EXECUTE | COMMITTED_TO_EXECUTE;
         static final int NOTIFIED_READY = 0x1000;
@@ -417,10 +405,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
         // TODO (expected): document the reason for this, and the justification for why it is safe
         //      At least, ensure and explain how we guarantee that we do not break the calculation of the W set from the protocol.
         //      (Since we only compute W on the coordination epoch, and we should never have a statusOverride for that epoch, this should be safe)
-        // bits 0 or 1 may be set.
+        // bit 0 only may be set
         public int statusOverrides()
         {
-            return status().flags ^ statusFlags();
+            int overrides = status().flags ^ statusFlags();
+            Invariants.checkState(overrides <= 1); // only currently permitted to override hasDeps
+            return overrides;
         }
 
         public int statusFlags()
@@ -441,12 +431,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
         //
         public boolean hasDeps()
         {
-            return 0 != (encodedStatus & HAS_EXECUTE_AT_AND_DEPS);
+            return 0 != (encodedStatus & HAS_DEPS);
         }
 
-        public boolean hasExecuteAtAndDeps()
+        public boolean hasExecuteAt()
         {
-            return hasDeps();
+            return 0 != (encodedStatus & HAS_EXECUTE_AT);
         }
 
         public boolean hasBallot()
@@ -459,6 +449,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
             return 0 != (encodedStatus & MANAGED);
         }
 
+        /**
+         * Indicates if we may (or will, once committed) execute this command locally.
+         * This excludes pre-bootstrap commands, which for consistency includes commands that were initiated in
+         * an epoch we don't own, even if the command executes in an epoch we do own. This is because we will have
+         * to join the epoch, and any data we receive when joining must include this command.
+         */
         public boolean mayExecute()
         {
             return 0 != (encodedStatus & MAY_EXECUTE);
@@ -592,7 +588,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         private static int preencode(InternalStatus internalStatus)
         {
             int encoded = internalStatus.ordinal();
-            if (internalStatus.hasExecuteAtAndDeps) encoded |= HAS_EXECUTE_AT_AND_DEPS;
+            if (internalStatus.hasExecuteAtAndDeps) encoded |= HAS_DEPS | HAS_EXECUTE_AT;
             if (internalStatus.isCommittedToExecute) encoded |= COMMITTED_TO_EXECUTE;
             if (internalStatus.depsKnownUntilExecuteAt()) encoded |= DEPS_KNOWN_UNTIL_EXECUTE_AT;
             if (internalStatus.hasBallot) encoded |= HAS_BALLOT;
@@ -609,6 +605,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         // statusOverrides is the bitmask we xor, not the new values of the flag (so providing zero has no effect, and providing the base value sets to zero)
         private static int encode(TxnId txnId, InternalStatus internalStatus, boolean isDurable, boolean mayExecute, int statusOverrideXor)
         {
+            Invariants.checkArgument(statusOverrideXor <= 1);
             int encoded = internalStatus.txnInfoEncoded | (mayExecute ? MAY_EXECUTE : 0) | (isDurable ? IS_DURABLE : 0);
             if (txnId.is(Key)) encoded |= MANAGED;
             encoded ^= statusOverrideXor << INTERNAL_STATUS_FLAGS_SHIFT;
@@ -683,6 +680,14 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
         TxnInfo withEncodedStatus(int encodedStatus)
         {
+            TxnId[] missing = this.missing;
+            if ((encodedStatus & HAS_DEPS) == 0)
+                missing = NO_TXNIDS;
+            Ballot ballot = this.ballot;
+            if ((encodedStatus & HAS_BALLOT) == 0)
+                ballot = Ballot.ZERO;
+            if (missing == NO_TXNIDS && ballot == Ballot.ZERO)
+                return new TxnInfo(this, encodedStatus, executeAt);
             return new TxnInfoExtra(this, encodedStatus, executeAt, missing, ballot);
         }
 
@@ -812,8 +817,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
             TO_SIMPLE_STATUS[INVALIDATED.ordinal()] = SummaryStatus.INVALIDATED;
         }
 
-        public static final int HAS_EXECUTE_AT_AND_DEPS = 1;
-        public static final int DEPS_KNOWN_UNTIL_EXECUTE_AT = 2;
+        public static final int HAS_DEPS = 1;
+        public static final int HAS_EXECUTE_AT = 2;
 
         public final boolean hasExecuteAtAndDeps;
         public final boolean hasBallot;
@@ -826,8 +831,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             this.hasBallot = hasBallot;
             this.hasExecuteAtAndDeps = hasExecuteAtAndDeps;
             this.isCommittedToExecute = isCommittedToExecute;
-            this.flags =   (hasExecuteAtAndDeps       ? HAS_EXECUTE_AT_AND_DEPS     : 0)
-                         | (depsKnownUntilExecuteAt() ? DEPS_KNOWN_UNTIL_EXECUTE_AT : 0);
+            this.flags = (hasExecuteAtAndDeps ? HAS_EXECUTE_AT | HAS_DEPS : 0);
             this.txnInfoEncoded = TxnInfo.preencode(this);
         }
 
@@ -1494,9 +1498,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
     {
         Invariants.checkArgument(!mayExecute);
         TxnInfo baseInfo = curInfo == null ? NO_INFO : curInfo;
-        // out of range means we have no deps, we're just marking committed, so we set both flags to zero
-        TxnInfo newInfo = baseInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, isDurable, false, newStatus.flags))
-                                  .withMissing(NO_TXNIDS);
+        // out of range means we have no deps, we're just marking committed, so we set HAS_DEPS to 0
+        int statusOverridesXor = curInfo == null ? 0 : newStatus.flags & 1;
+        TxnInfo newInfo = baseInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, isDurable, false, statusOverridesXor));
         return insertOrUpdate(this, updatePos, plainTxnId, curInfo, newInfo, wasPruned, loadingAsPrunedFor);
     }
 
@@ -2097,6 +2101,35 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 }
             }
         }
+    }
+
+    public boolean equalContents(CommandsForKey that)
+    {
+        if (!Arrays.equals(this.unmanageds, that.unmanageds))
+            return false;
+
+        if (this.byId.length != that.byId.length)
+            return false;
+
+        for (int i = 0 ; i < byId.length ; ++i)
+        {
+            TxnInfo a = this.byId[i], b = that.byId[i];
+            if (a.getClass() != b.getClass())
+                return false;
+            if (!a.equals(b))
+                return false;
+            if (a.statusOverrides() != b.statusOverrides())
+                return false;
+            if (a.status() != b.status())
+                return false;
+            if (!a.executeAt.equals(b.executeAt))
+                return false;
+            if (!a.ballot().equals(b.ballot()))
+                return false;
+            if (!Arrays.equals(a.missing(), b.missing()))
+                return false;
+        }
+        return true;
     }
 
     public boolean isEmpty()

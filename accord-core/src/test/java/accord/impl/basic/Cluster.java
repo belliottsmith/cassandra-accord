@@ -18,6 +18,7 @@
 
 package accord.impl.basic;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -47,6 +48,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
+import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -92,6 +94,7 @@ import accord.local.ShardDistributor;
 import accord.local.StoreParticipants;
 import accord.local.TimeService;
 import accord.local.cfk.CommandsForKey;
+import accord.local.cfk.Serialize;
 import accord.messages.Message;
 import accord.messages.MessageType;
 import accord.messages.Reply;
@@ -112,7 +115,9 @@ import accord.topology.Topology;
 import accord.topology.TopologyRandomizer;
 import accord.utils.Gens;
 import accord.utils.Invariants;
+import accord.utils.LazyToString;
 import accord.utils.RandomSource;
+import accord.utils.ReflectionUtils;
 import accord.utils.Timestamped;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
@@ -122,9 +127,12 @@ import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
 import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
 import static accord.impl.basic.NodeSink.Action.DELIVER;
 import static accord.impl.basic.NodeSink.Action.DROP;
+import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.utils.AccordGens.keysInsideRanges;
 import static accord.utils.AccordGens.rangeInsideRange;
 import static accord.utils.Gens.mixedDistribution;
+import static accord.utils.Invariants.Paranoia.LINEAR;
+import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonMap;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -469,6 +477,130 @@ public class Cluster
         return stats;
     }
 
+    static class RandomLoader
+    {
+        private final BooleanSupplier cacheEmptyChance;
+        private final BooleanSupplier cacheFullChance;
+        private final BooleanSupplier commandLoadedChance;
+        private final BooleanSupplier cfkLoadedChance;
+        private final BooleanSupplier tfkLoadedChance;
+
+        final BooleanSupplier cmdCheckChance;
+        final BooleanSupplier cfkCheckChance;
+        static int cmdCounter, cfkCounter;
+
+        RandomLoader(RandomSource random)
+        {
+            this(random.nextBoolean() ? 1.0f : random.nextFloat(), random);
+        }
+
+        RandomLoader(float presentChance, RandomSource random)
+        {
+            this(Gens.supplier(Gens.bools().mixedDistribution().next(random), random),
+                 Gens.supplier(Gens.bools().mixedDistribution().next(random), random),
+                 random.biasedUniformBools(presentChance),
+                 random.biasedUniformBools(presentChance),
+                 random.biasedUniformBools(presentChance),
+                 Invariants.testParanoia(LINEAR, LINEAR, HIGH) ? Gens.supplier(Gens.bools().mixedDistribution().next(random), random) : () -> random.decide(0.001f),
+                 () -> random.decide(0.1f)
+            );
+        }
+
+        RandomLoader(BooleanSupplier cacheEmptyChance, BooleanSupplier cacheFullChance,
+                     BooleanSupplier commandLoadedChance, BooleanSupplier cfkLoadedChance, BooleanSupplier tfkLoadedChance,
+                     BooleanSupplier cmdCheckChance, BooleanSupplier cfkCheckChance)
+        {
+            this.cacheEmptyChance = cacheEmptyChance;
+            this.cacheFullChance = cacheFullChance;
+            this.commandLoadedChance = commandLoadedChance;
+            this.cfkLoadedChance = cfkLoadedChance;
+            this.tfkLoadedChance = tfkLoadedChance;
+            this.cmdCheckChance = cmdCheckChance;
+            this.cfkCheckChance = cfkCheckChance;
+        }
+
+        public boolean cacheEmpty() { return cacheEmptyChance.getAsBoolean();}
+        public boolean cacheFull() { return cacheFullChance.getAsBoolean(); }
+        public boolean commandLoaded() { return commandLoadedChance.getAsBoolean(); }
+        public boolean cfkLoaded() { return cfkLoadedChance.getAsBoolean(); }
+        public boolean tfkLoaded() { return tfkLoadedChance.getAsBoolean(); }
+
+        DelayedCommandStores.CacheLoading newLoader(Journal journal)
+        {
+            return new DelayedCommandStores.CacheLoading()
+            {
+                @Override
+                public boolean cacheEmpty()
+                {
+                    return cacheEmptyChance.getAsBoolean();
+                }
+
+                @Override
+                public boolean cacheFull()
+                {
+                    return cacheFullChance.getAsBoolean();
+                }
+
+                @Override
+                public boolean isLoaded(TxnId txnId)
+                {
+                    return commandLoadedChance.getAsBoolean();
+                }
+
+                @Override
+                public boolean isLoaded(RoutingKey key)
+                {
+                    return cfkLoadedChance.getAsBoolean();
+                }
+
+                @Override
+                public boolean tfkLoaded()
+                {
+                    return tfkLoadedChance.getAsBoolean();
+                }
+
+                @Override
+                public void validate(CommandStore commandStore, Command command)
+                {
+                    if (command.txnId().kind() == Txn.Kind.EphemeralRead
+                        || command.saveStatus() == SaveStatus.Uninitialised
+                        || command.saveStatus() == SaveStatus.ErasedOrVestigial
+                        || command.saveStatus() == SaveStatus.Erased)
+                        return;
+
+                    if (!cmdCheckChance.getAsBoolean())
+                        return;
+
+                    ++cmdCounter;
+                    command = command.updateParticipants(command.participants().filter(LOAD, commandStore.unsafeGetRedundantBefore(), command.txnId(), command.executeAtIfKnown()));
+                    // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
+                    Command reconstructed = journal.loadCommand(commandStore.id(), command.txnId(), commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
+                    List<ReflectionUtils.Difference<?>> diff = ReflectionUtils.recursiveEquals(command, reconstructed);
+                    if (!diff.isEmpty() && command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
+                        diff.removeIf(v -> v.path.equals(".participants."));
+                    Invariants.checkState(diff.isEmpty(), "Commands did not match: expected %s, given %s on s, diff %s", command, reconstructed, commandStore, new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
+                }
+
+                @Override
+                public void validate(CommandStore commandStore, CommandsForKey cfk)
+                {
+                    if (cfk == null) return;
+                    if (cfk.isLoadingPruned()) return;
+
+                    if (!cfkCheckChance.getAsBoolean())
+                        return;
+
+                    ++cfkCounter;
+                    cfk = cfk.maximalPrune();
+                    ByteBuffer encoded = Serialize.unsafeToBytesWithoutKey(cfk);
+                    CommandsForKey decoded = Serialize.fromBytes(cfk.key(), encoded);
+                    Invariants.checkState(cfk.equalContents(decoded));
+                }
+            };
+        }
+
+    }
+
     public static Map<MessageType, Stats> run(Id[] nodes, int[] prefixes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
                                               BiFunction<Id, BiConsumer<Timestamp, Ranges>, AgentExecutor> nodeExecutorSupplier,
                                               Runnable checkFailures, Consumer<Packet> responseSink,
@@ -537,44 +669,12 @@ public class Cluster
                 Journal journal = journalFactory.apply(id);
                 journalMap.put(id, journal);
                 BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
-                DelayedCommandStores.CacheLoadingChance isLoadedCheck = new DelayedCommandStores.CacheLoadingChance()
-                {
-                    final float presentChance = random.nextBoolean() ? 1.0f : random.nextFloat();
-                    private final BooleanSupplier cacheEmptyChance = Gens.supplier(Gens.bools().mixedDistribution().next(random), random);
-                    public boolean cacheEmpty()
-                    {
-                        return cacheEmptyChance.getAsBoolean();
-                    }
-
-                    private final BooleanSupplier cacheFullChance = Gens.supplier(Gens.bools().mixedDistribution().next(random), random);
-                    public boolean cacheFull()
-                    {
-                        return cacheFullChance.getAsBoolean();
-                    }
-
-                    private final BooleanSupplier commandLoadedChance = random.biasedUniformBools(presentChance);
-                    public boolean commandLoaded()
-                    {
-                        return commandLoadedChance.getAsBoolean();
-                    }
-
-                    private final BooleanSupplier cfkLoadedChance = random.biasedUniformBools(presentChance);
-                    public boolean cfkLoaded()
-                    {
-                        return cfkLoadedChance.getAsBoolean();
-                    }
-
-                    private final BooleanSupplier tfkLoadedChance = random.biasedUniformBools(presentChance);
-                    public boolean tfkLoaded()
-                    {
-                        return tfkLoadedChance.getAsBoolean();
-                    }
-                };
+                DelayedCommandStores.CacheLoading cacheLoading = new RandomLoader(random).newLoader(journal);
                 Node node = new Node(id, messageSink, configService, timeService,
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      nodeExecutor.agent(),
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
-                                     DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, isLoadedCheck, journal), new CoordinationAdapter.DefaultFactory(),
+                                     DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading, journal), new CoordinationAdapter.DefaultFactory(),
                                      DurableBefore.NOOP_PERSISTER, localConfig);
                 DurabilityScheduling durability = node.durabilityScheduling();
                 // TODO (desired): randomise

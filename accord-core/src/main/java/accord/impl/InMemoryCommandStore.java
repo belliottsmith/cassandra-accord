@@ -36,6 +36,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -62,10 +63,11 @@ import accord.local.RedundantBefore;
 import accord.local.RejectBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.local.StoreParticipants;
 import accord.local.cfk.CommandsForKey;
+import accord.local.cfk.SafeCommandsForKey;
 import accord.primitives.AbstractRanges;
 import accord.primitives.AbstractUnseekableKeys;
-import accord.primitives.Known;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
@@ -83,6 +85,7 @@ import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
+import org.agrona.collections.ObjectHashSet;
 
 import static accord.local.KeyHistory.ASYNC;
 import static accord.primitives.Known.KnownRoute.Maybe;
@@ -295,7 +298,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             Invariants.checkState(command.hasBeen(Applied)
                                   || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
                                   || (durableBefore().min(txnId) == NotDurable &&
-                                      ((command.participants().executes() != null && command.participants().executes().isEmpty())
+                                      ((command.participants().stillExecutes() != null && command.participants().stillExecutes().isEmpty())
                                       || !Route.isFullRoute(command.route()))));
         }
         super.updatedRedundantBefore(safeStore, syncId, ranges);
@@ -336,7 +339,8 @@ public abstract class InMemoryCommandStore extends CommandStore
         return new InMemorySafeStore(this, ranges, context, commands, timestampsForKey, commandsForKeys);
     }
 
-    protected void validateRead(Command current) {}
+    protected void onRead(Command current) {}
+    protected void onRead(CommandsForKey current) {}
 
     protected final InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges)
     {
@@ -345,14 +349,6 @@ public abstract class InMemoryCommandStore extends CommandStore
         Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey = new HashMap<>();
 
         context.forEachId(txnId -> commands.put(txnId, lazyReference(txnId)));
-        for (InMemorySafeCommand safe : commands.values())
-        {
-            GlobalCommand global = safe.unsafeGlobal();
-            if (global == null) continue;
-            Command current = global.value();
-            if (current == null) continue;
-            validateRead(current);
-        }
 
         for (Unseekable unseekable : context.keys())
         {
@@ -620,6 +616,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         protected final Map<TxnId, InMemorySafeCommand> commands;
         private final Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey;
         private final Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey;
+        private final Set<Object> hasLoaded = new ObjectHashSet<>();
         private CommandSummaries.Snapshot commandsForRanges;
 
         public InMemorySafeStore(InMemoryCommandStore commandStore,
@@ -667,6 +664,33 @@ public abstract class InMemoryCommandStore extends CommandStore
             if (commandStore().canExposeUnloaded())
                 return commandStore().new InMemoryCommandStoreCaches();
             return null;
+        }
+
+        @Override
+        protected SafeCommand maybeCleanup(SafeCommand safeCommand)
+        {
+            SafeCommand result = super.maybeCleanup(safeCommand);
+            if (!((InMemorySafeCommand)result).isModified() && hasLoaded.add(safeCommand.txnId()))
+                commandStore().onRead(result.current());
+            return result;
+        }
+
+        @Override
+        protected SafeCommand maybeCleanup(SafeCommand safeCommand, @Nonnull StoreParticipants supplemental)
+        {
+            SafeCommand result = super.maybeCleanup(safeCommand, supplemental);
+            if (!((InMemorySafeCommand)result).isModified() && hasLoaded.add(safeCommand.txnId()))
+                commandStore().onRead(result.current());
+            return result;
+        }
+
+        @Override
+        protected SafeCommandsForKey maybeCleanup(SafeCommandsForKey safeCfk)
+        {
+            safeCfk = super.maybeCleanup(safeCfk);
+            if (hasLoaded.add(safeCfk.key()))
+                commandStore().onRead(safeCfk.current());
+            return safeCfk;
         }
 
         @Override
@@ -854,7 +878,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (command.hasBeen(Applied)) continue;
                 if (txnId.is(EphemeralRead)) continue;
                 Participants<?> intersecting = txnId.is(ExclusiveSyncPoint) ? command.participants().owns().intersecting(updated.participants().touches(), Minimal)
-                                                                            : command.participants().executes().intersecting(covering, Minimal);
+                                                                            : command.participants().stillExecutes().intersecting(covering, Minimal);
                 if (intersecting.isEmpty()) continue;
                 if (commandStore().unsafeGetRedundantBefore().preBootstrapOrStale(command.txnId(), intersecting) == RedundantBefore.PreBootstrapOrStale.FULLY) continue;
                 illegalState();
@@ -1247,7 +1271,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         protected void unsafeApplyWrites(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
         {
             Command.Executed executed = command.asExecuted();
-            Participants<?> executes = executed.participants().executes();
+            Participants<?> executes = executed.participants().stillExecutes();
             if (!executes.isEmpty())
             {
                 command.writes().applyUnsafe(safeStore, Commands.applyRanges(safeStore, command.executeAt()), command.partialTxn());

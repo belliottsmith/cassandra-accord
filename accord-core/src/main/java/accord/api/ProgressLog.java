@@ -154,6 +154,9 @@ public interface ProgressLog
      */
     void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after);
 
+    /**
+     * Process a remote asynchronous callback.
+     */
     void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from);
 
     /**
@@ -192,8 +195,8 @@ public interface ProgressLog
     void clear();
 
     /**
-     * We have finished locally processing all transactions with lower TxnId; ensure their waiting states are cleared;
-     * if an owned transaction is undecided it should be cleaned up and any listeners notified.
+     * We have finished locally processing all transactions with lower {@code TxnId} so ensure their waiting states are cleared.
+     * If an owned transaction is undecided it should be cleaned up and any listeners notified.
      */
     void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore);
 
