@@ -214,7 +214,7 @@ public class VIntCoding
     }
 
     /** Compute the number of bytes that would be needed to encode a varint. */
-    public static int computeVIntSize(final long param)
+    public static int sizeOfVInt(final long param)
     {
         return sizeOfUnsignedVInt(encodeZigZag64(param));
     }

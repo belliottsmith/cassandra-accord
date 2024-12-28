@@ -58,6 +58,7 @@ import static accord.utils.BitUtils.writeMostSignificantBytes;
 import static accord.utils.VIntCoding.sizeOfUnsignedVInt;
 import static accord.utils.VIntCoding.decodeZigZag64;
 import static accord.utils.VIntCoding.encodeZigZag64;
+import static accord.utils.VIntCoding.sizeOfVInt;
 
 public class Serialize
 {
@@ -152,6 +153,11 @@ public class Serialize
             {
                 nodeIds[0] = cfk.redundantBefore().node.id;
                 nodeIdCount = 1;
+                {
+                    TxnId bootstrappedAt = cfk.bootstrappedAt();
+                    if (bootstrappedAt != null)
+                        nodeIds[nodeIdCount++] = bootstrappedAt.node.id;
+                }
                 for (int i = 0 ; i < commandCount ; ++i)
                 {
                     if (nodeIdCount + 3 >= nodeIds.length)
@@ -322,19 +328,30 @@ public class Serialize
 
             cachedInts().forceDiscard(bytesHistogram);
 
-            prevEpoch = cfk.redundantBefore().epoch();
-            prevHlc = cfk.redundantBefore().hlc();
             {
-                RedundantBefore.Entry boundsInfo = cfk.boundsInfo();
-                long start = boundsInfo.startOwnershipEpoch;
-                long end = boundsInfo.endOwnershipEpoch;
-                totalBytes += sizeOfUnsignedVInt(start);
-                totalBytes += sizeOfUnsignedVInt(end == Long.MAX_VALUE ? 0 : (1 + end - start));
-                totalBytes += VIntCoding.computeVIntSize(prevEpoch - start);
+                Timestamp redundantBefore = cfk.redundantBefore();
+                TxnId bootstrappedAt = cfk.bootstrappedAt();
+                prevEpoch = redundantBefore.epoch();
+                prevHlc = redundantBefore.hlc();
+                {
+                    RedundantBefore.Entry boundsInfo = cfk.boundsInfo();
+                    long start = boundsInfo.startOwnershipEpoch;
+                    long end = boundsInfo.endOwnershipEpoch;
+                    totalBytes += sizeOfUnsignedVInt(start);
+                    totalBytes += sizeOfUnsignedVInt(end == Long.MAX_VALUE ? 0 : (1 + end - start));
+                    totalBytes += sizeOfUnsignedVInt(((prevEpoch == 0 ? 0 : (1 + prevEpoch - start)) << 1) | (bootstrappedAt == null ? 0 : 1));
+                }
+                totalBytes += sizeOfUnsignedVInt(prevHlc);
+                totalBytes += sizeOfUnsignedVInt(redundantBefore.flags());
+                totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, redundantBefore.node.id));
+                if (bootstrappedAt != null)
+                {
+                    totalBytes += sizeOfUnsignedVInt(bootstrappedAt.epoch() - prevEpoch);
+                    totalBytes += sizeOfVInt(bootstrappedAt.hlc() - prevHlc);
+                    totalBytes += sizeOfUnsignedVInt(bootstrappedAt.flags());
+                    totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, bootstrappedAt.node.id));
+                }
             }
-            totalBytes += sizeOfUnsignedVInt(prevHlc);
-            totalBytes += sizeOfUnsignedVInt(cfk.redundantBefore().flags());
-            totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, cfk.redundantBefore().node.id));
             totalBytes += sizeOfUnsignedVInt(prunedBeforeIndex + 1);
 
             int bitsPerBallotEpoch = 0, bitsPerBallotHlc = 1, bitsPerBallotFlags = 0;
@@ -404,19 +421,27 @@ public class Serialize
             out.putShort((short)flags);
 
             {
+                TxnId redundantBefore = cfk.redundantBefore();
+                Timestamp bootstrappedAt = cfk.bootstrappedAt();
                 RedundantBefore.Entry boundsInfo = cfk.boundsInfo();
                 long start = boundsInfo.startOwnershipEpoch;
                 long end = boundsInfo.endOwnershipEpoch;
                 VIntCoding.writeUnsignedVInt(start, out);
                 VIntCoding.writeUnsignedVInt(end == Long.MAX_VALUE ? 0 : (1 + end - start), out);
-                VIntCoding.writeVInt(prevEpoch - start, out);
+                VIntCoding.writeUnsignedVInt(((prevEpoch == 0 ? 0 : (1 + prevEpoch - start)) << 1) | (bootstrappedAt == null ? 0 : 1), out);
+                VIntCoding.writeUnsignedVInt(prevHlc, out);
+                VIntCoding.writeUnsignedVInt32(redundantBefore.flags(), out);
+                VIntCoding.writeUnsignedVInt32(Arrays.binarySearch(nodeIds, 0, nodeIdCount, redundantBefore.node.id), out);
+                if (bootstrappedAt != null)
+                {
+                    VIntCoding.writeUnsignedVInt(bootstrappedAt.epoch() - prevEpoch, out);
+                    VIntCoding.writeVInt(bootstrappedAt.hlc() - prevHlc, out);
+                    VIntCoding.writeUnsignedVInt(bootstrappedAt.flags(), out);
+                    VIntCoding.writeUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, bootstrappedAt.node.id), out);
+                }
             }
-            VIntCoding.writeUnsignedVInt(prevHlc, out);
-            VIntCoding.writeUnsignedVInt32(cfk.redundantBefore().flags(), out);
-            VIntCoding.writeUnsignedVInt32(Arrays.binarySearch(nodeIds, 0, nodeIdCount, cfk.redundantBefore().node.id), out);
             VIntCoding.writeUnsignedVInt32(prunedBeforeIndex + 1, out);
 
-            // TODO (expected): do these variables cause register pressure? can be encoded in a single mask
             int flagsPlus = (flags & HEADER_BIT_FLAGS_MASK) + (2 << HAS_NON_STANDARD_FLAGS_HEADER_BIT_SHIFT);
             // TODO (desired): check this loop compiles correctly to only branch on epoch case, for binarySearch and flushing
             for (int i = 0 ; i < commandCount ; ++i)
@@ -697,12 +722,29 @@ public class Serialize
             maxEpoch = offset == 0 ? Long.MAX_VALUE : minEpoch + offset - 1;
         }
         RedundantBefore.Entry boundsInfo = NO_BOUNDS_INFO.withEpochs(minEpoch, maxEpoch);
-        long prevEpoch = minEpoch + VIntCoding.readVInt(in);
-        long prevHlc = VIntCoding.readUnsignedVInt(in);
+        long prevEpoch, prevHlc;
         {
-            int flags = VIntCoding.readUnsignedVInt32(in);
-            Node.Id node = nodeIds[VIntCoding.readUnsignedVInt32(in)];
-            boundsInfo = boundsInfo.withGcBeforeBeforeAtLeast(TxnId.fromValues(prevEpoch, prevHlc, flags, node));
+            boolean hasBootstrappedAt;
+            {
+                long v = VIntCoding.readUnsignedVInt(in);
+                hasBootstrappedAt = 0 != (v & 1);
+                v >>= 1;
+                prevEpoch = v == 0 ? 0 : minEpoch + (v - 1);
+            }
+            prevHlc = VIntCoding.readUnsignedVInt(in);
+            {
+                int flags = VIntCoding.readUnsignedVInt32(in);
+                Node.Id node = nodeIds[VIntCoding.readUnsignedVInt32(in)];
+                boundsInfo = boundsInfo.withGcBeforeBeforeAtLeast(TxnId.fromValues(prevEpoch, prevHlc, flags, node));
+            }
+            if (hasBootstrappedAt)
+            {
+                long epoch = prevEpoch + VIntCoding.readUnsignedVInt(in);
+                long hlc = prevHlc + VIntCoding.readVInt(in);
+                int flags = VIntCoding.readUnsignedVInt32(in);
+                Node.Id node = nodeIds[VIntCoding.readUnsignedVInt32(in)];
+                boundsInfo = boundsInfo.withBootstrappedAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
+            }
         }
         int prunedBeforeIndex = VIntCoding.readUnsignedVInt32(in) - 1;
 
@@ -721,12 +763,12 @@ public class Serialize
                 commandDecodeFlags |= statusOverrides << 3;
 
                 int statusFlags = status.flags ^ statusOverrides;
-                int executeAtMask = (statusFlags >>> 1) & executeAtMasks;
-                int missingDepsMask = statusFlags & missingDepsMasks;
-                commandDecodeFlags |= ((int)header & executeAtMask) << 1;
-                header >>>= executeAtMask;
-                commandDecodeFlags |= ((int)header & missingDepsMask);
-                header >>>= missingDepsMask;
+                int hasExecuteAt = (statusFlags >>> 1) & executeAtMasks;
+                int hasMissingDeps = statusFlags & missingDepsMasks;
+                commandDecodeFlags |= ((int)header & hasExecuteAt) << 1;
+                header >>>= hasExecuteAt;
+                commandDecodeFlags |= ((int)header & hasMissingDeps);
+                header >>>= hasMissingDeps;
                 int ballotMask = status.hasBallot ? ballotMasks : 0;
                 commandDecodeFlags |= ((int)header & ballotMask) << 2;
                 header >>>= ballotMask;

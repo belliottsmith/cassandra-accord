@@ -274,6 +274,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             return new Entry(range, startOwnershipEpoch, endOwnershipEpoch, locallyWitnessedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore, shardAppliedOrInvalidatedBefore, newGcBefore, bootstrappedAt, staleUntilAtLeast);
         }
 
+        public Entry withBootstrappedAtLeast(TxnId newBootstrappedAt)
+        {
+            if (newBootstrappedAt.compareTo(gcBefore) <= 0)
+                return this;
+
+            return new Entry(range, startOwnershipEpoch, endOwnershipEpoch, locallyWitnessedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore, shardAppliedOrInvalidatedBefore, gcBefore, newBootstrappedAt, staleUntilAtLeast);
+        }
+
         @VisibleForImplementation
         public Entry withEpochs(long start, long end)
         {

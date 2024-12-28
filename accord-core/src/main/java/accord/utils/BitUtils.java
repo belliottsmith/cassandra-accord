@@ -41,6 +41,9 @@ public class BitUtils
 
         public long read(int readCount, ByteBuffer in)
         {
+            if (readCount == 0)
+                return 0;
+
             if (readCount == 64 && bitCount == 0)
                 return in.getLong();
 
