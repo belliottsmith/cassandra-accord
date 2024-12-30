@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -62,6 +63,7 @@ import accord.impl.basic.Cluster;
 import accord.impl.basic.Cluster.Stats;
 import accord.impl.basic.InMemoryJournal;
 import accord.impl.basic.MonitoredPendingQueue;
+import accord.impl.basic.NodeSink;
 import accord.impl.basic.Packet;
 import accord.impl.basic.PendingQueue;
 import accord.impl.basic.PendingRunnable;
@@ -91,6 +93,7 @@ import accord.utils.DefaultRandom;
 import accord.utils.Gen;
 import accord.utils.Gens;
 import accord.utils.RandomSource;
+import accord.utils.UnhandledEnum;
 import accord.utils.Utils;
 import accord.utils.async.AsyncExecutor;
 import accord.utils.async.TimeoutUtils;
@@ -102,6 +105,12 @@ import org.agrona.collections.IntHashSet;
 import static accord.impl.PrefixedIntHashKey.forHash;
 import static accord.impl.PrefixedIntHashKey.range;
 import static accord.impl.PrefixedIntHashKey.ranges;
+import static accord.impl.list.ListResult.Status.Applied;
+import static accord.impl.list.ListResult.Status.Failure;
+import static accord.impl.list.ListResult.Status.Invalidated;
+import static accord.impl.list.ListResult.Status.Lost;
+import static accord.impl.list.ListResult.Status.RecoveryApplied;
+import static accord.impl.list.ListResult.Status.Truncated;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.utils.Utils.toArray;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -338,10 +347,10 @@ public class BurnTestBase
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get());
+        BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, ListAgent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should enver get a stale event");
-        }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get()));
+        }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null));
         Verifier verifier = createVerifier(keyCount * prefixCount);
         Function<CommandStore, AsyncExecutor> executor = ignore -> globalExecutor;
 
@@ -356,12 +365,9 @@ public class BurnTestBase
         int[] starts = new int[requests.length];
         Packet[] replies = new Packet[requests.length];
 
-        AtomicInteger acks = new AtomicInteger();
-        AtomicInteger nacks = new AtomicInteger();
-        AtomicInteger lost = new AtomicInteger();
-        AtomicInteger truncated = new AtomicInteger();
-        AtomicInteger recovered = new AtomicInteger();
-        AtomicInteger failedToCheck = new AtomicInteger();
+        EnumMap<ListResult.Status, AtomicInteger> counters = new EnumMap<>(ListResult.Status.class);
+        for (ListResult.Status status : ListResult.Status.values())
+            counters.put(status, new AtomicInteger());
         AtomicInteger clock = new AtomicInteger();
         AtomicInteger requestIndex = new AtomicInteger();
         Queue<Packet> initialRequests = new ArrayDeque<>();
@@ -401,30 +407,28 @@ public class BurnTestBase
                 int start = starts[(int)packet.replyId];
                 int end = clock.incrementAndGet();
                 logger.debug("{} at [{}, {}]", reply, start, end);
-                replies[(int)packet.replyId] = packet;
 
-                if (!reply.isSuccess())
+                switch (reply.status)
                 {
-                    switch (reply.status())
-                    {
-                        case Lost:          lost.incrementAndGet();             break;
-                        case Invalidated:   nacks.incrementAndGet();            break;
-                        case Failure:       failedToCheck.incrementAndGet();    break;
-                        case Truncated:     truncated.incrementAndGet();        break;
-                        // txn was applied?, but client saw a timeout, so response isn't known
-                        case Other:                                             break;
-                        default:            throw new AssertionError("Unexpected fault: " + reply.status());
-                    }
-                    return;
+                    default: throw new UnhandledEnum(reply.status);
+                    case Lost:
+                    case Truncated:
+                    case Failure:
+                    case Invalidated:
+                        replies[(int)packet.replyId] = packet;
+                        counters.get(reply.status).incrementAndGet();
+
+                    case Other:
+                        return;
+
+                    case Applied:
+                    case RecoveryApplied:
+                        replies[(int)packet.replyId] = packet;
+                        counters.get(reply.status).incrementAndGet();
                 }
+
 
                 progress.incrementAndGet();
-                switch (reply.status())
-                {
-                    default: throw new AssertionError("Unhandled status: " + reply.status());
-                    case Applied: acks.incrementAndGet(); break;
-                    case RecoveryApplied: recovered.incrementAndGet(); // NOTE: technically this might have been applied by the coordinator and it simply timed out
-                }
                 // TODO (correctness): when a keyspace is removed, the history/validator isn't cleaned up...
                 // the current logic for add keyspace only knows what is there, so a ABA problem exists where keyspaces
                 // may come back... logically this is a problem as the history doesn't get reset, but practically that
@@ -459,7 +463,7 @@ public class BurnTestBase
         try
         {
             messageStatsMap = Cluster.run(toArray(nodes, Id[]::new), newPrefixes, listener, () -> queue,
-                                          (id, onStale) -> globalExecutor.withAgent(agentSupplier.apply(onStale)),
+                                          (id, onStale, timeoutSupplier) -> globalExecutor.withAgent(agentSupplier.apply(onStale, timeoutSupplier)),
                                           queue::checkFailures,
                                           responseSink, random::fork, timeServiceSupplier,
                                           topologyFactory, initialRequests::poll,
@@ -480,8 +484,11 @@ public class BurnTestBase
             throw t;
         }
 
-        int observedOperations = acks.get() + recovered.get() + nacks.get() + lost.get() + truncated.get();
-        logger.info("nodes: {}, rf: {}. Received {} acks, {} recovered, {} nacks, {} lost, {} truncated ({} total) to {} operations", nodes.size(), topologyFactory.rf, acks.get(), recovered.get(), nacks.get(), lost.get(), truncated.get(), observedOperations, operations);
+        int observedOperations = counters.get(Applied).get() + counters.get(RecoveryApplied).get() + counters.get(Invalidated).get()
+                                 + counters.get(Lost).get() + counters.get(Truncated).get() + counters.get(Failure).get();
+        logger.info("nodes: {}, rf: {}. Received {} acks, {} recovered, {} nacks, {} lost, {} truncated ({} total) to {} operations", nodes.size(), topologyFactory.rf,
+                    counters.get(Applied).get(), counters.get(RecoveryApplied).get(), counters.get(Invalidated).get(), counters.get(Lost).get(), counters.get(Truncated).get(),
+                    observedOperations, operations);
         logger.info("Message counts: {}", statsInDescOrder(messageStatsMap));
         logger.info("Took {} and in logical time of {}", Duration.ofNanos(System.nanoTime() - startNanos), Duration.ofMillis(queue.nowInMillis() - startLogicalMillis));
         if (clock.get() != operations * 2 || observedOperations != operations)
@@ -498,7 +505,7 @@ public class BurnTestBase
                 }
             }
             if (clock.get() != operations * 2) throw new AssertionError("Incomplete set of responses; clock=" + clock.get() + ", expected operations=" + (operations * 2));
-            else throw new AssertionError("Incomplete set of responses; ack+recovered+other+nacks+lost+truncated=" + observedOperations + ", expected operations=" + (operations * 2));
+            else throw new AssertionError("Incomplete set of responses; ack+recovered+other+nacks+lost+truncated=" + observedOperations + ", expected operations=" + operations);
         }
     }
 

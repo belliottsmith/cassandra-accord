@@ -71,7 +71,7 @@ import org.agrona.collections.ObjectHashSet;
 
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Known.KnownRoute.Full;
+import static accord.primitives.Known.KnownRoute.FullRoute;
 
 public class RemoteListenersTest
 {
@@ -207,7 +207,7 @@ public class RemoteListenersTest
             int nodeCount = rnd.nextBoolean() ? rnd.nextInt(10, 1000) : Integer.MAX_VALUE;
             this.nodeIds = () -> new Node.Id(rnd.nextInt(0, nodeCount));
             this.awaits = rnd.randomWeightedPicker(Arrays.stream(SaveStatus.values())
-                                                         .filter(s -> s.known.route == Full)
+                                                         .filter(s -> s.known.route() == FullRoute)
                                                          .toArray(SaveStatus[]::new));
             this.durabilities = rnd.randomWeightedPicker(Durability.values());
 

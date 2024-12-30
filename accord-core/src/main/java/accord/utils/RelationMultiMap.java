@@ -25,6 +25,7 @@ import java.util.*;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.IntFunction;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
@@ -897,6 +898,70 @@ public class RelationMultiMap
             throw new IllegalStateException();
         System.arraycopy(src, 0, result, 0, to);
         return result;
+    }
+
+    public static <K, K2, V, T> T remove(T from, K[] keys, V[] oldValues, int[] oldKeysToValues, Predicate<V> remove, T none, IntFunction<V[]> newValueArray,
+                                         K2 passthroughKeys, SimpleConstructor<K2, V[], T> constructor)
+    {
+        if (isEmpty(keys, oldKeysToValues))
+            return from;
+
+        IntBuffers cache = ArrayBuffers.cachedInts();
+        int[] remapValue = cache.getInts(oldValues.length);
+        int[] newKeyToValue = null;
+        V[] newValues;
+        int o;
+        try
+        {
+            int count = 0;
+            for (int i = 0 ; i < oldValues.length ; ++i)
+            {
+                if (remove.test(oldValues[i])) remapValue[i] = -1;
+                else remapValue[i] = count++;
+            }
+
+            if (count == oldValues.length)
+                return from;
+
+            if (count == 0)
+                return none;
+
+            newValues = newValueArray.apply(count);
+            for (int i = 0 ; i < oldValues.length ; ++i)
+            {
+                if (remapValue[i] >= 0)
+                    newValues[remapValue[i]] = oldValues[i];
+            }
+
+            newKeyToValue = cache.getInts(oldKeysToValues.length);
+            int k = 0, i = keys.length;
+            o = i;
+            while (i < oldKeysToValues.length)
+            {
+                while (oldKeysToValues[k] == i)
+                    newKeyToValue[k++] = o;
+
+                int remapped = remapValue[oldKeysToValues[i]];
+                if (remapped >= 0)
+                    newKeyToValue[o++] = remapped;
+                ++i;
+            }
+
+            while (k < keys.length)
+                newKeyToValue[k++] = o;
+        }
+        catch (Throwable t)
+        {
+            cache.forceDiscard(newKeyToValue);
+            throw t;
+        }
+        finally
+        {
+            cache.forceDiscard(remapValue);
+        }
+
+        newKeyToValue = cache.completeAndDiscard(newKeyToValue, o);
+        return constructor.construct(passthroughKeys, newValues, newKeyToValue);
     }
 
     public static <K, V> boolean remove(K[] oldKeys, V[] oldValues, int[] oldKeysToValues,

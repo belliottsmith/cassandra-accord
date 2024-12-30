@@ -21,6 +21,7 @@ package accord.local;
 import accord.api.Result;
 import accord.local.Command.Truncated;
 import accord.primitives.Ballot;
+import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -98,9 +99,9 @@ public abstract class SafeCommand
         return update;
     }
 
-    public Command.PreAccepted preaccept(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)
+    public Command.PreAccepted preaccept(SafeCommandStore safeStore, CommonAttributes attrs, SaveStatus saveStatus, Timestamp executeAt, Ballot ballot)
     {
-        return update(safeStore, Command.preaccept(current(), attrs, executeAt, ballot));
+        return update(safeStore, Command.preaccept(current(), attrs, saveStatus, executeAt, ballot));
     }
 
     public Command.Accepted markDefined(SafeCommandStore safeStore, CommonAttributes attributes, Ballot promised)
@@ -113,16 +114,14 @@ public abstract class SafeCommand
         return incidentalUpdate(current().updatePromised(promised));
     }
 
-    public Command.Accepted accept(SafeCommandStore safeStore, Unseekables<?> keysOrRanges, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)
+    public Command.Accepted accept(SafeCommandStore safeStore, SaveStatus saveStatus, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)
     {
-        Command current = current();
-        Command.Accepted updated = Command.accept(current, attrs, executeAt, ballot);
-        return update(safeStore, updated);
+        return update(safeStore, Command.accept(saveStatus, attrs, executeAt, ballot));
     }
 
-    public Command acceptInvalidated(SafeCommandStore safeStore, Ballot ballot)
+    public Command notAccept(SafeCommandStore safeStore, Status status, Ballot ballot)
     {
-        return update(safeStore, Command.acceptInvalidated(current(), ballot));
+        return update(safeStore, Command.notAccept(status, current(), ballot));
     }
 
     public Command.Committed commit(SafeCommandStore safeStore, CommonAttributes attrs, Ballot ballot, Timestamp executeAt)

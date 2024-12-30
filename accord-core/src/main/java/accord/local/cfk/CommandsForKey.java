@@ -53,25 +53,28 @@ import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
+import accord.utils.UnhandledEnum;
 import accord.utils.btree.BTree;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
-import static accord.local.CommandSummaries.IsDep.IS_DEP;
-import static accord.local.CommandSummaries.IsDep.IS_NOT_DEP;
+import static accord.local.CommandSummaries.IsDep.IS_COORD_DEP;
+import static accord.local.CommandSummaries.IsDep.IS_STABLE_DEP;
+import static accord.local.CommandSummaries.IsDep.IS_NOT_COORD_DEP;
+import static accord.local.CommandSummaries.IsDep.IS_NOT_STABLE_DEP;
 import static accord.local.CommandSummaries.IsDep.NOT_ELIGIBLE;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
-import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
-import static accord.local.CommandSummaries.SummaryStatus.NOT_ACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.PREACCEPTED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_DURABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_NOT_DURABLE;
-import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
-import static accord.local.cfk.CommandsForKey.InternalStatus.PREACCEPTED_OR_ACCEPTED_INVALIDATE;
+import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TO_SUMMARY_STATUS;
+import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE;
-import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.from;
 import static accord.local.cfk.CommandsForKey.InternalStatus.prunedFrom;
 import static accord.local.cfk.PostProcess.notifyManagedPreBootstrap;
@@ -84,6 +87,7 @@ import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Updating.insertOrUpdate;
 import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -293,7 +297,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (!newStatus.hasBallot)
             return false;
 
-        Ballot prevAcceptedOrCommitted = prev == null ? Ballot.ZERO : prev.acceptedOrCommitted();
+        Ballot prevAcceptedOrCommitted = prev.acceptedOrCommitted();
         Ballot newAcceptedOrCommitted = updated.acceptedOrCommitted();
 
         return newAcceptedOrCommitted.compareTo(prevAcceptedOrCommitted) > 0;
@@ -806,10 +810,14 @@ public class CommandsForKey extends CommandsForKeyUpdate
         // TODO (expected): use TRANSITIVE instead of TRANSITIVE_VISIBLE when we don't need to sync dependencies
         TRANSITIVE                             (SummaryStatus.NOT_DIRECTLY_WITNESSED,                false, false, false, false),
         TRANSITIVE_VISIBLE                     (SummaryStatus.NOT_DIRECTLY_WITNESSED,                false, false, false, false),
-        PREACCEPTED_OR_ACCEPTED_INVALIDATE     (NOT_ACCEPTED, false, false, true, false),
-        // even though we don't need the executeAt for deps calculation, we do need it for recovery to decide membership of the earlierWait collection
-        ACCEPTED                               (SummaryStatus.ACCEPTED,                              true, true,  true,  false),
-        COMMITTED                              (SummaryStatus.COMMITTED, true, true, true, true),
+        PREACCEPTED_WITHOUT_DEPS               (SummaryStatus.PREACCEPTED,                           false, false, true,  false),
+        PREACCEPTED_WITH_COORDINATOR_DEPS      (SummaryStatus.PREACCEPTED,                           false, true,  true,  false),
+        PRENOTACCEPTED_WITH_COORDINATOR_DEPS   (SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE, false, true,  true,  false),
+        PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE  (SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE, false, false, true,  false),
+        NOTACCEPTED_WITH_COORDINATOR_DEPS      (SummaryStatus.NOTACCEPTED,                           false, true,  true,  false),
+        NOTACCEPTED                            (SummaryStatus.NOTACCEPTED,                           false, false, true,  false),
+        ACCEPTED                               (SummaryStatus.ACCEPTED,                              false, true,  true,  false),
+        COMMITTED                              (SummaryStatus.COMMITTED,                             true,  true,  true,  true),
         STABLE                                 (SummaryStatus.STABLE,                                true,  true,  false, true),
         // TODO (expected): do not encode missing collection for APPLIED transactions,
         //  as anything they should have witnessed can be treated as supersedingRejected
@@ -828,13 +836,20 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
         static
         {
-            FROM_SAVE_STATUS.put(SaveStatus.PreAccepted, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidateWithDefinition, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.PreAccepted, PREACCEPTED_WITHOUT_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.PreAcceptedWithDeps, PREACCEPTED_WITH_COORDINATOR_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidateWithDefinition, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.PreNotAccepted, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithDefinition, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.NotAccepted, NOTACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDefinition, NOTACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.Accepted, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.AcceptedWithDefinition, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefinition, PREACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithAcceptedDeps, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefinitionAndAcceptedDeps, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.AcceptedSlow, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.AcceptedSlowWithDefinition, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefinition, PREACCEPTED_WITHOUT_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDeps, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefAndDeps, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.Committed, COMMITTED);
             FROM_SAVE_STATUS.put(SaveStatus.Stable, STABLE);
             FROM_SAVE_STATUS.put(SaveStatus.ReadyToExecute, STABLE);
@@ -1229,7 +1244,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
             switch (testStartedAt)
             {
-                default: throw new AssertionError("Unhandled TestStartedAt: " + testStartedAt);
+                default: throw new UnhandledEnum(testStartedAt);
                 case STARTED_BEFORE: start = 0; end = insertPos; break;
                 case STARTED_AFTER: start = insertPos; end = byId.length; break;
                 case ANY: start = 0; end = byId.length;
@@ -1253,7 +1268,6 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 }
                 else
                 {
-
                     boolean hasAsDep;
                     if (loadingFor == null)
                     {
@@ -1269,11 +1283,20 @@ public class CommandsForKey extends CommandsForKeyUpdate
                         // we could use expontentialSearch and moving index for improved algorithmic complexity,
                         // but since should be rarely taken path probably not worth code complexity
                         loadingIndex = SortedArrays.exponentialSearch(loadingFor, loadingIndex, loadingFor.length, txn);
-                        if (hasAsDep = (loadingIndex >= 0)) ++loadingIndex;
-                        else loadingIndex = -1 - loadingIndex;
+                        if (loadingIndex >= 0)
+                        {
+                            hasAsDep = !loadingFor[loadingIndex].is(UNSTABLE);
+                            ++loadingIndex;
+                        }
+                        else
+                        {
+                            hasAsDep = false;
+                            loadingIndex = -1 - loadingIndex;
+                        }
                     }
 
-                    dep = hasAsDep ? IS_DEP : IS_NOT_DEP;
+                    dep = txn.compareTo(ACCEPTED) < 0 ? (hasAsDep ? IS_COORD_DEP : IS_NOT_COORD_DEP)
+                                                      : (hasAsDep ? IS_STABLE_DEP : IS_NOT_STABLE_DEP);
                 }
             }
 
@@ -1511,7 +1534,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 if (c > 0)
                 {
                     // newStatus moves us backwards; we only permit this for (Pre)?(Not)?Accepted states
-                    if (cur.compareTo(COMMITTED) >= 0 || newStatus.compareTo(PREACCEPTED_OR_ACCEPTED_INVALIDATE) < 0)
+                    if (cur.compareTo(COMMITTED) >= 0 || newStatus.compareTo(PREACCEPTED) <= 0)
                         return this;
 
                     // and only when the new ballot is strictly greater
@@ -1816,7 +1839,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                                 }
                                 for (int j = missingFrom ; j < missing.length ; ++j)
                                 {
-                                    if (!managesExecution(missing[j]))
+                                    if (!managesExecution(missing[j]) || missing[j].is(UNSTABLE))
                                         --missingCount;
                                 }
                             }
@@ -1849,7 +1872,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     {
         switch (kind)
         {
-            default: throw new AssertionError("Unhandled Txn.Kind: " + kind);
+            default: throw new UnhandledEnum(kind);
             case EphemeralRead:
                 throw illegalState("Invalid Txn.Kind for CommandsForKey: " + kind);
 
@@ -1869,7 +1892,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     {
         switch (kind)
         {
-            default: throw new AssertionError("Unhandled Txn.Kind: " + kind);
+            default: throw new UnhandledEnum(kind);
             case EphemeralRead:
             case ExclusiveSyncPoint:
                 throw illegalState("Invalid Txn.Kind for CommandsForKey: " + kind);

@@ -41,6 +41,7 @@ public interface Topologies extends TopologySorter
 {
     Topology current();
 
+    default boolean containsEpoch(long epoch) { return epoch >= oldestEpoch() && epoch <= currentEpoch(); }
     int indexForEpoch(long epoch);
 
     Topology getEpoch(long epoch);

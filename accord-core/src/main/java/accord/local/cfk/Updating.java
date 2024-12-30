@@ -37,6 +37,7 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.cfk.CommandsForKey.InternalStatus;
 import accord.local.cfk.PostProcess.LoadPruned;
+import accord.primitives.Deps.DepList;
 import accord.primitives.Status;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.primitives.Ballot;
@@ -47,7 +48,7 @@ import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.RelationMultiMap;
 import accord.utils.SortedArrays;
-import accord.utils.SortedCursor;
+import accord.utils.SortedList.MergeCursor;
 
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.KeyHistory.SYNC;
@@ -70,6 +71,7 @@ import static accord.local.cfk.Utils.removePrunedAdditions;
 import static accord.local.cfk.Utils.removeUnmanaged;
 import static accord.local.cfk.Utils.validateMissing;
 import static accord.primitives.Routable.Domain.Range;
+import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
@@ -205,7 +207,7 @@ class Updating
             ballot = command.acceptedOrCommitted();
 
         Timestamp depsKnownBefore = newStatus.depsKnownBefore(txnId, executeAt);
-        SortedCursor<TxnId> deps = command.partialDeps().txnIds(cfk.key());
+        MergeCursor<TxnId, DepList> deps = command.partialDeps().txnIds(cfk.key());
         deps.find(cfk.redundantBefore());
 
         return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, mayExecute, ballot, executeAt, depsKnownBefore, deps);
@@ -215,7 +217,7 @@ class Updating
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, SortedCursor<TxnId> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -239,6 +241,13 @@ class Updating
             int c = t.compareTo(d);
             if (c == 0)
             {
+                if (d.is(UNSTABLE) && t.compareTo(COMMITTED) < 0)
+                {
+                    if (missingCount == missing.length)
+                        missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount * 2));
+                    missing[missingCount++] = d;
+                }
+
                 ++txnIdsIndex;
                 deps.advance();
             }
@@ -280,7 +289,7 @@ class Updating
             {
                 if (additionCount >= additions.length)
                     additions = cachedTxnIds().resize(additions, additionCount, Math.max(8, additionCount * 2));
-                additions[additionCount++] = deps.cur();
+                additions[additionCount++] = deps.cur().withoutNonIdentityFlags();
                 deps.advance();
             }
             while (deps.hasCur());

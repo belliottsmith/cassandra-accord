@@ -370,13 +370,13 @@ public class CommandChange
             if (durability != null)
                 attrs.durability(durability);
             if (participants != null)
-                attrs.setParticipants(participants.filter(StoreParticipants.Filter.LOAD, redundantBefore, txnId, saveStatus.known.executeAt.isDecidedAndKnownToExecute() ? executeAt : null));
+                attrs.setParticipants(participants.filter(StoreParticipants.Filter.LOAD, redundantBefore, txnId, saveStatus.known.executeAt().isDecidedAndKnownToExecute() ? executeAt : null));
             if (participants != null)
                 attrs.setParticipants(participants);
-            if (partialDeps != null && saveStatus.known.deps.hasProposedOrDecidedDeps())
+            if (partialDeps != null && saveStatus.known.deps().hasPreAcceptedOrProposedOrDecidedDeps())
                 attrs.partialDeps(partialDeps);
 
-            switch (saveStatus.known.outcome)
+            switch (saveStatus.known.outcome())
             {
                 case Erased:
                 case WasApply:
@@ -395,11 +395,14 @@ public class CommandChange
                     return saveStatus == SaveStatus.Uninitialised ? Command.NotDefined.uninitialised(attrs.txnId())
                                                                   : Command.NotDefined.notDefined(attrs, promised);
                 case PreAccepted:
-                    return Command.PreAccepted.preAccepted(attrs, executeAt, promised);
+                    return Command.PreAccepted.preAccepted(attrs, saveStatus, executeAt, promised);
                 case AcceptedInvalidate:
+                case PreNotAccepted:
+                case NotAccepted:
                     if (!saveStatus.known.isDefinitionKnown())
-                        return Command.AcceptedInvalidateWithoutDefinition.acceptedInvalidate(attrs, promised, acceptedOrCommitted);
+                        return Command.NotAcceptedWithoutDefinition.notAccepted(saveStatus, attrs, promised, acceptedOrCommitted);
                 case Accepted:
+                case AcceptedSlow:
                 case PreCommitted:
                     return Command.Accepted.accepted(attrs, saveStatus, executeAt, promised, acceptedOrCommitted);
 

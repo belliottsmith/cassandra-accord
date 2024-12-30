@@ -18,82 +18,129 @@
 
 package accord.topology;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
 import accord.local.Node.Id;
 import accord.primitives.Range;
 import accord.primitives.RoutableKey;
+import accord.primitives.TxnId;
+import accord.primitives.TxnId.FastPath;
+import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
+import accord.utils.UnhandledEnum;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
+import com.google.common.primitives.Shorts;
 
 import static accord.utils.Invariants.checkArgument;
 
 // TODO (expected, efficiency): concept of region/locality
+// TODO (expected): introduce recovery quorum size configuration
 public class Shard
 {
+    private static final SortedArrayList<Id> NO_NODES = SortedArrayList.ofSorted(new Id[0]);
+
     public final Range range;
     public final SortedArrayList<Id> nodes;
-    public final Set<Id> fastPathElectorate;
-    public final Set<Id> joining;
-    public final int maxFailures;
-    public final int recoveryFastPathSize;
-    public final int fastPathQuorumSize;
-    public final int fastPathRejectSize;
-    public final int slowPathQuorumSize;
+    public final SortedArrayList<Id> notInFastPath;
+    public final SortedArrayList<Id> joining;
+    public final short rf;
+    public final short maxFailures;
+    public final short fastPathElectorateSize;
+    public final short simpleFastQuorumSize;
+    public final short privilegedWithoutDepsFastQuorumSize;
+    public final short privilegedWithDepsFastQuorumSize;
+    public final short slowQuorumSize;
+    public final short recoveryQuorumSize;
     public final boolean pendingRemoval;
 
-    public Shard(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, Set<Id> joining, boolean pendingRemoval)
+    Shard(Range range, SortedArrayList<Id> nodes, SortedArrayList<Id> notInFastPath, SortedArrayList<Id> joining, boolean pendingRemoval)
     {
         this.range = range;
         this.nodes = nodes;
-        this.maxFailures = maxToleratedFailures(nodes.size());
-        this.fastPathElectorate = ImmutableSet.copyOf(fastPathElectorate);
-        this.joining = checkArgument(ImmutableSet.copyOf(joining), Iterables.all(joining, nodes::contains),
+        this.notInFastPath = checkArgument(notInFastPath, nodes.containsAll(notInFastPath));
+        this.joining = checkArgument(joining, nodes.containsAll(joining),
                 "joining nodes must also be present in nodes; joining=%s, nodes=%s", joining, nodes);
-        int e = fastPathElectorate.size();
-        this.recoveryFastPathSize = (maxFailures+1)/2;
-        this.slowPathQuorumSize = slowPathQuorumSize(nodes.size());
-        this.fastPathQuorumSize = fastPathQuorumSize(nodes.size(), e, maxFailures);
-        this.fastPathRejectSize = 1 + fastPathElectorate.size() - fastPathQuorumSize;
+        this.rf = Shorts.saturatedCast(nodes.size());
+        this.maxFailures = Shorts.saturatedCast(maxToleratedFailures(rf));
+        this.fastPathElectorateSize = Shorts.saturatedCast(nodes.size() - notInFastPath.size());
+        this.slowQuorumSize = Shorts.saturatedCast(slowQuorumSize(nodes.size()));
+        this.recoveryQuorumSize = slowQuorumSize;
+        this.simpleFastQuorumSize = Shorts.saturatedCast(simpleFastQuorumSize(rf, fastPathElectorateSize, recoveryQuorumSize));
+        this.privilegedWithoutDepsFastQuorumSize = Shorts.saturatedCast(privilegedWithoutDepsFastQuorumSize(rf, fastPathElectorateSize, recoveryQuorumSize));
+        this.privilegedWithDepsFastQuorumSize = Shorts.saturatedCast(privilegedWithDepsFastQuorumSize(rf, fastPathElectorateSize, recoveryQuorumSize));
         this.pendingRemoval = pendingRemoval;
     }
 
-    public Shard(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, Set<Id> joining)
+    public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, Set<Id> joining)
     {
-        this(range, nodes, fastPathElectorate, joining, false);
+        return create(range, nodes, fastPathElectorate, joining, false);
     }
 
-    public Shard(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate)
+    public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate)
     {
-        this(range, nodes, fastPathElectorate, Collections.emptySet());
+        return create(range, nodes, fastPathElectorate, false);
     }
 
-    @VisibleForTesting
-    public static int maxToleratedFailures(int replicas)
+    public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, boolean pendingRemoval)
     {
-        return (replicas - 1) / 2;
+        return create(range, nodes, fastPathElectorate, NO_NODES, pendingRemoval);
     }
 
-    @VisibleForTesting
-    static int fastPathQuorumSize(int replicas, int electorate, int f)
+
+    public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, Set<Id> joining, boolean pendingRemoval)
     {
-        checkArgument(electorate >= replicas - f);
-        return (f + electorate)/2 + 1;
+        Invariants.checkArgument(nodes.containsAll(fastPathElectorate));
+        return new Shard(range, nodes, nodes.without(fastPathElectorate::contains),
+                         joining instanceof SortedArrayList<?> ? (SortedArrayList<Id>) joining : SortedArrayList.copyUnsorted(joining, Id[]::new),
+                         pendingRemoval);
     }
 
-    public static int slowPathQuorumSize(int replicas)
+    public boolean electorateIsSubset()
     {
-        return replicas - maxToleratedFailures(replicas);
+        return !notInFastPath.isEmpty();
+    }
+
+    public boolean rejectsFastPath(TxnId txnId, int rejections)
+    {
+        return rejections > fastPathElectorateSize - fastQuorumSize(txnId);
+    }
+
+    public boolean rejectsFastPath(int fastQuorumSize, int rejections)
+    {
+        return rejections > fastPathElectorateSize - fastQuorumSize;
+    }
+
+    public boolean acceptsFastPath(TxnId txnId, int accepts)
+    {
+        return accepts > fastQuorumSize(txnId);
+    }
+
+    public int fastQuorumSize(TxnId txnId)
+    {
+        return fastQuorumSize(txnId.fastPath());
+    }
+
+    public int fastQuorumSize(FastPath fastPath)
+    {
+        switch (fastPath)
+        {
+            default: throw new UnhandledEnum(fastPath);
+            case UNOPTIMISED: return simpleFastQuorumSize;
+            case PRIVILEGED_COORDINATOR_WITHOUT_DEPS: return privilegedWithoutDepsFastQuorumSize;
+            case PRIVILEGED_COORDINATOR_WITH_DEPS: return privilegedWithDepsFastQuorumSize;
+        }
+    }
+
+    public boolean isInFastPath(Id id)
+    {
+        return !notInFastPath.contains(id);
     }
 
     public int rf()
     {
-        return nodes.size();
+        return rf;
     }
 
     public boolean contains(RoutableKey key)
@@ -116,7 +163,7 @@ public class Shard
 
                 Id node = nodes.get(i);
                 sb.append(node);
-                if (fastPathElectorate.contains(node))
+                if (isInFastPath(node))
                     sb.append('f');
             }
             sb.append(')');
@@ -154,18 +201,64 @@ public class Shard
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         Shard shard = (Shard) o;
-        return recoveryFastPathSize == shard.recoveryFastPathSize
-            && fastPathQuorumSize == shard.fastPathQuorumSize
-            && slowPathQuorumSize == shard.slowPathQuorumSize
-            && range.equals(shard.range)
-            && nodes.equals(shard.nodes)
-            && fastPathElectorate.equals(shard.fastPathElectorate)
-            && joining.equals(shard.joining);
+        return    rf == shard.rf
+                  && maxFailures == shard.maxFailures
+                  && fastPathElectorateSize == shard.fastPathElectorateSize
+                  && simpleFastQuorumSize == shard.simpleFastQuorumSize
+                  && privilegedWithoutDepsFastQuorumSize == shard.privilegedWithoutDepsFastQuorumSize
+                  && privilegedWithDepsFastQuorumSize == shard.privilegedWithDepsFastQuorumSize
+                  && slowQuorumSize == shard.slowQuorumSize
+                  && range.equals(shard.range)
+                  && nodes.equals(shard.nodes)
+                  && notInFastPath.equals(shard.notInFastPath)
+                  && joining.equals(shard.joining);
     }
 
     @Override
     public int hashCode()
     {
         return range.hashCode();
+    }
+
+    @VisibleForTesting
+    static int maxToleratedFailures(int replicas)
+    {
+        return (replicas - 1) / 2;
+    }
+
+    @VisibleForTesting
+    static int simpleFastQuorumSize(int rf, int electorate, int recoveryQuorum)
+    {
+        return fastQuorumSize(rf, electorate, recoveryQuorum, 1);
+    }
+
+    @VisibleForTesting
+    static int privilegedWithoutDepsFastQuorumSize(int rf, int electorate, int recoveryQuorum)
+    {
+        return fastQuorumSize(rf, electorate, recoveryQuorum, 0);
+    }
+
+    @VisibleForTesting
+    static int privilegedWithDepsFastQuorumSize(int rf, int electorate, int recoveryQuorum)
+    {
+        return fastQuorumSize(rf, electorate, recoveryQuorum, -1);
+    }
+
+    static int fastQuorumSize(int rf, int electorate, int recoveryQuorum, int d)
+    {
+        return Math.max((d + electorate + rf - recoveryQuorum + 1)/2, (rf/2) + 1);
+    }
+
+    @VisibleForTesting
+    static int slowQuorumSize(int replicas)
+    {
+        return replicas - maxToleratedFailures(replicas);
+    }
+
+    public FastPath bestFastPath()
+    {
+        return privilegedWithDepsFastQuorumSize == privilegedWithoutDepsFastQuorumSize
+               ? FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS
+               : FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
     }
 }

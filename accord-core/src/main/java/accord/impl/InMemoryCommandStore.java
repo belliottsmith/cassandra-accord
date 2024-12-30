@@ -88,7 +88,7 @@ import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
 import static accord.local.KeyHistory.ASYNC;
-import static accord.primitives.Known.KnownRoute.Maybe;
+import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.local.KeyHistory.SYNC;
@@ -1222,7 +1222,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         TreeMap<TxnId, RangeCommand> rangeCommands = this.rangeCommands;
         rangeDeps.forEachUniqueTxnId(allRanges, null, (ignore, txnId) -> {
             GlobalCommand global = commands.get(txnId);
-            if (global != null && global.value().known().route != Maybe)
+            if (global != null && global.value().known().has(MaybeRoute))
                 return;
 
             Ranges ranges = rangeDeps.ranges(txnId);

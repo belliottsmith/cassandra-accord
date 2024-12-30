@@ -64,6 +64,7 @@ import static accord.local.RedundantStatus.WAS_OWNED_PARTIALLY_RETIRED;
 import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
+import static accord.utils.Invariants.partiallyOrdered;
 
 public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 {
@@ -186,15 +187,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             this.staleUntilAtLeast = staleUntilAtLeast;
             checkNoneOrRX(locallyWitnessedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore,
                           shardAppliedOrInvalidatedBefore, gcBefore);
-            checkPartiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
-            checkPartiallyOrdered(shardAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
-            checkPartiallyOrdered(gcBefore, shardAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore);
-        }
-
-        private static void checkPartiallyOrdered(TxnId ... txnIds)
-        {
-            for (int i = 1 ; i < txnIds.length ; ++i)
-                Invariants.checkArgument(txnIds[i - 1].compareTo(txnIds[i]) <= 0);
+            partiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
+            partiallyOrdered(shardAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
+            partiallyOrdered(gcBefore, shardAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore);
         }
 
         private static void checkNoneOrRX(TxnId ... txnIds)

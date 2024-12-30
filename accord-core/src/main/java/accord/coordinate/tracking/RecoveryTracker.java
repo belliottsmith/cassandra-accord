@@ -18,17 +18,24 @@
 
 package accord.coordinate.tracking;
 
-import accord.coordinate.tracking.QuorumTracker.QuorumShardTracker;
+import accord.coordinate.tracking.QuorumTracker.AbstractQuorumShardTracker;
 import accord.local.Node;
+import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.topology.Topology;
 
 public class RecoveryTracker extends AbstractTracker<RecoveryTracker.RecoveryShardTracker>
 {
-    public static class RecoveryShardTracker extends QuorumShardTracker
+    public static class RecoveryShardTracker extends AbstractQuorumShardTracker
     {
         protected int fastPathRejects = 0;
+
+        @Override
+        public boolean hasReachedQuorum()
+        {
+            return successes >= shard.recoveryQuorumSize;
+        }
 
         private RecoveryShardTracker(Shard shard)
         {
@@ -37,14 +44,14 @@ public class RecoveryTracker extends AbstractTracker<RecoveryTracker.RecoverySha
 
         private ShardOutcomes onSuccessRejectFastPath(Node.Id from)
         {
-            if (shard.fastPathElectorate.contains(from))
+            if (shard.isInFastPath(from))
                 ++fastPathRejects;
             return onSuccess(from);
         }
 
-        private boolean rejectsFastPath()
+        private boolean rejectsFastPath(TxnId txnId)
         {
-            return fastPathRejects > shard.fastPathElectorate.size() - shard.fastPathQuorumSize;
+            return shard.rejectsFastPath(txnId, fastPathRejects);
         }
     }
 
@@ -67,7 +74,7 @@ public class RecoveryTracker extends AbstractTracker<RecoveryTracker.RecoverySha
         return recordResponse(this, from, RecoveryShardTracker::onFailure, from);
     }
 
-    public boolean rejectsFastPath()
+    public boolean rejectsFastPath(TxnId txnId)
     {
         // a fast path decision must have recorded itself to a fast quorum in an earlier epoch
         // but the fast path votes may be taken from the proposal epoch only.
@@ -76,9 +83,15 @@ public class RecoveryTracker extends AbstractTracker<RecoveryTracker.RecoverySha
         Topology current = topologies.current();
         for (int i = 0 ; i < current.size() ; ++i)
         {
-            if (trackers[i].rejectsFastPath())
+            if (trackers[i].rejectsFastPath(txnId))
                 return true;
         }
+        return false;
+    }
+
+    public boolean mustSupersedingCoordinatorHaveIntersectedFastQuorum(TxnId self, TxnId superseding)
+    {
+        // TODO (required): in follow up
         return false;
     }
 }

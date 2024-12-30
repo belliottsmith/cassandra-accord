@@ -46,6 +46,7 @@ import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.SimpleBitSet;
 import accord.utils.SortedList;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 
 import static accord.local.KeyHistory.INCR;
@@ -269,7 +270,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     {
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
-        if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition.isKnown())
+        if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition().isKnown())
             return;
 
         TxnId txnId = updated.txnId();
@@ -390,7 +391,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 RedundantStatus status = redundantBefore.status(maxTxnId, key);
                 switch (status)
                 {
-                    default: throw new AssertionError("Unhandled RedundantStatus: " + status);
+                    default: throw new UnhandledEnum(status);
                     case NOT_OWNED:
                     case WAS_OWNED:
                     case WAS_OWNED_CLOSED:

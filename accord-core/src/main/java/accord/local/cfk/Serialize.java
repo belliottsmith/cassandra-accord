@@ -39,11 +39,13 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.BitUtils;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 import accord.utils.VIntCoding;
 
 import static accord.local.cfk.CommandsForKey.NO_BOUNDS_INFO;
 import static accord.local.cfk.CommandsForKey.NO_PENDING_UNMANAGED;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
+import static accord.primitives.TxnId.MediumPath.MEDIUM_PATH_TRACK_STABLE;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.SyncPoint;
@@ -837,7 +839,8 @@ public class Serialize
             if (readEpochBytes > 0)
                 epoch += readEpochBytes == 1 ? (in.get() & 0xff) : in.getInt();
 
-            txnIds[i] = kind != null ? new TxnId(epoch, hlc, kind, domain, node)
+            // TODO (required): efficiently encode medium path / coordinator optimisation Flag
+            txnIds[i] = kind != null ? new TxnId(epoch, hlc, 0, kind, domain, node)
                                      : TxnId.fromValues(epoch, hlc, flags, node);
 
             prevEpoch = epoch;
@@ -1050,7 +1053,7 @@ public class Serialize
         return (bootstrappedAt != null && bootstrappedAt.flags() != RX_FLAGS) || (redundantBefore.flags() != RX_FLAGS);
     }
 
-    private static final int RX_FLAGS = new TxnId(0, 0, ExclusiveSyncPoint, Domain.Range, Node.Id.NONE).flags();
+    private static final int RX_FLAGS = new TxnId(0, 0, MEDIUM_PATH_TRACK_STABLE.bits, ExclusiveSyncPoint, Domain.Range, Node.Id.NONE).flags();
 
     private static boolean hasMaxHlc(CommandsForKey cfk)
     {
@@ -1106,6 +1109,7 @@ public class Serialize
      */
     private static int txnIdFlagsBits(TxnId txnId, boolean extended)
     {
+        // TODO (required): we expect to almost always have more flags than this, so optimise handling
         if (txnId.flags() > Timestamp.KIND_AND_DOMAIN_FLAGS)
             return 0;
 
@@ -1131,7 +1135,7 @@ public class Serialize
                     case ExclusiveSyncPoint: return 5;
                     default: return 0;
                 }
-            default: throw new AssertionError("Unhandled Domain: " + domain);
+            default: throw new UnhandledEnum(domain);
         }
     }
 

@@ -21,6 +21,7 @@ package accord.local;
 import javax.annotation.Nullable;
 
 import accord.api.Result;
+import accord.messages.Accept;
 import accord.primitives.Ballot;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
@@ -47,7 +48,7 @@ public class CheckedCommands
         StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command before = safeCommand.current();
-        Commands.AcceptOutcome result = Commands.preaccept(safeStore, safeCommand, participants, txnId, txnId.epoch(), partialTxn, route);
+        Commands.AcceptOutcome result = Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false, route);
         Command after = safeCommand.current();
         if (result != Commands.AcceptOutcome.Success) throw illegalState("Command mutation rejected: " + result);
         consumer.accept(before, after);
@@ -63,7 +64,7 @@ public class CheckedCommands
         StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command before = safeCommand.current();
-        Commands.AcceptOutcome result = Commands.accept(safeStore, safeCommand, participants, txnId, ballot, route, executeAt, partialDeps);
+        Commands.AcceptOutcome result = Commands.accept(safeStore, safeCommand, participants, txnId, Accept.Kind.SLOW, ballot, route, executeAt, partialDeps);
         Command after = safeCommand.current();
         if (result != Commands.AcceptOutcome.Success) throw illegalState("Command mutation rejected: " + result);
         consumer.accept(before, after);

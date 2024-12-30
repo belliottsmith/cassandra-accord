@@ -30,6 +30,7 @@ import accord.messages.ReplyContext;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -142,5 +143,11 @@ public class MaelstromAgent implements Agent
     public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
+    }
+
+    @Override
+    public long localExpiresAt(Status.Phase phase, TimeUnit unit)
+    {
+        return unit.convert(1L, SECONDS);
     }
 }

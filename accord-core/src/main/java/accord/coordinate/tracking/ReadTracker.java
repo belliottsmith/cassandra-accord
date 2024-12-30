@@ -27,6 +27,8 @@ import accord.primitives.Ranges;
 import accord.topology.Shard;
 import accord.topology.ShardSelection;
 import com.google.common.annotations.VisibleForTesting;
+
+import accord.topology.Topology;
 import accord.utils.Invariants;
 
 import accord.local.Node.Id;
@@ -135,7 +137,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
             if (hadSucceeded)
                 return NoChange;
 
-            if (quorum == shard.slowPathQuorumSize)
+            if (quorum == shard.slowQuorumSize)
                 return Success;
 
             return ensureProgressOrFail();
@@ -169,7 +171,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
 
         public boolean hasReachedQuorum()
         {
-            return quorum >= shard.slowPathQuorumSize;
+            return quorum >= shard.slowQuorumSize;
         }
 
         public boolean hasSucceeded()
@@ -307,6 +309,37 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     {
         boolean isSlow = receiveResponseIsSlow(from);
         return recordResponse(this, from, function, isSlow);
+    }
+
+    protected final boolean tryIfUniversal(Id id)
+    {
+        if (candidates.isEmpty())
+            return false;
+
+        for (int i = 0 ; i < topologies.size() ; ++i)
+        {
+            Topology topology = topologies.get(i);
+            for (int j = 0 ; j < topology.size() ; ++j)
+            {
+                if (!topology.get(j).nodes.contains(id))
+                    return false;
+            }
+        }
+
+        {
+            int index = 0, last = candidates.size() - 1;
+            while (index <= last)
+            {
+                if (id.equals(candidates.get(index)))
+                    break;
+                ++index;
+            }
+            candidates.set(index, candidates.get(last));
+            candidates.remove(last);
+        }
+        recordInFlightRead(id);
+
+        return true;
     }
 
     public <T1> RequestStatus trySendMore(BiConsumer<T1, Id> contact, T1 with)

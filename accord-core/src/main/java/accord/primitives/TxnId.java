@@ -25,13 +25,95 @@ import accord.local.Node.Id;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Txn.Kind;
 import accord.primitives.Txn.Kind.Kinds;
+import accord.utils.Invariants;
+import accord.utils.TinyEnumSet;
 
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.illegalArgument;
 
 public class TxnId extends Timestamp
 {
+    public enum FastPath
+    {
+        UNOPTIMISED,
+        PRIVILEGED_COORDINATOR_WITHOUT_DEPS,
+        PRIVILEGED_COORDINATOR_WITH_DEPS;
+
+        private static final FastPaths IS_PRIVILEGED = new FastPaths(PRIVILEGED_COORDINATOR_WITH_DEPS, PRIVILEGED_COORDINATOR_WITHOUT_DEPS);
+        private static final FastPath[] VALUES = values();
+
+        public final int bits;
+
+        FastPath()
+        {
+            this.bits = ordinal() << 4;
+        }
+
+        public static FastPath forOrdinal(int ordinal)
+        {
+            return VALUES[ordinal];
+        }
+
+        static boolean hasPrivilegedCoordinator(int ordinal)
+        {
+            return IS_PRIVILEGED.contains(ordinal);
+        }
+
+        public FastPath toPermitted(FastPaths permitted)
+        {
+            if (permitted.contains(this))
+                return this;
+            if (this == UNOPTIMISED)
+                return this;
+            FastPath alt = this == PRIVILEGED_COORDINATOR_WITH_DEPS ? PRIVILEGED_COORDINATOR_WITHOUT_DEPS : PRIVILEGED_COORDINATOR_WITH_DEPS;
+            if (permitted.contains(alt))
+                return alt;
+            return UNOPTIMISED;
+        }
+    }
+
+    public static class FastPaths extends TinyEnumSet<FastPath>
+    {
+        public FastPaths(FastPath... values) { super(values); }
+
+        public boolean hasPrivilegedCoordinator() { return bitset > 1; }
+    }
+
+    public enum MediumPath
+    {
+        NONE(0),
+        MEDIUM_PATH_WAIT_ON_RECOVERY(1),
+        MEDIUM_PATH_TRACK_STABLE(2);
+
+        private static final MediumPath[] VALUES = values();
+
+        public final int bits;
+
+        MediumPath(int bits)
+        {
+            this.bits = bits << 6;
+        }
+
+        public static boolean any(int bits)
+        {
+            return bits != 0;
+        }
+
+        public static MediumPath forOrdinal(int ordinal)
+        {
+            return VALUES[ordinal];
+        }
+    }
+
+    public static class MediumPaths extends TinyEnumSet<MediumPath>
+    {
+        public MediumPaths(MediumPath... values) { super(values); }
+        public boolean permitsAny() { return bitset != 0; }
+    }
+
+    private static final int DOMAIN_AND_KIND_MASK = 0xf;
     public static final TxnId[] NO_TXNIDS = new TxnId[0];
 
     public static final TxnId NONE = new TxnId(0, 0, Id.NONE);
@@ -59,7 +141,12 @@ public class TxnId extends Timestamp
 
     public TxnId(Timestamp timestamp, Kind rw, Domain domain)
     {
-        super(timestamp, flags(rw, domain));
+        this(timestamp, 0, rw, domain);
+    }
+
+    public TxnId(Timestamp timestamp, int flags, Kind rw, Domain domain)
+    {
+        super(timestamp, flags(flags, rw, domain));
     }
 
     public TxnId(TxnId copy)
@@ -69,7 +156,12 @@ public class TxnId extends Timestamp
 
     public TxnId(long epoch, long hlc, Kind rw, Domain domain, Id node)
     {
-        this(epoch, hlc, flags(rw, domain), node);
+        this(epoch, hlc, 0, rw, domain, node);
+    }
+
+    public TxnId(long epoch, long hlc, int flags, Kind rw, Domain domain, Id node)
+    {
+        this(epoch, hlc, flags(flags, rw, domain), node);
     }
 
     private TxnId(long epoch, long hlc, int flags, Id node)
@@ -105,6 +197,31 @@ public class TxnId extends Timestamp
     public boolean is(Kind kind)
     {
         return kindOrdinal(flagsUnmasked()) == kind.ordinal();
+    }
+
+    public boolean is(FastPath fastPath)
+    {
+        return fastPathOrdinal(flagsUnmasked()) == fastPath.ordinal();
+    }
+
+    public boolean is(MediumPath mediumPath)
+    {
+        return fastPathOrdinal(flagsUnmasked()) == mediumPath.ordinal();
+    }
+
+    public TxnId withoutNonIdentityFlags()
+    {
+        return (flags() & ~IDENTITY_FLAGS) == 0 ? this : new TxnId(msb, lsb & IDENTITY_LSB, node);
+    }
+
+    public boolean hasPrivilegedCoordinator()
+    {
+        return FastPath.hasPrivilegedCoordinator(fastPathOrdinal(flagsUnmasked()));
+    }
+
+    public boolean hasMediumPath()
+    {
+        return MediumPath.any(mediumPathOrdinal(flagsUnmasked()));
     }
 
     public boolean isVisible()
@@ -164,7 +281,28 @@ public class TxnId extends Timestamp
 
     public TxnId as(Kind kind, Domain domain)
     {
-        return new TxnId(epoch(), hlc(), kind, domain, node);
+        return new TxnId(epoch(), hlc(), flagsWithoutDomainAndKind(), kind, domain, node);
+    }
+
+    private int flagsWithoutDomainAndKind()
+    {
+        return flags() & ~DOMAIN_AND_KIND_MASK;
+    }
+
+    public TxnId addFlags(int flags)
+    {
+        checkArgument(flags <= MAX_FLAGS);
+        return addFlags(this, flags, TxnId::new);
+    }
+
+    public TxnId addFlag(Flag flag)
+    {
+        return addFlags(flag.bit);
+    }
+
+    public final TxnId addFlags(TxnId merge)
+    {
+        return addFlags(this, merge, TxnId::new);
     }
 
     public TxnId withEpoch(long epoch)
@@ -184,9 +322,11 @@ public class TxnId extends Timestamp
         return "[" + epoch() + ',' + hlc() + ',' + flags() + '(' + domain().shortName() + kind().shortName() + ')' + ',' + node + ']';
     }
 
-    private static int flags(Kind rw, Domain domain)
+    private static int flags(int flags, Kind rw, Domain domain)
     {
-        return flags(rw) | flags(domain);
+        int domainAndKindFlags = flags(rw) | flags(domain);
+        Invariants.checkState((flags & domainAndKindFlags) == 0);
+        return domainAndKindFlags | flags;
     }
 
     private static int flags(Kind rw)
@@ -212,6 +352,21 @@ public class TxnId extends Timestamp
     public static int kindOrdinal(int flags)
     {
         return (flags >> 1) & 7;
+    }
+
+    public FastPath fastPath()
+    {
+        return FastPath.forOrdinal(fastPathOrdinal(flagsUnmasked()));
+    }
+
+    public static int fastPathOrdinal(int flags)
+    {
+        return (flags >> 4) & 3;
+    }
+
+    public static int mediumPathOrdinal(int flags)
+    {
+        return (flags >> 6) & 3;
     }
 
     private static int domainOrdinal(int flags)

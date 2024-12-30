@@ -35,7 +35,6 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.api.Agent;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.ProtocolModifiers.QuorumEpochIntersections.Include;
-import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.api.TopologySorter;
 import accord.api.LocalConfig;
@@ -47,8 +46,11 @@ import accord.local.Node.Id;
 import accord.local.TimeService;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Ranges;
+import accord.primitives.RoutableKey;
 import accord.primitives.Routables;
 import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
+import accord.primitives.TxnId.FastPath;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies.Single;
 import accord.utils.Invariants;
@@ -60,6 +62,9 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owne
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
+import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
+import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
+import static accord.primitives.TxnId.FastPath.UNOPTIMISED;
 import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.checkState;
 import static accord.utils.Invariants.illegalState;
@@ -440,8 +445,10 @@ public class TopologyManager
     }
 
     private final TopologySorter.Supplier sorter;
+    private final TopologiesCollectors topologiesCollectors;
+    private final FastPathCalculator fastPathCalculator;
     private final Agent agent;
-    private final Id node;
+    private final Id self;
     private final Scheduler scheduler;
     private final TimeService time;
     private volatile Epochs epochs;
@@ -449,11 +456,13 @@ public class TopologyManager
 
     private final LocalConfig localConfig;
 
-    public TopologyManager(TopologySorter.Supplier sorter, Agent agent, Id node, Scheduler scheduler, TimeService time, LocalConfig localConfig)
+    public TopologyManager(TopologySorter.Supplier sorter, Agent agent, Id self, Scheduler scheduler, TimeService time, LocalConfig localConfig)
     {
         this.sorter = sorter;
+        this.topologiesCollectors = new TopologiesCollectors(sorter);
+        this.fastPathCalculator = new FastPathCalculator(self);
         this.agent = agent;
-        this.node = node;
+        this.self = self;
         this.scheduler = scheduler;
         this.time = time;
         this.epochs = Epochs.EMPTY;
@@ -503,7 +512,7 @@ public class TopologyManager
         System.arraycopy(current.epochs, 0, nextEpochs, 1, current.epochs.length);
 
         Ranges prevAll = current.epochs.length == 0 ? Ranges.EMPTY : current.epochs[0].global.ranges;
-        nextEpochs[0] = new EpochState(node, topology, sorter.get(topology), prevAll);
+        nextEpochs[0] = new EpochState(self, topology, sorter.get(topology), prevAll);
         notifications.syncComplete.forEach(nextEpochs[0]::recordSyncComplete);
         nextEpochs[0].recordClosed(notifications.closed);
         nextEpochs[0].recordComplete(notifications.complete);
@@ -690,6 +699,11 @@ public class TopologyManager
         return withSufficientEpochsAtLeast(select, minEpoch, maxEpoch, epochState -> epochState.synced);
     }
 
+    public FastPath selectFastPath(Routables<?> select, long epoch)
+    {
+        return withSufficientEpochsAtLeast(select, epoch, epoch, epochState -> epochState.synced, fastPathCalculator);
+    }
+
     public Topologies withOpenEpochs(Routables<?> select, @Nullable EpochSupplier min, @Nullable EpochSupplier max)
     {
         return withSufficientEpochsAtMost(select,
@@ -708,6 +722,100 @@ public class TopologyManager
 
     private Topologies withSufficientEpochsAtLeast(Unseekables<?> select, long minEpoch, long maxEpoch, Function<EpochState, Ranges> isSufficientFor)
     {
+        return withSufficientEpochsAtLeast(select, minEpoch, maxEpoch, isSufficientFor, topologiesCollectors);
+    }
+
+    static class TopologiesCollectors implements Collectors<Topologies.Builder, Topologies>
+    {
+        final TopologySorter.Supplier sorter;
+
+        TopologiesCollectors(TopologySorter.Supplier sorter)
+        {
+            this.sorter = sorter;
+        }
+
+        @Override
+        public Topologies.Builder update(Topologies.Builder collector, EpochState epoch, Routables<?> select, boolean permitMissing)
+        {
+            collector.add(epoch.global.select(select, permitMissing));
+            return collector;
+        }
+
+        @Override
+        public Topologies one(EpochState epoch, Routables<?> unseekables, boolean permitMissing)
+        {
+            return new Topologies.Single(sorter, epoch.global.select(unseekables, permitMissing));
+        }
+
+        @Override
+        public Topologies multi(Topologies.Builder builder)
+        {
+            return builder.build(sorter);
+        }
+
+        @Override
+        public Topologies.Builder allocate(int count)
+        {
+            return new Topologies.Builder(count);
+        }
+    }
+
+    static class FastPathCalculator implements Collectors<FastPath, FastPath>
+    {
+        final Id self;
+
+        FastPathCalculator(Id self)
+        {
+            this.self = self;
+        }
+
+        @Override
+        public FastPath update(FastPath collector, EpochState epoch, Routables<?> select, boolean permitMissing)
+        {
+            return merge(collector, one(epoch, select, permitMissing));
+        }
+
+        @Override
+        public FastPath one(EpochState epoch, Routables<?> routables, boolean permitMissing)
+        {
+            if (!epoch.local.ranges.containsAll(routables))
+                return UNOPTIMISED;
+
+            return epoch.local.foldl(routables, (s, v, i) -> merge(v, s.bestFastPath()), null);
+        }
+
+        @Override
+        public FastPath multi(FastPath result)
+        {
+            return result;
+        }
+
+        @Override
+        public FastPath allocate(int count)
+        {
+            return null;
+        }
+
+        private static FastPath merge(FastPath a, FastPath b)
+        {
+            if (a == null) return b;
+            if (a == UNOPTIMISED || b == UNOPTIMISED) return UNOPTIMISED;
+            if (a == PRIVILEGED_COORDINATOR_WITH_DEPS || b == PRIVILEGED_COORDINATOR_WITH_DEPS) return PRIVILEGED_COORDINATOR_WITH_DEPS;
+            return PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
+        }
+    }
+
+    interface Collectors<C, T>
+    {
+        C allocate(int size);
+        C update(C collector, EpochState epoch, Routables<?> select, boolean permitMissing);
+        T one(EpochState epoch, Routables<?> select, boolean permitMissing);
+        T multi(C collector);
+    }
+
+    private <C, T> T withSufficientEpochsAtLeast(Routables<?> select, long minEpoch, long maxEpoch, Function<EpochState, Ranges> isSufficientFor,
+                                                 Collectors<C, T> collectors)
+    {
         Invariants.checkArgument(minEpoch <= maxEpoch);
         Epochs snapshot = epochs;
 
@@ -720,11 +828,11 @@ public class TopologyManager
 
         EpochState maxEpochState = nonNull(snapshot.get(maxEpoch));
         if (minEpoch == maxEpoch && isSufficientFor.apply(maxEpochState).containsAll(select))
-            return new Single(sorter, maxEpochState.global.select(select, false));
+            return collectors.one(maxEpochState, select, false);
 
         int i = (int)(snapshot.currentEpoch - maxEpoch);
         int maxi = (int)(Math.min(1 + snapshot.currentEpoch - minEpoch, snapshot.epochs.length));
-        Topologies.Builder topologies = new Topologies.Builder(maxi - i);
+        C collector = collectors.allocate(maxi - i);
 
         // Previous logic would exclude synced ranges, but this was removed as that makes min epoch selection harder.
         // An issue was found where a range was removed from a replica and min selection picked the epoch before that,
@@ -733,37 +841,37 @@ public class TopologyManager
         while (i < maxi)
         {
             EpochState epochState = snapshot.epochs[i++];
-            topologies.add(epochState.global.select(select, false));
+            collector = collectors.update(collector, epochState, select, false);
             select = select.without(epochState.addedRanges);
         }
 
         if (select.isEmpty())
-            return topologies.build(sorter);
+            return collectors.multi(collector);
 
         if (i == snapshot.epochs.length)
         {
             if (!select.isEmpty())
                 throw new IllegalArgumentException("Ranges " + select + " could not be found");
-            return topologies.build(sorter);
+            return collectors.multi(collector);
         }
 
         // remaining is updated based off isSufficientFor, but select is not
-        Unseekables<?> remaining = select;
+        Routables<?> remaining = select;
 
         // include any additional epochs to reach sufficiency
         EpochState prev = snapshot.epochs[maxi - 1];
         do
         {
             remaining = remaining.without(isSufficientFor.apply(prev));
-            Unseekables<?> prevSelect = select;
+            Routables<?> prevSelect = select;
             select = select.without(prev.addedRanges);
             if (prevSelect != select) // perf optimization; if select wasn't changed (it does not intersect addedRanges), then remaining won't
                 remaining = remaining.without(prev.addedRanges);
             if (remaining.isEmpty())
-                return topologies.build(sorter);
+                return collectors.multi(collector);
 
             EpochState next = snapshot.epochs[i++];
-            topologies.add(next.global.select(select, false));
+            collector = collectors.update(collector, next, select, false);
             prev = next;
         } while (i < snapshot.epochs.length);
         // needd to remove sufficent / added else remaining may not be empty when the final matches are the last epoch
@@ -772,7 +880,7 @@ public class TopologyManager
 
         if (!remaining.isEmpty()) throw new IllegalArgumentException("Ranges " + remaining + " could not be found");
 
-        return topologies.build(sorter);
+        return collectors.multi(collector);
     }
 
     private Topologies withSufficientEpochsAtMost(Routables<?> select, long minEpoch, long maxEpoch, BiFunction<EpochState, EpochState, Ranges> isSufficientFor)
@@ -850,7 +958,7 @@ public class TopologyManager
         return new Single(sorter, state.global.select(select));
     }
 
-    public Shard forEpochIfKnown(RoutingKey key, long epoch)
+    public Shard forEpochIfKnown(RoutableKey key, long epoch)
     {
         EpochState epochState = epochs.get(epoch);
         if (epochState == null)
@@ -858,7 +966,7 @@ public class TopologyManager
         return epochState.global().forKey(key);
     }
 
-    public Shard forEpoch(RoutingKey key, long epoch)
+    public Shard forEpoch(RoutableKey key, long epoch)
     {
         Shard ifKnown = forEpochIfKnown(key, epoch);
         if (ifKnown == null)
@@ -886,7 +994,7 @@ public class TopologyManager
 
     public Ranges localRangesForEpoch(long epoch)
     {
-        return epochs.get(epoch).local().rangesForNode(node);
+        return epochs.get(epoch).local().rangesForNode(self);
     }
 
     public Ranges localRangesForEpochs(long start, long end)

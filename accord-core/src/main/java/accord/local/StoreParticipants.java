@@ -36,7 +36,7 @@ import accord.utils.Invariants;
 
 import static accord.local.StoreParticipants.Filter.QUERY;
 import static accord.local.StoreParticipants.Filter.UPDATE;
-import static accord.primitives.Known.KnownRoute.Maybe;
+import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.tryCastToRoute;
@@ -353,7 +353,7 @@ public class StoreParticipants
         if (currentSaveStatus.compareTo(Erased) >= 0)
             return this;
 
-        if (currentSaveStatus.known.route == Maybe)
+        if (currentSaveStatus.known.has(MaybeRoute))
             return merge(that);
 
         return supplement(that);
@@ -519,10 +519,11 @@ public class StoreParticipants
         return create(tryCastToRoute(participants), owns, executes, touches, touches);
     }
 
-    public static StoreParticipants invalidate(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId)
+    public static StoreParticipants notAccept(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId)
     {
         RangesForEpoch storeRanges = safeStore.ranges();
         Ranges ownedRanges = storeRanges.allAt(txnId.epoch());
+        // TODO (expected): do we need to extend touches here? Feels likely this harks back to before we saved hasTouched
         Ranges touchesRanges = storeRanges.all();
         Participants<?> owns = participants.slice(ownedRanges, Minimal);
         Participants<?> touches = ownedRanges == touchesRanges || owns == participants ? owns : participants.slice(touchesRanges, Minimal);

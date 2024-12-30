@@ -1364,6 +1364,7 @@ public class SortedArrays
         {
             if (src[i] != trg[j] && !src[i].equals(trg[j]))
             {
+                int prevj = j;
                 j = SortedArrays.exponentialSearch(trg, j, trgLength, src[i], comparator, FAST);
                 if (j < 0)
                 {

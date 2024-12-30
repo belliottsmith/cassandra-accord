@@ -88,7 +88,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
             Known known = full.maxKnown();
             Route<?> someRoute = full.route;
 
-            switch (known.outcome)
+            switch (known.outcome())
             {
                 default: throw new AssertionError();
                 case Unknown:
@@ -132,7 +132,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     callback.accept(full.toProgressToken(), null);
                     break;
 
-                case Invalidated:
+                case Abort:
                     Commit.Invalidate.commitInvalidate(node, txnId, Route.merge(full.route, (Route)route), txnId.epoch());
                     locallyInvalidateAndCallback(node, txnId, txnId, txnId, someRoute, full.toProgressToken(), callback);
                     break;

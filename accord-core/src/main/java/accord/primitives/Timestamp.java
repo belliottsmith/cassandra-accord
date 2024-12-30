@@ -22,25 +22,52 @@ import accord.local.Node.Id;
 import accord.utils.Invariants;
 import javax.annotation.Nonnull;
 
+import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.utils.Invariants.checkArgument;
 
+/**
+ * TxnId flag bits:
+ *      [0..1)    - TxnId Domain
+ *      [1..4)    - TxnId Kind
+ *      [4..6)    - TxnId uses FastPath
+ *      [6..8)    - TxnId uses Medium Path
+ *      [11..12)  - TxnId is unstable - used by Dep handling only
+ *
+ * Timestamp flag bits
+ *      [11..12)  - isRejected
+ *
+ */
 public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 {
     public static final Timestamp MAX = new Timestamp(Long.MAX_VALUE, Long.MAX_VALUE, Id.MAX);
     public static final Timestamp NONE = new Timestamp(0, 0, 0, Id.NONE);
 
-    private static final int REJECTED_FLAG = 0x8000;
+    interface Factory<T extends Timestamp>
+    {
+        T create(long msb, long lsb, Id id);
+    }
+
+    public enum Flag
+    {
+        REJECTED(0x0800),
+        UNSTABLE(0x0800);
+        public final int bit;
+
+        Flag(int bit)
+        {
+            this.bit = bit;
+        }
+    }
 
     /**
      * The set of flags we want to retain as we merge timestamps (e.g. when taking mergeMax).
      * Today this is only the REJECTED_FLAG, but we may include additional flags in future (such as Committed, Applied..)
      * which we may also want to retain when merging in other contexts (such as in Deps).
      */
-    private static final int MERGE_FLAGS = 0x8000;
-    // TODO (testing): is this the correct set of identity bits?
-    private static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF007FL;
-    public static final int IDENTITY_FLAGS = 0x00000000_0000007F;
-    public static final int KIND_AND_DOMAIN_FLAGS = 0x00000000_0000001F;
+    static final int MERGE_FLAGS = 0x0800;
+    public static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF00FFL;
+    public static final int IDENTITY_FLAGS = 0x00000000_000000FF;
+    public static final int KIND_AND_DOMAIN_FLAGS = 0x00000000_0000000F;
     public static final long MAX_EPOCH = (1L << 48) - 1;
     private static final long HLC_INCR = 1L << 16;
     static final long MAX_FLAGS = HLC_INCR - 1;
@@ -58,11 +85,6 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     public static Timestamp fromValues(long epoch, long hlc, int flags, Id node)
     {
         return new Timestamp(epoch, hlc, flags, node);
-    }
-
-    public static Timestamp fromValues(long epoch, long hlc, int flags, int node)
-    {
-        return new Timestamp(epoch, hlc, flags, new Id(node));
     }
 
     public static Timestamp maxForEpoch(long epoch)
@@ -143,14 +165,14 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return (int)lsb;
     }
 
-    public boolean isRejected()
+    public boolean is(Flag flag)
     {
-        return (lsb & REJECTED_FLAG) != 0;
+        return 0 != (flagsUnmasked() & flag.bit);
     }
 
     public Timestamp asRejected()
     {
-        return withExtraFlags(REJECTED_FLAG);
+        return addFlag(REJECTED);
     }
 
     public Timestamp withNextHlc(long hlcAtLeast)
@@ -174,21 +196,38 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return this.node.equals(node) ? this : new Timestamp(this, node);
     }
 
-    public Timestamp withExtraFlags(int flags)
+    public Timestamp addFlags(int flags)
     {
         checkArgument(flags <= MAX_FLAGS);
-        long newLsb = lsb | flags;
-        if (lsb == newLsb)
-            return this;
-        return new Timestamp(msb, newLsb, node);
+        return addFlags(this, flags, Timestamp::new);
     }
 
-    public Timestamp mergeFlags(Timestamp mergeFlags)
+    public Timestamp addFlag(Flag flag)
     {
-        long newLsb = lsb | (mergeFlags.lsb & MERGE_FLAGS);
-        if (lsb == newLsb)
-            return this;
-        return new Timestamp(msb, newLsb, node);
+        return addFlags(flag.bit);
+    }
+
+    public final Timestamp addFlags(Timestamp merge)
+    {
+        return addFlags(this, merge, Timestamp::new);
+    }
+
+    static <T extends Timestamp> T addFlags(T a, T b, Factory<T> factory)
+    {
+        long newLsb = a.lsb | (b.lsb & MERGE_FLAGS);
+        if (a.lsb == newLsb)
+            return a;
+        if (b.lsb == newLsb && a.msb == b.msb && a.node.equals(b.node))
+            return b;
+        return factory.create(a.msb, newLsb, a.node);
+    }
+
+    static <T extends Timestamp> T addFlags(T a, int addFlags, Factory<T> factory)
+    {
+        long newLsb = a.lsb | addFlags;
+        if (a.lsb == newLsb)
+            return a;
+        return factory.create(a.msb, newLsb, a.node);
     }
 
     public Timestamp logicalNext(Id node)
@@ -285,8 +324,8 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     {
         // Note: it is not safe to take the highest HLC while retaining the current node;
         //       however, it is safe to take the highest epoch, as the originating node will always advance the hlc()
-        return a.compareToWithoutEpoch(b) >= 0 ? a.mergeFlags(b).withEpochAtLeast(b.epoch())
-                                               : b.mergeFlags(a).withEpochAtLeast(a.epoch());
+        return a.compareToWithoutEpoch(b) >= 0 ? a.addFlags(b).withEpochAtLeast(b.epoch())
+                                               : b.addFlags(a).withEpochAtLeast(a.epoch());
     }
 
     public static <T extends Timestamp> T rejectedOrMax(T a, T b)

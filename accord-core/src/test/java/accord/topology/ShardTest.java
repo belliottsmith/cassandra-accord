@@ -57,17 +57,17 @@ public class ShardTest
         Assertions.assertEquals(9, Shard.maxToleratedFailures(20));
     }
 
-    int fastPathQuorumSize(int allReplicas, int electorateSize)
+    int simpleFastQuorumSize(int allReplicas, int electorateSize)
     {
         int f = Shard.maxToleratedFailures(allReplicas);
         return (int) Math.ceil((electorateSize + f + 1) / 2.0);
     }
 
-    void assertFastPathQuorumSize(int expected, int replicas, int fpElectorate)
+    void assertSimpleFastQuorumSize(int expected, int replicas, int fpElectorate)
     {
         int f = Shard.maxToleratedFailures(replicas);
-        int actual = Shard.fastPathQuorumSize(replicas, fpElectorate, f);
-        Assertions.assertEquals(fastPathQuorumSize(replicas, fpElectorate), actual);
+        int actual = Shard.simpleFastQuorumSize(replicas, fpElectorate, f);
+        Assertions.assertEquals(simpleFastQuorumSize(replicas, fpElectorate), actual);
         Assertions.assertEquals(expected, actual);
     }
 
@@ -87,65 +87,65 @@ public class ShardTest
     void assertInvalidFastPathElectorateSize(int replicas, int fpElectorate)
     {
         int f = Shard.maxToleratedFailures(replicas);
-        assertIllegalArgument(() -> Shard.fastPathQuorumSize(replicas, fpElectorate, f),
+        assertIllegalArgument(() -> Shard.simpleFastQuorumSize(replicas, fpElectorate, f),
                               String.format("Expected exception for fp electorate size %s for replica set size %s (f %s)",
                                             fpElectorate, replicas, f));
     }
 
     @Test
-    void slowPathQuorumSizeTest()
+    void slowQuorumSizeTest()
     {
-        Assertions.assertEquals(1, Shard.slowPathQuorumSize(1));
-        Assertions.assertEquals(2, Shard.slowPathQuorumSize(2));
-        Assertions.assertEquals(2, Shard.slowPathQuorumSize(3));
-        Assertions.assertEquals(3, Shard.slowPathQuorumSize(4));
-        Assertions.assertEquals(3, Shard.slowPathQuorumSize(5));
+        Assertions.assertEquals(1, Shard.slowQuorumSize(1));
+        Assertions.assertEquals(2, Shard.slowQuorumSize(2));
+        Assertions.assertEquals(2, Shard.slowQuorumSize(3));
+        Assertions.assertEquals(3, Shard.slowQuorumSize(4));
+        Assertions.assertEquals(3, Shard.slowQuorumSize(5));
     }
 
     @Test
-    void fastPathQuorumSizeTest()
+    void simpleFastQuorumSizeTest()
     {
         // rf=3
-        assertFastPathQuorumSize(3, 3, 3);
-        assertFastPathQuorumSize(2, 3, 2);
+        assertSimpleFastQuorumSize(3, 3, 3);
+        assertSimpleFastQuorumSize(2, 3, 2);
         assertInvalidFastPathElectorateSize(3, 1);
 
         // rf=4
-        assertFastPathQuorumSize(3, 4, 4);
-        assertFastPathQuorumSize(3, 4, 3);
+        assertSimpleFastQuorumSize(3, 4, 4);
+        assertSimpleFastQuorumSize(3, 4, 3);
         assertInvalidFastPathElectorateSize(4, 2);
 
         // rf=5
-        assertFastPathQuorumSize(4, 5, 5);
-        assertFastPathQuorumSize(4, 5, 4);
-        assertFastPathQuorumSize(3, 5, 3);
+        assertSimpleFastQuorumSize(4, 5, 5);
+        assertSimpleFastQuorumSize(4, 5, 4);
+        assertSimpleFastQuorumSize(3, 5, 3);
         assertInvalidFastPathElectorateSize(5, 2);
 
         // rf=6
-        assertFastPathQuorumSize(5, 6, 6);
-        assertFastPathQuorumSize(4, 6, 5);
-        assertFastPathQuorumSize(4, 6, 4);
+        assertSimpleFastQuorumSize(5, 6, 6);
+        assertSimpleFastQuorumSize(4, 6, 5);
+        assertSimpleFastQuorumSize(4, 6, 4);
         assertInvalidFastPathElectorateSize(6, 3);
 
         // rf=7
-        assertFastPathQuorumSize(6, 7, 7);
-        assertFastPathQuorumSize(5, 7, 6);
-        assertFastPathQuorumSize(5, 7, 5);
-        assertFastPathQuorumSize(4, 7, 4);
+        assertSimpleFastQuorumSize(6, 7, 7);
+        assertSimpleFastQuorumSize(5, 7, 6);
+        assertSimpleFastQuorumSize(5, 7, 5);
+        assertSimpleFastQuorumSize(4, 7, 4);
         assertInvalidFastPathElectorateSize(7, 3);
 
         // rf=8
-        assertFastPathQuorumSize(6, 8, 8);
-        assertFastPathQuorumSize(6, 8, 7);
-        assertFastPathQuorumSize(5, 8, 6);
+        assertSimpleFastQuorumSize(6, 8, 8);
+        assertSimpleFastQuorumSize(6, 8, 7);
+        assertSimpleFastQuorumSize(5, 8, 6);
         assertInvalidFastPathElectorateSize(8, 4);
 
         // rf=9
-        assertFastPathQuorumSize(7, 9, 9);
-        assertFastPathQuorumSize(7, 9, 8);
-        assertFastPathQuorumSize(6, 9, 7);
-        assertFastPathQuorumSize(6, 9, 6);
-        assertFastPathQuorumSize(5, 9, 5);
+        assertSimpleFastQuorumSize(7, 9, 9);
+        assertSimpleFastQuorumSize(7, 9, 8);
+        assertSimpleFastQuorumSize(6, 9, 7);
+        assertSimpleFastQuorumSize(6, 9, 6);
+        assertSimpleFastQuorumSize(5, 9, 5);
         assertInvalidFastPathElectorateSize(9, 4);
     }
 
@@ -155,9 +155,9 @@ public class ShardTest
         SortedArrayList<Node.Id> nodes = ids(0, 3);
         Set<Node.Id> fpNodes = new HashSet<>(ids(0, 2));
         // pending nodes are part of electorate
-        new Shard(range(0, 100), nodes, fpNodes, new HashSet<>(ids(3, 3)));
+        Shard.create(range(0, 100), nodes, fpNodes, new HashSet<>(ids(3, 3)));
         // pending nodes are not part of electorate
-        assertIllegalArgument(() -> new Shard(range(0, 100), nodes, fpNodes, new HashSet<>(ids(4, 4))),
+        assertIllegalArgument(() -> Shard.create(range(0, 100), nodes, fpNodes, new HashSet<>(ids(4, 4))),
                               "Expected exception for non-electorate pending nodes");
     }
 }

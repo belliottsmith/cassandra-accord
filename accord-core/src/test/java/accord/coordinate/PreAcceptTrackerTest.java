@@ -21,6 +21,7 @@ package accord.coordinate;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.local.Node;
 import accord.primitives.Ranges;
+import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.topology.TopologyUtils;
 
@@ -54,7 +55,7 @@ public class PreAcceptTrackerTest
     void singleShard()
     {
         Topology subTopology = topology(topology.get(0));
-        FastPathTracker responses = new FastPathTracker(topologies(subTopology));
+        FastPathTracker responses = new FastPathTracker(topologies(subTopology), TxnId.NONE);
 
         responses.recordSuccess(ids[0], false);
         assertResponseState(responses, false, false, false);
@@ -70,7 +71,7 @@ public class PreAcceptTrackerTest
     void singleShardFastPath()
     {
         Topology subTopology = topology(topology.get(0));
-        FastPathTracker responses = new FastPathTracker(topologies(subTopology));
+        FastPathTracker responses = new FastPathTracker(topologies(subTopology), TxnId.NONE);
 
         responses.recordSuccess(ids[0], true);
         assertResponseState(responses, false, false, false);
@@ -89,7 +90,7 @@ public class PreAcceptTrackerTest
     void unexpectedResponsesAreIgnored()
     {
         Topology subTopology = topology(topology.get(0));
-        FastPathTracker responses = new FastPathTracker(topologies(subTopology));
+        FastPathTracker responses = new FastPathTracker(topologies(subTopology), TxnId.NONE);
 
         responses.recordSuccess(ids[0], false);
         assertResponseState(responses, false, false, false);
@@ -106,7 +107,7 @@ public class PreAcceptTrackerTest
     void failure()
     {
         Topology subTopology = topology(topology.get(0));
-        FastPathTracker responses = new FastPathTracker(topologies(subTopology));
+        FastPathTracker responses = new FastPathTracker(topologies(subTopology), TxnId.NONE);
 
         responses.recordSuccess(ids[0], true);
         assertResponseState(responses, false, false, false);
@@ -122,7 +123,7 @@ public class PreAcceptTrackerTest
     void multiShard()
     {
         Topology subTopology = new Topology(1, topology.get(0), topology.get(1), topology.get(2));
-        FastPathTracker responses = new FastPathTracker(topologies(subTopology));
+        FastPathTracker responses = new FastPathTracker(topologies(subTopology), TxnId.NONE);
         /*
         (000, 100](100, 200](200, 300]
         [1, 2, 3] [2, 3, 4] [3, 4, 5]

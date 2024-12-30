@@ -31,6 +31,7 @@ import accord.utils.IndexedFoldToLong;
 import accord.utils.IndexedTriFold;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
+import accord.utils.UnhandledEnum;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
 import static accord.primitives.Ranges.EMPTY;
@@ -309,7 +310,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     {
         switch (slice)
         {
-            default: throw new AssertionError("Unhandled Slice: " + slice);
+            default: throw new UnhandledEnum(slice);
             case Minimal:
                 RoutableKey[] newKeys = SortedArrays.sliceWithMultipleMatches(intersecting.keys, input.ranges, RoutableKey[]::new, (k, r) -> -r.compareTo(k), Range::compareTo);
                 if (newKeys.length == 0)

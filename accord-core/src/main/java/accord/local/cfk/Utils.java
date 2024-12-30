@@ -108,7 +108,7 @@ class Utils
             if (txn.getClass() == TxnInfo.class) continue;
             if (!txn.hasDeps()) continue;
             if (!txn.kind().witnesses(removeTxnId)) continue;
-            if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
+            if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
 
             TxnId[] missing = txn.missing();
             TxnId[] newMissing = removeOneMissing(missing, removeTxnId);
@@ -189,7 +189,7 @@ class Utils
                 if (txn == newInfo) continue;
                 if (!txn.hasDeps()) continue;
                 if (!txn.kind().witnesses(insertTxnId)) continue;
-                if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
+                if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
                 if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
                 {
                     ++minDoNotInsertSearchIndex;
@@ -210,7 +210,7 @@ class Utils
             // TODO (expected): optimise this with flag bits
             if (!txn.hasDeps()) continue;
             if (!txn.kind().witnesses(insertTxnId)) continue;
-            if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
+            if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
             if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
             {
                 ++minDoNotInsertSearchIndex;

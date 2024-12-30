@@ -36,6 +36,7 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
 import static accord.coordinate.tracking.RequestStatus.Success;
 
@@ -72,35 +73,42 @@ public class AsynchronousAwait implements Callback<AwaitOk>
     final Participants<?> contact;
     final AwaitTracker tracker;
     final int asynchronousCallbackId;
+    final boolean notifyProgressLog;
     final BiConsumer<SynchronousResult, Throwable> synchronousCallback;
     private boolean isDone;
     private Throwable failure;
 
-    public AsynchronousAwait(TxnId txnId, Participants<?> contact, AwaitTracker tracker, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
+    public AsynchronousAwait(TxnId txnId, Participants<?> contact, AwaitTracker tracker, boolean notifyProgressLog, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
     {
         this.txnId = txnId;
         this.contact = contact;
         this.tracker = tracker;
         this.asynchronousCallbackId = asynchronousCallbackId;
+        this.notifyProgressLog = notifyProgressLog;
         this.synchronousCallback = synchronousCallback;
+    }
+
+    public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
+    {
+        return awaitAny(node, topologies, txnId, contact, awaiting, true, asynchronousCallbackId, synchronousCallback);
     }
 
     /**
      * we require a Route to contact so we can be sure a home shard recipient invokes {@link Commands#supplementParticipants},
      * notifying the progress log of a Route to determine it is the home shard.
      */
-    public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
+    public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, boolean notifyProgressLog, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
     {
         Invariants.checkArgument(topologies.size() == 1);
         AwaitTracker tracker = new AwaitTracker(topologies);
-        AsynchronousAwait result = new AsynchronousAwait(txnId, contact, tracker, asynchronousCallbackId, synchronousCallback);
+        AsynchronousAwait result = new AsynchronousAwait(txnId, contact, tracker, notifyProgressLog, asynchronousCallbackId, synchronousCallback);
         result.start(node, topologies, contact, awaiting);
         return result;
     }
 
     private void start(Node node, Topologies topologies, Route<?> route, BlockedUntil blockedUntil)
     {
-        node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, route, blockedUntil, asynchronousCallbackId), this);
+        node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, route, blockedUntil, asynchronousCallbackId, notifyProgressLog), this);
     }
 
     @Override
@@ -121,7 +129,7 @@ public class AsynchronousAwait implements Callback<AwaitOk>
         RequestStatus status = tracker.recordFailure(from);
         switch (status)
         {
-            default: throw new AssertionError("Unhandled RequestStatus: " + status);
+            default: throw new UnhandledEnum(status);
             case NoChange: break;
             case Success:
                 onSuccess();
@@ -143,12 +151,13 @@ public class AsynchronousAwait implements Callback<AwaitOk>
     }
 
     @Override
-    public synchronized void onCallbackFailure(Id from, Throwable failure)
+    public synchronized boolean onCallbackFailure(Id from, Throwable failure)
     {
-        if (isDone) return;
+        if (isDone) return false;
 
         isDone = true;
         synchronousCallback.accept(null, failure);
+        return true;
     }
 }
 

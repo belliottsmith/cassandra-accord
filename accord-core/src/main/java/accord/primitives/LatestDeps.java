@@ -34,9 +34,11 @@ import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
 import accord.utils.TriFunction;
+import accord.utils.UnhandledEnum;
 
 import static accord.primitives.Known.KnownDeps.DepsCommitted;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
+import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 
 public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
@@ -347,8 +349,8 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         {
             switch (e.known)
             {
-                default: throw new AssertionError("Unhandled KnownDeps: " + e.known);
-                case DepsProposed: return Stream.of(getter.apply(e.coordinatedDeps, slice));
+                default: throw new UnhandledEnum(e.known);
+                case DepsProposedFixed: case DepsProposed: return Stream.of(getter.apply(e.coordinatedDeps, slice));
                 case DepsUnknown: return e.merge.stream().map(d -> getter.apply(d, slice));
                 case DepsKnown: case DepsErased: case NoDeps: case DepsCommitted:
                     throw new AssertionError("Invalid KnownDeps for proposal: " + e.known);
@@ -360,12 +362,19 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             return (Ranges ranges, MergeEntry e, BiFunction<Deps, Ranges, V> getter) -> {
                 switch (e.known)
                 {
-                    default: throw new AssertionError("Unhandled KnownDeps: " + e.known);
+                    default: throw new UnhandledEnum(e.known);
                     case DepsUnknown:
                         if (atLeast != DepsUnknown)
                             return Stream.empty();
                         success.add(ranges.get(0));
                         return e.merge.stream().map(d -> getter.apply(d, ranges));
+
+                    case DepsProposedFixed:
+                        if (atLeast.compareTo(DepsProposedFixed) > 0)
+                            return Stream.empty();
+                        success.add(ranges.get(0));
+                        return Stream.of(getter.apply(e.coordinatedDeps, ranges));
+
                     case DepsProposed:
                         // we may encounter DepsProposed for any interrupted commit. This might be a fast-path commit that
                         // was partially recovered by a prior recovery coordinator, or a slow-path commit that was interrupted.
@@ -377,6 +386,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                             return Stream.empty();
                         success.add(ranges.get(0));
                         return Stream.concat(Stream.of(getter.apply(e.coordinatedDeps, ranges)), e.merge.stream().map(d -> getter.apply(d, ranges)));
+
                     case DepsCommitted:
                         if (atLeast.compareTo(DepsCommitted) > 0)
                             return Stream.empty();

@@ -431,4 +431,9 @@ public class Invariants
             throw new IndexOutOfBoundsException(String.format("Offset %d, length = %d; real length was %d", offset, length, realLength));
     }
 
+    public static <T extends Comparable<? super T>> void partiallyOrdered(T... vs)
+    {
+        for (int i = 1 ; i < vs.length ; ++i)
+            Invariants.checkArgument(vs[i - 1].compareTo(vs[i]) <= 0);
+    }
 }

@@ -129,7 +129,7 @@ public class CommandsForKeyTest
     // TODO (expected): randomise ballots
     static class Canon implements NotifySink
     {
-        private static final TxnId MIN = new TxnId(1, 1, Txn.Kind.Read, Key, new Node.Id(1));
+        private static final TxnId MIN = new TxnId(1, 1, 0, Txn.Kind.Read, Key, new Node.Id(1));
 
         // TODO (expected): randomise ratios
         static final Txn.Kind[] KINDS = new Txn.Kind[] { Txn.Kind.Read, Txn.Kind.Write, Txn.Kind.EphemeralRead, Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint };
@@ -238,13 +238,15 @@ public class CommandsForKeyTest
 
         static
         {
-            TRANSITIONS.put(SaveStatus.NotDefined, new SaveStatus[] { SaveStatus.PreAccepted, SaveStatus.AcceptedInvalidate, SaveStatus.AcceptedInvalidateWithDefinition, SaveStatus.Accepted, SaveStatus.AcceptedWithDefinition, SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
-            TRANSITIONS.put(SaveStatus.PreAccepted, new SaveStatus[] { SaveStatus.AcceptedInvalidateWithDefinition, SaveStatus.AcceptedWithDefinition, SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.NotDefined, new SaveStatus[] { SaveStatus.PreAccepted, SaveStatus.AcceptedInvalidate, SaveStatus.AcceptedInvalidateWithDefinition, SaveStatus.Accepted, SaveStatus.AcceptedWithDefinition, SaveStatus.AcceptedSlow, SaveStatus.AcceptedSlowWithDefinition, SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.PreAccepted, new SaveStatus[] { SaveStatus.AcceptedInvalidateWithDefinition, SaveStatus.AcceptedWithDefinition, SaveStatus.AcceptedSlowWithDefinition, SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
             // permit updated ballot and moving to other statuses
             TRANSITIONS.put(SaveStatus.AcceptedInvalidate, new SaveStatus[] { SaveStatus.Invalidated });
             TRANSITIONS.put(SaveStatus.AcceptedInvalidateWithDefinition, new SaveStatus[] { SaveStatus.Invalidated });
             TRANSITIONS.put(SaveStatus.Accepted, new SaveStatus[] { SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
             TRANSITIONS.put(SaveStatus.AcceptedWithDefinition, new SaveStatus[] { SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.AcceptedSlow, new SaveStatus[] { SaveStatus.Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.AcceptedSlowWithDefinition, new SaveStatus[] { SaveStatus.Stable, SaveStatus.Invalidated });
             TRANSITIONS.put(SaveStatus.Committed, new SaveStatus[] { SaveStatus.Stable });
             TRANSITIONS.put(SaveStatus.Stable, new SaveStatus[] { SaveStatus.Applied });
         }
@@ -399,7 +401,7 @@ public class CommandsForKeyTest
         {
             TxnId min = MIN;
             TxnId max;
-            if (byId.isEmpty()) max = new TxnId(1, 100, Txn.Kind.Read, Key, nodeIds[0]);
+            if (byId.isEmpty()) max = new TxnId(1, 100, 0, Txn.Kind.Read, Key, nodeIds[0]);
             else
             {
                 max = byId.lastEntry().getValue().txnId();
@@ -409,7 +411,7 @@ public class CommandsForKeyTest
                     case 2:
                         min = max;
                     case 1:
-                        max = new TxnId(Math.min(100, max.epoch() * 2), max.hlc() + 100, max.kind(), max.domain(), max.node);
+                        max = new TxnId(Math.min(100, max.epoch() * 2), max.hlc() + 100, 0, max.kind(), max.domain(), max.node);
                     case 0:
 
                 }
@@ -445,7 +447,7 @@ public class CommandsForKeyTest
             else if (hlc == max.hlc() && max.domain() == Key) domain = Key;
             else domain = rnd.nextBoolean() ? Key : Domain.Range;
 
-            return new TxnId(epoch, hlc, kind, domain, node);
+            return new TxnId(epoch, hlc, 0, kind, domain, node);
         }
 
         Timestamp generateTimestamp(Timestamp min, Timestamp max, boolean unique)
@@ -487,20 +489,20 @@ public class CommandsForKeyTest
 
         Command preaccepted(TxnId txnId)
         {
-            return Command.PreAccepted.preAccepted(common(txnId), txnId, Ballot.ZERO);
+            return Command.PreAccepted.preAccepted(common(txnId), SaveStatus.PreAccepted, txnId, Ballot.ZERO);
         }
 
         Command acceptedInvalidated(TxnId txnId, SaveStatus saveStatus)
         {
             return saveStatus == SaveStatus.AcceptedInvalidateWithDefinition
                    ? Command.Accepted.accepted(common(txnId, true), saveStatus, txnId, Ballot.ZERO, Ballot.ZERO)
-                   : Command.AcceptedInvalidateWithoutDefinition.acceptedInvalidate(common(txnId, false), Ballot.ZERO, Ballot.ZERO);
+                   : Command.NotAcceptedWithoutDefinition.acceptedInvalidate(common(txnId, false), Ballot.ZERO, Ballot.ZERO);
         }
 
         Command accepted(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus)
         {
             Deps deps = generateDeps(txnId, txnId, Status.Accepted);
-            return Command.Accepted.accepted(common(txnId, saveStatus.known.definition.isKnown()).partialDeps(deps.intersecting(txnId.domain() == Key ? KEY_ROUTE : RANGE_ROUTE)),
+            return Command.Accepted.accepted(common(txnId, saveStatus.known.definition().isKnown()).partialDeps(deps.intersecting(txnId.domain() == Key ? KEY_ROUTE : RANGE_ROUTE)),
                                         saveStatus, executeAt, Ballot.ZERO, Ballot.ZERO);
         }
 
@@ -1069,6 +1071,12 @@ public class CommandsForKeyTest
 
         @Override
         public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
+        {
+            return 0;
+        }
+
+        @Override
+        public long localExpiresAt(Status.Phase phase, TimeUnit unit)
         {
             return 0;
         }

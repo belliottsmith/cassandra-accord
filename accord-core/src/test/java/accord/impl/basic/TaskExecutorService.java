@@ -21,6 +21,7 @@ package accord.impl.basic;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RunnableFuture;
@@ -50,7 +51,7 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
         @Override
         public boolean cancel(boolean mayInterruptIfRunning)
         {
-            return false;
+            return tryFailure(new CancellationException());
         }
 
         @Override

@@ -132,7 +132,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         if (!sufficientTo.isDefinitionKnown())
             return false;
 
-        if (sufficientTo.outcome.isInvalidated())
+        if (sufficientTo.outcome().isInvalidated())
             return true;
 
         Invariants.checkState(full.partialTxn.covers(route));
@@ -152,16 +152,16 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         Known known = full.knownFor(txnId, route, route);
 
         // TODO (required): audit this logic, and centralise with e.g. FetchData inferences
-        switch (known.outcome)
+        switch (known.outcome())
         {
             default: throw new AssertionError();
             case Unknown:
-                if (known.definition.isKnown())
+                if (known.definition().isKnown())
                 {
                     Txn txn = full.partialTxn.reconstitute(route);
                     Recover.recover(node, txnId, txn, route, callback);
                 }
-                else if (!known.definition.isOrWasKnown())
+                else if (!known.definition().isOrWasKnown())
                 {
                     // TODO (required): this logic should be put in Infer, alongside any similar inferences in Recover
                     if (witnessedByInvalidation != null && witnessedByInvalidation.compareTo(Status.PreAccepted) > 0)
@@ -194,9 +194,9 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             else
                             {
                                 known = full.knownFor(txnId, trySendTo, trySendTo);
-                                Invariants.checkState(known.executeAt.isDecidedAndKnownToExecute() && known.outcome == Apply);
+                                Invariants.checkState(known.executeAt().isDecidedAndKnownToExecute() && known.outcome() == Apply);
 
-                                if (known.deps != DepsKnown)
+                                if (!known.is(DepsKnown))
                                 {
                                     Invariants.checkState(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
                                     Participants<?> collect = full.map.knownFor(Known.Nothing.with(DepsKnown), route);
@@ -239,7 +239,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 }
 
                 Txn txn = full.partialTxn.reconstitute(route);
-                if (known.executeAt.isDecidedAndKnownToExecute() && known.deps.hasDecidedDeps() && known.outcome == Apply)
+                if (known.executeAt().isDecidedAndKnownToExecute() && !known.is(DepsKnown) && known.outcome() == Apply)
                 {
                     Deps deps = full.stableDeps.reconstitute(route());
                     node.withEpoch(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
@@ -253,7 +253,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 }
                 break;
 
-            case Invalidated:
+            case Abort:
                 if (witnessedByInvalidation != null && witnessedByInvalidation.hasBeen(Status.PreCommitted))
                     throw illegalState("We previously invalidated, finding a status that should be recoverable");
 

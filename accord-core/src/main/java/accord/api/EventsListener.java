@@ -45,6 +45,10 @@ public interface EventsListener
     {
     }
 
+    default void onMediumPathTaken(TxnId txnId, Deps deps)
+    {
+    }
+
     default void onSlowPathTaken(TxnId txnId, Deps deps)
     {
     }
@@ -62,6 +66,10 @@ public interface EventsListener
     }
 
     default void onInvalidated(TxnId txnId)
+    {
+    }
+
+    default void onRejected(TxnId txnId)
     {
     }
 

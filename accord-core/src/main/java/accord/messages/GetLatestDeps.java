@@ -79,20 +79,13 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
         Command command = safeCommand.current();
         PartialDeps coordinatedDeps = command.partialDeps();
         Deps localDeps = null;
-        switch (command.known().deps)
+        if (!command.known().deps().hasCommittedOrDecidedDeps())
         {
-            default: throw new AssertionError("Unhandled KnownDeps: " + command.known().deps);
-            case NoDeps:
-            case DepsErased:
-            case DepsKnown:
-            case DepsCommitted:
-                break;
-            case DepsUnknown:
-            case DepsProposed:
-                localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), executeAt, false);
+            // TODO (required): consider owns vs touches - should be touches?
+            localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), executeAt, false);
         }
 
-        LatestDeps deps = LatestDeps.create(participants.owns(), command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, localDeps);
+        LatestDeps deps = LatestDeps.create(participants.owns(), command.known().deps(), command.acceptedOrCommitted(), coordinatedDeps, localDeps);
         return new GetLatestDepsOk(deps);
     }
 

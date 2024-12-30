@@ -73,7 +73,8 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         readTxnData(0),
         readDataWithoutTimestamp(1),
         waitUntilApplied(2),
-        applyThenWaitUntilApplied(3);
+        applyThenWaitUntilApplied(3),
+        stableThenRead(4);
 
         public final byte val;
 
@@ -94,6 +95,8 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     return waitUntilApplied;
                 case 3:
                     return applyThenWaitUntilApplied;
+                case 4:
+                    return stableThenRead;
                 default:
                     throw new IllegalArgumentException("Unrecognized ReadType value " + val);
             }
@@ -111,9 +114,8 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
     }
 
-    // TODO (desired, cleanup): should this be a Route?
     public final TxnId txnId;
-    public final Participants<?> readScope;
+    public final Participants<?> scope;
     public final long executeAtEpoch;
     private transient State state = State.PENDING; // TODO (low priority, semantics): respond with the Executed result we have stored?
 
@@ -130,18 +132,18 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     protected transient Node.Id replyTo;
     protected transient ReplyContext replyContext;
 
-    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long executeAtEpoch)
     {
         this.txnId = txnId;
-        int startIndex = latestRelevantEpochIndex(to, topologies, readScope);
-        this.readScope = TxnRequest.computeScope(to, topologies, readScope, startIndex, Participants::slice, Participants::with);
+        int startIndex = latestRelevantEpochIndex(to, topologies, scope);
+        this.scope = TxnRequest.computeScope(to, topologies, scope, startIndex, Participants::slice, Participants::with);
         this.executeAtEpoch = executeAtEpoch;
     }
 
-    protected ReadData(TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    protected ReadData(TxnId txnId, Participants<?> scope, long executeAtEpoch)
     {
         this.txnId = txnId;
-        this.readScope = readScope;
+        this.scope = scope;
         this.executeAtEpoch = executeAtEpoch;
     }
 
@@ -168,13 +170,18 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     @Override
     public final void process(Node on, Node.Id replyTo, ReplyContext replyContext)
     {
-        this.node = on;
         this.replyTo = replyTo;
         this.replyContext = replyContext;
+        long expiresAt = on.agent().expiresAt(replyContext, MICROSECONDS);
+        process(on, expiresAt);
+    }
+
+    public final void process(Node on, long expiresAt)
+    {
+        this.node = on;
         waitingOn = new IntHashSet();
         reading = new IntHashSet();
-        Cancellable cancel = node.mapReduceConsumeLocal(this, readScope, minEpoch(), executeAtEpoch, this);
-        long expiresAt = node.agent().expiresAt(replyContext, MICROSECONDS);
+        Cancellable cancel = node.mapReduceConsumeLocal(this, scope, minEpoch(), executeAtEpoch, this);
         RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerWithDelay(this, expiresAt, MICROSECONDS);
         synchronized (this)
         {
@@ -206,7 +213,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     @Override
     public CommitOrReadNack apply(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.execute(safeStore, readScope, txnId, minEpoch(), executeAtEpoch);
+        StoreParticipants participants = StoreParticipants.execute(safeStore, scope, txnId, minEpoch(), executeAtEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         return apply(safeStore, safeCommand, participants);
     }
@@ -222,7 +229,9 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
             SaveStatus status = command.saveStatus();
             int storeId = safeStore.commandStore().id();
 
-            logger.trace("{}: setting up read with status {} on {}", txnId, status, safeStore);
+            if (logger.isTraceEnabled())
+                logger.trace("{}: setting up read with status {} on {}", txnId, status, safeStore);
+
             switch (actionForStatus(status))
             {
                 default: throw new AssertionError();
@@ -233,7 +242,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
                     int c = status.compareTo(SaveStatus.Stable);
                     if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, null, participants);
-                    else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, readScope, null);
+                    else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, scope, null);
                     return status.compareTo(SaveStatus.Stable) >= 0 ? null : Insufficient;
 
                 case OBSOLETE:
@@ -264,8 +273,10 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public boolean notify(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
         Command command = safeCommand.current();
-        logger.trace("{}: updating as listener in response to change on {} with status {} ({})",
-                     this, command.txnId(), command.status(), command);
+
+        if (logger.isTraceEnabled())
+            logger.trace("{}: updating as listener in response to change on {} with status {} ({})",
+                         this, command.txnId(), command.status(), command);
 
         boolean execute;
         synchronized (this)
@@ -315,7 +326,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         {
             onOneSuccess(-1, null, true);
             if (reply != null)
-                node.reply(replyTo, replyContext, reply, null);
+                reply(reply, null);
         }
         else
         {
@@ -348,7 +359,8 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         beginRead(safeStore, command.executeAt(), command.partialTxn(), unavailable).begin((next, throwable) -> {
             if (throwable != null)
             {
-                logger.trace("{}: read failed for {}", txnId, unsafeStore, throwable);
+                if (logger.isTraceEnabled())
+                    logger.trace("{}: read failed for {}", txnId, unsafeStore, throwable);
                 onFailure(null, throwable);
             }
             else
@@ -394,7 +406,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
         if (newUnavailable != null && !newUnavailable.isEmpty())
         {
-            newUnavailable = newUnavailable.intersecting(readScope, Minimal);
+            newUnavailable = newUnavailable.intersecting(scope, Minimal);
             if (unavailable == null) unavailable = newUnavailable;
             else unavailable = newUnavailable.with(unavailable);
         }
@@ -420,7 +432,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
             case PENDING:
                 state = State.RETURNED;
-                node.reply(replyTo, replyContext, constructReadOk(unavailable, data), null);
+                reply(constructReadOk(unavailable, data), null);
                 return clearUnsafe();
         }
     }
@@ -487,12 +499,12 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
         if (throwable != null)
         {
-            node.reply(replyTo, replyContext, null, throwable);
+            reply(null, throwable);
             node.agent().onUncaughtException(throwable);
         }
         else
         {
-            node.reply(replyTo, replyContext, failReply, null);
+            reply(failReply, null);
         }
     }
 
@@ -500,6 +512,11 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     {
         if (data != null) data.validateReply(txnId, executeAt);
         return new ReadOk(unavailable, data);
+    }
+
+    protected void reply(ReadReply reply, Throwable fail)
+    {
+        node.reply(replyTo, replyContext, reply, fail);
     }
 
     @Override
@@ -518,11 +535,6 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public enum CommitOrReadNack implements ReadData.ReadReply
     {
         /**
-         * The read is for a point in the past
-         */
-        Invalid("CommitInvalid", true),
-
-        /**
          * The commit has been rejected due to stale ballot.
          */
         Rejected("CommitRejected", true),
@@ -533,9 +545,9 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         Insufficient("CommitInsufficient", false),
 
         /**
-         * PreApplied successfully, but the request is blocking so waiting to reply
+         * Committed/PreApplied successfully, but the request is blocking so waiting to reply
          */
-        Waiting("ApplyWaiting", false),
+        Waiting("ReadOrApplyWaiting", false),
 
         Redundant("CommitOrReadRedundant", true);
 

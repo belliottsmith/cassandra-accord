@@ -35,7 +35,9 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
+import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
@@ -45,7 +47,9 @@ public interface CommandSummaries
     enum SummaryStatus
     {
         NOT_DIRECTLY_WITNESSED,
-        NOT_ACCEPTED,
+        PREACCEPTED,
+        PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE,
+        NOTACCEPTED,
         ACCEPTED,
         COMMITTED,
         STABLE,
@@ -55,7 +59,7 @@ public interface CommandSummaries
         public static final SummaryStatus NONE = null;
     }
 
-    enum IsDep { IS_DEP, NOT_ELIGIBLE, IS_NOT_DEP }
+    enum IsDep { IS_COORD_DEP, IS_NOT_COORD_DEP, NOT_ELIGIBLE, IS_STABLE_DEP, IS_NOT_STABLE_DEP }
 
     class Summary
     {
@@ -150,10 +154,13 @@ public interface CommandSummaries
             {
                 switch (status)
                 {
-                    default: throw new AssertionError("Unhandled SummaryStatus: " + status);
-                    case NOT_ACCEPTED:
+                    default: throw new UnhandledEnum(status);
+                    case NOT_DIRECTLY_WITNESSED:
+                    case PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE:
+                    case NOTACCEPTED:
                     case INVALIDATED:
                         return false;
+                    case PREACCEPTED:
                     case ACCEPTED:
                         return txnId.compareTo(findAsDep) > 0;
                     case COMMITTED:
@@ -204,7 +211,7 @@ public interface CommandSummaries
                     ranges = newRanges;
                 }
 
-                Invariants.checkState(partialDeps != null || findAsDep == null || !saveStatus.known.deps.hasProposedOrDecidedDeps());
+                Invariants.checkState(partialDeps != null || findAsDep == null || !saveStatus.known.deps().hasProposedOrDecidedDeps());
                 IsDep isDep = null;
                 if (findAsDep != null)
                 {
@@ -214,8 +221,11 @@ public interface CommandSummaries
                     }
                     else
                     {
+                        boolean isStable = summaryStatus.compareTo(ACCEPTED) >= 0;
                         Unseekables<?> participants = partialDeps.participants(findAsDep);
-                        isDep = participants != null && participants.containsAll(ranges) ? IsDep.IS_DEP : IsDep.IS_NOT_DEP;
+                        isDep = participants != null && participants.containsAll(ranges)
+                                ? (isStable ? IsDep.IS_STABLE_DEP     : IsDep.IS_COORD_DEP)
+                                : (isStable ? IsDep.IS_NOT_STABLE_DEP : IsDep.IS_NOT_COORD_DEP);
                     }
                 }
 

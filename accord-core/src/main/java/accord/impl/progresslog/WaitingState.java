@@ -42,6 +42,7 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.Query.HOME;
@@ -298,7 +299,7 @@ abstract class WaitingState extends BaseTxnState
     void record(DefaultProgressLog owner, SaveStatus newSaveStatus)
     {
         BlockedUntil currentlyBlockedUntil = blockedUntil();
-        if (currentlyBlockedUntil.minSaveStatus.compareTo(newSaveStatus) <= 0)
+        if (currentlyBlockedUntil.unblockedFrom.compareTo(newSaveStatus) <= 0)
         {
             boolean isDone = newSaveStatus.hasBeen(Status.PreApplied);
             set(null, owner, isDone ? CanApply : currentlyBlockedUntil, NoneExpected);
@@ -318,8 +319,8 @@ abstract class WaitingState extends BaseTxnState
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
         Invariants.checkState(!owner.hasActive(Waiting, txnId));
-        Invariants.checkState(command.saveStatus().compareTo(blockedUntil.minSaveStatus) < 0,
-                              "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.minSaveStatus, command);
+        Invariants.checkState(command.saveStatus().compareTo(blockedUntil.unblockedFrom) < 0,
+                              "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.unblockedFrom, command);
 
         set(safeStore, owner, blockedUntil, Querying);
         TxnId txnId = safeCommand.txnId();
@@ -424,7 +425,7 @@ abstract class WaitingState extends BaseTxnState
 
             switch (kind)
             {
-                default: throw new AssertionError("Unhandled CallbackKind: " + kind);
+                default: throw new UnhandledEnum(kind);
 
                 case AwaitHome:
                     if (notReady == null)
@@ -612,7 +613,7 @@ abstract class WaitingState extends BaseTxnState
         // TODO (desired): fetch only the route
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchRouteCallback);
-        FetchData.fetch(blockedUntil.minSaveStatus.known, owner.node(), txnId, executeAt, fetchKeys, lowEpoch, highEpoch, invoker);
+        FetchData.fetch(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchKeys, lowEpoch, highEpoch, invoker);
     }
 
     static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, EpochSupplier lowEpoch, EpochSupplier highEpoch, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
@@ -620,7 +621,7 @@ abstract class WaitingState extends BaseTxnState
         Invariants.checkState(!slicedRoute.isEmpty());
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
-        FetchData.fetchSpecific(blockedUntil.minSaveStatus.known, owner.node(), txnId, fetchRoute, maxRoute, slicedRoute, lowEpoch, highEpoch, executeAt, invoker);
+        FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, fetchRoute, maxRoute, slicedRoute, lowEpoch, highEpoch, executeAt, invoker);
     }
 
     void awaitHomeKey(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route)
@@ -653,7 +654,7 @@ abstract class WaitingState extends BaseTxnState
         switch (progress)
         {
             default:
-                throw new AssertionError("Unhandled Progress: " + progress);
+                throw new UnhandledEnum(progress);
             case NoneExpected:
                 return blockedUntil == CanApply ? "Done" : "NotWaiting";
             case Queued:

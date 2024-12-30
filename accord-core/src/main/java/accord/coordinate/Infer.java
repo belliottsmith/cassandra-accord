@@ -86,7 +86,7 @@ public class Infer
                 return NotKnownToBeInvalid;
             }
 
-            if (maxKnown.executeAt.hasDecision())
+            if (maxKnown.executeAt().hasDecision())
             {
                 // could be invalidated or committed, but we definitely know which so we don't need to infer anything
                 return NotKnownToBeInvalid;
@@ -138,7 +138,7 @@ public class Infer
         public Void apply(SafeCommandStore safeStore)
         {
             // we're applying an invalidation, so the record will not be cleaned up until the whole range is truncated
-            StoreParticipants participants = StoreParticipants.invalidate(safeStore, this.participants, txnId);
+            StoreParticipants participants = StoreParticipants.notAccept(safeStore, this.participants, txnId);
             return apply(safeStore, safeStore.get(txnId, participants));
         }
 

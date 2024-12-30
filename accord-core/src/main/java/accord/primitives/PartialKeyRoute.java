@@ -24,6 +24,7 @@ import accord.utils.Invariants;
 
 import accord.api.RoutingKey;
 import accord.utils.SortedArrays;
+import accord.utils.UnhandledEnum;
 
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.Invariants.illegalState;
@@ -61,7 +62,7 @@ public class PartialKeyRoute extends KeyRoute implements PartialRoute<RoutingKey
         Unseekables.UnseekablesKind kind = that.kind();
         switch (kind)
         {
-            default: throw new AssertionError("Unhandled kind: " + kind);
+            default: throw new UnhandledEnum(kind);
             case RoutingRanges:
             case PartialRangeRoute:
             case FullRangeRoute:

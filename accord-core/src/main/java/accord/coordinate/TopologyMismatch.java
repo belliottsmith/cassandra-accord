@@ -41,7 +41,7 @@ public class TopologyMismatch extends CoordinationFailed
         this.reasons = reasons;
     }
 
-    private TopologyMismatch(EnumSet<Reason> reasons, Topology t, Unseekables<?> select)
+    private TopologyMismatch(EnumSet<Reason> reasons, Topology t, Routables<?> select)
     {
         super(null, null, buildMessage(t, select));
         this.reasons = reasons;
@@ -74,7 +74,7 @@ public class TopologyMismatch extends CoordinationFailed
         return sb.toString();
     }
 
-    private static String buildMessage(Topology t, Unseekables<?> select)
+    private static String buildMessage(Topology t, Routables<?> select)
     {
         return String.format("Attempted to access %s that are no longer valid globally (%d -> %s)", select.without(t.ranges()), t.epoch(), t.ranges());
     }
@@ -98,7 +98,7 @@ public class TopologyMismatch extends CoordinationFailed
     }
 
     @Nullable
-    public static TopologyMismatch checkForMismatch(Topology t, Unseekables<?> select)
+    public static TopologyMismatch checkForMismatch(Topology t, Routables<?> select)
     {
         return t.ranges().containsAll(select) ? null : new TopologyMismatch(EnumSet.of(Reason.KEYS_OR_RANGES), t, select);
     }

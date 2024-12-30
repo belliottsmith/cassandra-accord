@@ -37,6 +37,7 @@ public abstract class SimpleTracker<ST extends ShardTracker> extends PreAcceptTr
     public RequestStatus recordSuccess(Id from, boolean withFastPathTimestamp) { return recordSuccess(from); }
     public RequestStatus recordDelayed(Id from) { return NoChange; }
     public boolean hasFastPathAccepted() { return false; }
+    public boolean hasMediumPathAccepted() { return false; }
 
     public abstract RequestStatus recordSuccess(Id from);
     public abstract RequestStatus recordFailure(Id from);

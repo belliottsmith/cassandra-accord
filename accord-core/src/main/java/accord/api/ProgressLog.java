@@ -18,6 +18,8 @@
 
 package accord.api;
 
+import java.util.function.Predicate;
+import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
 import accord.local.Command;
@@ -38,6 +40,7 @@ import static accord.api.ProgressLog.BlockedUntil.Query.HOME;
 import static accord.api.ProgressLog.BlockedUntil.Query.SHARD;
 import static accord.primitives.Status.Durability.Majority;
 import static accord.primitives.Status.Durability.NotDurable;
+import static accord.primitives.Status.NotAccepted;
 import static accord.utils.SortedArrays.Search.FAST;
 
 /**
@@ -82,6 +85,16 @@ public interface ProgressLog
         HasDecidedExecuteAt(HOME, HOME, SaveStatus.PreCommitted, NotDurable),
 
         /**
+         * Wait for the transaction to be no longer pre-accepted.
+         *
+         * This is used for transactions that may have used the coordinator optimisation
+         *
+         * This BlockedUntil is useful for remote listeners performing recovery that are waiting for transactions in
+         * the Accept phase that need to reach Committed to advance the recovery machine.
+         */
+        CommittedOrNotAccepted(SHARD, SHARD, SaveStatus.Committed, NotDurable, s -> s.status == NotAccepted),
+
+        /**
          * Wait for the transaction to be Committed.
          *
          * Note that we only set Committed during coordination, we do not propagate Committed directly between replicas,
@@ -111,18 +124,27 @@ public interface ProgressLog
 
         public enum Query { HOME, SHARD }
 
-        private static final BlockedUntil[] lookup = values();
+        private static final BlockedUntil[] lookupByOrdinal = values();
+        // avoid clashes when searching by on unblockedFrom by filtering those that may unblock by the predicate (introduced alongside NotAcceptedOrCommitted)
+        private static final BlockedUntil[] searchByUnblockedFrom = Stream.of(values()).filter(b -> b.additionallyUnblockedBy == null).toArray(BlockedUntil[]::new);
         public final Query waitsOn, fetchFrom;
-        public final SaveStatus minSaveStatus;
+        public final SaveStatus unblockedFrom;
+        public final @Nullable Predicate<SaveStatus> additionallyUnblockedBy;
         // have remote listeners wait for the Durability before responding
         // this permits us to wait for only the home shard for CanApply
         public final Durability remoteDurability;
 
-        BlockedUntil(Query waitsOn, Query fetchFrom, SaveStatus minSaveStatus, Durability remoteDurability)
+        BlockedUntil(Query waitsOn, Query fetchFrom, SaveStatus unblockedFrom, Durability remoteDurability)
+        {
+            this(waitsOn, fetchFrom, unblockedFrom, remoteDurability, null);
+        }
+
+        BlockedUntil(Query waitsOn, Query fetchFrom, SaveStatus unblockedFrom, Durability remoteDurability, @Nullable Predicate<SaveStatus> additionallyUnblockedBy)
         {
             this.waitsOn = waitsOn;
             this.fetchFrom = fetchFrom;
-            this.minSaveStatus = minSaveStatus;
+            this.unblockedFrom = unblockedFrom;
+            this.additionallyUnblockedBy = additionallyUnblockedBy;
             this.remoteDurability = remoteDurability;
         }
 
@@ -136,16 +158,16 @@ public interface ProgressLog
 
         public static BlockedUntil forOrdinal(int ordinal)
         {
-            if (ordinal < 0 || ordinal > lookup.length)
+            if (ordinal < 0 || ordinal > lookupByOrdinal.length)
                 throw new IndexOutOfBoundsException(ordinal);
-            return lookup[ordinal];
+            return lookupByOrdinal[ordinal];
         }
 
         public static BlockedUntil forSaveStatus(SaveStatus saveStatus)
         {
-            int i = SortedArrays.binarySearch(lookup, 0, lookup.length, saveStatus, (s, w) -> s.compareTo(w.minSaveStatus), FAST);
+            int i = SortedArrays.binarySearch(searchByUnblockedFrom, 0, searchByUnblockedFrom.length, saveStatus, (s, w) -> s.compareTo(w.unblockedFrom), FAST);
             if (i < 0) i = Math.max(0, -2 - i);
-            return lookup[i];
+            return searchByUnblockedFrom[i];
         }
     }
 

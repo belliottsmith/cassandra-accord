@@ -29,6 +29,7 @@ import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.CoordinationAdapter.Adapters.SyncPointAdapter;
 import accord.local.Node;
+import accord.messages.Accept;
 import accord.messages.Apply;
 import accord.messages.Callback;
 import accord.messages.PreAccept.PreAcceptOk;
@@ -44,16 +45,17 @@ import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import accord.utils.SortedListMap;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
 import static accord.coordinate.ExecutePath.FAST;
-import static accord.coordinate.Propose.Invalidate.proposeAndCommitInvalidate;
+import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.messages.Apply.participates;
+import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.mergeMax;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.utils.Functions.foldl;
 import static accord.utils.Invariants.checkArgument;
 
 /**
@@ -161,20 +163,22 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     }
 
     @Override
-    void onPreAccepted(Topologies topologies, Timestamp executeAt, List<PreAcceptOk> oks)
+    void onPreAccepted(Topologies topologies, Timestamp executeAt, SortedListMap<Node.Id, PreAcceptOk> oks)
     {
-        Deps deps = Deps.merge(oks, oks.size(), List::get, ok -> ok.deps);
-        Timestamp checkRejected = foldl(oks, (ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
-        if (checkRejected.isRejected())
+        Timestamp checkRejected = oks.foldlNonNullValues((ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
+        if (checkRejected.is(REJECTED))
         {
             proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, checkRejected, this);
         }
         else
         {
+            Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             if (tracker.hasFastPathAccepted())
                 adapter.execute(node, topologies, route, FAST, txnId, txn, txnId, deps, this);
+            else if (tracker.hasMediumPathAccepted())
+                adapter.propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, this);
             else
-                adapter.propose(node, topologies, route, Ballot.ZERO, txnId, txn, executeAt, deps, this);
+                adapter.propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, this);
         }
     }
 

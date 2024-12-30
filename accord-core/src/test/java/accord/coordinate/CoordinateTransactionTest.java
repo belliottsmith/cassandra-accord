@@ -230,13 +230,13 @@ public class CoordinateTransactionTest
 
             // Create a txn to block the one we are about to create after this
             DefaultProgressLogs.unsafePauseForTesting(true);
-            TxnId blockingTxnId = new TxnId(txnId.epoch(), 1, Read, Key, new Id(1));
+            TxnId blockingTxnId = new TxnId(txnId.epoch(), 1, 0, Read, Key, new Id(1));
             Txn blockingTxn = new Txn.InMemory(keys, MockStore.read(keys), MockStore.QUERY, null);
             PreLoadContext blockingTxnContext = PreLoadContext.contextFor(blockingTxnId, route);
             for (Node n : cluster)
                 assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(blockingTxnContext, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, blockingTxnId.epoch(), blockingTxnId, blockingTxnId.epoch());
-                    return Commands.preaccept(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, blockingTxnId.epoch(), blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId), true), route);
+                    return Commands.preaccept(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId), true), null, false, route);
                 })));
 
             // Now create the transaction that should be blocked by the previous one
@@ -245,7 +245,7 @@ public class CoordinateTransactionTest
             for (Node n : cluster)
                 assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(context, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
-                    return Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txnId.epoch(), txn.slice(safeStore.ranges().allAt(txnId.epoch()), true), route);
+                    return Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txn.slice(safeStore.ranges().allAt(txnId.epoch()), true), null, false, route);
                 })));
 
 
@@ -329,7 +329,7 @@ public class CoordinateTransactionTest
     private TxnId coordinate(Node node, long clock, Keys keys) throws Throwable
     {
         TxnId txnId = node.nextTxnId(Write, Key);
-        txnId = new TxnId(txnId.epoch(), txnId.hlc() + clock, Write, Key, txnId.node);
+        txnId = new TxnId(txnId.epoch(), txnId.hlc() + clock, 0, Write, Key, txnId.node);
         Txn txn = writeTxn(keys);
         Result result = getUninterruptibly(CoordinateTransaction.coordinate(node, node.computeRoute(txnId, txn.keys()), txnId, txn));
         assertEquals(MockStore.RESULT, result);

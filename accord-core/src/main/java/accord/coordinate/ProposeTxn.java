@@ -22,6 +22,7 @@ import java.util.function.BiConsumer;
 
 import accord.api.Result;
 import accord.local.Node;
+import accord.messages.Accept;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -33,22 +34,13 @@ import accord.utils.SortedListMap;
 
 import static accord.api.ProtocolModifiers.Faults;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
+import static accord.coordinate.ExecutePath.MEDIUM;
 
 class ProposeTxn extends Propose<Result>
 {
-    ProposeTxn(Node node, Topologies topologies, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
+    ProposeTxn(Node node, Topologies topologies, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, topologies, ballot, txnId, txn, route, executeAt, deps, callback);
-    }
-
-    @Override
-    void onAccepted()
-    {
-        Deps deps = Deps.merge(acceptOks, acceptOks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
-        if (!Faults.txnDiscardPreAcceptDeps)
-            deps = deps.with(this.deps);
-
-        adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, deps, callback);
+        super(node, topologies, kind, ballot, txnId, txn, route, executeAt, deps, callback);
     }
 
     protected CoordinationAdapter<Result> adapter()

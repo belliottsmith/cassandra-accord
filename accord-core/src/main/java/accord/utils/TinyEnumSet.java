@@ -16,20 +16,31 @@
  * limitations under the License.
  */
 
-package accord.messages;
+package accord.utils;
 
-import accord.local.Node.Id;
-
-/**
- * Represents some execution for handling responses from messages a node has sent.
- * TODO (expected, efficiency): associate a Callback with a CommandShard or other context for execution
- *                              (for coordination, usually its home shard)
- */
-public interface Callback<T>
+public class TinyEnumSet<E extends Enum<E>>
 {
-    void onSuccess(Id from, T reply);
-    default void onSlowResponse(Id from) {}
-    void onFailure(Id from, Throwable failure);
-    // return true if the failure was handled/propagated
-    boolean onCallbackFailure(Id from, Throwable failure);
+    protected final int bitset;
+
+    public TinyEnumSet(Enum<E> ... values)
+    {
+        int bitset = 0;
+        for (Enum<E> v : values)
+        {
+            Invariants.checkArgument(v.ordinal() < 32);
+            bitset |= 1 << v.ordinal();
+        }
+        this.bitset = bitset;
+    }
+
+    public boolean contains(E value)
+    {
+        return contains(value.ordinal());
+    }
+
+    public boolean contains(int ordinal)
+    {
+        return 0 != (bitset & (1 << ordinal));
+    }
 }
+

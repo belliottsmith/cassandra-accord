@@ -16,20 +16,14 @@
  * limitations under the License.
  */
 
-package accord.messages;
+package accord.utils;
 
-import accord.local.Node.Id;
+import javax.annotation.Nonnull;
 
-/**
- * Represents some execution for handling responses from messages a node has sent.
- * TODO (expected, efficiency): associate a Callback with a CommandShard or other context for execution
- *                              (for coordination, usually its home shard)
- */
-public interface Callback<T>
+public class UnhandledEnum extends AssertionError
 {
-    void onSuccess(Id from, T reply);
-    default void onSlowResponse(Id from) {}
-    void onFailure(Id from, Throwable failure);
-    // return true if the failure was handled/propagated
-    boolean onCallbackFailure(Id from, Throwable failure);
+    public UnhandledEnum(@Nonnull Enum<?> value)
+    {
+        super("Unhandled " + value.getClass().getSimpleName() + ": " + value);
+    }
 }

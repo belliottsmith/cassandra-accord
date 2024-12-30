@@ -89,7 +89,7 @@ public class TopologyUtils
         for (int i = 0; i < ranges.size() ; ++i)
         {
             SortedArrayList<Node.Id> sortedNodes = SortedArrayList.copyUnsorted(electorates.get(i % electorates.size()), Node.Id[]::new);
-            shards.add(new Shard(ranges.get(i), sortedNodes, fastPathElectorates.get(i % fastPathElectorates.size())));
+            shards.add(Shard.create(ranges.get(i), sortedNodes, fastPathElectorates.get(i % fastPathElectorates.size())));
             noShard.removeAll(electorates.get(i % electorates.size()));
         }
         if (!noShard.isEmpty())

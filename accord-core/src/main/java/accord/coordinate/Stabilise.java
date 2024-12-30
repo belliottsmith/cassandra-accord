@@ -28,7 +28,6 @@ import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadReply;
-import accord.messages.ReadTxnData;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -38,6 +37,7 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListMap;
+import accord.utils.UnhandledEnum;
 
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ExecutePath.SLOW;
@@ -107,19 +107,15 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
         {
             switch ((CommitOrReadNack)reply)
             {
-                default: throw new AssertionError("Unhandled CommitOrReadNack: " + reply);
+                default: throw new UnhandledEnum((CommitOrReadNack)reply);
                 case Redundant:
                     isDone = true;
                     callback.accept(null, new Redundant(txnId, route.homeKey(), executeAt));
                     break;
                 case Rejected:
-                case Invalid:
-                    isDone = true;
-                    callback.accept(null, new Preempted(txnId, route.homeKey()));
-                    break;
                 case Insufficient:
-                    node.send(from, new Commit(CommitWithTxn, from, allTopologies.getEpoch(txnId.epoch()), allTopologies,
-                                               txnId, txn, route, ballot, executeAt, stabiliseDeps, (ReadTxnData) null));
+                    node.send(from, new Commit(CommitWithTxn, from, allTopologies,
+                                               txnId, txn, route, ballot, executeAt, stabiliseDeps));
                     break;
             }
         }
@@ -141,13 +137,13 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
     }
 
     @Override
-    public void onCallbackFailure(Node.Id from, Throwable failure)
+    public boolean onCallbackFailure(Node.Id from, Throwable failure)
     {
-        if (isDone)
-            return;
+        if (isDone) return false;
 
         isDone = true;
         callback.accept(null, failure);
+        return true;
     }
 
     protected void onStabilised()

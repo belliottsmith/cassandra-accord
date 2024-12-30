@@ -80,7 +80,7 @@ public class PreAcceptTest
     private static PreAccept preAccept(TxnId txnId, Txn txn, RoutingKey homeKey)
     {
         FullRoute<?> route = txn.keys().toRoute(homeKey);
-        return PreAccept.SerializerSupport.create(txnId, route.slice(FULL_RANGE), txnId.epoch(), txnId.epoch(), txnId.epoch(), txn.slice(FULL_RANGE, true), route);
+        return PreAccept.SerializerSupport.create(txnId, route.slice(FULL_RANGE), txnId.epoch(), txnId.epoch(), txnId.epoch(), txn.slice(FULL_RANGE, true), null, false, route);
     }
 
     @Test
@@ -200,7 +200,7 @@ public class PreAcceptTest
             messageSink.clearHistory();
             Raw key2 = IntKey.key(11);
             Keys keys = Keys.of(key1, key2);
-            TxnId txnId2 = new TxnId(1, 50, Write, Key, ID3);
+            TxnId txnId2 = new TxnId(1, 50, 0, Write, Key, ID3);
             PreAccept preAccept2 = preAccept(txnId2, writeTxn(keys), key2.toUnseekable());
             clock.increment(10);
             preAccept2.process(node, ID3, REPLY_CONTEXT);
@@ -233,7 +233,7 @@ public class PreAcceptTest
         try
         {
             Keys keys = Keys.of(key);
-            TxnId txnId = new TxnId(1, 110, Write, Key, ID2);
+            TxnId txnId = new TxnId(1, 110, 0, Write, Key, ID2);
             PreAccept preAccept = preAccept(txnId, writeTxn(keys), key.toUnseekable());
             preAccept.process(node, ID2, REPLY_CONTEXT);
 

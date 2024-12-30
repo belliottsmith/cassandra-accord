@@ -77,13 +77,14 @@ public class SafeCallback<T extends Reply>
             {
                 try
                 {
-                    callback.onCallbackFailure(src, t);
+                    if (callback.onCallbackFailure(src, t))
+                        return;
                 }
                 catch (Throwable t2)
                 {
                     t.addSuppressed(t2);
-                    executor.agent().onUncaughtException(t);
                 }
+                executor.agent().onUncaughtException(t);
             }
         });
     }

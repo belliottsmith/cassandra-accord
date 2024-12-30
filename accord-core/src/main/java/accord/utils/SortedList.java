@@ -26,6 +26,18 @@ import java.util.Spliterator;
 
 public interface SortedList<T extends Comparable<? super T>> extends List<T>, Set<T>, RandomAccess
 {
+    interface MergeCursor<T extends Comparable<? super T>, L extends SortedList<? extends T>> extends SortedCursor<T>
+    {
+        interface Entry<L extends SortedList<?>>
+        {
+            L list();
+            int index();
+        }
+
+        // only guaranteed to be valid until advance() is invoked
+        Entry<L> curEntry();
+    }
+
     int findNext(int i, Comparable<? super T> find);
     int find(Comparable<? super T> find);
     int find(int from, int to, Comparable<? super T> find);

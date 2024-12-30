@@ -23,6 +23,8 @@ import java.util.Objects;
 import accord.api.RoutingKey;
 import accord.utils.Invariants;
 import accord.utils.SortedCursor;
+import accord.utils.SortedList;
+import accord.utils.SortedList.MergeCursor;
 
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalArgument;
@@ -77,7 +79,7 @@ public class PartialDeps extends Deps
     }
 
     @Override
-    public SortedCursor<TxnId> txnIds(RoutingKey key)
+    public MergeCursor<TxnId, DepList> txnIds(RoutingKey key)
     {
         Invariants.checkArgument(covers(key), "%s is not covered by %s", key, this);
         return super.txnIds(key);

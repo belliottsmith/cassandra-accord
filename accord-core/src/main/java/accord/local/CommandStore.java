@@ -29,6 +29,7 @@ import accord.api.Agent;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.primitives.RangeDeps;
 import accord.primitives.Routables;
+import accord.primitives.Route;
 import accord.primitives.Unseekables;
 import accord.utils.async.AsyncChain;
 
@@ -510,6 +511,14 @@ public abstract class CommandStore implements AgentExecutor
         CommandStore cs = maybeCurrent();
         if (cs == null)
             throw illegalState("Attempted to access current CommandStore, but not running in a CommandStore");
+        return cs;
+    }
+
+    public static CommandStore currentOrElseSelect(Node node, Route<?> route)
+    {
+        CommandStore cs = maybeCurrent();
+        if (cs == null)
+            return node.commandStores().select(route);
         return cs;
     }
 

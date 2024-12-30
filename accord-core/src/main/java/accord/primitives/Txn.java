@@ -424,6 +424,9 @@ public interface Txn
     @Nonnull PartialTxn slice(Ranges ranges, boolean includeQuery);
     @Nonnull PartialTxn intersecting(Participants<?> participants, boolean includeQuery);
 
+    default boolean covers(Route<?> route) { return true; }
+    default boolean covers(Unseekables<?> participants) { return true; }
+
     default boolean isWrite()
     {
         return kind().isWrite();

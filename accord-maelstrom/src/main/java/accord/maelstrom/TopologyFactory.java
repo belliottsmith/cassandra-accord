@@ -84,7 +84,7 @@ public class TopologyFactory
         for (int j = 0 ; j < kinds.length ; ++j)
         {
             for (int i = 0 ; i < this.shards ; ++i)
-                shards.add(new Shard(ranges[j][i], copyUnsorted(electorates.get(i % electorates.size()), Id[]::new), fastPathElectorates.get(i % fastPathElectorates.size())));
+                shards.add(Shard.create(ranges[j][i], copyUnsorted(electorates.get(i % electorates.size()), Id[]::new), fastPathElectorates.get(i % fastPathElectorates.size())));
         }
         return new Topology(1, SortedArrayList.ofSorted(), toArray(shards, Shard[]::new));
     }

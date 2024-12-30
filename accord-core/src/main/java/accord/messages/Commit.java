@@ -44,14 +44,14 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies;
-import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
-import accord.utils.TriFunction;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.IntHashSet;
 
 import static accord.messages.Commit.Kind.CommitWithTxn;
+import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.primitives.SaveStatus.Committed;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
 import static accord.messages.Commit.WithDeps.HasDeps;
@@ -64,23 +64,62 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
 {
     public static class SerializerSupport
     {
-        public static Commit create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, @Nullable PartialTxn partialTxn, PartialDeps partialDeps, @Nullable FullRoute<?> fullRoute, @Nullable ReadData readData)
+        public static Commit create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, @Nullable PartialTxn partialTxn, PartialDeps partialDeps, @Nullable FullRoute<?> fullRoute)
         {
-            return new Commit(kind, txnId, scope, waitForEpoch, minEpoch, ballot, executeAt, partialTxn, partialDeps, fullRoute, readData);
+            return new Commit(kind, txnId, scope, waitForEpoch, minEpoch, ballot, executeAt, partialTxn, partialDeps, fullRoute);
         }
     }
 
-    public final Kind kind;
-    public final Ballot ballot;
-    public final Timestamp executeAt;
-    // TODO (expected): share keys with partialTxn and partialDeps - in memory and on wire
-    public final @Nullable PartialTxn partialTxn;
-    public final @Nullable PartialDeps partialDeps;
-    public final @Nullable FullRoute<?> route;
-    public final @Nullable ReadData readData;
+    public enum WithTxn
+    {
+        NoTxn, HasNewlyOwnedTxnRanges, HasTxn;
+        public PartialTxn select(Txn txn, Participants<?> scope, Topologies topologies, TxnId txnId, Id to)
+        {
+            switch (this)
+            {
+                default: throw new UnhandledEnum(this);
+                case HasTxn: return txn.intersecting(scope, true);
+                case HasNewlyOwnedTxnRanges:
+                    if (txnId.epoch() != topologies.currentEpoch())
+                    {
+                        Ranges coordinateRanges = topologies.getEpoch(txnId.epoch()).rangesForNode(to);
+                        Ranges commitRanges = topologies.computeRangesForNode(to);
+                        Ranges extraRanges = commitRanges.without(coordinateRanges);
+                        if (!extraRanges.isEmpty())
+                            return txn.intersecting(scope.without(coordinateRanges), true);
+                    }
+                case NoTxn:
+                    return null;
+            }
+        }
 
-    public enum WithTxn  { NoTxn,  HasNewlyOwnedTxnRanges, HasTxn }
-    public enum WithDeps { NoDeps, HasDeps }
+        public FullRoute<?> select(FullRoute<?> route)
+        {
+            switch (this)
+            {
+                default: throw new UnhandledEnum(this);
+                case HasTxn: return route;
+                case NoTxn:
+                case HasNewlyOwnedTxnRanges:
+                    return null;
+            }
+        }
+    }
+
+    public enum WithDeps
+    {
+        NoDeps, HasDeps;
+
+        public PartialDeps select(Deps deps, Participants<?> scope)
+        {
+            switch (this)
+            {
+                default: throw new UnhandledEnum(this);
+                case HasDeps: return deps.intersecting(scope);
+                case NoDeps: return null;
+            }
+        }
+    }
 
     public enum Kind
     {
@@ -91,9 +130,9 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         StableSlowPath(      NoTxn,                  NoDeps,  SaveStatus.Stable),
         StableWithTxnAndDeps(HasTxn,                 HasDeps, SaveStatus.Stable);
 
-        final WithTxn withTxn;
-        final WithDeps withDeps;
-        final SaveStatus saveStatus;
+        public final WithTxn withTxn;
+        public final WithDeps withDeps;
+        public final SaveStatus saveStatus;
 
         Kind(WithTxn withTxn, WithDeps withDeps, SaveStatus saveStatus)
         {
@@ -103,51 +142,30 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         }
     }
 
+    public final Kind kind;
+    public final Ballot ballot;
+    public final Timestamp executeAt;
+    // TODO (expected): share keys with partialTxn and partialDeps - in memory and on wire
+    public final @Nullable PartialTxn partialTxn;
+    public final @Nullable PartialDeps partialDeps;
+    public final @Nullable FullRoute<?> route;
+
+
     // TODO (low priority, clarity): cleanup passing of topologies here - maybe fetch them afresh from Node?
     //                               Or perhaps introduce well-named classes to represent different topology combinations
 
-    // TODO (required): must send to prior epochs for recovery decisions in those epochs
-    public Commit(Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, ReadData read)
-    {
-        this(kind, to, coordinateTopology, topologies, txnId, txn, route, ballot, executeAt, deps, read == null ? null : (u1, u2, u3) -> read);
-    }
-
-    public Commit(Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, @Nullable Participants<?> readScope)
-    {
-        this(kind, to, coordinateTopology, topologies, txnId, txn, route, ballot, executeAt, deps, readScope != null ? new ReadTxnData(to, topologies, txnId, readScope, executeAt.epoch()) : null);
-    }
-
-    public Commit(Kind kind, Id to, Topology coordinateTopology, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps, TriFunction<Txn, Route<?>, PartialDeps, ReadData> toExecuteFactory)
+    public Commit(Kind kind, Id to, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Ballot ballot, Timestamp executeAt, Deps deps)
     {
         super(to, topologies, txnId, route);
         this.ballot = ballot;
-
-        FullRoute<?> sendRoute = null;
-        PartialTxn partialTxn = null;
-        if (kind.withTxn == HasTxn)
-        {
-            // TODO (desired): only includeQuery if isHome; this affects state eviction and is low priority given size in C*
-            partialTxn = txn.intersecting(scope, true);
-            sendRoute = route;
-        }
-        else if (kind.withTxn == HasNewlyOwnedTxnRanges && executeAt.epoch() != txnId.epoch())
-        {
-            Ranges coordinateRanges = coordinateTopology.rangesForNode(to);
-            Ranges executeRanges = topologies.computeRangesForNode(to);
-            Ranges extraRanges = executeRanges.without(coordinateRanges);
-            if (!extraRanges.isEmpty())
-                partialTxn = txn.intersecting(scope.without(coordinateRanges), coordinateRanges.contains(route.homeKey()));
-        }
-
         this.kind = kind;
         this.executeAt = executeAt;
-        this.partialTxn = partialTxn;
-        this.partialDeps = deps.intersecting(scope);
-        this.route = sendRoute;
-        this.readData = toExecuteFactory == null ? null : toExecuteFactory.apply(partialTxn != null ? partialTxn : txn, scope, partialDeps);
+        this.partialTxn = kind.withTxn.select(txn, scope, topologies, txnId, to);
+        this.partialDeps = kind.withDeps.select(deps, scope);
+        this.route = kind.withTxn.select(route);
     }
 
-    protected Commit(Kind kind, TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt, @Nullable PartialTxn partialTxn, PartialDeps partialDeps, @Nullable FullRoute<?> fullRoute, @Nullable ReadData readData)
+    protected Commit(Kind kind, TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt, @Nullable PartialTxn partialTxn, PartialDeps partialDeps, @Nullable FullRoute<?> fullRoute)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
         this.kind = kind;
@@ -156,44 +174,37 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         this.partialTxn = partialTxn;
         this.partialDeps = partialDeps;
         this.route = fullRoute;
-        this.readData = readData;
     }
 
     public static void commitMinimalNoRead(SortedArrayList<Id> contact, Node node, Topologies stabilise, Topologies all, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps unstableDeps, Callback<ReadReply> callback)
     {
         Invariants.checkArgument(stabilise.size() == 1, "Invalid coordinate epochs: %s", stabilise);
-        // we want to send to everyone, and we want to include all of the relevant data, but we stabilise on the coordination epoch replica responses
-        Topology coordinates = stabilise.getEpoch(txnId.epoch());
-
-        sendTo(contact, null, (i1, i2) -> false, (i1, i2) -> true, null, node, coordinates, coordinates, all, Kind.CommitSlowPath, ballot,
+        // we want to send to everyone, and we want to include all the relevant data, but we stabilise on the coordination epoch replica responses
+        sendTo(contact, null, (i1, i2) -> false, (i1, i2) -> true, node, all, Kind.CommitSlowPath, ballot,
                txnId, txn, route, executeAt, unstableDeps, callback, false);
     }
 
     // TODO (desired, efficiency): do not commit if we're already ready to execute (requires extra info in Accept responses)
-    public static void stableAndRead(Node node, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, Participants<?> readScope, Timestamp executeAt, Deps stableDeps, IntHashSet readSet, Callback<ReadReply> callback, boolean onlyContactOldAndReadSet)
+    public static void stableAndRead(Node node, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps stableDeps, IntHashSet readSet, Callback<ReadReply> callback, boolean onlyContactOldAndReadSet)
     {
         Invariants.checkState(all.oldestEpoch() == txnId.epoch());
         Invariants.checkState(all.currentEpoch() == executeAt.epoch());
-        Topology executes = all.getEpoch(executeAt.epoch());
-        Topology coordinates = all.getEpoch(txnId.epoch());
 
         SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
-        sendTo(contact, readSet, (set, id) -> set.contains(id.id), (set, id) -> false, readScope, node, coordinates, executes, all, kind, Ballot.ZERO,
+        sendTo(contact, readSet, (set, id) -> set.contains(id.id), (set, id) -> false, node, all, kind, Ballot.ZERO,
                txnId, txn, route, executeAt, stableDeps, callback, onlyContactOldAndReadSet);
     }
 
-    public static void stableAndRead(Id to, Node node, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, Participants<?> readScope, Timestamp executeAt, Deps stableDeps, Callback<ReadReply> callback, boolean onlyContactOldAndReadSet)
+    public static void stableAndRead(Id to, Node node, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps stableDeps, Callback<ReadReply> callback, boolean onlyContactOldAndReadSet)
     {
         Invariants.checkState(all.oldestEpoch() == txnId.epoch());
         Invariants.checkState(all.currentEpoch() == executeAt.epoch());
-        Topology executes = all.getEpoch(executeAt.epoch());
-        Topology coordinates = all.getEpoch(txnId.epoch());
 
-        sendTo(to, true, true, readScope, node, coordinates, executes, all, kind, Ballot.ZERO, txnId, txn, route, executeAt, stableDeps, callback, onlyContactOldAndReadSet);
+        sendTo(to, true, true, node, all, kind, Ballot.ZERO, txnId, txn, route, executeAt, stableDeps, callback, onlyContactOldAndReadSet);
     }
 
-    private static <P> void sendTo(SortedArrayList<Id> contact, P param, BiPredicate<P, Id> reads, BiPredicate<P, Id> registerCallback, @Nullable Participants<?> readScope,
-                                   Node node, Topology coordinates, Topology primary, Topologies all, Kind kind, Ballot ballot,
+    private static <P> void sendTo(SortedArrayList<Id> contact, P param, BiPredicate<P, Id> reads, BiPredicate<P, Id> registerCallback,
+                                   Node node, Topologies all, Kind kind, Ballot ballot,
                                    TxnId txnId, @Nullable Txn txn, FullRoute<?> route, Timestamp executeAt, @Nullable Deps deps,
                                    Callback<ReadReply> callback, boolean onlyContactOldAndReads)
     {
@@ -201,45 +212,47 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         {
             boolean isRead = reads.test(param, to);
             boolean hasCallback = isRead || registerCallback.test(param, to);
-            sendTo(to, isRead, hasCallback, readScope, node, coordinates, primary, all, kind, ballot, txnId, txn, route, executeAt, deps, callback, onlyContactOldAndReads);
+            sendTo(to, isRead, hasCallback, node, all, kind, ballot, txnId, txn, route, executeAt, deps, callback, onlyContactOldAndReads);
         }
     }
 
-    private static void sendTo(Id to, boolean isRead, boolean hasCallback, Participants<?> readScope,
-                                   Node node, Topology coordinates, Topology primary, Topologies all, Kind kind, Ballot ballot,
-                                   TxnId txnId, @Nullable Txn txn, FullRoute<?> route, Timestamp executeAt, @Nullable Deps deps,
-                                   Callback<ReadReply> callback, boolean onlyContactOldAndCallbacks)
+    private static void sendTo(Id to, boolean isRead, boolean hasCallback,
+                               Node node, Topologies all, Kind kind, Ballot ballot,
+                               TxnId txnId, @Nullable Txn txn, FullRoute<?> route, Timestamp executeAt, @Nullable Deps deps,
+                               Callback<ReadReply> callback, boolean onlyContactOldAndCallbacks)
     {
-        if ((all.size() == 1 || primary.contains(to)))
+        Request send = requestTo(to, isRead, all, kind, ballot, txnId, txn, route, executeAt, deps, onlyContactOldAndCallbacks);
+        if (send != null)
+        {
+            if (isRead | hasCallback) node.send(to, send, callback);
+            else node.send(to, send);
+        }
+    }
+
+    public static Request requestTo(Id to, boolean isRead,
+                                    Topologies all, Kind kind, Ballot ballot,
+                                    TxnId txnId, @Nullable Txn txn, FullRoute<?> route, Timestamp executeAt, @Nullable Deps deps,
+                                    boolean onlyContactOldAndCallbacks)
+    {
+        if ((all.size() == 1 || all.current().contains(to)))
         {
             if (isRead)
             {
-                // if we register a callback, supply the provided readScope (which may be null)
-                Commit send = new Commit(kind, to, coordinates, all, txnId, txn, route, ballot, executeAt, deps, readScope);
-                node.send(to, send, callback);
-                return;
+                Invariants.checkState(kind.compareTo(StableFastPath) >= 0);
+                return new StableThenRead(kind, to, all, txnId, txn, route, executeAt, deps);
             }
             if (onlyContactOldAndCallbacks)
-                return;
+                return null;
         }
         Invariants.checkState(!isRead);
-        Commit send = new Commit(kind, to, coordinates, all, txnId, txn, route, ballot, executeAt, deps, (ReadTxnData) null);
-        if (hasCallback) node.send(to, send, callback);
-        else node.send(to, send);
+        return new Commit(kind, to, all, txnId, txn, route, ballot, executeAt, deps);
     }
 
     public static void stableMaximal(Node node, Node.Id to, Txn txn, TxnId txnId, Timestamp executeAt, FullRoute<?> route, Deps deps)
     {
         // the replica may be missing the original commit, or the additional commit, so send everything
         Topologies topologies = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
-        Topology coordinates = topologies.getEpoch(txnId.epoch());
-        node.send(to, new Commit(StableWithTxnAndDeps, to, coordinates, topologies, txnId, txn, route, Ballot.ZERO, executeAt, deps, (ReadTxnData) null));
-    }
-
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
+        node.send(to, new Commit(StableWithTxnAndDeps, to, topologies, txnId, txn, route, Ballot.ZERO, executeAt, deps));
     }
 
     @Override
@@ -293,8 +306,6 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     {
         if (reply != null || failure != null)
             node.reply(replyTo, replyContext, reply, failure);
-        else if (readData != null)
-            readData.process(node, replyTo, replyContext);
         else if (kind.saveStatus == Committed)
             node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null), null);
     }
@@ -320,7 +331,6 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
                ", txnId: " + txnId +
                ", executeAt: " + executeAt +
                ", deps: " + partialDeps +
-               ", toExecute: " + readData +
                '}';
     }
 
@@ -394,7 +404,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
             node.forEachLocal(this, scope, txnId.epoch(), invalidateUntilEpoch, safeStore -> {
                 // it's fine for this to operate on a non-participating home key, since invalidation is a terminal state,
                 // so it doesn't matter if we resurrect a redundant entry
-                StoreParticipants participants = StoreParticipants.invalidate(safeStore, scope, txnId);
+                StoreParticipants participants = StoreParticipants.notAccept(safeStore, scope, txnId);
                 Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), scope);
             }).begin(node.agent());
         }

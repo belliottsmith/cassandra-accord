@@ -38,6 +38,8 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableSortedSet;
 
+import accord.primitives.TxnId;
+
 public class Utils
 {
     // reimplements Collection#toArray

@@ -16,20 +16,21 @@
  * limitations under the License.
  */
 
-package accord.messages;
+package accord.coordinate.tracking;
 
-import accord.local.Node.Id;
+import accord.primitives.TxnId;
+import accord.topology.Topologies;
 
-/**
- * Represents some execution for handling responses from messages a node has sent.
- * TODO (expected, efficiency): associate a Callback with a CommandShard or other context for execution
- *                              (for coordination, usually its home shard)
- */
-public interface Callback<T>
+public class PreAcceptExclusiveSyncPointTracker extends QuorumTracker
 {
-    void onSuccess(Id from, T reply);
-    default void onSlowResponse(Id from) {}
-    void onFailure(Id from, Throwable failure);
-    // return true if the failure was handled/propagated
-    boolean onCallbackFailure(Id from, Throwable failure);
+    public PreAcceptExclusiveSyncPointTracker(Topologies topologies, TxnId txnId)
+    {
+        super(topologies);
+    }
+
+    @Override
+    public boolean hasMediumPathAccepted()
+    {
+        return hasReachedQuorum();
+    }
 }

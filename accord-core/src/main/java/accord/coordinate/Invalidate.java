@@ -33,14 +33,15 @@ import accord.api.RoutingKey;
 import accord.messages.BeginInvalidation;
 import accord.messages.BeginInvalidation.InvalidateReply;
 import accord.messages.Callback;
-import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
+import accord.utils.SortedListMap;
+import accord.utils.UnhandledEnum;
 
 import javax.annotation.Nullable;
 
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
-import static accord.coordinate.Propose.Invalidate.proposeInvalidate;
+import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.primitives.Status.Accepted;
 import static accord.primitives.Status.PreAccepted;
@@ -59,8 +60,7 @@ public class Invalidate implements Callback<InvalidateReply>
     private boolean isDone;
     private boolean isPrepareDone;
     private final boolean transitivelyInvokedByPriorInvalidation;
-    private final InvalidateReply[] replies;
-    private final Topology topology;
+    private final SortedListMap<Id, InvalidateReply> replies;
     private final InvalidationTracker tracker;
     private Throwable failure;
     private final long reportLowEpoch, reportHighEpoch;
@@ -77,9 +77,8 @@ public class Invalidate implements Callback<InvalidateReply>
         this.reportHighEpoch = reportHighEpoch;
         Topologies topologies = node.topology().forEpoch(invalidateWith, txnId.epoch());
         Invariants.checkState(topologies.size() == 1);
-        this.tracker = new InvalidationTracker(topologies);
-        this.topology = topologies.current();
-        this.replies = new InvalidateReply[topology.nodes().size()];
+        this.tracker = new InvalidationTracker(topologies, txnId);
+        this.replies = new SortedListMap<>(topologies.nodes(), InvalidateReply[]::new);
     }
 
     public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, BiConsumer<Outcome, Throwable> callback)
@@ -113,7 +112,7 @@ public class Invalidate implements Callback<InvalidateReply>
         if (isDone || isPrepareDone)
             return;
 
-        replies[topology.nodes().find(from)] = reply;
+        replies.put(from, reply);
 
         Participants<?> truncated = reply.truncated;
         Participants<?> notTruncated = truncated == null ? invalidateWith : invalidateWith.without(truncated);
@@ -163,19 +162,19 @@ public class Invalidate implements Callback<InvalidateReply>
         Invariants.checkState(!isPrepareDone);
         isPrepareDone = true;
 
-        FullRoute<?> fullRoute = InvalidateReply.findRoute(replies);
-        Route<?> someRoute = InvalidateReply.mergeRoutes(replies);
+        FullRoute<?> fullRoute = InvalidateReply.findRoute(replies.unsafeValuesBackingArray());
+        Route<?> someRoute = InvalidateReply.mergeRoutes(replies.unsafeValuesBackingArray());
 
         // first look to see if it has already been decided/invalidated
         // check each shard independently - if we find any that can be invalidated, do so
-        InvalidateReply max = InvalidateReply.max(replies);
-        InvalidateReply maxNotTruncated = !max.maxKnowledgeStatus.is(Status.Truncated) ? max : InvalidateReply.maxNotTruncated(replies);
+        InvalidateReply max = InvalidateReply.max(replies.unsafeValuesBackingArray());
+        InvalidateReply maxNotTruncated = !max.maxKnowledgeStatus.is(Status.Truncated) ? max : InvalidateReply.maxNotTruncated(replies.unsafeValuesBackingArray());
 
         if (maxNotTruncated != null)
         {
             switch (maxNotTruncated.maxKnowledgeStatus.status)
             {
-                default: throw new AssertionError("Unhandled status: " + maxNotTruncated.maxKnowledgeStatus.status);
+                default: throw new UnhandledEnum(maxNotTruncated.maxKnowledgeStatus.status);
                 case Truncated: throw illegalState();
 
                 case AcceptedInvalidate:
@@ -195,6 +194,7 @@ public class Invalidate implements Callback<InvalidateReply>
                     Invariants.checkState(maxNotTruncated.maxKnowledgeStatus.status == PreAccepted || !invalidateWith.contains(someRoute.homeKey()) || fullRoute != null);
 
                 case Accepted:
+                case AcceptedSlow:
                     // TODO (desired, efficiency): if we see Committed or above, go straight to Execute if we have assembled enough information
                     Invariants.checkState(fullRoute != null, "Received a reply from a node that must have known some route, but that did not include it"); // we now require the FullRoute on all replicas to preaccept, commit or apply
                     // The data we see might have made it only to a minority in the event of PreAccept ONLY.
@@ -287,7 +287,7 @@ public class Invalidate implements Callback<InvalidateReply>
     @SuppressWarnings({"unchecked", "rawtypes"})
     private void commitInvalidate()
     {
-        @Nullable Route<?> route = InvalidateReply.mergeRoutes(replies);
+        @Nullable Route<?> route = InvalidateReply.mergeRoutes(replies.unsafeValuesBackingArray());
         if (route == null && Route.isRoute(invalidateWith)) route = Route.castToRoute(invalidateWith);
         if (route != null) route = route.withHomeKey();
 
@@ -304,7 +304,7 @@ public class Invalidate implements Callback<InvalidateReply>
         // TODO (desired): when sending to network, register a callback for when local application of commitInvalidate message ahs been performed, so no need to special-case
         node.forEachLocal(contextFor(txnId), commitTo, lowEpoch, highEpoch, safeStore -> {
             // TODO (expected): consid
-            StoreParticipants participants = StoreParticipants.invalidate(safeStore, commitTo, txnId);
+            StoreParticipants participants = StoreParticipants.notAccept(safeStore, commitTo, txnId);
             Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), commitTo);
         }).begin((s, f) -> {
             callback.accept(INVALIDATED, null);
@@ -314,12 +314,12 @@ public class Invalidate implements Callback<InvalidateReply>
     }
 
     @Override
-    public void onCallbackFailure(Id from, Throwable failure)
+    public boolean onCallbackFailure(Id from, Throwable failure)
     {
-        if (isDone)
-            return;
+        if (isDone) return false;
 
         isDone = true;
         callback.accept(null, failure);
+        return true;
     }
 }

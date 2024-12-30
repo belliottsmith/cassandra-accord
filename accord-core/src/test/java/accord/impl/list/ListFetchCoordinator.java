@@ -110,7 +110,7 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
         {
             CommandStore commandStore = safeStore.commandStore();
             Ranges slice = safeStore.ranges().allAt(txnId).without(unavailable);
-            ((InMemoryCommandStore)commandStore).maxAppliedFor(readScope, slice).begin((newMaxApplied, failure) -> {
+            ((InMemoryCommandStore)commandStore).maxAppliedFor(scope, slice).begin((newMaxApplied, failure) -> {
                 if (failure != null)
                 {
                     commandStore.agent().onUncaughtException(failure);

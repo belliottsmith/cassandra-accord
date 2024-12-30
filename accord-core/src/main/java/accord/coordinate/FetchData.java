@@ -192,10 +192,10 @@ public class FetchData extends CheckShards<Route<?>>
     {
         Invariants.checkState(req.executeAt == null);
         TxnId txnId = req.txnId;
-        switch (found.outcome)
+        switch (found.outcome())
         {
-            default: throw new AssertionError("Unknown outcome: " + found.outcome);
-            case Invalidated:
+            default: throw new AssertionError("Unknown outcome: " + found.outcome());
+            case Abort:
                 locallyInvalidateAndCallback(node, txnId, constant(req.lowEpoch), constant(req.highEpoch), req.fetchKeys, new FetchResult(found, req.fetchKeys, null), req.callback);
                 break;
 
@@ -337,10 +337,7 @@ public class FetchData extends CheckShards<Route<?>>
         else
         {
             if (success == ReadCoordinator.Success.Success)
-            {
-                if (!isSufficient(merged))
-                    Invariants.checkState(isSufficient(merged), "Status %s is not sufficient", merged);
-            }
+                Invariants.checkState(isSufficient(merged), "Status %s is not sufficient", merged);
 
             // TODO (expected): should we automatically trigger a new fetch if we find executeAt but did not request enough information? would be more rob ust
             Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, lowEpoch, highEpoch, success.withQuorum, query(), propagateTo, target, (CheckStatusOkFull) merged, callback);

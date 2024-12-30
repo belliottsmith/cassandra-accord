@@ -174,18 +174,18 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     private KnownMap foundKnown(Command command, StoreParticipants query)
     {
         SaveStatus saveStatus = command.saveStatus();
-        if (query.owns() == command.participants().stillTouches() || (!saveStatus.known.deps.hasProposedOrDecidedDeps() && saveStatus.known.definition != DefinitionKnown))
+        if (query.owns() == command.participants().stillTouches() || (!saveStatus.known.deps().hasProposedOrDecidedDeps() && saveStatus.known.definition() != DefinitionKnown))
             return KnownMap.create(query.owns(), saveStatus.known);
 
         Known known = saveStatus.known;
         KnownMap result = KnownMap.EMPTY;
-        if (known.deps.hasProposedOrDecidedDeps())
+        if (known.deps().hasProposedOrDecidedDeps())
         {
             Invariants.checkState(command.participants().touches().containsAll(command.partialDeps().covering));
-            result = KnownMap.create(command.partialDeps().covering, Known.Nothing.with(saveStatus.known.deps));
+            result = KnownMap.create(command.partialDeps().covering, Known.Nothing.with(saveStatus.known.deps()));
             known = known.with(DepsUnknown);
         }
-        if (known.definition == DefinitionKnown && !txnId.isSystemTxn())
+        if (known.definition() == DefinitionKnown && !txnId.isSystemTxn())
         {
             Participants<?> participants = command.partialTxn().keys().toParticipants();
             Invariants.checkState(command.participants().owns().containsAll(participants));
@@ -307,7 +307,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
 
         public Timestamp executeAtIfKnown()
         {
-            if (maxKnown().executeAt.isDecidedAndKnownToExecute())
+            if (maxKnown().executeAt().isDecidedAndKnownToExecute())
                 return executeAt;
             return null;
         }
@@ -391,8 +391,8 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         {
             Known known = map.knownFor(owns, touches);
             Invariants.checkState(!known.hasFullRoute() || Route.isFullRoute(route));
-            Invariants.checkState(!known.outcome.isInvalidated() || (!maxKnowledgeSaveStatus.known.isDecidedToExecute() && !maxSaveStatus.known.isDecidedToExecute()));
-            Invariants.checkState(!(maxSaveStatus.known.outcome.isInvalidated() || maxKnowledgeSaveStatus.known.outcome.isInvalidated()) || !known.isDecidedToExecute());
+            Invariants.checkState(!known.outcome().isInvalidated() || (!maxKnowledgeSaveStatus.known.isDecidedToExecute() && !maxSaveStatus.known.isDecidedToExecute()));
+            Invariants.checkState(!(maxSaveStatus.known.outcome().isInvalidated() || maxKnowledgeSaveStatus.known.outcome().isInvalidated()) || !known.isDecidedToExecute());
             // TODO (desired): make sure these match identically, rather than only ensuring Route.isFullRoute (either by coercing it here or by ensuring it at callers)
             return known;
         }
@@ -448,7 +448,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             CheckStatusOk maxPromised = prefer.maxPromised.compareTo(defer.maxPromised) >= 0 ? prefer : defer;
             CheckStatusOk maxAccepted = prefer.maxAcceptedOrCommitted.compareTo(defer.maxAcceptedOrCommitted) >= 0 ? prefer : defer;
             CheckStatusOk maxHomeKey = prefer.homeKey != null || defer.homeKey == null ? prefer : defer;
-            CheckStatusOk maxExecuteAt = prefer.maxKnown().executeAt.compareTo(defer.maxKnown().executeAt) >= 0 ? prefer : defer;
+            CheckStatusOk maxExecuteAt = prefer.maxKnown().executeAt().compareTo(defer.maxKnown().executeAt()) >= 0 ? prefer : defer;
             Route<?> mergedRoute = Route.merge(prefer.route, (Route)defer.route);
             Durability mergedDurability = Durability.merge(prefer.durability, defer.durability);
             InvalidIf invalidIf = prefer.invalidIf.atLeast(defer.invalidIf);

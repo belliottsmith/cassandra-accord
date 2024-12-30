@@ -573,10 +573,7 @@ public abstract class CommandStores
         {
             Shard oldShard = oldShards.get(i);
             Shard newShard = newShards.get(i);
-            if (!oldShard.fastPathElectorate.containsAll(newShard.fastPathElectorate))
-                return true;
-
-            if (!newShard.fastPathElectorate.containsAll(oldShard.fastPathElectorate))
+            if (!oldShard.notInFastPath.equals(newShard.notInFastPath))
                 return true;
 
             if (!newShard.nodes.equals(oldShard.nodes))

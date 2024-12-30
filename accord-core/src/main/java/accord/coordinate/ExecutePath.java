@@ -20,5 +20,5 @@ package accord.coordinate;
 
 public enum ExecutePath
 {
-    FAST, SLOW, RECOVER
+    FAST, MEDIUM, SLOW, RECOVER
 }

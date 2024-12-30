@@ -81,8 +81,8 @@ public class CoordinateGloballyDurable extends SettableResult<Void> implements C
     }
 
     @Override
-    public void onCallbackFailure(Node.Id from, Throwable failure)
+    public boolean onCallbackFailure(Node.Id from, Throwable failure)
     {
-        tryFailure(failure);
+        return tryFailure(failure);
     }
 }

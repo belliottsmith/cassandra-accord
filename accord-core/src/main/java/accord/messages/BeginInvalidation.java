@@ -63,7 +63,7 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
     @Override
     public InvalidateReply apply(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.invalidate(safeStore, this.participants, txnId);
+        StoreParticipants participants = StoreParticipants.notAccept(safeStore, this.participants, txnId);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
         boolean acceptedFastPath;
@@ -158,7 +158,7 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
 
         public boolean hasDecision()
         {
-            return maxKnowledgeStatus.known.executeAt.hasDecision();
+            return maxKnowledgeStatus.known.executeAt().hasDecision();
         }
 
         public boolean isPromiseRejected()
