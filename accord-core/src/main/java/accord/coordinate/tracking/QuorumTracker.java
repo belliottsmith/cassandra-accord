@@ -26,30 +26,39 @@ import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.*;
 
 public class QuorumTracker extends SimpleTracker<QuorumTracker.QuorumShardTracker> implements ResponseTracker
 {
-    public static class QuorumShardTracker extends ShardTracker
+    public static class QuorumShardTracker extends AbstractQuorumShardTracker
+    {
+        public QuorumShardTracker(Shard shard)
+        {
+            super(shard);
+        }
+        public boolean hasReachedQuorum()
+        {
+            return successes >= shard.slowQuorumSize;
+        }
+    }
+
+    public static abstract class AbstractQuorumShardTracker extends ShardTracker
     {
         protected int successes;
         protected int failures;
 
-        public QuorumShardTracker(Shard shard)
+        public abstract boolean hasReachedQuorum();
+
+        public AbstractQuorumShardTracker(Shard shard)
         {
             super(shard);
         }
 
         public ShardOutcomes onSuccess(Object ignore)
         {
-            return ++successes == shard.slowPathQuorumSize ? Success : NoChange;
+            return ++successes == shard.slowQuorumSize ? Success : NoChange;
         }
 
         // return true iff hasFailed()
         public ShardOutcomes onFailure(Object ignore)
         {
             return failures++ == shard.maxFailures ? Fail : NoChange;
-        }
-
-        public boolean hasReachedQuorum()
-        {
-            return successes >= shard.slowPathQuorumSize;
         }
 
         boolean hasInFlight()

@@ -19,6 +19,7 @@
 package accord.coordinate.tracking;
 
 import accord.coordinate.tracking.FastPathTracker.FastPathShardTracker;
+import accord.primitives.TxnId;
 import accord.utils.RandomSource;
 import accord.local.Node;
 import accord.topology.Topologies;
@@ -32,7 +33,7 @@ public class FastPathTrackerReconciler extends TrackerReconciler<FastPathShardTr
 
     FastPathTrackerReconciler(RandomSource random, Topologies topologies)
     {
-        this(random, new FastPathTracker(topologies));
+        this(random, new FastPathTracker(topologies, TxnId.NONE));
     }
 
     private FastPathTrackerReconciler(RandomSource random, FastPathTracker tracker)

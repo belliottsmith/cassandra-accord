@@ -139,7 +139,7 @@ public class ImmutableCommandTest
             {
                 StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, txnId.epoch());
                 SafeCommand  safeCommand = safeStore.get(txnId, participants);
-                Commands.preaccept(safeStore, safeCommand, participants, txnId, txnId.epoch(), txn.slice(FULL_RANGES, true), ROUTE);
+                Commands.preaccept(safeStore, safeCommand, participants, txnId, txn.slice(FULL_RANGES, true), null, false, ROUTE);
                 Command command = safeStore.get(txnId).current();
                 Assertions.assertEquals(Status.PreAccepted, command.status());
                 Assertions.assertEquals(txnId, command.executeAt());
@@ -174,7 +174,7 @@ public class ImmutableCommandTest
         Timestamp expectedTimestamp = Timestamp.fromValues(2, 110, ID1);
         getUninterruptibly(commands.execute(context, (Consumer<? super SafeCommandStore>) safeStore -> {
             StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, 2);
-            Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txnId.epoch(), txn.slice(FULL_RANGES, true), ROUTE);
+            Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txn.slice(FULL_RANGES, true), null, false, ROUTE);
         }));
         commands.execute(PreLoadContext.contextFor(txnId, txn.keys().toParticipants()), safeStore -> {
             Command command = safeStore.get(txnId).current();

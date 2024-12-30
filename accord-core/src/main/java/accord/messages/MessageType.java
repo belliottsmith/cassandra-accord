@@ -39,7 +39,7 @@ public class MessageType
     public static final MessageType PRE_ACCEPT_RSP                    = remote("PRE_ACCEPT_RSP",                    false);
     public static final MessageType ACCEPT_REQ                        = remote("ACCEPT_REQ",                        true );
     public static final MessageType ACCEPT_RSP                        = remote("ACCEPT_RSP",                        false);
-    public static final MessageType ACCEPT_INVALIDATE_REQ             = remote("ACCEPT_INVALIDATE_REQ",             true );
+    public static final MessageType NOT_ACCEPT_REQ                    = remote("NOT_ACCEPT_REQ",                    true );
     public static final MessageType CALCULATE_DEPS_REQ                = remote("CALCULATE_DEPS_REQ",                false);
     public static final MessageType CALCULATE_DEPS_RSP                = remote("CALCULATE_DEPS_RSP",                false);
     public static final MessageType GET_LATEST_DEPS_REQ               = remote("GET_LATEST_DEPS_REQ",               false);
@@ -66,6 +66,8 @@ public class MessageType
     public static final MessageType AWAIT_RSP                         = remote("AWAIT_RSP",                         false);
     public static final MessageType ASYNC_AWAIT_COMPLETE_REQ          = remote("ASYNC_AWAIT_COMPLETE_RSP",          false);
     public static final MessageType WAIT_UNTIL_APPLIED_REQ            = remote("WAIT_UNTIL_APPLIED_REQ",            false);
+    public static final MessageType APPLY_THEN_WAIT_UNTIL_APPLIED_REQ = remote("APPLY_THEN_WAIT_UNTIL_APPLIED_REQ", true );
+    public static final MessageType STABLE_THEN_READ_REQ              = remote("STABLE_THEN_READ",                  true );
     public static final MessageType INFORM_DURABLE_REQ                = remote("INFORM_DURABLE_REQ",                true );
     public static final MessageType CHECK_STATUS_REQ                  = remote("CHECK_STATUS_REQ",                  false);
     public static final MessageType CHECK_STATUS_RSP                  = remote("CHECK_STATUS_RSP",                  false);
@@ -75,7 +77,6 @@ public class MessageType
     public static final MessageType SET_GLOBALLY_DURABLE_REQ          = remote("SET_GLOBALLY_DURABLE_REQ",          true );
     public static final MessageType QUERY_DURABLE_BEFORE_REQ          = remote("QUERY_DURABLE_BEFORE_REQ",          false);
     public static final MessageType QUERY_DURABLE_BEFORE_RSP          = remote("QUERY_DURABLE_BEFORE_RSP",          false);
-    public static final MessageType APPLY_THEN_WAIT_UNTIL_APPLIED_REQ = remote("APPLY_THEN_WAIT_UNTIL_APPLIED_REQ", true );
 
     /**
      * LOCAL messages are not sent to remote nodes.

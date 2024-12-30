@@ -35,17 +35,22 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
+import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Txn.Kind.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
+import static accord.primitives.Txn.Kind.Nothing;
 
 public interface CommandSummaries
 {
     enum SummaryStatus
     {
         NOT_DIRECTLY_WITNESSED,
-        NOT_ACCEPTED,
+        PREACCEPTED,
+        PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE,
+        NOTACCEPTED,
         ACCEPTED,
         COMMITTED,
         STABLE,
@@ -55,7 +60,7 @@ public interface CommandSummaries
         public static final SummaryStatus NONE = null;
     }
 
-    enum IsDep { IS_DEP, NOT_ELIGIBLE, IS_NOT_DEP }
+    enum IsDep { IS_COORD_DEP, IS_NOT_COORD_DEP, NOT_ELIGIBLE, IS_STABLE_DEP, IS_NOT_STABLE_DEP }
 
     class Summary
     {
@@ -105,13 +110,13 @@ public interface CommandSummaries
 
             protected final Unseekables<?> searchKeysOrRanges;
             protected final RedundantBefore redundantBefore;
-            // TODO (desired): separate out Kinds we need before/after primaryTxnId/executeAt
+            // TODO (expected): separate out Kinds we need before/after primaryTxnId/executeAt
             protected final Kinds testKind;
             protected final TxnId minTxnId;
             protected final Timestamp maxTxnId;
             @Nullable protected final TxnId findAsDep;
 
-            // TODO (desired): provide executeAt to PreLoadContext so we can more aggressively filter what we load, esp. by Kind
+            // TODO (expected): provide executeAt to PreLoadContext so we can more aggressively filter what we load, esp. by Kind
             public static Loader loader(RedundantBefore redundantBefore, PreLoadContext context)
             {
                 return loader(redundantBefore, context.primaryTxnId(), context.keyHistory(), context.keys());
@@ -127,7 +132,7 @@ public interface CommandSummaries
                 TxnId minTxnId = redundantBefore.min(keysOrRanges, e -> e.gcBefore);
                 Timestamp maxTxnId = primaryTxnId == null || keyHistory == KeyHistory.RECOVER || !primaryTxnId.is(ExclusiveSyncPoint) ? Timestamp.MAX : primaryTxnId;
                 TxnId findAsDep = primaryTxnId != null && keyHistory == KeyHistory.RECOVER ? primaryTxnId : null;
-                Kinds kinds = primaryTxnId == null ? AnyGloballyVisible : primaryTxnId.witnesses().or(keyHistory == KeyHistory.RECOVER ? primaryTxnId.witnessedBy() : Kinds.Nothing);
+                Kinds kinds = primaryTxnId == null ? AnyGloballyVisible : primaryTxnId.witnesses().or(keyHistory == KeyHistory.RECOVER ? primaryTxnId.witnessedBy() : Nothing);
                 return factory.create(keysOrRanges, redundantBefore, kinds, minTxnId, maxTxnId, findAsDep);
             }
 
@@ -150,10 +155,15 @@ public interface CommandSummaries
             {
                 switch (status)
                 {
-                    default: throw new AssertionError("Unhandled SummaryStatus: " + status);
-                    case NOT_ACCEPTED:
+                    default: throw new UnhandledEnum(status);
+                    case NOT_DIRECTLY_WITNESSED:
                     case INVALIDATED:
                         return false;
+                    case PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE:
+                    case NOTACCEPTED:
+                    case PREACCEPTED:
+                        if (!txnId.is(TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS))
+                            return false;
                     case ACCEPTED:
                         return txnId.compareTo(findAsDep) > 0;
                     case COMMITTED:
@@ -204,7 +214,7 @@ public interface CommandSummaries
                     ranges = newRanges;
                 }
 
-                Invariants.checkState(partialDeps != null || findAsDep == null || !saveStatus.known.deps.hasProposedOrDecidedDeps());
+                Invariants.checkState(partialDeps != null || findAsDep == null || !saveStatus.known.deps().hasProposedOrDecidedDeps());
                 IsDep isDep = null;
                 if (findAsDep != null)
                 {
@@ -214,8 +224,11 @@ public interface CommandSummaries
                     }
                     else
                     {
+                        boolean isStable = summaryStatus.compareTo(ACCEPTED) >= 0;
                         Unseekables<?> participants = partialDeps.participants(findAsDep);
-                        isDep = participants != null && participants.containsAll(ranges) ? IsDep.IS_DEP : IsDep.IS_NOT_DEP;
+                        isDep = participants != null && participants.containsAll(ranges)
+                                ? (isStable ? IsDep.IS_STABLE_DEP     : IsDep.IS_COORD_DEP)
+                                : (isStable ? IsDep.IS_NOT_STABLE_DEP : IsDep.IS_NOT_COORD_DEP);
                     }
                 }
 

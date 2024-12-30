@@ -141,15 +141,19 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
                     }
                     catch (Throwable t)
                     {
+                        Throwable log = null;
                         try
                         {
-                            callback.onCallbackFailure(to, t);
+                            if (!callback.onCallbackFailure(to, t))
+                                log = t;
                         }
                         catch (Throwable t2)
                         {
+                            log = t;
                             t.addSuppressed(t2);
-                            executor.agent().onUncaughtException(t);
                         }
+                        if (log != null)
+                            executor.agent().onUncaughtException(t);
                     }
                 });
             }

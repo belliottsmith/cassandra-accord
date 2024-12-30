@@ -27,6 +27,7 @@ import accord.local.SafeCommandStore;
 import accord.messages.ReplyContext;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
+import accord.primitives.Status.Phase;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -149,6 +150,7 @@ public interface Agent extends UncaughtExceptionListener
      */
     long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units);
 
+    long localExpiresAt(TxnId txnId, Phase phase, TimeUnit unit);
     long expiresAt(ReplyContext replyContext, TimeUnit unit);
 
     default void onViolation(String message) { throw illegalState(message); }

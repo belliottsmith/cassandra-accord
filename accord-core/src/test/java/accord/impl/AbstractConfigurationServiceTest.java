@@ -180,7 +180,7 @@ public class AbstractConfigurationServiceTest
 
     private static Shard shard(Range range, SortedArrayList<Id> nodes, Set<Id> fastPath)
     {
-        return new Shard(range, nodes, fastPath);
+        return Shard.create(range, nodes, fastPath);
     }
 
     private static Topology topology(long epoch, Range range, SortedArrayList<Id> nodes, Set<Id> fastPath)

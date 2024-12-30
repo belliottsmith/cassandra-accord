@@ -47,7 +47,7 @@ public class FindRoute extends CheckShards<Route<?>>
         public Result(CheckStatusOk ok)
         {
             this.route = Route.castToFullRoute(ok.route);
-            this.executeAt = ok.maxKnown().executeAt.isDecidedAndKnownToExecute() ? ok.executeAt : null;
+            this.executeAt = ok.maxKnown().executeAt().isDecidedAndKnownToExecute() ? ok.executeAt : null;
         }
     }
 

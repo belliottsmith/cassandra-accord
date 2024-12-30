@@ -43,15 +43,14 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.Unseekable;
-import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
+import accord.utils.UnhandledEnum;
 import accord.utils.WrappableException;
 import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.messages.Apply.ApplyReply.Insufficient;
-import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.primitives.Status.Durability.Majority;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
@@ -107,7 +106,6 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
             switch ((CommitOrReadNack) reply)
             {
                 case Waiting:
-                case Invalid:
                 case Redundant:
                     return true;
                 case Insufficient:
@@ -130,7 +128,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
                             onDurableSuccess(from);
                     }
                     @Override public void onFailure(Node.Id from, Throwable failure) {}
-                    @Override public void onCallbackFailure(Node.Id from, Throwable failure) {}
+                    @Override public boolean onCallbackFailure(Node.Id from, Throwable failure) { return false; }
                 };
             }
             CoordinateSyncPoint.sendApply(node, to, syncPoint, tracker.topologies(), insufficientCallback);
@@ -140,11 +138,10 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         public void start()
         {
             Txn txn = node.agent().emptySystemTxn(syncPoint.syncId.kind(), syncPoint.syncId.domain());
-            Writes writes = txn.execute(syncPoint.syncId, syncPoint.syncId, null);
             Result result = txn.result(syncPoint.syncId, syncPoint.syncId, null);
             node.send(tracker.topologies().nodes(), to -> {
                 Participants<?> participants = syncPoint.route.participants();
-                return new ApplyThenWaitUntilApplied(to, tracker.topologies(), executeAt, syncPoint.route(), syncPoint.syncId, txn, syncPoint.waitFor, participants, writes, result);
+                return new ApplyThenWaitUntilApplied(to, tracker.topologies(), executeAt, syncPoint.route(), syncPoint.syncId, txn, syncPoint.waitFor, participants, null, result);
             }, this);
         }
     }
@@ -253,7 +250,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         {
             switch ((CommitOrReadNack)reply)
             {
-                default: throw new AssertionError("Unhandled: " + reply);
+                default: throw new UnhandledEnum((CommitOrReadNack)reply);
 
                 case Insufficient:
                     sendApply(from);
@@ -262,9 +259,6 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
                 case Redundant:
                     tryFailure(new SyncPointErased());
                     return;
-
-                case Invalid:
-                    tryFailure(new Invalidated(syncPoint.syncId, syncPoint.route.homeKey()));
 
                 case Waiting:
             }
@@ -299,8 +293,8 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
     }
 
     @Override
-    public void onCallbackFailure(Node.Id from, Throwable failure)
+    public boolean onCallbackFailure(Node.Id from, Throwable failure)
     {
-        tryFailure(failure);
+        return tryFailure(failure);
     }
 }

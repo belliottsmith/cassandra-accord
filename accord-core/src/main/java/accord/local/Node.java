@@ -19,12 +19,10 @@
 package accord.local;
 
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -73,6 +71,7 @@ import accord.primitives.FullRoute;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Routables;
+import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -96,6 +95,10 @@ import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
+import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
+import static accord.api.ProtocolModifiers.Toggles.defaultMediumPath;
+import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
+import static accord.primitives.TxnId.FastPath.UNOPTIMISED;
 import static accord.utils.Invariants.illegalState;
 import static java.lang.String.format;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -561,8 +564,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     // send to every node besides ourselves
     public void send(Topology topology, Request send)
     {
-        Set<Id> contacted = new HashSet<>();
-        topology.forEach(shard -> send(shard, send, contacted));
+        topology.nodes().forEach(id -> send(id, send));
     }
 
     public void send(Shard shard, Request send)
@@ -579,14 +581,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     {
         checkStore(executor);
         shard.nodes.forEach(node -> messageSink.send(node, send, executor, callback));
-    }
-
-    private <T> void send(Shard shard, Request send, Set<Id> alreadyContacted)
-    {
-        shard.nodes.forEach(node -> {
-            if (alreadyContacted.add(node))
-                send(node, send);
-        });
     }
 
     public void send(Collection<Id> to, Request send)
@@ -686,19 +680,63 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         messageSink.reply(replyingToNode, replyContext, send);
     }
 
+    public TxnId nextTxnId(Txn.Kind rw, Domain domain)
+    {
+        return nextTxnId(rw, domain, defaultMediumPath().bits);
+    }
+
     /**
      * TODO (required): Make sure we cannot re-issue the same txnid on startup
      */
-    public TxnId nextTxnId(Txn.Kind rw, Domain domain)
+    public TxnId nextTxnId(Txn.Kind rw, Domain domain, int flags)
     {
-        TxnId txnId = new TxnId(uniqueNow(), rw, domain);
+        TxnId txnId = new TxnId(uniqueNow(), flags, rw, domain);
         Invariants.checkState((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
 
+    public TxnId nextTxnId(Txn txn)
+    {
+        Seekables<?, ?> keys = txn.keys();
+        Txn.Kind kind = txn.kind();
+        Domain domain = keys.domain();
+        if (!usePrivilegedCoordinator())
+            return nextTxnId(kind, domain);
+
+        Timestamp now = uniqueNow();
+        int flags = computeBestDefaultTxnIdFlags(keys, now.epoch());
+        TxnId txnId = new TxnId(now, flags, kind, domain);
+        Invariants.checkState((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
+        return txnId;
+    }
+
+    private int computeBestDefaultTxnIdFlags(Routables<?> keys, long epoch)
+    {
+        if (!topology.hasEpoch(epoch) || !usePrivilegedCoordinator())
+            return defaultMediumPath().bits;
+
+        TxnId.FastPath fastPath = ensurePermitted(topology().selectFastPath(keys, epoch));
+        return fastPath.bits | defaultMediumPath().bits;
+    }
+
+    public TxnId nextTxnId(Txn txn, TxnId.FastPath fastPath, TxnId.MediumPath mediumPath)
+    {
+        Seekables<?, ?> keys = txn.keys();
+        Txn.Kind kind = txn.kind();
+        Domain domain = keys.domain();
+
+        Timestamp now = uniqueNow();
+        fastPath = ensurePermitted(fastPath);
+        if (fastPath != UNOPTIMISED && (!topology.hasEpoch(now.epoch()) || !topology.supportsPrivilegedFastPath(keys, now.epoch())))
+            fastPath = UNOPTIMISED;
+
+        return nextTxnId(kind, domain, fastPath.bits | mediumPath.bits);
+    }
+
     public AsyncResult<Result> coordinate(Txn txn)
     {
-        return coordinate(nextTxnId(txn.kind(), txn.keys().domain()), txn);
+        TxnId txnId = nextTxnId(txn);
+        return coordinate(txnId, txn);
     }
 
     public AsyncResult<Result> coordinate(TxnId txnId, Txn txn)
@@ -706,6 +744,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return coordinate(txnId, txn, txnId.epoch(), Long.MAX_VALUE);
     }
 
+    // TODO (required): plumb deadlineNanos in (perhaps on integration side, but maybe introduce some context we can pass through for the MessageSink)
     public AsyncResult<Result> coordinate(TxnId txnId, Txn txn, long minEpoch, long deadlineNanos)
     {
         // TODO (desirable, consider): The combination of updating the epoch of the next timestamp with epochs we don't have topologies for,

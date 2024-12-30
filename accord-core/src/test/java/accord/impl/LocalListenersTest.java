@@ -31,8 +31,6 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-import javax.annotation.Nullable;
-
 import com.google.common.collect.Iterables;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -41,16 +39,12 @@ import accord.api.LocalListeners;
 import accord.api.LocalListeners.ComplexListener;
 import accord.api.RemoteListeners.NoOpRemoteListeners;
 import accord.local.Command;
-import accord.local.CommonAttributes;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
-import accord.primitives.PartialDeps;
-import accord.primitives.PartialTxn;
-import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.AccordGens;
 import accord.utils.Invariants;
@@ -427,82 +421,13 @@ public class LocalListenersTest
 
     static class TestCommand extends Command
     {
-        final TxnId txnId;
-        final SaveStatus saveStatus;
-        final Durability durability;
-        final StoreParticipants participants;
-
         TestCommand(TxnId txnId, SaveStatus saveStatus, Durability durability)
         {
-            this.txnId = txnId;
-            this.saveStatus = saveStatus;
-            this.durability = durability;
-            this.participants = StoreParticipants.empty(txnId);
+            super(txnId, saveStatus, durability, StoreParticipants.empty(txnId), Ballot.ZERO, null, null, null, null, true);
         }
 
         @Override
-        public StoreParticipants participants()
-        {
-            return participants;
-        }
-
-        @Override
-        public TxnId txnId()
-        {
-            return txnId;
-        }
-
-        @Override
-        public Ballot promised()
-        {
-            return null;
-        }
-
-        @Override
-        public Durability durability()
-        {
-            return durability;
-        }
-
-        @Override
-        public SaveStatus saveStatus()
-        {
-            return saveStatus;
-        }
-
-        @Override
-        public Timestamp executeAt()
-        {
-            return null;
-        }
-
-        @Override
-        public Ballot acceptedOrCommitted()
-        {
-            return null;
-        }
-
-        @Override
-        public PartialTxn partialTxn()
-        {
-            return null;
-        }
-
-        @Nullable
-        @Override
-        public PartialDeps partialDeps()
-        {
-            return null;
-        }
-
-        @Override
-        public Command updateAttributes(CommonAttributes attrs, Ballot promised)
-        {
-            return null;
-        }
-
-        @Override
-        public Command updateParticipants(StoreParticipants participants)
+        public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
             return null;
         }

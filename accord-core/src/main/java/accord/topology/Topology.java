@@ -35,10 +35,10 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
-import accord.api.RoutingKey;
 import accord.local.Node.Id;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
+import accord.primitives.RoutableKey;
 import accord.primitives.Routables;
 import accord.primitives.Unseekables;
 import accord.utils.ArrayBuffers;
@@ -250,7 +250,7 @@ public class Topology
     }
 
     // TODO (low priority, efficiency): optimised HomeKey concept containing the Key, Shard and Topology to avoid lookups when topology hasn't changed
-    public Shard forKey(RoutingKey key)
+    public Shard forKey(RoutableKey key)
     {
         int i = subsetOfRanges.indexOf(key);
         if (i < 0)
@@ -258,7 +258,7 @@ public class Topology
         return shards[supersetIndexes[i]];
     }
 
-    public int indexForKey(RoutingKey key)
+    public int indexForKey(RoutableKey key)
     {
         return subsetOfRanges.indexOf(key);
     }
@@ -272,6 +272,11 @@ public class Topology
     public Topology select(Routables<?> select)
     {
         return select(select, false);
+    }
+
+    public Topology selectIfExists(Routables<?> select)
+    {
+        return select(select, true);
     }
 
     public Topology select(Routables<?> select, boolean permitMissing)
@@ -401,9 +406,9 @@ public class Topology
         }
     }
 
-    public <T> T foldl(Unseekables<?> select, IndexedBiFunction<Shard, T, T> function, T accumulator)
+    public <T> T foldl(Routables<?> select, IndexedBiFunction<Shard, T, T> function, T accumulator)
     {
-        Unseekables<?> as = select;
+        Routables<?> as = select;
         Ranges bs = subsetOfRanges;
         int ai = 0, bi = 0;
 

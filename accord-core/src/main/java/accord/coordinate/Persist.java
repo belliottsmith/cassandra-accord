@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import accord.api.Result;
 import accord.coordinate.tracking.QuorumTracker;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Apply;
@@ -34,6 +35,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 
 import static accord.coordinate.tracking.RequestStatus.Success;
@@ -68,6 +70,7 @@ public abstract class Persist implements Callback<ApplyReply>
         this.route = route;
         this.topologies = all;
         this.tracker = new QuorumTracker(all);
+        Invariants.checkState((writes != null) == txnId.is(Txn.Kind.Write), "%s: writes %s", txnId, writes);
     }
 
     @Override
@@ -100,9 +103,10 @@ public abstract class Persist implements Callback<ApplyReply>
     }
 
     @Override
-    public void onCallbackFailure(Id from, Throwable failure)
+    public boolean onCallbackFailure(Id from, Throwable failure)
     {
         // TODO (expected): handle exception
+        return false;
     }
 
     public void start(Apply.Factory factory, Apply.Kind kind, Topologies all, Writes writes, Result result)
@@ -116,7 +120,8 @@ public abstract class Persist implements Callback<ApplyReply>
         }
         else
         {
-            node.send(contact, to -> factory.create(kind, to, all, txnId, sendTo, txn, executeAt, stableDeps, writes, result, route), this);
+            CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
+            node.send(contact, to -> factory.create(kind, to, all, txnId, sendTo, txn, executeAt, stableDeps, writes, result, route), commandStore, this);
         }
     }
 }

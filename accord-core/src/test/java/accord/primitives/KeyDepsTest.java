@@ -160,28 +160,26 @@ public class KeyDepsTest
             {
                 RoutingKeys withoutKeys = RoutingKeys.of(key);
                 RoutingKeys expectedKeys = (RoutingKeys) deps.test.keys.without(withoutKeys);
-                accord.primitives.KeyDeps without = deps.test.without(deps.test.intersecting(expectedKeys));
+                accord.primitives.KeyDeps without = deps.test.without(deps.test.intersecting(withoutKeys));
                 Assertions.assertEquals(expectedKeys, without.keys());
 
                 // all other keys are fine?
                 for (RoutingKey otherKey : expectedKeys)
-                    Assertions.assertEquals(deps.test.txnIds(key), without.txnIds(key), "txnIds(" + otherKey + ")");
+                    Assertions.assertEquals(deps.test.txnIds(otherKey), without.txnIds(otherKey), "txnIds(" + otherKey + ") without " + key);
 
                 // check each TxnId
                 for (TxnId txnId : deps.test.txnIds())
                 {
                     RoutingKeys expected = (RoutingKeys) deps.test.participatingKeys(txnId).without(withoutKeys);
-                    Assertions.assertEquals(expected, get(without, key), () -> "TxnId " + txnId + " is expected to be removed for key " + key);
+                    Assertions.assertEquals(expected, without.participatingKeys(txnId), () -> "TxnId " + txnId + " is expected to be removed for key " + key);
                 }
             }
         });
     }
 
-    private static List<TxnId> get(accord.primitives.KeyDeps deps, RoutingKey key)
+    private static RoutingKeys get(accord.primitives.KeyDeps deps, TxnId txnId)
     {
-        List<TxnId> ids = new ArrayList<>();
-        deps.forEach(key, (id, i) -> ids.add(id));
-        return ids;
+        return deps.participatingKeys(txnId);
     }
 
     @Test

@@ -149,6 +149,11 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 super(fn);
             }
 
+            private DelayedTask(Callable<T> fn, Pending origin)
+            {
+                super(fn, origin);
+            }
+
             public DelayedCommandStore parent()
             {
                 return DelayedCommandStore.this;
@@ -229,13 +234,19 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         public void onRead(Command current)
         {
-            cacheLoading.validate(this, current);
+            cacheLoading.validateRead(this, current);
+        }
+
+        @Override
+        public void onWrite(Command current)
+        {
+            cacheLoading.validateWrite(this, current);
         }
 
         @Override
         public void onRead(CommandsForKey current)
         {
-            cacheLoading.validate(this, current);
+            cacheLoading.validateRead(this, current);
         }
 
         @Override
@@ -258,19 +269,31 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         public AsyncChain<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
-            return submit(context, i -> { consumer.accept(i); return null; });
+            return submit(newTask(context, i -> { consumer.accept(i); return null; }));
         }
 
         @Override
         public <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> function)
         {
-            return submit(() -> executeInContext(this, context, function));
+            return submit(newTask(context, function));
         }
 
         @Override
         public <T> AsyncChain<T> submit(Callable<T> fn)
         {
-            Task<T> task = new DelayedTask<>(fn);
+            return submit(new DelayedTask<>(fn));
+        }
+
+        private <T> DelayedTask<T> newTask(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        {
+            Pending origin = Pending.Global.activeOrigin();
+            if (RecurringPendingRunnable.isRecurring(origin) && context.primaryTxnId() != null && !context.primaryTxnId().isSystemTxn())
+                origin = null;
+            return new DelayedTask<>(() -> executeInContext(this, context, function), origin);
+        }
+
+        private <T> AsyncChain<T> submit(DelayedTask<T> task)
+        {
             if (Invariants.testParanoia(LINEAR, LINEAR, HIGH))
             {
                 return AsyncChains.detectLeak(agent::onUncaughtException, () -> {
@@ -294,12 +317,17 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                         task.begin(callback);
                         return () -> {
                             if (pending.peek() != task)
+                            {
                                 pending.remove(task);
+                                task.cancel(false);
+                            }
                         };
                     }
                 };
             }
         }
+
+
 
         private void runNextTask()
         {
@@ -368,7 +396,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 Command before = safe.original();
                 Command after = safe.current();
                 commandStore.journal.saveCommand(commandStore.id(), new CommandUpdate(before, after), () -> {});
-                commandStore.onRead(safe.current());
+                commandStore.onWrite(safe.current());
             });
             super.postExecute();
         }
@@ -417,7 +445,8 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         boolean isLoaded(TxnId txnId);
         boolean isLoaded(RoutingKey key);
         boolean tfkLoaded();
-        void validate(CommandStore commandStore, Command command);
-        void validate(CommandStore commandStore, CommandsForKey cfk);
+        void validateRead(CommandStore commandStore, Command command);
+        void validateWrite(CommandStore commandStore, Command command);
+        void validateRead(CommandStore commandStore, CommandsForKey cfk);
     }
 }

@@ -40,4 +40,5 @@ public abstract class PreAcceptTracker<ST extends ShardTracker> extends Abstract
     public abstract RequestStatus recordSuccess(Node.Id from, boolean withFastPathTimestamp);
     public abstract RequestStatus recordDelayed(Node.Id from);
     public abstract boolean hasFastPathAccepted();
+    public abstract boolean hasMediumPathAccepted();
 }

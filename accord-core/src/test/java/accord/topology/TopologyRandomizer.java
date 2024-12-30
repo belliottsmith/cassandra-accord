@@ -154,8 +154,8 @@ public class TopologyRandomizer
 
         Hash newBound = PrefixedIntHashKey.forHash(minBound.prefix, minBound.hash + random.nextInt(maxBound.hash - minBound.hash));
 
-        shards[idx] = new Shard(PrefixedIntHashKey.range((Hash)leftRange.start(), newBound), left.nodes, left.fastPathElectorate, left.joining);
-        shards[idx+1] = new Shard(PrefixedIntHashKey.range(newBound, (Hash)rightRange.end()), right.nodes, right.fastPathElectorate, right.joining);
+        shards[idx] = Shard.create(PrefixedIntHashKey.range((Hash)leftRange.start(), newBound), left.nodes, left.notInFastPath, left.joining);
+        shards[idx+1] = Shard.create(PrefixedIntHashKey.range(newBound, (Hash)rightRange.end()), right.nodes, right.notInFastPath, right.joining);
 //        logger.debug("Updated boundary on {} & {} {} {} to {} {}", idx, idx + 1, left, right,
 //                     shards[idx].toString(true), shards[idx + 1].toString(true));
 
@@ -182,8 +182,8 @@ public class TopologyRandomizer
         Shard[] result = new Shard[shards.length + 1];
         System.arraycopy(shards, 0, result, 0, idx);
         System.arraycopy(shards, idx, result, idx + 1, shards.length - idx);
-        result[idx] = new Shard(PrefixedIntHashKey.range(minBound, newBound), split.nodes, split.fastPathElectorate, split.joining);
-        result[idx+1] = new Shard(PrefixedIntHashKey.range(newBound, maxBound), split.nodes, split.fastPathElectorate, split.joining);
+        result[idx] = new Shard(PrefixedIntHashKey.range(minBound, newBound), split.nodes, split.notInFastPath, split.joining, split.pendingRemoval);
+        result[idx+1] = new Shard(PrefixedIntHashKey.range(newBound, maxBound), split.nodes, split.notInFastPath, split.joining, split.pendingRemoval);
         logger.debug("Split boundary on {} & {} {} to {} {}", idx, idx + 1, split,
                      result[idx].toString(true), result[idx + 1].toString(true));
 
@@ -223,7 +223,7 @@ public class TopologyRandomizer
         Set<Id> joining = new TreeSet<>();
         joining.addAll(left.joining);
         joining.addAll(right.joining);
-        result[idx] = new Shard(range, nodes, newFastPath(nodes, random), joining);
+        result[idx] = Shard.create(range, nodes, newFastPath(nodes, random), joining);
         logger.debug("Merging at {} & {} {} {} to {}", idx, idx + 1, left, right,
                      shards[idx].toString(true));
         return result;
@@ -276,8 +276,8 @@ public class TopologyRandomizer
         nodesRight.add(toRight);
 
         Shard[] newShards = shards.clone();
-        newShards[idxLeft] = new Shard(shardLeft.range, SortedArrayList.copyUnsorted(nodesLeft, Id[]::new), newFastPath(nodesLeft, random), Sets.intersection(joining, new HashSet<>(nodesLeft)));
-        newShards[idxRight] = new Shard(shardRight.range, SortedArrayList.copyUnsorted(nodesRight, Id[]::new), newFastPath(nodesRight, random), Sets.intersection(joining, new HashSet<>(nodesRight)));
+        newShards[idxLeft] = Shard.create(shardLeft.range, SortedArrayList.copyUnsorted(nodesLeft, Id[]::new), newFastPath(nodesLeft, random), Sets.intersection(joining, new HashSet<>(nodesLeft)));
+        newShards[idxRight] = Shard.create(shardRight.range, SortedArrayList.copyUnsorted(nodesRight, Id[]::new), newFastPath(nodesRight, random), Sets.intersection(joining, new HashSet<>(nodesRight)));
         logger.debug("updated membership on {} & {} {} {} to {} {}",
                     idxLeft, idxRight,
                     shardLeft.toString(true), shardRight.toString(true),
@@ -309,7 +309,7 @@ public class TopologyRandomizer
         Shard[] shards = state.shards;
         int idx = random.nextInt(shards.length);
         Shard shard = shards[idx];
-        shards[idx] = new Shard(shard.range, shard.nodes, newFastPath(shard.nodes, random), shard.joining);
+        shards[idx] = Shard.create(shard.range, shard.nodes, newFastPath(shard.nodes, random), shard.joining);
 //        logger.debug("Updated fast path on {} {} to {}", idx, shard.toString(true), shards[idx].toString(true));
         return shards;
     }
@@ -362,7 +362,7 @@ public class TopologyRandomizer
             Range range = ranges[i];
             SortedArrayList<Id> replicas = select(nodes, rf, random);
             Set<Id> fastPath = newFastPath(replicas, random);
-            result.add(new Shard(range, replicas, fastPath, Sets.intersection(joining, new HashSet<>(replicas))));
+            result.add(Shard.create(range, replicas, fastPath, Sets.intersection(joining, new HashSet<>(replicas))));
         }
         return result.toArray(EMPTY_SHARDS);
     }

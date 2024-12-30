@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
@@ -34,10 +35,13 @@ import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
 import accord.utils.TriFunction;
+import accord.utils.UnhandledEnum;
 
 import static accord.primitives.Known.KnownDeps.DepsCommitted;
+import static accord.primitives.Known.KnownDeps.DepsErased;
+import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
-import static accord.primitives.Known.KnownDeps.DepsUnknown;
+import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
 
 public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 {
@@ -80,7 +84,10 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         // the second parameter will be used only for merging any localDeps
         static <T extends AbstractEntry> T reduce(T a, T b, BiFunction<T, T, T> merge)
         {
-            int c = a.known.compareTo(b.known);
+            if (a.known == DepsErased || b.known == DepsErased)
+                return a.known.compareTo(b.known) >= 0 ? a : b;
+
+            int c = a.known.phase.compareTo(b.known.phase);
             if (c == 0 && a.known.phase.tieBreakWithBallot) c = a.ballot.compareTo(b.ballot);
             if (c < 0)
             {
@@ -228,13 +235,13 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         return merge.mergeProposal();
     }
 
-    // WARNING:
-    public static <T> MergedCommitResult mergeCommit(KnownDeps atLeast, TxnId txnId, Timestamp executeAt, List<T> list, Timestamp localDepsComputedUntil, Function<T, LatestDeps> getter)
+    public static <T> MergedCommitResult mergeCommit(KnownDeps atLeast, Timestamp executeAt, List<T> list, Timestamp localDepsComputedUntil, Function<T, LatestDeps> getter)
     {
         Invariants.checkState(atLeast.compareTo(DepsCommitted) >= 0 || executeAt.compareTo(localDepsComputedUntil) <= 0);
         // merge merge merge
         Merge merge = merge(list, getter);
-        return merge.mergeForCommitOrStable(atLeast);
+        return merge.mergeForCommitOrStable(atLeast == DepsProposedFixed ? test -> test.compareTo(DepsKnown) >= 0 || test == DepsProposedFixed
+                                                                         : test -> test.compareTo(atLeast) >= 0);
     }
 
     private static <T> Merge merge(List<T> list, Function<T, LatestDeps> getter)
@@ -273,8 +280,8 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
             static MergeEntry reduce(MergeEntry a, MergeEntry b)
             {
-                return reduce(a, b, (v1, v2) -> new MergeEntry(a.known, a.ballot, a.coordinatedDeps,
-                                                               ImmutableList.<Deps>builder().addAll(a.merge).addAll(b.merge).build()));
+                return reduce(a, b, (v1, v2) -> new MergeEntry(v1.known, v1.ballot, v1.coordinatedDeps,
+                                                               ImmutableList.<Deps>builder().addAll(v1.merge).addAll(v2.merge).build()));
             }
         }
 
@@ -322,15 +329,15 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             return new Deps(keyDeps, rangeDeps, directKeyDeps);
         }
 
-        MergedCommitResult mergeForCommitOrStable(KnownDeps atLeast)
+        MergedCommitResult mergeForCommitOrStable(Predicate<KnownDeps> atLeast)
         {
             if (size() == 0)
                 return new MergedCommitResult(Deps.NONE, Ranges.EMPTY);
 
-            List<Range> sufficientFor = new ArrayList<>();
+            SuccessCollector sufficientFor = new SuccessCollector(true);
             KeyDeps keyDeps =  KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.keyDeps.slice(r)));
-            KeyDeps directKeyDeps =  KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.directKeyDeps.slice(r)));
-            RangeDeps rangeDeps =  RangeDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.rangeDeps.slice(r)));
+            KeyDeps directKeyDeps = KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.directKeyDeps.slice(r)));
+            RangeDeps rangeDeps = RangeDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.rangeDeps.slice(r)));
             return new MergedCommitResult(new Deps(keyDeps, rangeDeps, directKeyDeps), Ranges.of(sufficientFor.toArray(new Range[0])));
         }
 
@@ -347,25 +354,67 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         {
             switch (e.known)
             {
-                default: throw new AssertionError("Unhandled KnownDeps: " + e.known);
-                case DepsProposed: return Stream.of(getter.apply(e.coordinatedDeps, slice));
-                case DepsUnknown: return e.merge.stream().map(d -> getter.apply(d, slice));
+                default: throw new UnhandledEnum(e.known);
+                case DepsProposedFixed: case DepsProposed: return Stream.of(getter.apply(e.coordinatedDeps, slice));
+                case DepsUnknown: case DepsFromCoordinator: return e.merge.stream().map(d -> getter.apply(d, slice));
                 case DepsKnown: case DepsErased: case NoDeps: case DepsCommitted:
                     throw new AssertionError("Invalid KnownDeps for proposal: " + e.known);
             }
         }
 
-        private static <V> TriFunction<Ranges, MergeEntry, BiFunction<Deps, Ranges, V>, Stream<V>> forCommitOrStable(KnownDeps atLeast, List<Range> success)
+        static class SuccessCollector extends ArrayList<Range>
+        {
+            final boolean hasSeenCommit;
+            int hasMedium = 0;
+
+            SuccessCollector(boolean hasSeenCommit)
+            {
+                this.hasSeenCommit = hasSeenCommit;
+            }
+
+            void add(Range range, KnownDeps known)
+            {
+                add(range);
+                if (!hasSeenCommit)
+                {
+                    switch (known)
+                    {
+                        default: throw new UnhandledEnum(known);
+                        case DepsUnknown:
+                        case DepsFromCoordinator:
+                        case DepsProposed:
+                        case DepsCommitted:
+                            Invariants.checkState(hasMedium <= 0, "Highest ballot for %s had %s, but another range had DepsProposedFixed", range, known);
+                            hasMedium = -1;
+                            break;
+                        case DepsProposedFixed:
+                            Invariants.checkState(hasMedium >= 0, "Highest ballot for %s had DepsProposedFixed, but another range had a slow path or no proposal", range);
+                            hasMedium = 1;
+                            break;
+                        case DepsKnown:
+                            break;
+                    }
+                }
+            }
+        }
+
+        private static <V> TriFunction<Ranges, MergeEntry, BiFunction<Deps, Ranges, V>, Stream<V>> forCommitOrStable(Predicate<KnownDeps> test, SuccessCollector success)
         {
             return (Ranges ranges, MergeEntry e, BiFunction<Deps, Ranges, V> getter) -> {
+                if (e.known == DepsErased || !test.test(e.known))
+                    return Stream.empty();
+
+                success.add(ranges.get(0), e.known);
                 switch (e.known)
                 {
-                    default: throw new AssertionError("Unhandled KnownDeps: " + e.known);
+                    default: throw new UnhandledEnum(e.known);
                     case DepsUnknown:
-                        if (atLeast != DepsUnknown)
-                            return Stream.empty();
-                        success.add(ranges.get(0));
+                    case DepsFromCoordinator:
                         return e.merge.stream().map(d -> getter.apply(d, ranges));
+
+                    case DepsProposedFixed:
+                        return Stream.of(getter.apply(e.coordinatedDeps, ranges));
+
                     case DepsProposed:
                         // we may encounter DepsProposed for any interrupted commit. This might be a fast-path commit that
                         // was partially recovered by a prior recovery coordinator, or a slow-path commit that was interrupted.
@@ -373,17 +422,12 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                         // However in the latter case to skip re-proposing for this shard  IFF txnId == executeAt we combine the coordinated/accepted deps
                         // with the computed deps from each response, as this is equivalent to the committed deps the prior coordinator
                         // would have committed using the accept responses.
-                        if (atLeast.compareTo(DepsProposed) > 0)
-                            return Stream.empty();
-                        success.add(ranges.get(0));
                         return Stream.concat(Stream.of(getter.apply(e.coordinatedDeps, ranges)), e.merge.stream().map(d -> getter.apply(d, ranges)));
+
                     case DepsCommitted:
-                        if (atLeast.compareTo(DepsCommitted) > 0)
-                            return Stream.empty();
                     case DepsKnown:
-                        success.add(ranges.get(0));
                         return Stream.of(getter.apply(e.coordinatedDeps, ranges));
-                    case DepsErased: case NoDeps:
+                    case NoDeps:
                     throw new AssertionError("Invalid KnownDeps for commit: " + e.known);
                 }
             };

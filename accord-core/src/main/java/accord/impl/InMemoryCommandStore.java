@@ -88,7 +88,7 @@ import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
 import static accord.local.KeyHistory.ASYNC;
-import static accord.primitives.Known.KnownRoute.Maybe;
+import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.local.KeyHistory.SYNC;
@@ -212,7 +212,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                             if (intersectingParticipants.isEmpty())
                                 continue;
 
-                            if (!cur.txnId().witnesses().test(prev.txnId()) && !cur.partialDeps().contains(prev.txnId()))
+                            if (!cur.txnId().witnesses(prev.txnId()) && !cur.partialDeps().contains(prev.txnId()))
                                 continue;
 
                             Participants<?> depParticipants = cur.partialDeps().participants(prev.txnId());
@@ -329,6 +329,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     }
 
     protected void onRead(Command current) {}
+    protected void onWrite(Command current) {}
     protected void onRead(CommandsForKey current) {}
 
     protected final InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges)
@@ -1182,14 +1183,16 @@ public abstract class InMemoryCommandStore extends CommandStore
             try
             {
                 PreLoadContext context = context(command, SYNC);
-                commandStore.executeInContext(commandStore,
-                                              context,
-                                              safeStore -> {
-                                                  applyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
-                                                      unsafeApplyWrites(safeStore, safeCommand, cmd);
+                commandStore.unsafeRunIn(() -> {
+                    commandStore.executeInContext(commandStore,
+                                                  context,
+                                                  safeStore -> {
+                                                      applyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
+                                                          unsafeApplyWrites(safeStore, safeCommand, cmd);
+                                                      });
+                                                      return null;
                                                   });
-                                                  return null;
-                                              });
+                });
             }
             catch (Throwable t)
             {
@@ -1222,7 +1225,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         TreeMap<TxnId, RangeCommand> rangeCommands = this.rangeCommands;
         rangeDeps.forEachUniqueTxnId(allRanges, null, (ignore, txnId) -> {
             GlobalCommand global = commands.get(txnId);
-            if (global != null && global.value().known().route != Maybe)
+            if (global != null && global.value().known().has(MaybeRoute))
                 return;
 
             Ranges ranges = rangeDeps.ranges(txnId);

@@ -18,10 +18,8 @@
 
 package accord.coordinate;
 
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.PreAcceptTracker;
@@ -38,26 +36,28 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.utils.SortedListMap;
 import accord.utils.WrappableException;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
+import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.primitives.Timestamp.mergeMax;
-import static accord.utils.Functions.foldl;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
  * If we are preempted by a recovery coordinator, we abort and let them complete (and notify us about the execution result)
  *
  * TODO (desired, testing): dedicated burn test to validate outcomes
+ * TODO (expected):
  */
 abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, PreAcceptReply>
 {
     final PreAcceptTracker<?> tracker;
     // TODO (expected): this can be cleared after preaccept
-    // TODO (expected): back by SortedListMap; must handle additional preaccepts (but this is no longer ordinarily enabled)
-    private final List<PreAcceptOk> oks;
+    private final SortedListMap<Id, PreAcceptOk> oks;
     final Txn txn;
+    boolean fastPathEnabled = true;
 
     CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route)
     {
@@ -69,27 +69,24 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
         this(node, txnId, txn, route, topologies, FastPathTracker::new);
     }
 
-    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, Function<Topologies, PreAcceptTracker<?>> trackerFactory)
+    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiFunction<Topologies, TxnId, PreAcceptTracker<?>> trackerFactory)
     {
         super(node, route, txnId, topologies);
-        this.tracker = trackerFactory.apply(topologies);
-        this.oks = new ArrayList<>(topologies.nodes().size());
+        this.tracker = trackerFactory.apply(topologies, txnId);
+        this.oks = new SortedListMap<>(topologies.nodes(), PreAcceptOk[]::new);
         this.txn = txn;
     }
 
     void contact(Collection<Id> nodes, Topologies topologies, Callback<PreAcceptReply> callback)
     {
-        // TODO (desired, efficiency): consider sending only to electorate of most recent topology (as only these PreAccept votes matter)
-        // note that we must send to all replicas of old topology, as electorate may not be reachable
-        CommandStore commandStore = CommandStore.maybeCurrent();
-        if (commandStore == null) commandStore = node.commandStores().select(route.homeKey());
-        node.send(nodes, to -> new PreAccept(to, topologies, txnId, txn, route), commandStore, callback);
+        CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
+        node.send(nodes, to -> new PreAccept(to, topologies, txnId, txn, null, false, route), commandStore, callback);
     }
 
     @Override
     long executeAtEpoch()
     {
-        return foldl(oks, (ok, prev) -> ok.witnessedAt.epoch() > prev.epoch() ? ok.witnessedAt : prev, Timestamp.NONE).epoch();
+        return oks.foldlNonNullValues((ok, prev) -> ok.witnessedAt.epoch() > prev.epoch() ? ok.witnessedAt : prev, Timestamp.NONE).epoch();
     }
 
     @Override
@@ -119,9 +116,9 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
         else
         {
             PreAcceptOk ok = (PreAcceptOk) reply;
-            oks.add(ok);
+            oks.put(from, ok);
 
-            boolean fastPath = ok.witnessedAt.compareTo(txnId) == 0;
+            boolean fastPath = ok.witnessedAt.compareTo(txnId) == 0 && fastPathEnabled;
             if (tracker.recordSuccess(from, fastPath) == Success)
                 onPreAcceptedOrNewEpoch();
         }
@@ -135,24 +132,13 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     }
 
     @Override
-    boolean onExtraSuccessInternal(Id from, PreAcceptReply reply)
-    {
-        if (!reply.isOk())
-            return false;
-
-        PreAcceptOk ok = (PreAcceptOk) reply;
-        oks.add(ok);
-        return true;
-    }
-
-    @Override
     void onNewEpochTopologyMismatch(TopologyMismatch mismatch)
     {
         /**
          * We cannot execute the transaction because the execution epoch's topology no longer contains all of the
          * participating keys/ranges, so we propose that the transaction is invalidated in its coordination epoch
          */
-        Propose.Invalidate.proposeInvalidate(node, new Ballot(node.uniqueNow()), txnId, route.homeKey(), (outcome, failure) -> {
+        proposeInvalidate(node, new Ballot(node.uniqueNow()), txnId, route.homeKey(), (outcome, failure) -> {
             if (failure != null)
                 mismatch.addSuppressed(failure);
             accept(null, mismatch);
@@ -163,11 +149,11 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     void onPreAccepted(Topologies topologies)
     {
         // TODO (expected): we do not have to take max here if we have enough fast path votes (this may unnecessarily force us onto the slow path)
-        Timestamp executeAt = foldl(oks, (ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
+        Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
         node.withEpoch(executeAt.epoch(), this, t -> WrappableException.wrap(t), () -> {
             onPreAccepted(topologies, executeAt, oks);
         });
     }
 
-    abstract void onPreAccepted(Topologies topologies, Timestamp executeAt, List<PreAcceptOk> oks);
+    abstract void onPreAccepted(Topologies topologies, Timestamp executeAt, SortedListMap<Id, PreAcceptOk> oks);
 }

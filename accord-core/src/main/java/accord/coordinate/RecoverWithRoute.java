@@ -61,6 +61,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
     final @Nullable Ballot promisedBallot; // if non-null, has already been promised by some shard
     final BiConsumer<Outcome, Throwable> callback;
     final Status witnessedByInvalidation;
+    // TODO (required): we don't use this on all paths, and should at least make sure we don't trigger any Invariant failures e.g. "Fetch was successful for all keys, but the WaitingState has not been cleared"
     final long reportLowEpoch, reportHighEpoch;
 
     private RecoverWithRoute(Node node, Topologies topologies, @Nullable Ballot promisedBallot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
@@ -132,7 +133,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         if (!sufficientTo.isDefinitionKnown())
             return false;
 
-        if (sufficientTo.outcome.isInvalidated())
+        if (sufficientTo.outcome().isInvalidated())
             return true;
 
         Invariants.checkState(full.partialTxn.covers(route));
@@ -152,21 +153,21 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         Known known = full.knownFor(txnId, route, route);
 
         // TODO (required): audit this logic, and centralise with e.g. FetchData inferences
-        switch (known.outcome)
+        switch (known.outcome())
         {
             default: throw new AssertionError();
             case Unknown:
-                if (known.definition.isKnown())
+                if (known.definition().isKnown())
                 {
                     Txn txn = full.partialTxn.reconstitute(route);
-                    Recover.recover(node, txnId, txn, route, callback);
+                    Recover.recover(node, txnId, txn, route, reportLowEpoch, reportHighEpoch, callback);
                 }
-                else if (!known.definition.isOrWasKnown())
+                else if (!known.definition().isOrWasKnown())
                 {
                     // TODO (required): this logic should be put in Infer, alongside any similar inferences in Recover
                     if (witnessedByInvalidation != null && witnessedByInvalidation.compareTo(Status.PreAccepted) > 0)
                         throw illegalState("We previously invalidated, finding a status that should be recoverable");
-                    Invalidate.invalidate(node, txnId, route, witnessedByInvalidation != null, callback);
+                    Invalidate.invalidate(node, txnId, route, witnessedByInvalidation != null, reportLowEpoch, reportHighEpoch, callback);
                 }
                 else
                 {
@@ -194,9 +195,9 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             else
                             {
                                 known = full.knownFor(txnId, trySendTo, trySendTo);
-                                Invariants.checkState(known.executeAt.isDecidedAndKnownToExecute() && known.outcome == Apply);
+                                Invariants.checkState(known.executeAt().isDecidedAndKnownToExecute() && known.outcome() == Apply);
 
-                                if (known.deps != DepsKnown)
+                                if (!known.is(DepsKnown))
                                 {
                                     Invariants.checkState(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
                                     Participants<?> collect = full.map.knownFor(Known.Nothing.with(DepsKnown), route);
@@ -208,7 +209,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                                             return;
                                         }
 
-                                        LatestDeps.MergedCommitResult mergedCommit = LatestDeps.mergeCommit(DepsUnknown, txnId, full.executeAt, deps, full.executeAt, i -> i);
+                                        LatestDeps.MergedCommitResult mergedCommit = LatestDeps.mergeCommit(DepsUnknown, full.executeAt, deps, full.executeAt, i -> i);
                                         Route<?> canSendTo = trySendTo.without(collect).with((Participants) collect.slice(mergedCommit.sufficientFor, Minimal));
                                         Deps stableDeps = full.stableDeps.with(mergedCommit.deps).intersecting(canSendTo);
                                         node.coordinationAdapter(txnId, Recovery).persist(node, null, route, canSendTo, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, null);
@@ -239,7 +240,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 }
 
                 Txn txn = full.partialTxn.reconstitute(route);
-                if (known.executeAt.isDecidedAndKnownToExecute() && known.deps.hasDecidedDeps() && known.outcome == Apply)
+                if (known.executeAt().isDecidedAndKnownToExecute() && known.is(DepsKnown) && known.outcome() == Apply)
                 {
                     Deps deps = full.stableDeps.reconstitute(route());
                     node.withEpoch(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
@@ -253,7 +254,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 }
                 break;
 
-            case Invalidated:
+            case Abort:
                 if (witnessedByInvalidation != null && witnessedByInvalidation.hasBeen(Status.PreCommitted))
                     throw illegalState("We previously invalidated, finding a status that should be recoverable");
 

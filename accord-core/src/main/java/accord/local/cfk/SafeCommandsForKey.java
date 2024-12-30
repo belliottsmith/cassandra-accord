@@ -49,7 +49,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     void updatePruned(SafeCommandStore safeStore, Command nextCommand, NotifySink notifySink)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.prunedCallback(nextCommand), notifySink);
+        update(safeStore, nextCommand, prevCfk, prevCfk.maybePrunedCallback(nextCommand), notifySink);
     }
 
     public void update(SafeCommandStore safeStore, Command nextCommand)

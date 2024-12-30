@@ -19,6 +19,7 @@
 package accord.coordinate.tracking;
 
 import accord.primitives.Participants;
+import accord.primitives.TxnId;
 import accord.utils.RandomSource;
 import accord.coordinate.tracking.InvalidationTracker.InvalidationShardTracker;
 import accord.local.Node;
@@ -34,7 +35,7 @@ public class InvalidationTrackerReconciler extends TrackerReconciler<Invalidatio
     final Participants<?> participants;
     InvalidationTrackerReconciler(RandomSource random, Topologies topologies)
     {
-        this(random, new InvalidationTracker(topologies));
+        this(random, new InvalidationTracker(topologies, TxnId.NONE));
     }
 
     private InvalidationTrackerReconciler(RandomSource random, InvalidationTracker tracker)

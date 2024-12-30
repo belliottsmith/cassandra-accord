@@ -18,8 +18,10 @@
 
 package accord.impl.list;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import accord.api.Result;
@@ -174,9 +176,14 @@ public class ListRequest implements Request
                     node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
                     node.scheduler().once(() -> checkOnResult(null, id, 0, null), 5L, TimeUnit.MINUTES);
                 }
+                else if (fail instanceof CancellationException)
+                {
+                    node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
+                    node.scheduler().once(() -> checkOnResult(null, id, 0, null), 5L, TimeUnit.MINUTES);
+                }
                 else
                 {
-                    node.agent().onUncaughtException(fail);
+                    node.reply(client, replyContext, ListResult.lost(client, ((Packet)replyContext).requestId, id), null);
                 }
             }
             else if (success != null)
@@ -256,14 +263,16 @@ public class ListRequest implements Request
 
     private final String description;
     private final Function<Node, Txn> gen;
+    private final BiFunction<Node, Txn, TxnId> txnIdGen;
     private final MessageListener listener;
     private transient Txn txn;
     private transient TxnId id;
 
-    public ListRequest(String description, Function<Node, Txn> gen, MessageListener listener)
+    public ListRequest(String description, Function<Node, Txn> gen, BiFunction<Node, Txn, TxnId> txnIdGen, MessageListener listener)
     {
         this.description = description;
         this.gen = gen;
+        this.txnIdGen = txnIdGen;
         this.listener = listener;
     }
 
@@ -273,7 +282,7 @@ public class ListRequest implements Request
         if (id != null)
             throw illegalState("Called process multiple times");
         txn = gen.apply(node);
-        id = node.nextTxnId(txn.kind(), txn.keys().domain());
+        id = txnIdGen.apply(node, txn);
         listener.onClientAction(MessageListener.ClientAction.SUBMIT, node.id(), id, txn);
         node.coordinate(id, txn).addCallback(new ResultCallback(node, client, replyContext, listener, id, txn));
     }

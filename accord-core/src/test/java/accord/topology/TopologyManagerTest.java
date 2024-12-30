@@ -131,8 +131,8 @@ public class TopologyManagerTest
                                       shard(range(100, 200), idList(1, 2, 3), idSet(1, 2)),
                                       shard(range(200, 300), idList(4, 5, 6), idSet(4, 5)));
         Topology topology2 = topology(2,
-                                      shard(range(100, 200), idList(1, 2, 3), idSet(3, 4)),
-                                      shard(range(200, 300), idList(4, 5, 6), idSet(4, 5)));
+                                      shard(range(100, 200), idList(1, 2, 3), idSet(2, 3)),
+                                      shard(range(200, 300), idList(4, 5, 6), idSet(5, 6)));
 
         TopologyManager service = testTopologyManager(SUPPLIER, ID);
         service.onTopologyUpdate(topology1, () -> null);

@@ -21,6 +21,7 @@ package accord.impl.basic;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RunnableFuture;
@@ -28,18 +29,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import accord.local.AgentExecutor;
-import accord.utils.Invariants;
 import accord.utils.async.AsyncResults;
 
 public abstract class TaskExecutorService extends AbstractExecutorService implements AgentExecutor
 {
     public static class Task<T> extends AsyncResults.RunnableResult<T> implements Pending, RunnableFuture<T>
     {
-        final Pending origin = Pending.Global.activeOrigin();
+        final Pending origin;
         public Task(Callable<T> fn)
         {
+            this(fn, Pending.Global.activeOrigin());
+        }
+
+        public Task(Callable<T> fn, Pending origin)
+        {
             super(fn);
-            Invariants.checkState(origin != null);
+            this.origin = origin == null ? this : origin;
         }
 
         public Pending origin()
@@ -50,7 +55,7 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
         @Override
         public boolean cancel(boolean mayInterruptIfRunning)
         {
-            return false;
+            return tryFailure(new CancellationException());
         }
 
         @Override

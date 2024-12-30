@@ -98,7 +98,7 @@ class CoordinateSyncPointTest
 
     private static SyncPoint<Range> awaitApplied(Node node, Range removed)
     {
-        var await = CoordinateSyncPoint.exclusiveSyncPoint(node, new TxnId(1, node.now(), Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, node.id()), Ranges.single(removed))
+        var await = CoordinateSyncPoint.exclusiveSyncPoint(node, new TxnId(1, node.now(), 0, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, node.id()), Ranges.single(removed))
                                        .flatMap(syncPoint ->
                                                         // the test uses an executor that runs everything right away, so this gets called outside the CommandStore
                                                         node.commandStores().forId(0).submit(() -> {

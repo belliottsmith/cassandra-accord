@@ -25,13 +25,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
+import accord.primitives.Deps.DepArrayList;
+import accord.primitives.Deps.DepRelationList;
 import accord.utils.ArrayBuffers;
 import accord.utils.IndexedBiConsumer;
 import accord.utils.IndexedConsumer;
@@ -44,12 +48,12 @@ import accord.utils.RelationMultiMap.MergeAdapter;
 import accord.utils.SearchableRangeList;
 import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.SortedArrayList;
-import accord.utils.SortedList;
 import accord.utils.SymmetricComparator;
 import accord.utils.TriFunction;
 import net.nicoulaj.compilecommand.annotations.DontInline;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
+import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.ObjectBuffers;
 import static accord.utils.ArrayBuffers.cachedInts;
@@ -59,11 +63,11 @@ import static accord.utils.RelationMultiMap.AbstractBuilder;
 import static accord.utils.RelationMultiMap.Adapter;
 import static accord.utils.RelationMultiMap.LinearMerger;
 import static accord.utils.RelationMultiMap.NO_INTS;
-import static accord.utils.RelationMultiMap.SortedRelationList;
 import static accord.utils.RelationMultiMap.endOffset;
 import static accord.utils.RelationMultiMap.invert;
 import static accord.utils.RelationMultiMap.linearUnion;
 import static accord.utils.RelationMultiMap.newIterator;
+import static accord.utils.RelationMultiMap.remove;
 import static accord.utils.RelationMultiMap.startOffset;
 import static accord.utils.RelationMultiMap.testEquality;
 import static accord.utils.RelationMultiMap.trimUnusedValues;
@@ -645,13 +649,19 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         return linearUnion(
                 this.ranges, this.ranges.length, this.txnIds, this.txnIds.length, this.rangesToTxnIds, this.rangesToTxnIds.length,
                 that.ranges, that.ranges.length, that.txnIds, that.txnIds.length, that.rangesToTxnIds, that.rangesToTxnIds.length,
-                rangeComparator(), TxnId::compareTo, null, null,
+                rangeComparator(), TxnId::compareTo, null, TxnId::addFlags,
                 cachedRanges(), cachedTxnIds(), cachedInts(),
                 (ranges, rangesLength, txnIds, txnIdsLength, out, outLength) ->
                         new RangeDeps(cachedRanges().complete(ranges, rangesLength),
                                 cachedTxnIds().complete(txnIds, txnIdsLength),
                                 cachedInts().complete(out, outLength))
         );
+    }
+
+    public RangeDeps without(Predicate<TxnId> remove)
+    {
+        return remove(this, ranges, txnIds, rangesToTxnIds, remove,
+                      NONE, TxnId[]::new, ranges, RangeDeps::new);
     }
 
     public RangeDeps without(RangeDeps remove)
@@ -684,6 +694,19 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         }
     }
 
+    public RangeDeps markUnstableBefore(TxnId txnId)
+    {
+        int i = indexOf(txnId);
+        if (i < 0) i = -1 - i;
+        if (i == 0)
+            return this;
+
+        TxnId[] newTxnIds = new TxnId[txnIds.length];
+        System.arraycopy(txnIds, i, newTxnIds, i, newTxnIds.length - i);
+        while (--i >= 0) newTxnIds[i] = txnIds[i].addFlag(UNSTABLE);
+        return new RangeDeps(ranges, newTxnIds, rangesToTxnIds, txnIdsToRanges);
+    }
+
     public boolean contains(TxnId txnId)
     {
         return Arrays.binarySearch(txnIds, txnId) >= 0;
@@ -694,7 +717,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         return new SortedArrayList<>(txnIds);
     }
 
-    public SortedRelationList<TxnId> txnIdsForRangeIndex(int rangeIndex)
+    public DepRelationList txnIdsForRangeIndex(int rangeIndex)
     {
         Invariants.checkState(rangeIndex < ranges.length);
         int start = startOffset(ranges, rangesToTxnIds, rangeIndex);
@@ -715,7 +738,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
             buffer[count++] = txnId;
         }
 
-        SortedList<TxnId> build()
+        SortedArrayList<TxnId> build()
         {
             TxnId[] txnIds = cachedTxnIds().completeAndDiscard(buffer, count);
             Arrays.sort(txnIds);
@@ -723,11 +746,11 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         }
     }
 
-    public SortedList<TxnId> computeTxnIds(RoutingKey key)
+    public DepArrayList computeTxnIds(RoutingKey key)
     {
         ListBuilder builder = new ListBuilder();
         forEachUniqueTxnId(key, builder::add);
-        return builder.build();
+        return new DepArrayList(builder.build());
     }
 
     public List<TxnId> computeTxnIds(Range key)
@@ -737,12 +760,12 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         return builder.build();
     }
 
-    private SortedRelationList<TxnId> txnIds(int[] ids, int start, int end)
+    private DepRelationList txnIds(int[] ids, int start, int end)
     {
         if (start == end)
-            return SortedRelationList.EMPTY;
+            return DepRelationList.EMPTY;
 
-        return new SortedRelationList<>(txnIds, ids, start, end);
+        return new DepRelationList(txnIds, ids, start, end);
     }
 
     public TxnId txnId(int i)
@@ -1065,6 +1088,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         @Override public SymmetricComparator<? super Range> keyComparator() { return rangeComparator(); }
         @Override public SymmetricComparator<? super TxnId> valueComparator() { return TxnId::compareTo; }
         @Override public int compareKeys(Range a, Range b) { return a.compareTo(b); }
+        @Override public BiFunction<TxnId, TxnId, TxnId> valueMerger() { return TxnId::addFlags; }
         @Override public int compareValues(TxnId a, TxnId b) { return a.compareTo(b); }
         @Override public ObjectBuffers<Range> cachedKeys() { return ArrayBuffers.cachedRanges(); }
         @Override public ObjectBuffers<TxnId> cachedValues() { return ArrayBuffers.cachedTxnIds(); }
@@ -1077,6 +1101,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         @Override public SymmetricComparator<? super Range> valueComparator() { return rangeComparator(); }
         @Override public int compareKeys(TxnId a, TxnId b) { return a.compareTo(b); }
         @Override public int compareValues(Range a, Range b) { return a.compare(b); }
+        @Override public BiFunction<TxnId, TxnId, TxnId> keyMerger() { return TxnId::addFlags; }
         @Override public ObjectBuffers<TxnId> cachedKeys() { return ArrayBuffers.cachedTxnIds(); }
         @Override public ObjectBuffers<Range> cachedValues() { return ArrayBuffers.cachedRanges(); }
     }

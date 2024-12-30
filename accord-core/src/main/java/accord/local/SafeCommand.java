@@ -18,13 +18,17 @@
 
 package accord.local;
 
+import javax.annotation.Nonnull;
+
 import accord.api.Result;
 import accord.local.Command.Truncated;
 import accord.primitives.Ballot;
+import accord.primitives.PartialDeps;
+import accord.primitives.PartialTxn;
+import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 
@@ -65,7 +69,7 @@ public abstract class SafeCommand
         return update;
     }
 
-     private <C extends Command> C incidentalUpdate(C update)
+    public <C extends Command> C incidentalUpdate(C update)
     {
         if (current() == update)
             return update;
@@ -79,14 +83,6 @@ public abstract class SafeCommand
         return incidentalUpdate(Command.updateWaitingOn(current().asCommitted(), waitingOn));
     }
 
-    public Command updateAttributes(SafeCommandStore safeStore, CommonAttributes attrs)
-    {
-        Command prev = current();
-        Command update = incidentalUpdate(prev.updateAttributes(attrs));
-        safeStore.progressLog().update(safeStore, txnId, prev, update);
-        return update;
-    }
-
     public Command updateParticipants(SafeCommandStore safeStore, StoreParticipants participants)
     {
         Command prev = current();
@@ -98,14 +94,14 @@ public abstract class SafeCommand
         return update;
     }
 
-    public Command.PreAccepted preaccept(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)
+    public Command.PreAccepted preaccept(SafeCommandStore safeStore, SaveStatus saveStatus, StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
     {
-        return update(safeStore, Command.preaccept(current(), attrs, executeAt, ballot));
+        return update(safeStore, Command.preaccept(current(), saveStatus, participants, promised, executeAt, partialTxn, partialDeps));
     }
 
-    public Command.Accepted markDefined(SafeCommandStore safeStore, CommonAttributes attributes, Ballot promised)
+    public Command.Accepted markDefined(SafeCommandStore safeStore, StoreParticipants participants, Ballot promised, PartialTxn partialTxn)
     {
-        return update(safeStore, Command.markDefined(current(), attributes, promised));
+        return update(safeStore, Command.markDefined(current(), participants, promised, partialTxn));
     }
 
     public Command updatePromised(Ballot promised)
@@ -113,26 +109,24 @@ public abstract class SafeCommand
         return incidentalUpdate(current().updatePromised(promised));
     }
 
-    public Command.Accepted accept(SafeCommandStore safeStore, Unseekables<?> keysOrRanges, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)
+    public Command.Accepted accept(SafeCommandStore safeStore, SaveStatus status, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialDeps partialDeps, Ballot acceptedOrCommitted)
     {
-        Command current = current();
-        Command.Accepted updated = Command.accept(current, attrs, executeAt, ballot);
-        return update(safeStore, updated);
+        return update(safeStore, Command.accept(current(), status, participants, promised, executeAt, partialDeps, acceptedOrCommitted));
     }
 
-    public Command acceptInvalidated(SafeCommandStore safeStore, Ballot ballot)
+    public Command notAccept(SafeCommandStore safeStore, Status status, Ballot ballot)
     {
-        return update(safeStore, Command.acceptInvalidated(current(), ballot));
+        return update(safeStore, Command.notAccept(status, current(), ballot));
     }
 
-    public Command.Committed commit(SafeCommandStore safeStore, CommonAttributes attrs, Ballot ballot, Timestamp executeAt)
+    public Command.Committed commit(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
     {
-        return update(safeStore, Command.commit(current(), attrs, ballot, executeAt));
+        return update(safeStore, Command.commit(current(), participants, ballot, executeAt, partialTxn, partialDeps));
     }
 
-    public Command.Committed stable(SafeCommandStore safeStore, CommonAttributes attrs, Ballot ballot, Timestamp executeAt, Command.WaitingOn waitingOn)
+    public Command.Committed stable(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn)
     {
-        return update(safeStore, Command.stable(current(), attrs, ballot, executeAt, waitingOn));
+        return update(safeStore, Command.stable(current(), participants, ballot, executeAt, partialTxn, partialDeps, waitingOn));
     }
 
     public Truncated commitInvalidated(SafeCommandStore safeStore)
@@ -144,9 +138,9 @@ public abstract class SafeCommand
         return update(safeStore, Truncated.invalidated(current));
     }
 
-    public Command precommit(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt)
+    public Command precommit(SafeCommandStore safeStore, Timestamp executeAt)
     {
-        return update(safeStore, Command.precommit(attrs, current(), executeAt));
+        return update(safeStore, Command.precommit(current(), executeAt));
     }
 
     public Command.Committed readyToExecute(SafeCommandStore safeStore)
@@ -154,9 +148,9 @@ public abstract class SafeCommand
         return update(safeStore, Command.readyToExecute(current().asCommitted()));
     }
 
-    public Command.Executed preapplied(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt, Command.WaitingOn waitingOn, Writes writes, Result result)
+    public Command.Executed preapplied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
     {
-        return update(safeStore, Command.preapplied(current(), attrs, executeAt, waitingOn, writes, result));
+        return update(safeStore, Command.preapplied(current(), participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
     }
 
     public Command.Executed applying(SafeCommandStore safeStore)

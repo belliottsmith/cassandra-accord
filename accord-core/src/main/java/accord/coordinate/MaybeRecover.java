@@ -28,6 +28,7 @@ import accord.utils.Invariants;
 import accord.local.Node;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
+import accord.utils.UnhandledEnum;
 
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 
@@ -88,9 +89,9 @@ public class MaybeRecover extends CheckShards<Route<?>>
             Known known = full.maxKnown();
             Route<?> someRoute = full.route;
 
-            switch (known.outcome)
+            switch (known.outcome())
             {
-                default: throw new AssertionError();
+                default: throw new UnhandledEnum(known.outcome());
                 case Unknown:
                     // ErasedOrInvalidated takes Unknown, and so permits invalidation to be initiated.
                     // This might prima facie seem unsafe, as ErasedOrInvalidated might mean the command
@@ -132,9 +133,9 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     callback.accept(full.toProgressToken(), null);
                     break;
 
-                case Invalidated:
+                case Abort:
                     Commit.Invalidate.commitInvalidate(node, txnId, Route.merge(full.route, (Route)route), txnId.epoch());
-                    locallyInvalidateAndCallback(node, txnId, txnId, txnId, someRoute, full.toProgressToken(), callback);
+                    locallyInvalidateAndCallback(node, txnId, txnId.epoch(), txnId.epoch(), someRoute, full.toProgressToken(), callback);
                     break;
             }
         }

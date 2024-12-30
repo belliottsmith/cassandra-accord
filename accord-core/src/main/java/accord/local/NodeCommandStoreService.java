@@ -20,6 +20,7 @@ package accord.local;
 
 import accord.api.Timeouts;
 import accord.primitives.Timestamp;
+import accord.topology.TopologyManager;
 
 public interface NodeCommandStoreService extends TimeService
 {
@@ -29,4 +30,5 @@ public interface NodeCommandStoreService extends TimeService
     DurableBefore durableBefore();
     Timestamp uniqueNow();
     Timestamp uniqueNow(Timestamp atLeast);
+    TopologyManager topology();
 }

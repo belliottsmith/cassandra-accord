@@ -314,7 +314,7 @@ public class RangeDepsTest
 
     private static TxnId id(int i)
     {
-        return new TxnId(1, i, Write, Domain.Key, new Node.Id(1));
+        return new TxnId(1, i, 0, Write, Domain.Key, new Node.Id(1));
     }
 
     private static Range r(int i, int j)

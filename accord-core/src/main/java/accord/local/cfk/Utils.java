@@ -52,12 +52,12 @@ class Utils
             int j = 0;
             for (int i = 0 ; i < additionIndex ; ++i)
             {
-                if (!txn.kind().witnesses(additions[i])) continue;
+                if (!txn.witnesses(additions[i])) continue;
                 j = SortedArrays.exponentialSearch(missing, j, missing.length, additions[i]);
                 if (shouldNotHaveMissing != NO_TXNIDS && Arrays.binarySearch(shouldNotHaveMissing, txn) >= 0) Invariants.checkState(j < 0);
                 else Invariants.checkState(j >= 0);
             }
-            if (curInfo == null && newInfo.compareTo(COMMITTED) < 0 && txn.kind().witnesses(newInfo) && txn.depsKnownBefore().compareTo(newInfo) > 0 && (shouldNotHaveMissing == NO_TXNIDS || Arrays.binarySearch(shouldNotHaveMissing, txn) < 0))
+            if (curInfo == null && newInfo.compareTo(COMMITTED) < 0 && txn.witnesses(newInfo) && txn.depsKnownBefore().compareTo(newInfo) > 0 && (shouldNotHaveMissing == NO_TXNIDS || Arrays.binarySearch(shouldNotHaveMissing, txn) < 0))
                 Invariants.checkState(Arrays.binarySearch(missing, newInfo) >= 0);
         }
     }
@@ -80,7 +80,7 @@ class Utils
             {
                 TxnInfo txn = committedByExecuteAt[i];
                 if (txn.getClass() == TxnInfo.class) continue;
-                if (!txn.kind().witnesses(removeTxnId)) continue;
+                if (!txn.witnesses(removeTxnId)) continue;
 
                 TxnId[] missing = txn.missing();
                 TxnId[] newMissing = removeOneMissing(missing, removeTxnId);
@@ -107,8 +107,8 @@ class Utils
             TxnInfo txn = byId[i];
             if (txn.getClass() == TxnInfo.class) continue;
             if (!txn.hasDeps()) continue;
-            if (!txn.kind().witnesses(removeTxnId)) continue;
-            if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
+            if (!txn.witnesses(removeTxnId)) continue;
+            if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
 
             TxnId[] missing = txn.missing();
             TxnId[] newMissing = removeOneMissing(missing, removeTxnId);
@@ -139,7 +139,7 @@ class Utils
             if (txn.mayExecute()) continue;
             if (!txn.hasDeps()) continue;
             if (txn.executeAt == txn) continue;
-            if (!txn.kind().witnesses(insertTxnId)) continue;
+            if (!txn.witnesses(insertTxnId)) continue;
             if (txn.depsKnownBefore().compareTo(newInfo) < 0) continue;
 
             TxnId[] missing = txn.missing();
@@ -155,7 +155,7 @@ class Utils
             {
                 TxnInfo txn = committedByExecuteAt[i];
                 if (txn == newInfo) continue;
-                if (!txn.kind().witnesses(insertTxnId)) continue;
+                if (!txn.witnesses(insertTxnId)) continue;
 
                 if (doNotInsert != NO_TXNIDS)
                 {
@@ -188,8 +188,8 @@ class Utils
                 TxnInfo txn = byId[minByIdSearchIndex];
                 if (txn == newInfo) continue;
                 if (!txn.hasDeps()) continue;
-                if (!txn.kind().witnesses(insertTxnId)) continue;
-                if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
+                if (!txn.witnesses(insertTxnId)) continue;
+                if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
                 if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
                 {
                     ++minDoNotInsertSearchIndex;
@@ -209,8 +209,8 @@ class Utils
             if (txn == newInfo) continue;
             // TODO (expected): optimise this with flag bits
             if (!txn.hasDeps()) continue;
-            if (!txn.kind().witnesses(insertTxnId)) continue;
-            if (txn.isNot(ACCEPTED) && txn.mayExecute()) continue;
+            if (!txn.witnesses(insertTxnId)) continue;
+            if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
             if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
             {
                 ++minDoNotInsertSearchIndex;

@@ -20,6 +20,7 @@ package accord.primitives;
 
 import accord.local.CommandSummaries.SummaryStatus;
 import accord.messages.BeginRecovery;
+import accord.utils.Invariants;
 
 import java.util.Collection;
 import java.util.function.Function;
@@ -31,24 +32,40 @@ import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
 import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
-import static accord.local.CommandSummaries.SummaryStatus.NOT_ACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.NOTACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
+import static accord.local.CommandSummaries.SummaryStatus.PREACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
+import static accord.primitives.Known.PrivilegedVote.NoVote;
 import static accord.primitives.Known.Definition.*;
 import static accord.primitives.Known.*;
 import static accord.primitives.Known.KnownDeps.*;
 import static accord.primitives.Known.KnownExecuteAt.*;
-import static accord.primitives.Known.KnownRoute.Covering;
-import static accord.primitives.Known.KnownRoute.Full;
-import static accord.primitives.Known.KnownRoute.Maybe;
+import static accord.primitives.Known.KnownRoute.CoveringRoute;
+import static accord.primitives.Known.KnownRoute.FullRoute;
+import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Known.Outcome.*;
 import static accord.primitives.Status.Phase.*;
 
 public enum Status
 {
-    NotDefined        (None,      NOT_ACCEPTED,   Nothing),
-    PreAccepted       (PreAccept, NOT_ACCEPTED,   DefinitionAndRoute),
-    AcceptedInvalidate(Accept,    NOT_ACCEPTED,   Maybe,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,  Unknown), // may or may not have witnessed
-    Accepted          (Accept,    ACCEPTED,       Covering,          DefinitionUnknown, ExecuteAtProposed,     DepsProposed, Unknown), // may or may not have witnessed
+    NotDefined        (None,      NOT_DIRECTLY_WITNESSED,                  Nothing),
+    PreAccepted       (PreAccept, PREACCEPTED,                             DefinitionAndRoute),
+
+    /**
+     * A recovery coordinator found a quorum of preaccept, i.e. no Accept or later was witnessed.
+     * Once recorded to a quorum, any in-flight Accept from the original coordinator is defunct and will not be re-proposed.
+     */
+    PreNotAccepted    (Accept,    PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE,   MaybeRoute,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,      Unknown), // may or may not have witnessed
+    /**
+     * A recovery coordinator found a quorum of preaccept, and has recorded this knowledge to a quorum.
+     */
+    NotAccepted       (Accept,    NOTACCEPTED,                             MaybeRoute,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,       Unknown), // may or may not have witnessed
+    AcceptedInvalidate(Accept,    PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE,   MaybeRoute,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,       Unknown), // may or may not have witnessed
+
+    AcceptedMedium    (Accept,    ACCEPTED,                                CoveringRoute,          DefinitionUnknown, ExecuteAtProposed,     DepsProposedFixed, Unknown), // may or may not have witnessed
+    AcceptedSlow      (Accept,    ACCEPTED,                                CoveringRoute,          DefinitionUnknown, ExecuteAtProposed,     DepsProposed,      Unknown), // may or may not have witnessed
 
     /**
      * PreCommitted is a peculiar state, half-way between Accepted and Committed.
@@ -75,18 +92,27 @@ public enum Status
      * To solve this problem we simply permit the executeAt we discover for B to be propagated to A* without
      * its dependencies. Though this does complicate the state machine a little.
      */
-    PreCommitted      (Accept,     NOT_ACCEPTED,Full,  DefinitionUnknown, ExecuteAtKnown,   DepsUnknown,  Unknown),
-
-    Committed         (Commit,     COMMITTED,   Full,  DefinitionKnown,   ExecuteAtKnown,   DepsCommitted,Unknown),
-    Stable            (Execute,    STABLE,      Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Unknown),
-    PreApplied        (Persist,    STABLE,      Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Outcome.Apply),
-    Applied           (Persist,    APPLIED,     Full,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,    Outcome.Apply),
+    PreCommitted      (Accept,     PREACCEPTED,  FullRoute,  DefinitionUnknown, ExecuteAtKnown,   DepsUnknown,   Unknown),
+    Committed         (Commit,     COMMITTED,    FullRoute,  DefinitionKnown,   ExecuteAtKnown,   DepsCommitted, Unknown),
+    Stable            (Execute,    STABLE,       FullRoute,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,     Unknown),
+    PreApplied        (Persist,    STABLE,       FullRoute,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,     Outcome.Apply),
+    Applied           (Persist,    APPLIED,      FullRoute,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,     Outcome.Apply),
     // TODO (required): TruncatedApply should be treated as APPLIED for summary status; when computing recovery decisions
     //  anything already APPLIED should be treated as not witnessing anything being recovered from preaccept status
     //  EXCEPT this cannot apply for touches \notin owns... consider some more how we handle this case
-    Truncated         (Cleanup,    null, Maybe, DefinitionErased,  ExecuteAtErased,  DepsErased, Outcome.Erased),
-    Invalidated       (Invalidate, INVALIDATED, Maybe, NoOp,              NoExecuteAt,      NoDeps,       Outcome.Invalidated),
+    Truncated         (Cleanup,  null,  MaybeRoute, DefinitionErased,  ExecuteAtErased,  DepsErased,    Outcome.Erased),
+    Invalidated       (Invalidate, INVALIDATED,  MaybeRoute, NoOp,              NoExecuteAt,      NoDeps,        Outcome.Abort),
     ;
+
+    static
+    {
+        // We require that Commands.notAccept can safely transition a reCoveringRoute transaction
+        // PreNotAccepted->NotAccepted->{AcceptedInvalidate,Accepted} using the same ballot,
+        // but must guard against message arrival order permitting us to go backwards
+        // (i.e. we need to reject equal ballot updates where the status would move us 'backwards')
+        // So we require that this order isn't changed
+        Invariants.partiallyOrdered(PreNotAccepted, NotAccepted, AcceptedInvalidate, AcceptedMedium);
+    }
 
     /**
      * Represents the phase of a transaction from the perspective of coordination
@@ -212,7 +238,7 @@ public enum Status
     {
         this.phase = phase;
         this.summary = summary;
-        this.minKnown = new Known(route, definition, executeAt, deps, outcome);
+        this.minKnown = new Known(route, definition, executeAt, deps, outcome, NoVote);
     }
 
     // TODO (desired, clarity): investigate all uses of hasBeen, and migrate as many as possible to testing
@@ -235,20 +261,32 @@ public enum Status
 
             Status status = getStatus.apply(item);
             Ballot ballot = getAcceptedOrCommittedBallot.apply(item);
-            boolean update = max == null
-                          || maxStatus.phase.compareTo(status.phase) < 0
-                          || (maxStatus.phase.tieBreakWithBallot ? maxStatus.phase == status.phase && maxBallot.compareTo(ballot) < 0
-                                                                 : maxStatus.compareTo(status) < 0);
-
-            if (!update)
-                continue;
-
-            max = item;
-            maxStatus = status;
-            maxBallot = ballot;
+            if (max == null || isGreater(status, ballot, maxStatus, maxBallot))
+            {
+                max = item;
+                maxStatus = status;
+                maxBallot = ballot;
+            }
         }
 
         return max;
+    }
+
+    private static boolean isGreater(Status testStatus, Ballot testBallot, Status thanStatus, Ballot thanBallot)
+    {
+        Phase phase = testStatus.phase;
+        int c = phase.compareTo(thanStatus.phase);
+        if (c != 0)
+            return c > 0;
+
+        if (phase.tieBreakWithBallot)
+        {
+            c = testBallot.compareTo(thanBallot);
+            if (c != 0)
+                return c > 0;
+        }
+
+        return testStatus.compareTo(thanStatus) > 0;
     }
 
     public static <T> T max(T a, Status statusA, Ballot ballotA, T b, Status statusB, Ballot ballotB)

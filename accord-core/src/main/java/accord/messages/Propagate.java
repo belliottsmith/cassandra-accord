@@ -46,6 +46,7 @@ import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
+import accord.utils.UnhandledEnum;
 
 import javax.annotation.Nullable;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
@@ -251,7 +252,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         {
             default: throw illegalState("Unexpected status: " + propagate);
             case Truncated: throw illegalState("Status expected to be handled elsewhere: " + propagate);
-            case Accepted:
+            case AcceptedMedium:
+            case AcceptedSlow:
             case AcceptedInvalidate:
                 // we never "propagate" accepted statuses as these are essentially votes,
                 // and contribute nothing to our local state machine
@@ -268,7 +270,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 break;
 
             case Stable:
-                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, ballot, txnId, route, partialTxn, executeAtIfKnown, stableDeps));
+                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, ballot, txnId, route, partialTxn, executeAtIfKnown, stableDeps, null));
                 break;
 
             case Committed:
@@ -276,13 +278,13 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             case PreCommitted:
                 confirm(Commands.precommit(safeStore, safeCommand, participants, txnId, executeAtIfKnown));
                 // TODO (desired): would it be clearer to yield a SaveStatus so we can have PreCommittedWithDefinition
-                if (!found.definition.isKnown())
+                if (!found.definition().isKnown())
                     break;
 
             case PreAccepted:
                 // only preaccept if we coordinate the transaction
                 if (safeStore.ranges().coordinates(txnId).intersects(route) && Route.isFullRoute(route))
-                    Commands.preaccept(safeStore, safeCommand, participants, txnId, txnId.epoch(), partialTxn, Route.castToFullRoute(route));
+                    Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false, Route.castToFullRoute(route));
 
             case NotDefined:
                 if (invalidIf == IfUncommitted)
@@ -353,7 +355,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
 
         Participants<?> stillOwnsOrMayExecute = participants.stillOwnsOrMayExecute(txnId);
-        Participants<?> notStaleTouches = known.knownFor(Nothing.with(requireExtra.deps), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
+        Participants<?> notStaleTouches = known.knownFor(Nothing.with(requireExtra.deps()), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
         Participants<?> notStaleOwnsOrMayExecutes = known.knownFor(requireExtra.with(DepsUnknown), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
 
         // any ranges we execute but cannot achieve the pre-applied status for have been left behind and are stale
@@ -389,7 +391,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     {
         switch (status)
         {
-            default: throw new AssertionError("Unhandled RedundantStatus: " + status);
+            default: throw new UnhandledEnum(status);
             case NOT_OWNED:
             case LOCALLY_REDUNDANT:
             case PARTIALLY_LOCALLY_REDUNDANT:

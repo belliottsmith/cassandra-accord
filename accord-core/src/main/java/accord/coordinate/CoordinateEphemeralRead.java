@@ -86,8 +86,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     @Override
     void contact(Collection<Node.Id> nodes, Topologies topologies, Callback<GetEphemeralReadDepsOk> callback)
     {
-        CommandStore commandStore = CommandStore.maybeCurrent();
-        if (commandStore == null) commandStore = node.commandStores().select(route.homeKey());
+        CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
         node.send(nodes, to -> new GetEphemeralReadDeps(to, topologies, route, txnId, executeAtEpoch), commandStore, callback);
     }
 
@@ -106,16 +105,6 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
 
         if (tracker.recordSuccess(from) == Success)
             onPreAcceptedOrNewEpoch();
-    }
-
-    @Override
-    boolean onExtraSuccessInternal(Node.Id from, GetEphemeralReadDepsOk ok)
-    {
-        if (ok.latestEpoch > executeAtEpoch)
-            executeAtEpoch = ok.latestEpoch;
-
-        oks.put(from, ok);
-        return true;
     }
 
     @Override

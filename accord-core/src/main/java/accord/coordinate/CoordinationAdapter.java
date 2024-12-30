@@ -19,16 +19,17 @@
 package accord.coordinate;
 
 import java.util.function.BiConsumer;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import javax.annotation.Nullable;
 
 import accord.api.ProtocolModifiers;
 import accord.api.Result;
 import accord.coordinate.ExecuteSyncPoint.ExecuteInclusive;
 import accord.coordinate.tracking.FastPathTracker;
+import accord.coordinate.tracking.PreAcceptExclusiveSyncPointTracker;
 import accord.coordinate.tracking.PreAcceptTracker;
-import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
+import accord.messages.Accept;
 import accord.messages.Apply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -43,6 +44,7 @@ import accord.primitives.Unseekable;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
@@ -59,7 +61,7 @@ public interface CoordinationAdapter<R>
         <R> CoordinationAdapter<R> get(TxnId txnId, Kind kind);
     }
 
-    void propose(Node node, @Nullable Topologies preaccept, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
+    void propose(Node node, @Nullable Topologies preaccept, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
     void stabilise(Node node, @Nullable Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
     void execute(Node node, @Nullable Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
     void persist(Node node, @Nullable Topologies any, FullRoute<?> route, Route<?> sendTo, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback);
@@ -85,7 +87,7 @@ public interface CoordinationAdapter<R>
             }
             switch (kind)
             {
-                default: throw new AssertionError("Unhandled kind: " + kind);
+                default: throw new UnhandledEnum(kind);
                 case Standard: return (CoordinationAdapter<R>) Adapters.standard();
                 case Recovery: return (CoordinationAdapter<R>) Adapters.recover();
             }
@@ -134,11 +136,11 @@ public interface CoordinationAdapter<R>
         public static abstract class AbstractTxnAdapter implements CoordinationAdapter<Result>
         {
             @Override
-            public void propose(Node node, @Nullable Topologies preacceptOrRecovery, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
+            public void propose(Node node, @Nullable Topologies preacceptOrRecovery, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
             {
                 Topologies accept = node.topology().reselect(preacceptOrRecovery, QuorumEpochIntersections.preacceptOrRecover,
                                                              route, txnId, executeAt, QuorumEpochIntersections.accept);
-                new ProposeTxn(node, accept, route, ballot, txnId, txn, executeAt, deps, callback).start();
+                new ProposeTxn(node, accept, route, kind, ballot, txnId, txn, executeAt, deps, callback).start();
             }
 
             @Override
@@ -166,8 +168,16 @@ public interface CoordinationAdapter<R>
             {
                 Topologies all = execution(node, any, route, txnId, executeAt);
 
-                if (txn.read().keys().isEmpty()) persist(node, all, route, txnId, txn, executeAt, deps, txn.execute(txnId, executeAt, null), txn.result(txnId, executeAt, null), callback);
-                else new ExecuteTxn(node, all, route, path, txnId, txn, txn.read().keys().toParticipants(), executeAt, deps, callback).start();
+                if (txn.read().keys().isEmpty())
+                {
+                    Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, null) : null;
+                    Result result = txn.result(txnId, executeAt, null);
+                    persist(node, all, route, txnId, txn, executeAt, deps, writes, result, callback);
+                }
+                else
+                {
+                    new ExecuteTxn(node, all, route, path, txnId, txn, executeAt, deps, callback).start();
+                }
             }
 
             Topologies execution(Node node, Topologies preacceptOrCommit, Participants<?> participants, TxnId txnId, Timestamp executeAt)
@@ -208,9 +218,9 @@ public interface CoordinationAdapter<R>
 
         public static abstract class SyncPointAdapter<R> implements CoordinationAdapter<R>
         {
-            final Function<Topologies, PreAcceptTracker<?>> preacceptTrackerFactory;
+            final BiFunction<Topologies, TxnId, PreAcceptTracker<?>> preacceptTrackerFactory;
 
-            protected SyncPointAdapter(Function<Topologies, PreAcceptTracker<?>> preacceptTrackerFactory)
+            protected SyncPointAdapter(BiFunction<Topologies, TxnId, PreAcceptTracker<?>> preacceptTrackerFactory)
             {
                 this.preacceptTrackerFactory = preacceptTrackerFactory;
             }
@@ -220,10 +230,10 @@ public interface CoordinationAdapter<R>
             abstract void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super R, Throwable> callback);
 
             @Override
-            public void propose(Node node, Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
+            public void propose(Node node, Topologies any, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
                 Topologies all = forDecision(node, route, txnId);
-                new ProposeSyncPoint<>(this, node, all, route, ballot, txnId, txn, executeAt, deps, callback).start();
+                new ProposeSyncPoint<>(this, node, all, route, kind, ballot, txnId, txn, executeAt, deps, callback).start();
             }
 
             @Override
@@ -237,7 +247,7 @@ public interface CoordinationAdapter<R>
             @Override
             public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
-                persist(node, null, route, txnId, txn, executeAt, deps, txn.execute(txnId, executeAt, null), txn.result(txnId, executeAt, null), callback);
+                persist(node, null, route, txnId, txn, executeAt, deps, null, txn.result(txnId, executeAt, null), callback);
             }
 
             @Override
@@ -255,7 +265,7 @@ public interface CoordinationAdapter<R>
         {
             public AbstractExclusiveSyncPointAdapter()
             {
-                super(QuorumTracker::new);
+                super(PreAcceptExclusiveSyncPointTracker::new);
             }
 
             @Override
@@ -305,6 +315,7 @@ public interface CoordinationAdapter<R>
         {
             protected AbstractInclusiveSyncPointAdapter()
             {
+                // TODO (required): this is only safe if SyncPoint is visible to other transactions
                 super(FastPathTracker::new);
             }
 

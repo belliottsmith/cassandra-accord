@@ -147,9 +147,9 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
         }
 
         @Override
-        public void onCallbackFailure(Node.Id from, Throwable failure)
+        public boolean onCallbackFailure(Node.Id from, Throwable failure)
         {
-            tryFailure(failure);
+            return tryFailure(failure);
         }
     }
 

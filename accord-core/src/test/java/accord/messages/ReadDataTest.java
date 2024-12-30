@@ -151,7 +151,7 @@ class ReadDataTest
                 CheckedCommands.accept(safe, state.txnId, Ballot.ZERO, state.partialRoute, state.executeAt, state.deps);
 
                 SafeCommand safeCommand = safe.ifInitialised(state.txnId);
-                safeCommand.stable(safe, safeCommand.current().updateParticipants(StoreParticipants.execute(safe, state.route, state.txnId, state.txnId.epoch())), Ballot.ZERO, state.executeAt, Command.WaitingOn.empty(state.txnId.domain()));
+                safeCommand.stable(safe, StoreParticipants.execute(safe, state.route, state.txnId, state.txnId.epoch()), Ballot.ZERO, state.executeAt, state.partialTxn, state.deps, Command.WaitingOn.empty(state.txnId.domain()));
             })));
 
             ReplyContext replyContext = state.process();
@@ -184,7 +184,7 @@ class ReadDataTest
 
             store = stores.get(1);
             check(store.execute(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
-                StoreParticipants participants = StoreParticipants.invalidate(safeStore, state.route, state.txnId);
+                StoreParticipants participants = StoreParticipants.notAccept(safeStore, state.route, state.txnId);
                 SafeCommand safeCommand = safeStore.get(state.txnId, participants);
                 Command prev = safeCommand.current();
                 safeCommand.commitInvalidated(safeStore);
@@ -202,7 +202,7 @@ class ReadDataTest
         test(state -> {
             List<CommandStore> stores = stores(state);
             stores.forEach(store -> check(store.execute(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
-                StoreParticipants participants = StoreParticipants.invalidate(safeStore, state.route, state.txnId);
+                StoreParticipants participants = StoreParticipants.notAccept(safeStore, state.route, state.txnId);
                 SafeCommand command = safeStore.get(state.txnId, participants);
                 command.commitInvalidated(safeStore);
             })));

@@ -94,7 +94,7 @@ public abstract class AbstractTracker<ST extends ShardTracker>
         this(topologies, arrayFactory, (ignore, shard) -> trackerFactory.apply(shard));
     }
 
-    public AbstractTracker(Topologies topologies, IntFunction<ST[]> arrayFactory, ShardFactory<ST> trackerFactory)
+    public <P> AbstractTracker(Topologies topologies, IntFunction<ST[]> arrayFactory, ShardFactory<ST> trackerFactory)
     {
         Invariants.checkArgument(topologies.totalShards() > 0);
         int topologyCount = topologies.size();

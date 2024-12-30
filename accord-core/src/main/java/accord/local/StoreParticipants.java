@@ -36,7 +36,7 @@ import accord.utils.Invariants;
 
 import static accord.local.StoreParticipants.Filter.QUERY;
 import static accord.local.StoreParticipants.Filter.UPDATE;
-import static accord.primitives.Known.KnownRoute.Maybe;
+import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.tryCastToRoute;
@@ -87,6 +87,11 @@ public class StoreParticipants
         public final Participants<?> hasTouched()
         {
             return hasTouched;
+        }
+
+        public boolean touchesOnlyOwned()
+        {
+            return touches.equals(owns());
         }
     }
 
@@ -224,6 +229,11 @@ public class StoreParticipants
         return owns;
     }
 
+    public boolean touchesOnlyOwned()
+    {
+        return true;
+    }
+
     /**
      * touches, but excluding any stale, pre-bootstrap or retired ranges that are also shard redundant,
      * as we do not need to do anything with these keys locally
@@ -275,7 +285,7 @@ public class StoreParticipants
 
     /**
      * Do not invoke this method on a participants we will use to query esp. e.g. for calculateDeps.
-     * TODO (required): create separate Query object that cannot be filtered or used to update a Command
+     * TODO (desired): create separate Query object that cannot be filtered or used to update a Command
      */
     public StoreParticipants filter(Filter filter, RedundantBefore redundantBefore, TxnId txnId, @Nullable EpochSupplier executeAt)
     {
@@ -353,7 +363,7 @@ public class StoreParticipants
         if (currentSaveStatus.compareTo(Erased) >= 0)
             return this;
 
-        if (currentSaveStatus.known.route == Maybe)
+        if (currentSaveStatus.known.has(MaybeRoute))
             return merge(that);
 
         return supplement(that);
@@ -403,6 +413,14 @@ public class StoreParticipants
         return new FullStoreParticipants(route, owns, executes, touches, hasTouched);
     }
 
+    public StoreParticipants withExecutes(Participants<?> executes, Participants<?> stillExecutes)
+    {
+        if (executes == stillExecutes)
+            return update(route, owns, executes, touches(), hasTouched());
+
+        return new FilteredStoreParticipants(route, owns, executes, touches(), hasTouched(), stillOwns(), stillTouches(), stillExecutes);
+    }
+
     // TODO (required): retire this method, merge with executes()
     public Ranges executeRanges(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt)
     {
@@ -415,16 +433,13 @@ public class StoreParticipants
     }
 
     // TODO (required): synchronise with latest standard logic
-    public static Route<?> touches(SafeCommandStore safeStore, TxnId txnId, EpochSupplier toEpoch, Route<?> route)
+    public static Route<?> touches(SafeCommandStore safeStore, EpochSupplier fromEpoch, TxnId txnId, EpochSupplier toEpoch, Route<?> route)
     {
         // TODO (required): remove pre-bootstrap?
         if (txnId.is(ExclusiveSyncPoint))
             return route.slice(safeStore.ranges().all(), Minimal);
 
-        if (txnId == toEpoch || txnId.epoch() == toEpoch.epoch())
-            return route;
-
-        return route.slice(safeStore.ranges().allBetween(txnId.epoch(), toEpoch), Minimal);
+        return route.slice(safeStore.ranges().allBetween(fromEpoch.epoch(), toEpoch), Minimal);
     }
 
     @Override
@@ -519,10 +534,11 @@ public class StoreParticipants
         return create(tryCastToRoute(participants), owns, executes, touches, touches);
     }
 
-    public static StoreParticipants invalidate(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId)
+    public static StoreParticipants notAccept(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId)
     {
         RangesForEpoch storeRanges = safeStore.ranges();
         Ranges ownedRanges = storeRanges.allAt(txnId.epoch());
+        // TODO (expected): do we need to extend touches here? Feels likely this harks back to before we saved hasTouched
         Ranges touchesRanges = storeRanges.all();
         Participants<?> owns = participants.slice(ownedRanges, Minimal);
         Participants<?> touches = ownedRanges == touchesRanges || owns == participants ? owns : participants.slice(touchesRanges, Minimal);

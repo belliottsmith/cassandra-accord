@@ -224,6 +224,8 @@ public class DurabilityScheduling implements ConfigurationService.Listener
             if (numberOfSplits > targetShardSplits && index % 4 == 0)
             {
                 index /= 4;
+                if (index > 0 && numberOfSplits % 4 != 0)
+                    --index;
                 numberOfSplits /= 4;
             }
             scheduleAt(nowMicros, scheduleAt);

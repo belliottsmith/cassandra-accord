@@ -44,6 +44,7 @@ import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.CommandsForKey.redundantBefore;
 import static accord.local.cfk.Updating.nextUndecided;
 import static accord.local.cfk.Utils.removeRedundantMissing;
+import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedAny;
@@ -69,8 +70,9 @@ public class Pruning
     {
         static class Merge implements UpdateFunction<TxnId, LoadingPruned>
         {
-            final TxnId[] witnessedBy;
-            final List<TxnId> inserted;
+            private final TxnId[] witnessedBy;
+            private TxnId[] witnessedByUnstable;
+            private final List<TxnId> inserted;
 
             Merge(TxnId[] witnessedBy, List<TxnId> inserted)
             {
@@ -82,6 +84,15 @@ public class Pruning
             @Override
             public LoadingPruned insert(TxnId insert)
             {
+                TxnId[] witnessedBy = this.witnessedBy;
+                if (insert.is(UNSTABLE))
+                {
+                    insert = insert.withoutNonIdentityFlags();
+                    // TODO (desired): this is a bit ugly - maybe we should save all prunedIds in byId by default?
+                    if (witnessedByUnstable == null)
+                        witnessedByUnstable = new TxnId[] { witnessedBy[0].addFlag(UNSTABLE) };
+                    witnessedBy = witnessedByUnstable;
+                }
                 inserted.add(insert);
                 return new LoadingPruned(insert, witnessedBy);
             }
@@ -152,14 +163,15 @@ public class Pruning
     /**
      * Return true if {@code waitingId} is waiting for any transaction with a lower TxnId than waitingExecuteAt
      */
-    static boolean isWaitingOnPruned(Object[] loadingPruned, TxnId waitingId, Timestamp waitingExecuteAt)
+    static boolean isWaitingOnPruned(Object[] loadingPruned, TxnId waitingId, Timestamp waitingExecuteAt, RedundantBefore.Entry boundsInfo)
     {
         if (BTree.isEmpty(loadingPruned))
             return false;
 
-        int ceilIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, waitingExecuteAt);
+        int startIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, boundsInfo.bootstrappedAt);
+        int endIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, waitingExecuteAt);
         // TODO (desired): this is O(n.lg n), whereas we could import the accumulate function and perform in O(max(m, lg n))
-        for (int i = 0; i < ceilIndex; ++i)
+        for (int i = startIndex; i < endIndex; ++i)
         {
             LoadingPruned loading = BTree.findByIndex(loadingPruned, i);
             if (!managesExecution(loading)) continue;
@@ -327,7 +339,12 @@ public class Pruning
 
                     case TRANSITIVE:
                     case TRANSITIVE_VISIBLE:
-                    case PREACCEPTED_OR_ACCEPTED_INVALIDATE:
+                    case PREACCEPTED_WITHOUT_DEPS:
+                    case PREACCEPTED_WITH_DEPS:
+                    case PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE:
+                    case PRENOTACCEPTED_WITH_DEPS:
+                    case NOTACCEPTED:
+                    case NOTACCEPTED_WITH_COORDINATOR_DEPS:
                     case ACCEPTED:
                         newByIdBuffer[pos - ++retainCount] = txn;
                         if (i == minUndecidedById)

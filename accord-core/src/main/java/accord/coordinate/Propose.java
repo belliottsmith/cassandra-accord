@@ -21,11 +21,10 @@ package accord.coordinate;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
-import accord.coordinate.tracking.AbstractTracker.ShardOutcomes;
 import accord.coordinate.tracking.QuorumTracker;
-import accord.coordinate.tracking.QuorumTracker.QuorumShardTracker;
-import accord.coordinate.tracking.RequestStatus;
+import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Accept;
@@ -34,25 +33,33 @@ import accord.messages.Callback;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.Participants;
 import accord.primitives.Route;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.SortedListMap;
 import accord.utils.WrappableException;
 
-import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.Fail;
+import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
+import static accord.coordinate.ExecutePath.MEDIUM;
 import static accord.coordinate.tracking.RequestStatus.Failed;
+import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
+import static accord.primitives.Status.AcceptedInvalidate;
+import static accord.primitives.Status.NotAccepted;
+import static accord.primitives.Status.PreNotAccepted;
+import static accord.primitives.TxnId.MediumPath.MEDIUM_PATH_TRACK_STABLE;
 import static accord.utils.Invariants.debug;
 
 abstract class Propose<R> implements Callback<AcceptReply>
 {
     final Node node;
+    final Accept.Kind kind;
     final Ballot ballot;
     final TxnId txnId;
     final Txn txn;
@@ -65,9 +72,10 @@ abstract class Propose<R> implements Callback<AcceptReply>
     final BiConsumer<? super R, Throwable> callback;
     private boolean isDone;
 
-    Propose(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
+    Propose(Node node, Topologies topologies, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
         this.node = node;
+        this.kind = kind;
         this.ballot = ballot;
         this.txnId = txnId;
         this.txn = txn;
@@ -85,7 +93,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
     {
         SortedArrays.SortedArrayList<Node.Id> contact = acceptTracker.filterAndRecordFaulty();
         if (contact == null) callback.accept(null, new Timeout(null, null));
-        else node.send(contact, to -> new Accept(to, acceptTracker.topologies(), ballot, txnId, route, executeAt, deps), this);
+        else node.send(contact, to -> new Accept(to, acceptTracker.topologies(), kind, ballot, txnId, route, executeAt, deps), this);
     }
 
     @Override
@@ -124,7 +132,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
             case Retired:
             case Success:
                 acceptOks.put(from, reply);
-                if (acceptTracker.recordSuccess(from) == RequestStatus.Success)
+                if (acceptTracker.recordSuccess(from) == Success)
                 {
                     isDone = true;
                     onAccepted();
@@ -147,50 +155,88 @@ abstract class Propose<R> implements Callback<AcceptReply>
     }
 
     @Override
-    public void onCallbackFailure(Id from, Throwable failure)
+    public boolean onCallbackFailure(Id from, Throwable failure)
     {
         if (isDone)
-            return;
+            return false;
 
         isDone = true;
         callback.accept(null, failure);
+        return true;
     }
 
-    abstract void onAccepted();
+    void onAccepted()
+    {
+        if (kind == Accept.Kind.MEDIUM)
+        {
+            adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, txnId, txn, executeAt, deps, callback);
+        }
+        else
+        {
+            adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, mergeDeps(), callback);
+        }
+    }
+
+    Deps mergeDeps()
+    {
+        Deps deps = Deps.merge(acceptOks, acceptOks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
+        if (Faults.discardPreAcceptDeps(txnId))
+            return deps;
+
+        if (txnId.is(MEDIUM_PATH_TRACK_STABLE))
+        {
+            if (!filterDuplicateDependenciesFromAcceptReply())
+                deps = deps.without(this.deps);
+
+            deps = deps.markUnstableBefore(txnId);
+        }
+
+        return deps.with(this.deps);
+    }
+
+    abstract CoordinationAdapter<R> adapter();
 
     // A special version for proposing the invalidation of a transaction; only needs to succeed on one shard
-    static class Invalidate implements Callback<AcceptReply>
+    static class NotAccept implements Callback<AcceptReply>
     {
         final Node node;
+        final Status status;
         final Ballot ballot;
         final TxnId txnId;
-        final RoutingKey someParticipant;
+        final Participants<?> someParticipants;
         final BiConsumer<Void, Throwable> callback;
         final Map<Id, AcceptReply> debug;
 
-        private final QuorumShardTracker acceptTracker;
+        private final SimpleTracker<?> acceptTracker;
         private boolean isDone;
 
-        Invalidate(Node node, Shard shard, Ballot ballot, TxnId txnId, RoutingKey someParticipant, BiConsumer<Void, Throwable> callback)
+        NotAccept(Node node, Status status, Topologies topologies, Ballot ballot, TxnId txnId, Participants<?> someParticipants, BiConsumer<Void, Throwable> callback)
         {
             this.node = node;
-            this.acceptTracker = new QuorumShardTracker(shard);
+            this.status = status;
+            this.acceptTracker = new QuorumTracker(topologies);
             this.ballot = ballot;
             this.txnId = txnId;
-            this.someParticipant = someParticipant;
+            this.someParticipants = someParticipants;
             this.callback = callback;
-            this.debug = debug() ? new SortedListMap<>(shard.nodes, AcceptReply[]::new) : null;
+            this.debug = debug() ? new SortedListMap<>(topologies.nodes(), AcceptReply[]::new) : null;
         }
 
-        public static Invalidate proposeInvalidate(Node node, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, BiConsumer<Void, Throwable> callback)
+        public static NotAccept proposeInvalidate(Node node, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, BiConsumer<Void, Throwable> callback)
         {
-            Shard shard = node.topology().forEpochIfKnown(invalidateWithParticipant, txnId.epoch());
-            Invalidate invalidate = new Invalidate(node, shard, ballot, txnId, invalidateWithParticipant, callback);
-            node.send(shard.nodes, to -> new Accept.Invalidate(ballot, txnId, invalidateWithParticipant), invalidate);
-            return invalidate;
+            return proposeNotAccept(node, AcceptedInvalidate, ballot, txnId, invalidateWithParticipant, callback);
         }
 
-        public static Invalidate proposeAndCommitInvalidate(Node node, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, Route<?> commitInvalidationTo, Timestamp invalidateUntil, BiConsumer<?, Throwable> callback)
+        public static NotAccept proposeNotAccept(Node node, Status status, Ballot ballot, TxnId txnId, RoutingKey participatingKey, BiConsumer<Void, Throwable> callback)
+        {
+            Participants<?> participants = Participants.singleton(txnId.domain(), participatingKey);
+            Topologies topologies = node.topology().forEpoch(participants, txnId.epoch());
+            NotAccept notAccept = new NotAccept(node, status, topologies, ballot, txnId, participants, callback);
+            node.send(topologies.nodes(), to -> new Accept.NotAccept(status, ballot, txnId, participants), notAccept);
+            return notAccept;
+        }
+
+        public static NotAccept proposeAndCommitInvalidate(Node node, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, Route<?> commitInvalidationTo, Timestamp invalidateUntil, BiConsumer<?, Throwable> callback)
         {
             return proposeInvalidate(node, ballot, txnId, invalidateWithParticipant, (success, fail) -> {
                 if (fail != null)
@@ -203,6 +249,24 @@ abstract class Propose<R> implements Callback<AcceptReply>
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
                         callback.accept(null, new Invalidated(txnId, invalidateWithParticipant));
                     });
+                }
+            });
+        }
+
+        public static NotAccept proposeAndPersistNotAccept(Node node, Ballot ballot, TxnId txnId, RoutingKey participatingKey, Route<?> commitNotAcceptTo, BiConsumer<?, Throwable> callback)
+        {
+            return proposeNotAccept(node, PreNotAccepted, ballot, txnId, participatingKey, (success, fail) -> {
+                if (fail != null)
+                {
+                    if (callback != null)
+                        callback.accept(null, fail);
+                }
+                else
+                {
+                    Topologies topologies = node.topology().forEpoch(commitNotAcceptTo, txnId.epoch());
+                    node.send(topologies.nodes(), to -> new Accept.NotAccept(NotAccepted, ballot, txnId, commitNotAcceptTo));
+                    if (callback != null)
+                        callback.accept(null, null);
                 }
             });
         }
@@ -222,7 +286,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
                 return;
             }
 
-            if (acceptTracker.onSuccess(from) == ShardOutcomes.Success)
+            if (acceptTracker.recordSuccess(from) == Success)
             {
                 isDone = true;
                 callback.accept(null, null);
@@ -235,7 +299,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
             if (isDone)
                 return;
 
-            if (acceptTracker.onFailure(from) == Fail)
+            if (acceptTracker.recordFailure(from) == Failed)
             {
                 isDone = true;
                 callback.accept(null, new Timeout(txnId, null));
@@ -243,13 +307,13 @@ abstract class Propose<R> implements Callback<AcceptReply>
         }
 
         @Override
-        public void onCallbackFailure(Id from, Throwable failure)
+        public boolean onCallbackFailure(Id from, Throwable failure)
         {
-            if (isDone)
-                return;
+            if (isDone) return false;
 
             isDone = true;
             callback.accept(null, failure);
+            return true;
         }
     }
 }

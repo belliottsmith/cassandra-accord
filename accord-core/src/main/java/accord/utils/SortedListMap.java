@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.IntFunction;
 import java.util.stream.Stream;
 
@@ -253,5 +254,15 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
     public V[] unsafeValuesBackingArray()
     {
         return values;
+    }
+
+    public <O> O foldlValues(BiFunction<V, O, O> foldl, O zero)
+    {
+        return Functions.foldl(values, foldl, zero);
+    }
+
+    public <O> O foldlNonNullValues(BiFunction<V, O, O> foldl, O zero)
+    {
+        return Functions.foldlNonNull(values, foldl, zero);
     }
 }

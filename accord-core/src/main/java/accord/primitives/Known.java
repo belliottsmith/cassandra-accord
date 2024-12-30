@@ -25,7 +25,10 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
+import static accord.primitives.Known.PrivilegedVote.VotePreAccept;
+import static accord.primitives.Known.PrivilegedVote.NoVote;
 import static accord.primitives.Known.Definition.DefinitionErased;
 import static accord.primitives.Known.Definition.DefinitionKnown;
 import static accord.primitives.Known.Definition.DefinitionUnknown;
@@ -36,8 +39,8 @@ import static accord.primitives.Known.KnownDeps.NoDeps;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtUnknown;
 import static accord.primitives.Known.KnownExecuteAt.NoExecuteAt;
-import static accord.primitives.Known.KnownRoute.Full;
-import static accord.primitives.Known.KnownRoute.Maybe;
+import static accord.primitives.Known.KnownRoute.FullRoute;
+import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Known.Outcome.Unknown;
 import static accord.primitives.Status.Phase.Accept;
 import static accord.primitives.Status.Phase.Cleanup;
@@ -45,6 +48,7 @@ import static accord.primitives.Status.Phase.Commit;
 import static accord.primitives.Status.Phase.Execute;
 import static accord.primitives.Status.Phase.Invalidate;
 import static accord.primitives.Status.Phase.PreAccept;
+import static org.agrona.BitUtil.findNextPositivePowerOfTwo;
 
 /**
  * A vector of various facets of knowledge about, or required for, processing a transaction.
@@ -52,51 +56,72 @@ import static accord.primitives.Status.Phase.PreAccept;
  * Each property's values are however ordered with respect to each other.
  * <p>
  * This information does not need to be consistent with
- * TODO (expected): encode as an integer
+ * TODO (expected): migrate inner class accessor methods to efficient bitmask operations
  */
 public class Known
 {
-    public static final Known Nothing = new Known(Maybe, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown);
-    public static final Known DefinitionOnly = new Known(Maybe, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown);
-    public static final Known DefinitionAndRoute = new Known(Full, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown);
-    public static final Known Apply = new Known(Full, DefinitionUnknown, ExecuteAtKnown, DepsKnown, Outcome.Apply);
-    public static final Known Invalidated = new Known(Maybe, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Outcome.Invalidated);
+    private static final int ROUTE_MASK = findNextPositivePowerOfTwo(KnownRoute.VALUES.length) - 1;
+    private static final int DEFINITION_SHIFT = Integer.bitCount(ROUTE_MASK);
+    private static final int DEFINITION_MASK = (findNextPositivePowerOfTwo(Definition.VALUES.length) - 1) << DEFINITION_SHIFT;
+    private static final int EXECUTE_AT_SHIFT = DEFINITION_SHIFT + Integer.bitCount(DEFINITION_MASK);
+    private static final int EXECUTE_AT_MASK = (findNextPositivePowerOfTwo(KnownExecuteAt.VALUES.length) - 1) << EXECUTE_AT_SHIFT;
+    private static final int DEPS_SHIFT = EXECUTE_AT_SHIFT + Integer.bitCount(EXECUTE_AT_MASK);
+    private static final int DEPS_MASK = (findNextPositivePowerOfTwo(KnownDeps.VALUES.length) - 1) << DEPS_SHIFT;
+    private static final int OUTCOME_SHIFT = DEPS_SHIFT + Integer.bitCount(DEPS_MASK);
+    private static final int OUTCOME_MASK = (findNextPositivePowerOfTwo(Outcome.VALUES.length) - 1) << OUTCOME_SHIFT;
+    private static final int PRIVILEGED_VOTE_SHIFT = OUTCOME_SHIFT + Integer.bitCount(OUTCOME_MASK);
+    private static final int PRIVILEGED_VOTE_MASK = 1 << PRIVILEGED_VOTE_SHIFT;
 
-    // TODO (desired): pack into an integer
-    public final KnownRoute route;
-    public final Definition definition;
-    public final KnownExecuteAt executeAt;
-    public final KnownDeps deps;
-    public final Outcome outcome;
+    public static final Known Nothing = new Known(MaybeRoute, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown, NoVote);
+    public static final Known DefinitionOnly = new Known(MaybeRoute, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown, NoVote);
+    public static final Known DefinitionAndRoute = new Known(FullRoute, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown, NoVote);
+    public static final Known Apply = new Known(FullRoute, DefinitionUnknown, ExecuteAtKnown, DepsKnown, Outcome.Apply, NoVote);
+    public static final Known Invalidated = new Known(MaybeRoute, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Outcome.Abort, NoVote);
+
+    public final int encoded;
 
     public Known(Known copy)
     {
-        this.route = copy.route;
-        this.definition = copy.definition;
-        this.executeAt = copy.executeAt;
-        this.deps = copy.deps;
-        this.outcome = copy.outcome;
+        this(copy.route(), copy.definition(), copy.executeAt(), copy.deps(), copy.outcome(), copy.privilegedVote());
     }
 
-    public Known(KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome)
+    public Known(KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome, PrivilegedVote privilegedVote)
     {
-        this.route = route;
-        this.definition = definition;
-        this.executeAt = executeAt;
-        this.deps = deps;
-        this.outcome = outcome;
+        encoded = encode(route, definition, executeAt, deps, outcome, privilegedVote);
         checkInvariants();
+    }
+
+    public Known(int encoded)
+    {
+        this.encoded = encoded;
+        checkInvariants();
+    }
+
+    private Known withEncoded(int encoded)
+    {
+        return encoded == this.encoded ? this : new Known(encoded);
+    }
+
+    private static int encode(KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome, PrivilegedVote privilegedVote)
+    {
+        return route.ordinal()
+             | (definition.ordinal() << DEFINITION_SHIFT)
+             | (executeAt.ordinal() << EXECUTE_AT_SHIFT)
+             | (deps.ordinal() << DEPS_SHIFT)
+             | (outcome.ordinal() << OUTCOME_SHIFT)
+             | (privilegedVote.ordinal() << PRIVILEGED_VOTE_SHIFT);
     }
 
     public Known atLeast(Known that)
     {
         Invariants.checkArgument(compatibleWith(that));
-        KnownRoute maxRoute = route.atLeast(that.route);
-        Definition maxDefinition = definition.atLeast(that.definition);
-        KnownExecuteAt maxExecuteAt = executeAt.atLeast(that.executeAt);
-        KnownDeps maxDeps = deps.atLeast(that.deps);
-        Outcome maxOutcome = outcome.atLeast(that.outcome);
-        return selectOrCreate(that, maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+        KnownRoute maxRoute = route().atLeast(that.route());
+        Definition maxDefinition = definition().atLeast(that.definition());
+        KnownExecuteAt maxExecuteAt = executeAt().atLeast(that.executeAt());
+        KnownDeps maxDeps = deps().atLeast(that.deps());
+        Outcome maxOutcome = outcome().atLeast(that.outcome());
+        PrivilegedVote maxPrivilegedVote = max(privilegedVote(), that.privilegedVote());
+        return selectOrCreate(that, maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome, maxPrivilegedVote);
     }
 
     public static Known nonNullOrMin(Known a, Known b)
@@ -106,12 +131,13 @@ public class Known
     public Known min(Known that)
     {
         Invariants.checkArgument(compatibleWith(that));
-        KnownRoute minRoute = min(route, that.route);
-        Definition minDefinition = min(definition, that.definition);
-        KnownExecuteAt minExecuteAt = min(executeAt, that.executeAt);
-        KnownDeps minDeps = min(deps, that.deps);
-        Outcome minOutcome = min(outcome, that.outcome);
-        return selectOrCreate(that, minRoute, minDefinition, minExecuteAt, minDeps, minOutcome);
+        KnownRoute minRoute = min(route(), that.route());
+        Definition minDefinition = min(definition(), that.definition());
+        KnownExecuteAt minExecuteAt = min(executeAt(), that.executeAt());
+        KnownDeps minDeps = min(deps(), that.deps());
+        Outcome minOutcome = min(outcome(), that.outcome());
+        PrivilegedVote minPrivilegedVote = min(privilegedVote(), that.privilegedVote());
+        return selectOrCreate(that, minRoute, minDefinition, minExecuteAt, minDeps, minOutcome, minPrivilegedVote);
     }
 
     static <E extends Enum<E>> E min(E a, E b)
@@ -119,56 +145,59 @@ public class Known
         return a.compareTo(b) <= 0 ? a : b;
     }
 
+    static <E extends Enum<E>> E max(E a, E b)
+    {
+        return a.compareTo(b) >= 0 ? a : b;
+    }
+
     public Known reduce(Known that)
     {
         Invariants.checkArgument(compatibleWith(that));
-        KnownRoute maxRoute = route.reduce(that.route);
-        Definition minDefinition = definition.reduce(that.definition);
-        KnownExecuteAt maxExecuteAt = executeAt.reduce(that.executeAt);
-        KnownDeps minDeps = deps.reduce(that.deps);
-        Outcome maxOutcome = outcome.reduce(that.outcome);
-        return selectOrCreate(that, maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
+        KnownRoute maxRoute = route().reduce(that.route());
+        Definition minDefinition = definition().reduce(that.definition());
+        KnownExecuteAt maxExecuteAt = executeAt().reduce(that.executeAt());
+        KnownDeps minDeps = deps().reduce(that.deps());
+        Outcome maxOutcome = outcome().reduce(that.outcome());
+        PrivilegedVote minPrivilegedVote = min(privilegedVote(), that.privilegedVote());
+        return selectOrCreate(that, maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome, minPrivilegedVote);
     }
 
     public Known validForAll()
     {
-        KnownRoute maxRoute = route.validForAll();
-        Definition minDefinition = definition.validForAll();
-        KnownExecuteAt maxExecuteAt = executeAt.validForAll();
-        KnownDeps minDeps = deps.validForAll();
-        Outcome maxOutcome = outcome.validForAll();
-        return selectOrCreate(maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome);
+        KnownRoute maxRoute = route().validForAll();
+        Definition minDefinition = definition().validForAll();
+        KnownExecuteAt maxExecuteAt = executeAt().validForAll();
+        KnownDeps minDeps = deps().validForAll();
+        Outcome maxOutcome = outcome().validForAll();
+        return selectOrCreate(maxRoute, minDefinition, maxExecuteAt, minDeps, maxOutcome, NoVote);
     }
 
     boolean compatibleWith(Known that)
     {
-        return executeAt.compatibleWith(that.executeAt)
-               && deps.compatibleWith(that.deps)
-               && outcome.compatibleWith(that.outcome);
+        return executeAt().compatibleWith(that.executeAt())
+               && deps().compatibleWith(that.deps())
+               && outcome().compatibleWith(that.outcome());
     }
 
     @Nonnull
-    private Known selectOrCreate(Known with, KnownRoute maxRoute, Definition maxDefinition, KnownExecuteAt maxExecuteAt, KnownDeps maxDeps, Outcome maxOutcome)
+    private Known selectOrCreate(KnownRoute newRoute, Definition newDefinition, KnownExecuteAt newExecuteAt, KnownDeps newDeps, Outcome newOutcome, PrivilegedVote newPrivilegedVote)
     {
-        if (maxRoute == with.route && maxDefinition == with.definition && maxExecuteAt == with.executeAt && maxDeps == with.deps && maxOutcome == with.outcome)
-            return with;
-        return selectOrCreate(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+        return withEncoded(encode(newRoute, newDefinition, newExecuteAt, newDeps, newOutcome, newPrivilegedVote));
     }
 
     @Nonnull
-    private Known selectOrCreate(KnownRoute maxRoute, Definition maxDefinition, KnownExecuteAt maxExecuteAt, KnownDeps maxDeps, Outcome maxOutcome)
+    private Known selectOrCreate(Known with, KnownRoute newRoute, Definition newDefinition, KnownExecuteAt newExecuteAt, KnownDeps newDeps, Outcome newOutcome, PrivilegedVote newPrivilegedVote)
     {
-        if (maxRoute == route && maxDefinition == definition && maxExecuteAt == executeAt && maxDeps == deps && maxOutcome == outcome)
-            return this;
-        return new Known(maxRoute, maxDefinition, maxExecuteAt, maxDeps, maxOutcome);
+        int encoded = encode(newRoute, newDefinition, newExecuteAt, newDeps, newOutcome, newPrivilegedVote);
+        return encoded == this.encoded ? this : encoded == with.encoded ? with : new Known(encoded);
     }
 
     public boolean isSatisfiedBy(Known that)
     {
-        return this.definition.compareTo(that.definition) <= 0
-               && this.executeAt.compareTo(that.executeAt) <= 0
-               && this.deps.compareTo(that.deps) <= 0
-               && this.outcome.isSatisfiedBy(that.outcome);
+        return    compareTo(that.definition()) <= 0
+               && compareTo(that.executeAt()) <= 0
+               && compareTo(that.deps()) <= 0
+               && outcome().isSatisfiedBy(that.outcome());
     }
 
     /**
@@ -177,7 +206,7 @@ public class Known
      */
     public LogicalEpoch epoch()
     {
-        if (outcome.isOrWasApply())
+        if (outcome().isOrWasApply())
             return LogicalEpoch.Execution;
 
         return LogicalEpoch.Coordination;
@@ -188,7 +217,7 @@ public class Known
         if (executeAt == null)
             return txnId.epoch();
 
-        if (outcome.isOrWasApply() && !executeAt.equals(Timestamp.NONE))
+        if (outcome().isOrWasApply() && !executeAt.equals(Timestamp.NONE))
             return executeAt.epoch();
 
         return txnId.epoch();
@@ -196,23 +225,22 @@ public class Known
 
     public Known with(Outcome newOutcome)
     {
-        if (outcome == newOutcome)
-            return this;
-        return new Known(route, definition, executeAt, deps, newOutcome);
+        return withEncoded((this.encoded & ~OUTCOME_MASK) | newOutcome.ordinal() << OUTCOME_SHIFT);
     }
 
     public Known with(Definition newDefinition)
     {
-        if (definition == newDefinition)
-            return this;
-        return new Known(route, newDefinition, executeAt, deps, outcome);
+        return withEncoded((this.encoded & ~DEFINITION_MASK) | (newDefinition.ordinal() << DEFINITION_SHIFT));
     }
 
     public Known with(KnownDeps newDeps)
     {
-        if (deps == newDeps)
-            return this;
-        return new Known(route, definition, executeAt, newDeps, outcome);
+        return withEncoded((this.encoded & ~DEPS_MASK) | (newDeps.ordinal() << DEPS_SHIFT));
+    }
+
+    public Known with(PrivilegedVote newPrivilegedVote)
+    {
+        return withEncoded((this.encoded & ~PRIVILEGED_VOTE_MASK) | (newPrivilegedVote.ordinal() << PRIVILEGED_VOTE_SHIFT));
     }
 
     /**
@@ -229,29 +257,27 @@ public class Known
         if (isInvalidated())
             return SaveStatus.Invalidated;
 
-        if (route != Full)
+        if (!has(FullRoute))
             return SaveStatus.NotDefined;
 
-        if (definition == DefinitionUnknown || definition == DefinitionErased)
+        if (definition() == DefinitionUnknown || definition() == DefinitionErased)
         {
-            if (executeAt.isDecidedAndKnownToExecute())
+            if (executeAt().isDecidedAndKnownToExecute())
                 return SaveStatus.PreCommitted;
             return SaveStatus.NotDefined;
         }
 
-        KnownExecuteAt executeAt = this.executeAt;
-        if (!executeAt.isDecidedAndKnownToExecute())
+        if (!executeAt().isDecidedAndKnownToExecute())
             return SaveStatus.PreAccepted;
 
         // cannot propagate proposed deps; and cannot propagate known deps without executeAt
-        KnownDeps deps = this.deps;
+        KnownDeps deps = this.deps();
         if (!deps.hasDecidedDeps())
             return SaveStatus.PreCommittedWithDefinition;
 
-        switch (outcome)
+        switch (outcome())
         {
-            default:
-                throw new AssertionError("Unhandled outcome: " + outcome);
+            default: throw new UnhandledEnum(outcome());
             case Unknown:
             case WasApply:
             case Erased:
@@ -264,7 +290,7 @@ public class Known
 
     public boolean isDefinitionKnown()
     {
-        return definition.isKnown();
+        return is(DefinitionKnown);
     }
 
     /**
@@ -272,21 +298,21 @@ public class Known
      */
     public boolean hasFullRoute()
     {
-        return definition.isKnown() || outcome.isOrWasApply();
+        return definition().isKnown() || outcome().isOrWasApply();
     }
 
     public boolean isTruncated()
     {
-        switch (outcome)
+        switch (outcome())
         {
             default:
-                throw new AssertionError("Unhandled outcome: " + outcome);
-            case Invalidated:
+                throw new UnhandledEnum(outcome());
+            case Abort:
             case Unknown:
                 return false;
             case Apply:
                 // since Apply is universal, we can
-                return deps == DepsErased;
+                return deps() == DepsErased;
             case Erased:
             case WasApply:
                 return true;
@@ -295,7 +321,7 @@ public class Known
 
     public boolean canProposeInvalidation()
     {
-        return deps.canProposeInvalidation() && executeAt.canProposeInvalidation() && outcome.canProposeInvalidation();
+        return deps().canProposeInvalidation() && executeAt().canProposeInvalidation() && outcome().canProposeInvalidation();
     }
 
     public Known subtract(Known subtract)
@@ -303,29 +329,30 @@ public class Known
         if (!subtract.isSatisfiedBy(this))
             return Known.Nothing;
 
-        Definition newDefinition = subtract.definition.compareTo(definition) >= 0 ? DefinitionUnknown : definition;
-        KnownExecuteAt newExecuteAt = subtract.executeAt.compareTo(executeAt) >= 0 ? ExecuteAtUnknown : executeAt;
-        KnownDeps newDeps = subtract.deps.compareTo(deps) >= 0 ? DepsUnknown : deps;
-        Outcome newOutcome = outcome.subtract(subtract.outcome);
-        return new Known(route, newDefinition, newExecuteAt, newDeps, newOutcome);
+        Definition newDefinition = subtract.definition().compareTo(definition()) >= 0 ? DefinitionUnknown : definition();
+        KnownExecuteAt newExecuteAt = subtract.executeAt().compareTo(executeAt()) >= 0 ? ExecuteAtUnknown : executeAt();
+        KnownDeps newDeps = subtract.deps().compareTo(deps()) >= 0 ? DepsUnknown : deps();
+        Outcome newOutcome = outcome().subtract(subtract.outcome());
+        PrivilegedVote newPrivilegedVote = privilegedVote().compareTo(subtract.privilegedVote()) > 0 ? VotePreAccept : NoVote;
+        return new Known(route(), newDefinition, newExecuteAt, newDeps, newOutcome, newPrivilegedVote);
     }
 
     public boolean isDecided()
     {
-        return executeAt.isDecided() || outcome.isDecided();
+        return executeAt().isDecided() || outcome().isDecided();
     }
 
     public boolean isDecidedToExecute()
     {
-        return executeAt.isDecidedAndKnownToExecute() || outcome.isOrWasApply();
+        return executeAt().isDecidedAndKnownToExecute() || outcome().isOrWasApply();
     }
 
     public String toString()
     {
-        return Stream.of(definition.isKnown() ? "Definition" : null,
-                         executeAt.isDecidedAndKnownToExecute() ? "ExecuteAt" : null,
-                         deps.hasDecidedDeps() ? "Deps" : null,
-                         outcome.isDecided() ? outcome.toString() : null
+        return Stream.of(definition().isKnown() ? "Definition" : null,
+                         executeAt().isDecidedAndKnownToExecute() ? "ExecuteAt" : null,
+                         deps().hasDecidedDeps() ? "Deps" : null,
+                         outcome().isDecided() ? outcome().toString() : null
         ).filter(Objects::nonNull).collect(Collectors.joining(",", "[", "]"));
     }
 
@@ -340,7 +367,7 @@ public class Known
     // ignores class identity
     boolean equals(Known that)
     {
-        return route == that.route && definition == that.definition && executeAt == that.executeAt && deps == that.deps && outcome == that.outcome;
+        return encoded == that.encoded;
     }
 
     @Override
@@ -351,24 +378,122 @@ public class Known
 
     public boolean hasDefinition()
     {
-        return definition.isKnown();
+        return is(DefinitionKnown);
     }
 
     public boolean hasDecidedDeps()
     {
-        return deps.hasDecidedDeps();
+        return deps().hasDecidedDeps();
     }
 
     public boolean isInvalidated()
     {
-        return outcome.isInvalidated();
+        return outcome().isInvalidated();
     }
 
     public void checkInvariants()
     {
-        if (outcome.isInvalidated()) Invariants.checkState(deps != DepsKnown && executeAt != ExecuteAtKnown);
-        else if (outcome.isOrWasApply()) Invariants.checkState(deps != NoDeps && executeAt != NoExecuteAt);
+        if (outcome().isInvalidated()) Invariants.checkState(deps() != DepsKnown && executeAt() != ExecuteAtKnown);
+        else if (outcome().isOrWasApply()) Invariants.checkState(deps() != NoDeps && executeAt() != NoExecuteAt);
         Invariants.checkState(!isDefinitionKnown() || hasFullRoute());
+    }
+
+    public KnownRoute route()
+    {
+        return KnownRoute.VALUES[encoded & ROUTE_MASK];
+    }
+
+    public boolean has(KnownRoute route)
+    {
+        return (encoded & ROUTE_MASK) == route.ordinal();
+    }
+
+    public int compareTo(KnownRoute route)
+    {
+        return (encoded & ROUTE_MASK) - route.ordinal();
+    }
+
+    public Definition definition()
+    {
+        return Definition.VALUES[(encoded & DEFINITION_MASK) >>> DEFINITION_SHIFT];
+    }
+
+    public boolean is(Definition definition)
+    {
+        return ((encoded & DEFINITION_MASK) >> DEFINITION_SHIFT) == definition.ordinal();
+    }
+
+    public int compareTo(Definition definition)
+    {
+        return ((encoded & DEFINITION_MASK) >> DEFINITION_SHIFT) - definition.ordinal();
+    }
+
+    public KnownExecuteAt executeAt()
+    {
+        return KnownExecuteAt.VALUES[(encoded & EXECUTE_AT_MASK) >>> EXECUTE_AT_SHIFT];
+    }
+
+    public boolean is(KnownExecuteAt executeAt)
+    {
+        return ((encoded & EXECUTE_AT_MASK) >> EXECUTE_AT_SHIFT) == executeAt.ordinal();
+    }
+
+    public int compareTo(KnownExecuteAt executeAt)
+    {
+        return ((encoded & EXECUTE_AT_MASK) >> EXECUTE_AT_SHIFT) - executeAt.ordinal();
+    }
+
+    public KnownDeps deps()
+    {
+        return KnownDeps.VALUES[(encoded & DEPS_MASK) >>> DEPS_SHIFT];
+    }
+
+    public boolean is(KnownDeps deps)
+    {
+        return ((encoded & DEPS_MASK) >> DEPS_SHIFT) == deps.ordinal();
+    }
+
+    public int compareTo(KnownDeps deps)
+    {
+        return ((encoded & DEPS_MASK) >> DEPS_SHIFT) - deps.ordinal();
+    }
+
+    public Outcome outcome()
+    {
+        return Outcome.VALUES[(encoded & OUTCOME_MASK) >>> OUTCOME_SHIFT];
+    }
+
+    public boolean is(Outcome outcome)
+    {
+        return ((encoded & OUTCOME_MASK) >> OUTCOME_SHIFT) == outcome.ordinal();
+    }
+
+    public int compareTo(Outcome outcome)
+    {
+        return ((encoded & OUTCOME_MASK) >> OUTCOME_SHIFT) - outcome.ordinal();
+    }
+
+    public boolean is(PrivilegedVote privilegedVote)
+    {
+        return privilegedOrdinal() == privilegedVote.ordinal();
+    }
+
+    /**
+     * This represents a vote by both the replica in question AND the coordinator (if different).
+     */
+    public PrivilegedVote privilegedVote()
+    {
+        return privilegedOrdinal() == 0 ? NoVote : VotePreAccept;
+    }
+
+    public boolean hasPrivilegedVote()
+    {
+        return privilegedVote() == VotePreAccept;
+    }
+
+    private int privilegedOrdinal()
+    {
+        return (encoded & PRIVILEGED_VOTE_MASK) >>> PRIVILEGED_VOTE_SHIFT;
     }
 
     public enum KnownRoute
@@ -377,7 +502,7 @@ public class Known
          * A route may or may not be known, but it may not cover (or even intersect) this shard.
          * The route should be relied upon only if it is a FullRoute.
          */
-        Maybe,
+        MaybeRoute,
 
         /**
          * A route is known that covers the ranges this shard participates in.
@@ -386,24 +511,26 @@ public class Known
          *
          * This status primarily exists to communicate semantically to the reader.
          */
-        Covering,
+        CoveringRoute,
 
         /**
          * The full route is known. <i>Generally</i> this coincides with knowing the Definition.
          */
-        Full
+        FullRoute
         ;
+
+        private static final KnownRoute[] VALUES = values();
 
         public KnownRoute reduce(KnownRoute that)
         {
             if (this == that) return this;
-            if (this == Full || that == Full) return Full;
-            return Maybe;
+            if (this == FullRoute || that == FullRoute) return FullRoute;
+            return MaybeRoute;
         }
 
         public KnownRoute validForAll()
         {
-            return this == Covering ? Maybe : this;
+            return this == CoveringRoute ? MaybeRoute : this;
         }
 
         public KnownRoute atLeast(KnownRoute that)
@@ -440,6 +567,8 @@ public class Known
          */
         NoExecuteAt
         ;
+
+        private static final KnownExecuteAt[] VALUES = values();
 
         /**
          * Is known to have agreed to execute or not; but the decision is not known (maybe erased)
@@ -503,6 +632,20 @@ public class Known
         DepsUnknown(PreAccept),
 
         /**
+         * No decision is known to have been reached, but we have dependencies broadcast from the original coordinator
+         * (or its proxy) that may be used for recovery decisions.
+         */
+        DepsFromCoordinator(PreAccept),
+
+        /**
+         * A decision to execute the transaction at the original timestamp (TxnId) is known to have been proposed,
+         * and the associated dependencies for the shard(s) in question are known.
+         *
+         * Proposed means Accepted at some replica, but not necessarily a majority and so not committed
+         */
+        DepsProposedFixed(Accept),
+
+        /**
          * A decision to execute the transaction at a given timestamp is known to have been proposed,
          * and the associated dependencies for the shard(s) in question are known for the coordination epoch (txnId.epoch) only.
          *
@@ -535,6 +678,8 @@ public class Known
          */
         NoDeps(Invalidate);
 
+        private static final KnownDeps[] VALUES = values();
+
         public final Status.Phase phase;
 
         KnownDeps(Status.Phase phase)
@@ -542,23 +687,20 @@ public class Known
             this.phase = phase;
         }
 
-        public boolean hasDecidedDeps()
-        {
-            return this == DepsKnown;
-        }
-
         public boolean canProposeInvalidation()
         {
             return this == DepsUnknown;
         }
 
-        public boolean hasProposedOrDecidedDeps()
+        public boolean hasPreAcceptedOrProposedOrDecidedDeps()
         {
             switch (this)
             {
-                default: throw new AssertionError("Unhandled KnownDeps: " + this);
+                default: throw new UnhandledEnum(this);
+                case DepsFromCoordinator:
                 case DepsCommitted:
                 case DepsProposed:
+                case DepsProposedFixed:
                 case DepsKnown:
                     return true;
                 case NoDeps:
@@ -566,6 +708,46 @@ public class Known
                 case DepsUnknown:
                     return false;
             }
+        }
+
+        public boolean hasProposedOrDecidedDeps()
+        {
+            switch (this)
+            {
+                default: throw new UnhandledEnum(this);
+                case DepsCommitted:
+                case DepsProposed:
+                case DepsProposedFixed:
+                case DepsKnown:
+                    return true;
+                case DepsFromCoordinator:
+                case NoDeps:
+                case DepsErased:
+                case DepsUnknown:
+                    return false;
+            }
+        }
+
+        public boolean hasProposedDeps()
+        {
+            switch (this)
+            {
+                default: throw new UnhandledEnum(this);
+                case DepsProposed:
+                case DepsProposedFixed:
+                    return true;
+                case DepsCommitted:
+                case DepsKnown:
+                case NoDeps:
+                case DepsErased:
+                case DepsUnknown:
+                    return false;
+            }
+        }
+
+        public boolean hasDecidedDeps()
+        {
+            return this == DepsKnown;
         }
 
         public boolean hasCommittedOrDecidedDeps()
@@ -625,6 +807,8 @@ public class Known
          */
         DefinitionKnown;
 
+        private static final Definition[] VALUES = values();
+
         public boolean isKnown()
         {
             return this == DefinitionKnown;
@@ -681,8 +865,10 @@ public class Known
         /**
          * The transaction is known to have been invalidated
          */
-        Invalidated
+        Abort
         ;
+
+        private static final Outcome[] VALUES = values();
 
         public boolean isOrWasApply()
         {
@@ -700,7 +886,7 @@ public class Known
                     if (other == Apply)
                         return true;
                 case Apply:
-                case Invalidated:
+                case Abort:
                 case Erased:
                     return other == this;
             }
@@ -713,7 +899,7 @@ public class Known
 
         public boolean isInvalidated()
         {
-            return this == Invalidated;
+            return this == Abort;
         }
 
         public Outcome atLeast(Outcome that)
@@ -751,8 +937,13 @@ public class Known
             int c = compareTo(that);
             Outcome max = c >= 0 ? this : that;
             Outcome min = c <= 0 ? this : that;
-            return max != Invalidated || (min != Apply && min != WasApply);
+            return max != Abort || (min != Apply && min != WasApply);
         }
+    }
+
+    public enum PrivilegedVote
+    {
+        NoVote, VotePreAccept
     }
 
     public enum LogicalEpoch

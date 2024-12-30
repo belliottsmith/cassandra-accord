@@ -19,16 +19,18 @@ package accord.utils;
 
 import javax.annotation.Nonnull;
 
-public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>> implements SortedCursor<T>
+import accord.utils.SortedList.MergeCursor;
+
+public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>, L extends SortedList<? extends T>> implements MergeCursor<T, L>
 {
     // Holds and is comparable by the head item of an iterator it owns
-    protected static final class Candidate<T extends Comparable<? super T>> implements Comparable<Candidate<T>>
+    public static final class Candidate<T extends Comparable<? super T>, L extends SortedList<? extends T>> implements Comparable<Candidate<T, L>>, MergeCursor.Entry<L>
     {
-        private final SortedList<? extends T> list;
+        private final L list;
         private int itemIdx;
         private T item;
 
-        public Candidate(@Nonnull SortedList<? extends T> list)
+        public Candidate(@Nonnull L list)
         {
             Invariants.checkState(!list.isEmpty());
             this.list = list;
@@ -36,7 +38,7 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>> 
         }
 
         /** @return this if our iterator had an item, and it is now available, otherwise null */
-        private Candidate<T> advance()
+        private Candidate<T, L> advance()
         {
             if (++itemIdx >= list.size())
                 return null;
@@ -58,11 +60,21 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>> 
             {
                 result |= ADVANCED;
                 if ((itemIdx = i) < list.size())
-                    item = list.get(itemIdx = i);
+                    item = list.get(i);
                 else
                     item = null;
             }
             return result;
+        }
+
+        public L list()
+        {
+            return list;
+        }
+
+        public int index()
+        {
+            return itemIdx;
         }
 
         @Override
@@ -71,20 +83,20 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>> 
             return list.toString();
         }
 
-        public int compareTo(Candidate<T> that)
+        public int compareTo(Candidate<T, L> that)
         {
             return this.item.compareTo(that.item);
         }
     }
 
-    Candidate<T>[] heap;
+    Candidate<T, L>[] heap;
     int size = 0;
     public MergeFewDisjointSortedListsCursor(int capacity)
     {
         heap = new Candidate[capacity];
     }
 
-    public void add(SortedList<? extends T> list)
+    public void add(L list)
     {
         heap[size++] = new Candidate<>(list);
     }
@@ -101,9 +113,14 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>> 
         return heap[0].item;
     }
 
+    public MergeCursor.Entry<L> curEntry()
+    {
+        return heap[0];
+    }
+
     public void advance()
     {
-        Candidate<T> sink = heap[0].advance();
+        Candidate<T, L> sink = heap[0].advance();
         if (sink == null) replaceHead();
         else siftDown(heap[0], 0);
     }
@@ -120,10 +137,10 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>> 
         if (size == 0)
             return false;
 
-        Candidate<T> found = null;
+        Candidate<T, L> found = null;
         while (true)
         {
-            Candidate<T> head = heap[0];
+            Candidate<T, L> head = heap[0];
             if (head == found)
                 return true;
 
@@ -158,7 +175,7 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>> 
         heap[--size] = null;
     }
 
-    private void siftDown(Candidate<T> node, int i)
+    private void siftDown(Candidate<T, L> node, int i)
     {
         int j = i;
         while (++j < size)

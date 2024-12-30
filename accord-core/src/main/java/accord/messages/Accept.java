@@ -21,7 +21,6 @@ package accord.messages;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Commands.AcceptOutcome;
@@ -45,9 +44,13 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
+import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
 import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
+import static accord.local.KeyHistory.ASYNC;
+import static accord.local.KeyHistory.SYNC;
+import static accord.messages.Accept.Kind.MEDIUM;
 
 // TODO (low priority, efficiency): use different objects for send and receive, so can be more efficient
 //                                  (e.g. serialize without slicing, and without unnecessary fields)
@@ -55,27 +58,32 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 {
     public static class SerializerSupport
     {
-        public static Accept create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps)
+        public static Accept create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps)
         {
-            return new Accept(txnId, scope, waitForEpoch, minEpoch, ballot, executeAt, partialDeps);
+            return new Accept(txnId, scope, waitForEpoch, minEpoch, kind, ballot, executeAt, partialDeps);
         }
     }
 
+    public enum Kind { SLOW, MEDIUM }
+
+    public final Kind kind;
     public final Ballot ballot;
     public final Timestamp executeAt;
     public final PartialDeps partialDeps;
 
-    public Accept(Id to, Topologies topologies, Ballot ballot, TxnId txnId, FullRoute<?> route, Timestamp executeAt, Deps deps)
+    public Accept(Id to, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, FullRoute<?> route, Timestamp executeAt, Deps deps)
     {
         super(to, topologies, txnId, route);
+        this.kind = kind;
         this.ballot = ballot;
         this.executeAt = executeAt;
         this.partialDeps = deps.intersecting(scope);
     }
 
-    private Accept(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps)
+    private Accept(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
+        this.kind = kind;
         this.ballot = ballot;
         this.executeAt = executeAt;
         this.partialDeps = partialDeps;
@@ -86,7 +94,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, txnId.epoch(), executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        switch (Commands.accept(safeStore, safeCommand, participants, txnId, ballot, scope, executeAt, partialDeps))
+        switch (Commands.accept(safeStore, safeCommand, participants, txnId, kind, ballot, scope, executeAt, partialDeps))
         {
             default: throw new IllegalStateException();
             case Redundant:
@@ -94,16 +102,20 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
                 return AcceptReply.redundant(ballot, participants, safeCommand.current());
             case RejectedBallot:
                 return new AcceptReply(safeCommand.current().promised());
-                // if owns is empty, we're just fetching deps
-                // TODO (desired): optimise deps calculation; for some keys we only need to return the last RX
             case Retired:
+                // if we're Retired, participants.owns() is empty, so we're just fetching deps
+                // TODO (desired): optimise deps calculation; for some keys we only need to return the last RX
             case Success:
-                // TODO (desired, efficiency): only return delta of sent and calculated deps
+                if (kind == MEDIUM)
+                    return new AcceptReply(Deps.NONE);
+
                 Deps deps = calculateDeps(safeStore, participants);
                 if (deps == null)
                     return AcceptReply.redundant(ballot, participants, safeCommand.current());
 
                 Invariants.checkState(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
+                if (filterDuplicateDependenciesFromAcceptReply())
+                    deps = deps.without(this.partialDeps);
                 return new AcceptReply(deps);
         }
     }
@@ -114,15 +126,9 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     }
 
     @Override
-    public AcceptReply reduce(AcceptReply ok1, AcceptReply ok2)
+    public AcceptReply reduce(AcceptReply r1, AcceptReply r2)
     {
-        if (!ok1.isOk() || !ok2.isOk())
-            return ok1.outcome().compareTo(ok2.outcome()) >= 0 ? ok1 : ok2;
-
-        Deps deps = ok1.deps.with(ok2.deps);
-        if (deps == ok1.deps) return ok1;
-        if (deps == ok2.deps) return ok2;
-        return new AcceptReply(deps);
+        return AcceptReply.reduce(r1, r2);
     }
 
     @Override
@@ -146,7 +152,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.SYNC;
+        return kind == MEDIUM ? ASYNC : SYNC;
     }
 
     @Override
@@ -157,7 +163,8 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
     public String toString() {
         return "Accept{" +
-                "ballot: " + ballot +
+                "kind: " + kind +
+                ", ballot: " + ballot +
                 ", txnId: " + txnId +
                 ", executeAt: " + executeAt +
                 ", deps: " + partialDeps +
@@ -166,7 +173,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
     public static final class AcceptReply implements Reply
     {
-        public static final AcceptReply ACCEPT_INVALIDATE = new AcceptReply(Success);
+        public static final AcceptReply SUCCESS = new AcceptReply(Success);
 
         public final AcceptOutcome outcome;
         public final Ballot supersededBy;
@@ -217,6 +224,17 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
             return new AcceptReply(superseding, command.executeAtIfKnown());
         }
 
+        public static AcceptReply reduce(AcceptReply r1, AcceptReply r2)
+        {
+            if (!r1.isOk() || !r2.isOk())
+                return r1.outcome().compareTo(r2.outcome()) >= 0 ? r1 : r2;
+
+            Deps deps = r1.deps == null ? r2.deps : r2.deps == null ? r1.deps : r1.deps.with(r2.deps);
+            if (deps == r1.deps) return r1;
+            if (deps == r2.deps) return r2;
+            return new AcceptReply(deps);
+        }
+
         @Override
         public MessageType type()
         {
@@ -249,31 +267,32 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         }
     }
 
-    public static class Invalidate extends AbstractRequest<AcceptReply>
+    public static class NotAccept extends AbstractRequest<AcceptReply>
     {
+        public final Status status;
         public final Ballot ballot;
-        // should not be a non-participating home key
-        public final RoutingKey someKey;
+        public final Participants<?> participants;
 
-        public Invalidate(Ballot ballot, TxnId txnId, RoutingKey someKey)
+        public NotAccept(Status status, Ballot ballot, TxnId txnId, Participants<?> participants)
         {
             super(txnId);
+            this.status = status;
             this.ballot = ballot;
-            this.someKey = someKey;
+            this.participants = participants;
         }
 
         @Override
         public Cancellable submit()
         {
-            return node.mapReduceConsumeLocal(this, someKey, txnId.epoch(), this);
+            return node.mapReduceConsumeLocal(this, participants, txnId.epoch(), txnId.epoch(), this);
         }
 
         @Override
         public AcceptReply apply(SafeCommandStore safeStore)
         {
-            StoreParticipants participants = StoreParticipants.invalidate(safeStore, Participants.singleton(txnId.domain(), someKey), txnId);
+            StoreParticipants participants = StoreParticipants.notAccept(safeStore, this.participants, txnId);
             SafeCommand safeCommand = safeStore.get(txnId, participants);
-            AcceptOutcome outcome = Commands.acceptInvalidate(safeStore, safeCommand, ballot);
+            AcceptOutcome outcome = Commands.notAccept(safeStore, safeCommand, status, ballot);
             switch (outcome)
             {
                 default: throw new IllegalArgumentException("Unknown status: " + outcome);
@@ -282,22 +301,28 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
                     return AcceptReply.redundant(ballot, participants, safeCommand.current());
                 case Retired:
                 case Success:
-                    return AcceptReply.ACCEPT_INVALIDATE;
+                    return AcceptReply.SUCCESS;
                 case RejectedBallot:
                     return new AcceptReply(safeCommand.current().promised());
             }
         }
 
         @Override
+        public AcceptReply reduce(AcceptReply r1, AcceptReply r2)
+        {
+            return AcceptReply.reduce(r1, r2);
+        }
+
+        @Override
         public MessageType type()
         {
-            return MessageType.ACCEPT_INVALIDATE_REQ;
+            return MessageType.NOT_ACCEPT_REQ;
         }
 
         @Override
         public String toString()
         {
-            return "AcceptInvalidate{ballot:" + ballot + ", txnId:" + txnId + ", key:" + someKey + '}';
+            return "NotAccept{kind: " + status + ", ballot:" + ballot + ", txnId:" + txnId + ", key:" + participants + '}';
         }
 
         @Override

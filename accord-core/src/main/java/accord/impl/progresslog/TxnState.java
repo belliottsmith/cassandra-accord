@@ -26,6 +26,7 @@ import accord.api.ProgressLog.BlockedUntil;
 import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -42,7 +43,7 @@ final class TxnState extends HomeState
         switch (newProgress)
         {
             default:
-                throw new AssertionError("Unhandled Progress: " + newProgress);
+                throw new UnhandledEnum(newProgress);
             case NoneExpected:
             case Querying:
                 newDelay = 0;
@@ -50,7 +51,7 @@ final class TxnState extends HomeState
             case Queued:
                 switch (updated)
                 {
-                    default: throw new AssertionError("Unhandled TxnStateKind: " + updated);
+                    default: throw new UnhandledEnum(updated);
                     case Waiting:
                         newDelay = instance.commandStore.agent().seekProgressDelay(instance.node, safeStore, txnId, waitingRetryCounter(), blockedUntil, MICROSECONDS);
                         break;

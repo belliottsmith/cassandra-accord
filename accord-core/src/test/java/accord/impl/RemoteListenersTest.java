@@ -44,6 +44,7 @@ import accord.api.RemoteListeners;
 import accord.api.RemoteListeners.Registration;
 import accord.api.RoutingKey;
 import accord.impl.LocalListenersTest.TestSafeCommand;
+import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.CommandSummaries;
@@ -71,7 +72,7 @@ import org.agrona.collections.ObjectHashSet;
 
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Known.KnownRoute.Full;
+import static accord.primitives.Known.KnownRoute.FullRoute;
 
 public class RemoteListenersTest
 {
@@ -207,7 +208,7 @@ public class RemoteListenersTest
             int nodeCount = rnd.nextBoolean() ? rnd.nextInt(10, 1000) : Integer.MAX_VALUE;
             this.nodeIds = () -> new Node.Id(rnd.nextInt(0, nodeCount));
             this.awaits = rnd.randomWeightedPicker(Arrays.stream(SaveStatus.values())
-                                                         .filter(s -> s.known.route == Full)
+                                                         .filter(s -> s.known.route() == FullRoute)
                                                          .toArray(SaveStatus[]::new));
             this.durabilities = rnd.randomWeightedPicker(Durability.values());
 
@@ -224,7 +225,12 @@ public class RemoteListenersTest
             for (int op = 0; op < ops; ++op)
             {
                 if (canonical.isEmpty() || !rnd.decide(notifyChance)) registerOne();
-                else notifyOne(awaits.get(), durabilities.get(), notifyRatio);
+                else
+                {
+                    SaveStatus saveStatus = awaits.get();
+                    Durability durability = durabilities.get();
+                    notifyOne(saveStatus, Command.durability(durability, saveStatus), notifyRatio);
+                }
             }
             while (!canonical.isEmpty())
                 notifyOne(SaveStatus.Invalidated, Durability.Universal, notifyRatio);
@@ -273,6 +279,7 @@ public class RemoteListenersTest
                 TxnId tmp = canonical.floorKey(txnIds.get());
                 txnId = tmp == null ? canonical.firstKey() : tmp;
             }
+
             TreeMap<StateKey, State> stateMap = canonical.get(txnId);
             TestSafeCommand safeCommand = new TestSafeCommand(txnId, newStatus, newDurability);
 

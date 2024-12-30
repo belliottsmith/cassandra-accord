@@ -33,16 +33,11 @@ import accord.api.Result;
 import accord.api.Update;
 import accord.local.SafeCommandStore;
 import accord.utils.Invariants;
+import accord.utils.TinyEnumSet;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
 import static accord.primitives.Routables.Slice.Minimal;
-import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
-import static accord.primitives.Txn.Kind.Kinds.ExclusiveSyncPoints;
-import static accord.primitives.Txn.Kind.Kinds.Nothing;
-import static accord.primitives.Txn.Kind.Kinds.RsOrWs;
-import static accord.primitives.Txn.Kind.Kinds.Ws;
-import static accord.primitives.Txn.Kind.Kinds.WsOrSyncPoints;
 
 public interface Txn
 {
@@ -106,59 +101,46 @@ public interface Txn
         ExclusiveSyncPoint('X', true, true, true, true),
         ;
 
-        public static class Kinds
+        public static class Kinds extends TinyEnumSet<Kind>
         {
-            public static final Kinds Nothing = new Kinds();
-            public static final Kinds Ws = new Kinds(Write);
-            public static final Kinds RsOrWs = new Kinds(Write, Read);
-            public static final Kinds WsOrSyncPoints = new Kinds(Write, SyncPoint, ExclusiveSyncPoint);
-            public static final Kinds ExclusiveSyncPoints = new Kinds(ExclusiveSyncPoint);
-            public static final Kinds AnyGloballyVisible = new Kinds(Write, Read, SyncPoint, ExclusiveSyncPoint);
-
-            final int bitset;
             Kinds(Kind ... kinds)
             {
-                int bitset = 0;
-                for (Kind kind : kinds)
-                    bitset |= 1 << kind.ordinal();
-                this.bitset = bitset;
+                super(kinds);
             }
 
             private Kinds(int bitset)
             {
-                this.bitset = bitset;
+                super(bitset);
             }
 
             public Kinds or(Kinds or)
             {
-                int newBitset = bitset | or.bitset;
-                return newBitset == bitset ? this : newBitset == or.bitset ? or : new Kinds(newBitset);
-            }
-
-            public boolean test(Kind kind)
-            {
-                return testOrdinal(kind.ordinal());
+                return or(this, or, Kinds::new);
             }
 
             public boolean test(TxnId txnId)
             {
                 return txnId.is(this);
             }
-
-            boolean testOrdinal(int ordinal)
-            {
-                return 0 != (bitset & (1 << ordinal));
-            }
         }
 
         // in future: BlindWrite, Interactive?
 
         private static final Kind[] VALUES = Kind.values();
+        private static final int COUNT = VALUES.length;
         private static final long ENCODED_ORDINAL_INFO;
+        private static final long ENCODED_WITNESSES_INFO;
         private static final long IS_VISIBLE_ORDINAL_INFO_OFFSET = 0;
-        private static final long IS_SYNCPOINT_ORDINAL_INFO_OFFSET = VALUES.length;
-        private static final long IS_SYSTEM_ORDINAL_INFO_OFFSET = 2 * VALUES.length;
-        private static final long AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET = 3 * VALUES.length;
+        private static final long IS_SYNCPOINT_ORDINAL_INFO_OFFSET = COUNT;
+        private static final long IS_SYSTEM_ORDINAL_INFO_OFFSET = 2 * COUNT;
+        private static final long AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET = 3 * COUNT;
+
+        public static final Kinds Nothing = new Kinds();
+        public static final Kinds Ws = new Kinds(Write);
+        public static final Kinds RsOrWs = new Kinds(Write, Read);
+        public static final Kinds WsOrSyncPoints = new Kinds(Write, SyncPoint, ExclusiveSyncPoint);
+        public static final Kinds ExclusiveSyncPoints = new Kinds(ExclusiveSyncPoint);
+        public static final Kinds AnyGloballyVisible = new Kinds(Write, Read, SyncPoint, ExclusiveSyncPoint);
 
         static
         {
@@ -174,6 +156,19 @@ public interface Txn
                 if (kind.awaitsOnlyDeps()) encodedOrdinalInfo |= 1L << (AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET + kind.ordinal());
             }
             ENCODED_ORDINAL_INFO = encodedOrdinalInfo;
+            Invariants.checkState(COUNT * COUNT <= 64);
+            int offset = 0;
+            long encodedWitnessesInfo = 0L;
+            for (Kind witness : VALUES)
+            {
+                for (Kind witnessed : VALUES)
+                {
+                    if (witness.witnesses().test(witnessed))
+                        encodedWitnessesInfo |= 1L << offset;
+                    ++offset;
+                }
+            }
+            ENCODED_WITNESSES_INFO = encodedWitnessesInfo;
         }
 
         private final char shortName;
@@ -273,12 +268,22 @@ public interface Txn
 
         public boolean witnesses(TxnId txnId)
         {
-            return witnesses().test(txnId);
+            return witnesses(ordinal(), TxnId.kindOrdinal(txnId.flagsUnmasked()));
         }
 
         public boolean witnesses(Kind kind)
         {
-            return witnesses().test(kind);
+            return witnesses(this.ordinal(), kind.ordinal());
+        }
+
+        static boolean witnesses(int witnessOrdinal, int witnessedOrdinal)
+        {
+            return 0 != ((1L << (witnessOrdinal * COUNT + witnessedOrdinal)) & ENCODED_WITNESSES_INFO);
+        }
+
+        public boolean witnessedBy(Kind kind)
+        {
+            return kind.witnesses(this);
         }
 
         public Kinds witnessedBy()
@@ -423,6 +428,9 @@ public interface Txn
 
     @Nonnull PartialTxn slice(Ranges ranges, boolean includeQuery);
     @Nonnull PartialTxn intersecting(Participants<?> participants, boolean includeQuery);
+
+    default boolean covers(Route<?> route) { return true; }
+    default boolean covers(Unseekables<?> participants) { return true; }
 
     default boolean isWrite()
     {

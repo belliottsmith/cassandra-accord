@@ -138,7 +138,7 @@ public class AccordGens
 
     public static Gen<TxnId> txnIds(Gen.LongGen epochs, Gen.LongGen hlcs, Gen.IntGen nodes, Gen<Txn.Kind> kinds, Gen<Routable.Domain> domains)
     {
-        return rs -> new TxnId(epochs.nextLong(rs), hlcs.nextLong(rs), kinds.next(rs), domains.next(rs), new Node.Id(nodes.nextInt(rs)));
+        return rs -> new TxnId(epochs.nextLong(rs), hlcs.nextLong(rs), 0, kinds.next(rs), domains.next(rs), new Node.Id(nodes.nextInt(rs)));
     }
 
     public static Gen<Ballot> ballot()
@@ -343,7 +343,7 @@ public class AccordGens
                 //noinspection StatementWithEmptyBody
                 while (!joining.add(nodes.get(rs.nextInt(nodes.size()))));
             }
-            return new Shard(range, nodes, fastPath, joining);
+            return Shard.create(range, nodes, fastPath, joining);
         };
     }
 

@@ -23,15 +23,22 @@ import javax.annotation.Nullable;
 
 import accord.local.Node;
 import accord.primitives.Participants;
+import accord.primitives.TxnId;
+import accord.primitives.TxnId.FastPath;
 import accord.topology.Shard;
 import accord.topology.Topologies;
+import accord.utils.UnhandledEnum;
 
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.*;
+import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
+import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
+import static accord.primitives.TxnId.FastPath.UNOPTIMISED;
 
 public class InvalidationTracker extends AbstractTracker<InvalidationTracker.InvalidationShardTracker>
 {
     public static class InvalidationShardTracker extends ShardTracker implements ShardOutcome<InvalidationTracker>
     {
+        private final int fastQuorumSize;
         private int fastPathRejects;
         private int fastPathInflight;
         private int promisesOrPartPromises;
@@ -40,16 +47,17 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
         private boolean isFinal;
         private @Nullable Participants<?> neverTruncated;
 
-        private InvalidationShardTracker(Shard shard)
+        private InvalidationShardTracker(FastPath fastPath, Shard shard)
         {
             super(shard);
             inflight = shard.rf();
-            fastPathInflight = shard.fastPathElectorate.size();
+            fastPathInflight = shard.fastPathElectorateSize;
+            fastQuorumSize = shard.fastQuorumSize(fastPath);
         }
 
         public InvalidationShardTracker onSuccess(Node.Id from, @Nullable Participants<?> promised, @Nonnull Participants<?> notTruncated, @Nullable Participants<?> truncated, boolean isDecided, boolean withFastPath)
         {
-            if (shard.fastPathElectorate.contains(from))
+            if (shard.isInFastPath(from))
             {
                 --fastPathInflight;
                 if (!withFastPath) ++fastPathRejects;
@@ -67,7 +75,7 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
 
         public ShardOutcome<? super InvalidationTracker> onFailure(Node.Id from)
         {
-            if (shard.fastPathElectorate.contains(from))
+            if (shard.isInFastPath(from))
                 --fastPathInflight;
             --inflight;
             return this;
@@ -85,12 +93,12 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
 
         public boolean isFastPathRejected()
         {
-            return fastPathRejects > shard.fastPathElectorate.size() - shard.fastPathQuorumSize;
+            return shard.rejectsFastPath(fastQuorumSize, fastPathRejects);
         }
 
         public boolean canFastPathBeRejected()
         {
-            return fastPathRejects + fastPathInflight > shard.fastPathElectorate.size() - shard.fastPathQuorumSize;
+            return shard.rejectsFastPath(fastQuorumSize, fastPathRejects + fastPathInflight);
         }
 
         private boolean isPromiseDecided()
@@ -100,12 +108,12 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
 
         public boolean isPromiseRejected()
         {
-            return promisesOrPartPromises + inflight < shard.slowPathQuorumSize;
+            return promisesOrPartPromises + inflight < shard.slowQuorumSize;
         }
 
         public boolean isPromised()
         {
-            return promisesOrPartPromises >= shard.slowPathQuorumSize;
+            return promisesOrPartPromises >= shard.slowQuorumSize;
         }
 
         public boolean isAnyNotTruncated()
@@ -148,9 +156,9 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
 
     private int promisedShard = -1;
     private boolean rejectsFastPath;
-    public InvalidationTracker(Topologies topologies)
+    public InvalidationTracker(Topologies topologies, TxnId txnId)
     {
-        super(topologies, InvalidationShardTracker[]::new, InvalidationShardTracker::new);
+        super(topologies, InvalidationShardTracker[]::new, factory(txnId));
     }
 
     public Shard promisedShard()
@@ -182,5 +190,16 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
     public RequestStatus recordFailure(Node.Id from)
     {
         return recordResponse(this, from, InvalidationShardTracker::onFailure, from);
+    }
+
+    private static ShardFactory<InvalidationShardTracker> factory(TxnId txnId)
+    {
+        switch (txnId.fastPath())
+        {
+            default: throw new UnhandledEnum(txnId.fastPath());
+            case UNOPTIMISED: return (i, s) -> new InvalidationShardTracker(UNOPTIMISED, s);
+            case PRIVILEGED_COORDINATOR_WITHOUT_DEPS: return (i, s) -> new InvalidationShardTracker(PRIVILEGED_COORDINATOR_WITHOUT_DEPS, s);
+            case PRIVILEGED_COORDINATOR_WITH_DEPS: return (i, s) -> new InvalidationShardTracker(PRIVILEGED_COORDINATOR_WITH_DEPS, s);
+        }
     }
 }

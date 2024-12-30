@@ -21,11 +21,11 @@ package accord.primitives;
 import accord.coordinate.Outcome;
 import accord.local.Command;
 import accord.primitives.Status.Durability;
-import accord.primitives.Status.Phase;
 
 import javax.annotation.Nonnull;
 
-import static accord.primitives.Status.AcceptedInvalidate;
+import static accord.primitives.Status.Phase.Accept;
+import static accord.primitives.Status.Phase.Commit;
 
 /**
  * A representation of activity on a command, so that peers may monitor a command to ensure it is making progress
@@ -56,7 +56,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
         this.durability = durability;
         this.status = status;
         this.promised = promised;
-        this.isAccepted = status.phase.compareTo(Phase.Accept) >= 0 && accepted.equals(promised);
+        this.isAccepted = isAccepted(status, promised, accepted);
     }
 
     @Override public int compareTo(@Nonnull ProgressToken that)
@@ -73,7 +73,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
         int c = this.durability.compareTo(that.durability());
         if (c == 0) c = this.status.phase.compareTo(that.status().phase);
         if (c == 0) c = this.promised.compareTo(that.promised());
-        if (c == 0 && this.isAccepted != (that.isAccepted() && that.promised().equals(that.acceptedOrCommitted()))) c = this.isAccepted ? 1 : -1;
+        if (c == 0 && this.isAccepted != isAccepted(that.status(), that.promised(), that.acceptedOrCommitted())) c = this.isAccepted ? 1 : -1;
         return c;
     }
 
@@ -101,7 +101,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
             status = this.status;
 
         Ballot promised = command.promised();
-        boolean isAccepted = status.hasBeen(AcceptedInvalidate) && command.acceptedOrCommitted().equals(command.promised());
+        boolean isAccepted = isAccepted(command.status(), command.promised(), command.acceptedOrCommitted());
         if (this.promised.compareTo(promised) >= 0)
         {
             promised = this.promised;
@@ -122,5 +122,10 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
     public ProgressToken asProgressToken()
     {
         return this;
+    }
+
+    private static boolean isAccepted(Status status, Ballot promised, Ballot acceptedOrCommitted)
+    {
+        return (status.phase == Accept || status.phase == Commit) && promised.equals(acceptedOrCommitted);
     }
 }

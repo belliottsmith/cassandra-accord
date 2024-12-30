@@ -34,6 +34,7 @@ import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
 import accord.primitives.Route;
+import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -43,11 +44,14 @@ import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
-import static accord.local.CommandSummaries.IsDep.IS_NOT_DEP;
 import static accord.local.CommandSummaries.ComputeIsDep.EITHER;
 import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
+import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.NOTACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.PREACCEPTED;
 import static accord.local.CommandSummaries.TestStartedAt.ANY;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
@@ -56,9 +60,11 @@ import static accord.messages.BeginRecovery.RecoverReply.Kind.Truncated;
 import static accord.messages.PreAccept.calculateDeps;
 import static accord.primitives.EpochSupplier.constant;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
-import static accord.primitives.Status.Accepted;
+import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.Phase;
 import static accord.primitives.Status.PreAccepted;
+import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
+import static accord.primitives.TxnId.MediumPath.MEDIUM_PATH_WAIT_ON_RECOVERY;
 import static accord.utils.Invariants.illegalState;
 
 public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.RecoverReply>
@@ -130,41 +136,44 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         LatestDeps deps; {
             PartialDeps coordinatedDeps = command.partialDeps();
             Deps localDeps = null;
-            if (!command.known().deps.hasCommittedOrDecidedDeps())
+            if (!command.known().deps().hasCommittedOrDecidedDeps())
             {
                 localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), txnId, false);
             }
             if (localDeps != null && coordinatedDeps != null && !participants.touches().equals(coordinatedDeps.covering))
             {
-                deps = LatestDeps.create(coordinatedDeps.covering, command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, null);
+                deps = LatestDeps.create(coordinatedDeps.covering, command.known().deps(), command.acceptedOrCommitted(), coordinatedDeps, null);
                 deps = LatestDeps.merge(deps, LatestDeps.create(participants.touches(), DepsUnknown, Ballot.ZERO, null, localDeps));
             }
             else
             {
                 Participants<?> knownFor = coordinatedDeps == null ? participants.touches() : coordinatedDeps.covering;
-                deps = LatestDeps.create(knownFor, command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, localDeps);
+                deps = LatestDeps.create(knownFor, command.known().deps(), command.acceptedOrCommitted(), coordinatedDeps, localDeps);
             }
         }
 
         boolean supersedingRejects;
         Deps earlierNoWait, earlierWait;
-        if (command.hasBeen(Accepted))
+        Deps laterNoWait, laterWait;
+        if (command.hasBeen(AcceptedMedium))
         {
             supersedingRejects = false;
             earlierNoWait = earlierWait = Deps.NONE;
+            laterNoWait = laterWait = Deps.NONE;
         }
         else
         {
             // TODO (expected): modify the mapReduce API to perform this check in a single pass
             class Visitor implements CommandSummaries.AllCommandVisitor, AutoCloseable
             {
-                Deps.Builder earlierNoWait, earlierWait;
+                Deps.Builder earlierNoWait, laterWait;
+                Deps.Builder earlierWait, laterNoWait;
                 boolean supersedingRejects;
 
                 @Override
                 public boolean visit(Unseekable keyOrRange, TxnId testTxnId, Timestamp testExecuteAt, SummaryStatus status, IsDep dep)
                 {
-                    if (status == NOT_DIRECTLY_WITNESSED || !txnId.is(testTxnId.witnesses()))
+                    if (status == NOT_DIRECTLY_WITNESSED || !txnId.witnessedBy(testTxnId))
                         return true;
 
                     int c = testTxnId.compareTo(txnId);
@@ -175,12 +184,12 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                     {
                         switch (dep)
                         {
-                            default: throw new AssertionError("Unhandled IsDep: " + dep);
-                            case IS_DEP:
+                            default: throw new UnhandledEnum(dep);
+                            case IS_STABLE_DEP:
                                 ensureEarlierNoWait().add(keyOrRange, testTxnId);
                                 break;
 
-                            case IS_NOT_DEP:
+                            case IS_NOT_STABLE_DEP:
                                 /*
                                  * The idea here is to discover those transactions that have been decided to execute after us
                                  * and did not witness us as part of their pre-accept or accept round, as this means that we CANNOT have
@@ -195,6 +204,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                                 switch (status)
                                 {
                                     case INVALIDATED:
+                                        // TODO (desired): optionally exclude these and other normally-unnecessary entries on e.g. first recovery attempt
                                         ensureEarlierNoWait().add(keyOrRange, testTxnId);
                                         break;
 
@@ -202,15 +212,61 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                                         if (testExecuteAt.compareTo(txnId) > 0)
                                             ensureEarlierWait().add(keyOrRange, testTxnId);
                                         break;
+
+                                    case PREACCEPTED:
+                                        // no need to wait for potential medium path transactions started before us, only after
+                                        // however, both privileged coordinator optimisations require waiting for an earlier potential fast path to decide itself
+                                        // TODO (desired): compute against shard whether this is necessary - for most quorum configurations it doesn't
+                                        if (txnId.hasPrivilegedCoordinator())
+                                            ensureEarlierWait().add(keyOrRange, testTxnId);
                                 }
                         }
                     }
                     else
                     {
-                        if (dep == IS_NOT_DEP)
+                        switch (dep)
                         {
-                            supersedingRejects = true;
-                            return false;
+                            case IS_STABLE_DEP:
+                                // if we're accepted on the slow path, we can't rule out the possibility that there's a medium path commit that will be resurrected
+                                // so we can't use this information to exclude the need to wait (without a quorum, but we don't want to have too many sets).
+                                // however, we only care about cases where we might wait for the transaction
+                                if (status != ACCEPTED && (testTxnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS) || testTxnId.is(MEDIUM_PATH_WAIT_ON_RECOVERY)))
+                                    ensureLaterNoWait().add(keyOrRange, testTxnId);
+                                break;
+
+                            case IS_NOT_STABLE_DEP:
+                                /*
+                                 * The idea here is to discover those transactions that were started after us and have been Accepted
+                                 * and did not witness us as part of their pre-accept round, as this means that we CANNOT have taken
+                                 * the fast path. This is central to safe recovery, as if every transaction that executes later has
+                                 * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
+                                 * has not witnessed us we can safely invalidate (us).
+                                 */
+                                supersedingRejects = true;
+                                return false;
+
+                            case NOT_ELIGIBLE:
+                                // Must be pre-notaccepted, not-accepted or preaccepted without coordinator optimisation
+                                // OR may be an out of range committed transaction (which can be ignored)
+                                if (testTxnId.is(MEDIUM_PATH_WAIT_ON_RECOVERY))
+                                {
+                                    // if the medium path is potentially active, then either it has been durably disabled, or we must wait to see if witnessed
+                                    if (status == NOTACCEPTED) ensureLaterNoWait().add(keyOrRange, testTxnId);
+                                    else if (status == PREACCEPTED) ensureLaterWait().add(keyOrRange, testTxnId);
+                                }
+                                // if the medium path is disabled we can safely proceed as we know the slow path must be taken,
+                                // so we will either be witnessed or the command will be invalidated.
+                                break;
+
+                            case IS_COORD_DEP:
+                                // the original coordinator witnessed us, so if it takes the fast or medium path we will be a durable dependency
+                                // if it doesn't, it will take the slow path (and witness us), or be invalidated (in which case it doesn't matter)
+                                break;
+
+                            case IS_NOT_COORD_DEP:
+                                Invariants.checkArgument(testTxnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
+                                // we don't know if we've been witnessed by the original coordinator that may yet take the fast (or medium) path
+                                ensureLaterWait().add(keyOrRange, testTxnId);
                         }
                     }
 
@@ -231,6 +287,20 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                     return earlierWait;
                 }
 
+                private Deps.Builder ensureLaterWait()
+                {
+                    if (laterWait == null)
+                        laterWait = new Deps.Builder(true);
+                    return laterWait;
+                }
+
+                private Deps.Builder ensureLaterNoWait()
+                {
+                    if (laterNoWait == null)
+                        laterNoWait = new Deps.Builder(true);
+                    return laterNoWait;
+                }
+
                 @Override
                 public void close()
                 {
@@ -244,9 +314,18 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                         earlierWait.close();
                         earlierWait = null;
                     }
+                    if (laterWait != null)
+                    {
+                        laterWait.close();
+                        laterWait = null;
+                    }
+                    if (laterNoWait != null)
+                    {
+                        laterNoWait.close();
+                        laterNoWait = null;
+                    }
                 }
             }
-
 
             try (Visitor visitor = new Visitor())
             {
@@ -254,16 +333,18 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                 supersedingRejects = visitor.supersedingRejects;
                 earlierNoWait = visitor.earlierNoWait == null ? Deps.NONE : visitor.earlierNoWait.build();
                 earlierWait = visitor.earlierWait == null ? Deps.NONE : visitor.earlierWait.build();
+                laterNoWait = visitor.laterNoWait == null ? Deps.NONE : visitor.laterNoWait.build();
+                laterWait = visitor.laterWait == null ? Deps.NONE : visitor.laterWait.build();
             }
         }
 
-        Status status = command.status();
+        SaveStatus saveStatus = command.saveStatus();
         Ballot accepted = command.acceptedOrCommitted();
         Timestamp executeAt = command.executeAt();
         Writes writes = command.writes();
         Result result = command.result();
-        boolean acceptsFastPath = executeAt.equals(txnId) || participants.owns().isEmpty();
-        return new RecoverOk(txnId, status, accepted, executeAt, deps, earlierWait, earlierNoWait, acceptsFastPath, supersedingRejects, writes, result);
+        boolean acceptsFastPath = participants.owns().isEmpty() || (txnId.hasPrivilegedCoordinator() ? saveStatus.known.hasPrivilegedVote() : executeAt.equals(txnId));
+        return new RecoverOk(txnId, saveStatus.status, accepted, executeAt, deps, earlierWait, earlierNoWait, laterWait, laterNoWait, acceptsFastPath, supersedingRejects, writes, result);
     }
 
     @Override
@@ -294,14 +375,17 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         LatestDeps deps = LatestDeps.merge(ok1.deps, ok2.deps);
         Deps earlierNoWait = ok1.earlierNoWait.with(ok2.earlierNoWait);
         Deps earlierWait = ok1.earlierWait.with(ok2.earlierWait)
-                                                       .without(earlierNoWait);
+                                          .without(earlierNoWait);
+        Deps laterNoWait = ok1.laterNoWait.with(ok2.laterNoWait);
+        Deps laterWait = ok1.laterWait.with(ok2.laterWait)
+                                      .without(laterNoWait);
         Timestamp timestamp = ok1.status == PreAccepted ? Timestamp.max(ok1.executeAt, ok2.executeAt) : ok1.executeAt;
 
         return new RecoverOk(
             txnId, ok1.status, ok1.accepted, timestamp,
-            deps, earlierWait, earlierNoWait,
+            deps, earlierWait, earlierNoWait, laterWait, laterNoWait,
             ok1.selfAcceptsFastPath & ok2.selfAcceptsFastPath,
-            ok1.supersedingRejects | ok2.supersedingRejects,
+                ok1.supersedingRejects | ok2.supersedingRejects,
             ok1.writes, ok1.result
         );
     }
@@ -362,14 +446,16 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         public final Ballot accepted;
         public final Timestamp executeAt;
         public final LatestDeps deps;
-        public final Deps earlierWait; // wait for these to commit
-        public final Deps earlierNoWait;  // counter-point to earlierWait, can remove these from any set we wait on
+        public final Deps earlierWait, earlierNoWait;
+        public final Deps laterWait, laterNoWait;
         public final boolean selfAcceptsFastPath;
         public final boolean supersedingRejects;
         public final Writes writes;
         public final Result result;
 
-        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, LatestDeps deps, Deps earlierWait, Deps earlierNoWait, boolean selfAcceptsFastPath, boolean supersedingRejects, Writes writes, Result result)
+        public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, LatestDeps deps,
+                         Deps earlierWait, Deps earlierNoWait, Deps laterWait, Deps laterNoWait,
+                         boolean selfAcceptsFastPath, boolean supersedingRejects, Writes writes, Result result)
         {
             this.txnId = txnId;
             this.accepted = accepted;
@@ -378,6 +464,8 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
             this.deps = deps;
             this.earlierWait = earlierWait;
             this.earlierNoWait = earlierNoWait;
+            this.laterWait = laterWait;
+            this.laterNoWait = laterNoWait;
             this.selfAcceptsFastPath = selfAcceptsFastPath;
             this.supersedingRejects = supersedingRejects;
             this.writes = writes;
@@ -404,8 +492,10 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                    ", accepted:" + accepted +
                    ", executeAt:" + executeAt +
                    ", deps:" + deps +
-                   ", earlierCommittedWitness:" + earlierNoWait +
-                   ", earlierAcceptedNoWitness:" + earlierWait +
+                   ", earlierWait:" + earlierWait +
+                   ", earlierNoWait:" + earlierNoWait +
+                   ", laterWait:" + laterWait +
+                   ", laterNoWait:" + laterNoWait +
                    ", selfAcceptsFastPath:" + selfAcceptsFastPath +
                    ", supersedingRejects:" + supersedingRejects +
                    ", writes:" + writes +

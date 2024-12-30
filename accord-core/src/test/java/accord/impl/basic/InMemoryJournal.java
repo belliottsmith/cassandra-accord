@@ -71,10 +71,12 @@ import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
+import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.ErasedOrVestigial;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
+import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
 
 public class InMemoryJournal implements Journal
@@ -105,13 +107,16 @@ public class InMemoryJournal implements Journal
             return null;
 
         Builder builder = reconstruct(saved, ALL);
-        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore);
+        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore, false);
         switch (cleanup)
         {
+            case VESTIGIAL:
             case EXPUNGE_PARTIAL:
             case EXPUNGE:
-            case ERASE:
                 return ErasedSafeCommand.erased(txnId, ErasedOrVestigial);
+
+            case ERASE:
+                return ErasedSafeCommand.erased(txnId, Erased);
         }
 
         return builder.construct(redundantBefore);
@@ -124,9 +129,10 @@ public class InMemoryJournal implements Journal
         if (builder == null || builder.isEmpty())
             return null;
 
-        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore);
+        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore, false);
         switch (cleanup)
         {
+            case VESTIGIAL:
             case EXPUNGE_PARTIAL:
             case EXPUNGE:
             case ERASE:
@@ -352,11 +358,23 @@ public class InMemoryJournal implements Journal
             for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
             {
                 if (e.getValue().isEmpty()) continue;
-                Command command = reconstruct(e.getValue(), ALL).construct(commandStore.unsafeGetRedundantBefore());
-                Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
-                                      "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
-                loader.load(command, sync);
-                if (command.saveStatus().compareTo(Stable) >= 0 && !command.hasBeen(Truncated))
+
+                // TODO (required): consider this race condition some more:
+                //      - can we avoid double-applying?
+                //      - is this definitely safe?
+                Command command;
+                if (!commandStore.hasCommand(e.getKey()))
+                {
+                    command = reconstruct(e.getValue(), ALL).construct(commandStore.unsafeGetRedundantBefore());
+                    Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
+                                          "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
+                    loader.load(command, sync);
+                }
+                else
+                {
+                    command = commandStore.command(e.getKey()).value();
+                }
+                if (command.txnId().is(Write) && command.saveStatus().compareTo(Stable) >= 0 && !command.hasBeen(Truncated))
                     loader.apply(command, sync);
             }
         }
@@ -368,7 +386,7 @@ public class InMemoryJournal implements Journal
 
         ErasedList(Diff erased)
         {
-            Invariants.checkArgument(erased.changes.get(SAVE_STATUS) == SaveStatus.Erased);
+            Invariants.checkArgument(erased.changes.get(SAVE_STATUS) == Erased);
             this.erased = erased;
         }
 
@@ -389,7 +407,7 @@ public class InMemoryJournal implements Journal
         @Override
         public boolean add(Diff diff)
         {
-            if (diff.changes.get(SAVE_STATUS) == SaveStatus.Erased)
+            if (diff.changes.get(SAVE_STATUS) == Erased)
                 return false;
             throw illegalState();
         }
@@ -427,7 +445,7 @@ public class InMemoryJournal implements Journal
         public boolean add(Diff diff)
         {
             Object saveStatus = diff.changes.get(SAVE_STATUS);
-            if (saveStatus == SaveStatus.Erased)
+            if (saveStatus == Erased)
                 return false;
             throw illegalState();
         }

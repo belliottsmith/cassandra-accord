@@ -43,7 +43,7 @@ public class QuorumIdTracker extends SimpleTracker<QuorumIdTracker.QuorumIdShard
 
         public ShardOutcomes onSuccess(Node.Id from)
         {
-            return successes.add(from) && successes.size() == shard.slowPathQuorumSize ? Success : NoChange;
+            return successes.add(from) && successes.size() == shard.slowQuorumSize ? Success : NoChange;
         }
 
         // return true iff hasFailed()
@@ -56,7 +56,7 @@ public class QuorumIdTracker extends SimpleTracker<QuorumIdTracker.QuorumIdShard
 
         public boolean hasReachedQuorum()
         {
-            return successes.size() >= shard.slowPathQuorumSize;
+            return successes.size() >= shard.slowQuorumSize;
         }
 
         boolean hasInFlight()

@@ -21,6 +21,10 @@ package accord.api;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import accord.primitives.TxnId;
+import accord.primitives.TxnId.FastPath;
+import accord.primitives.TxnId.FastPaths;
+import accord.primitives.TxnId.MediumPath;
 import accord.utils.Invariants;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.Chase;
@@ -69,6 +73,7 @@ public class ProtocolModifiers
             Spec(ChaseAndInclude preaccept, Include accept, Include commit, Include stable, Include recover)
             {
                 this.preaccept = preaccept;
+                Invariants.checkState(preaccept.chase == DoNotChase, "PreAccept chasing epoch is not implemented as not needed for current formulation and it complicated some aspects. An implementation can be found in git history.");
                 this.accept = accept;
                 this.commit = commit;
                 this.stable = stable;
@@ -142,6 +147,7 @@ public class ProtocolModifiers
     {
         static class Spec
         {
+            // note that {txn,syncPoint}DiscardPreAcceptDeps faults expect filterDuplicateDependenciesFromAcceptReply to be off
             final boolean txnInstability, txnDiscardPreAcceptDeps;
             final boolean syncPointInstability, syncPointDiscardPreAcceptDeps;
 
@@ -166,10 +172,33 @@ public class ProtocolModifiers
 
         public static final boolean txnInstability, txnDiscardPreAcceptDeps;
         public static final boolean syncPointInstability, syncPointDiscardPreAcceptDeps;
+
+        public static boolean discardPreAcceptDeps(TxnId txnId)
+        {
+            return (txnDiscardPreAcceptDeps | syncPointDiscardPreAcceptDeps)
+                   && (txnId.isSyncPoint() ? syncPointDiscardPreAcceptDeps : txnDiscardPreAcceptDeps);
+        }
     }
 
     public static class Toggles
     {
+        private static FastPaths permittedFastPaths = new FastPaths(FastPath.values());
+        public static boolean usePrivilegedCoordinator() { return permittedFastPaths.hasPrivilegedCoordinator(); }
+        public static void setPermittedFastPaths(FastPaths newPermittedFastPaths) { permittedFastPaths = newPermittedFastPaths; }
+        public static FastPath ensurePermitted(FastPath path) { return path.toPermitted(permittedFastPaths); }
+
+        private static MediumPath defaultMediumPath = MediumPath.MEDIUM_PATH_WAIT_ON_RECOVERY;
+        public static MediumPath defaultMediumPath() { return defaultMediumPath; }
+        public static void setDefaultMediumPath(MediumPath newDefaultMediumPath) { defaultMediumPath = newDefaultMediumPath; }
+
+        private static boolean filterDuplicateDependenciesFromAcceptReply = true;
+        public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
+        public static void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }
+
+        private static boolean permitLocalExecution = true;
+        public static boolean permitLocalExecution() { return permitLocalExecution; }
+        public static void setPermitLocalExecution(boolean newPermitLocalExecution) { permitLocalExecution = newPermitLocalExecution; }
+
         public enum DependencyElision { OFF, ON, IF_DURABLE }
         private static DependencyElision dependencyElision = IF_DURABLE;
         public static DependencyElision dependencyElision() { return dependencyElision; }

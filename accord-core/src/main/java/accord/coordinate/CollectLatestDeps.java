@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
 
-import accord.api.RoutingKey;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.CommandStore;
 import accord.local.Node;
@@ -32,6 +31,7 @@ import accord.messages.GetLatestDeps;
 import accord.messages.GetLatestDeps.GetLatestDepsOk;
 import accord.primitives.FullRoute;
 import accord.primitives.LatestDeps;
+import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -41,12 +41,13 @@ import accord.utils.SortedListMap;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
+import static accord.primitives.Routables.Slice.Minimal;
 
 public class CollectLatestDeps implements Callback<GetLatestDepsOk>
 {
     final Node node;
     final TxnId txnId;
-    final RoutingKey homeKey;
+    final Route<?> route;
     final Timestamp executeAt;
 
     private final SortedListMap<Id, GetLatestDepsOk> oks;
@@ -54,11 +55,11 @@ public class CollectLatestDeps implements Callback<GetLatestDepsOk>
     private final BiConsumer<List<LatestDeps>, Throwable> callback;
     private boolean isDone;
 
-    CollectLatestDeps(Node node, Topologies topologies, TxnId txnId, RoutingKey homeKey, Timestamp executeAt, BiConsumer<List<LatestDeps>, Throwable> callback)
+    CollectLatestDeps(Node node, Topologies topologies, TxnId txnId, Route<?> route, Timestamp executeAt, BiConsumer<List<LatestDeps>, Throwable> callback)
     {
         this.node = node;
         this.txnId = txnId;
-        this.homeKey = homeKey;
+        this.route = route;
         this.executeAt = executeAt;
         this.callback = callback;
         this.oks = new SortedListMap<>(topologies.nodes(), GetLatestDepsOk[]::new);
@@ -67,15 +68,14 @@ public class CollectLatestDeps implements Callback<GetLatestDepsOk>
 
     public static void withLatestDeps(Node node, TxnId txnId, FullRoute<?> fullRoute, Unseekables<?> collectFrom, Timestamp executeAt, BiConsumer<List<LatestDeps>, Throwable> callback)
     {
-        Topologies topologies = node.topology().withUnsyncedEpochs(collectFrom, txnId, executeAt);
-        CollectLatestDeps collect = new CollectLatestDeps(node, topologies, txnId, fullRoute.homeKey(), executeAt, callback);
-        CommandStore store = CommandStore.maybeCurrent();
-        if (store == null)
-            store = node.commandStores().select(fullRoute);
+        Route<?> route = fullRoute.intersecting(collectFrom, Minimal);
+        Topologies topologies = node.topology().withUnsyncedEpochs(route, txnId, executeAt);
+        CollectLatestDeps collect = new CollectLatestDeps(node, topologies, txnId, route, executeAt, callback);
+        CommandStore store = CommandStore.currentOrElseSelect(node, fullRoute);
 
         SortedArrayList<Id> contact = collect.tracker.filterAndRecordFaulty();
-        if (contact == null) callback.accept(null, new Exhausted(txnId, collect.homeKey, null));
-        else node.send(contact, to -> new GetLatestDeps(to, topologies, fullRoute, txnId, executeAt), store, collect);
+        if (contact == null) callback.accept(null, new Exhausted(txnId, route.homeKey(), null));
+        else node.send(contact, to -> new GetLatestDeps(to, topologies, route, txnId, executeAt), store, collect);
     }
 
     @Override
@@ -98,18 +98,18 @@ public class CollectLatestDeps implements Callback<GetLatestDepsOk>
         if (tracker.recordFailure(from) == Failed)
         {
             isDone = true;
-            callback.accept(null, new Timeout(txnId, homeKey));
+            callback.accept(null, new Timeout(txnId, route.homeKey()));
         }
     }
 
     @Override
-    public void onCallbackFailure(Id from, Throwable failure)
+    public boolean onCallbackFailure(Id from, Throwable failure)
     {
-        if (isDone)
-            return;
+        if (isDone) return false;
 
         isDone = true;
         callback.accept(null, failure);
+        return true;
     }
 
     private void onQuorum()

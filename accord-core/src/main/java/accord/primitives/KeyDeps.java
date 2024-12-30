@@ -19,6 +19,7 @@
 package accord.primitives;
 
 import accord.api.RoutingKey;
+import accord.primitives.Deps.DepRelationList;
 import accord.utils.ArrayBuffers;
 import accord.utils.IndexedBiConsumer;
 import accord.utils.IndexedConsumer;
@@ -31,13 +32,16 @@ import accord.utils.TriFunction;
 
 import java.util.*;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 import javax.annotation.Nullable;
 
 import static accord.primitives.RoutingKeys.toRoutingKeys;
+import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.*;
 import static accord.utils.Invariants.illegalArgument;
@@ -270,13 +274,19 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         return linearUnion(
                 this.keys.keys, this.keys.keys.length, this.txnIds, this.txnIds.length, this.keysToTxnIds, this.keysToTxnIds.length,
                 that.keys.keys, that.keys.keys.length, that.txnIds, that.txnIds.length, that.keysToTxnIds, that.keysToTxnIds.length,
-                RoutingKey::compareTo, TxnId::compareTo, null, null,
+                RoutingKey::compareTo, TxnId::compareTo, null, TxnId::addFlags,
                 cachedRoutingKeys(), cachedTxnIds(), cachedInts(),
                 (keys, keysLength, txnIds, txnIdsLength, out, outLength) ->
                         new KeyDeps(RoutingKeys.ofSortedUnique(cachedRoutingKeys().complete(keys, keysLength)),
                                 cachedTxnIds().complete(txnIds, txnIdsLength),
                                 cachedInts().complete(out, outLength))
                 );
+    }
+
+    public KeyDeps without(Predicate<TxnId> remove)
+    {
+        return remove(this, keys.keys, txnIds, keysToTxnIds, remove,
+                      NONE, TxnId[]::new, keys, KeyDeps::new);
     }
 
     public KeyDeps without(KeyDeps remove)
@@ -292,6 +302,19 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
             }
             return builder.build();
         }
+    }
+
+    public KeyDeps markUnstableBefore(TxnId txnId)
+    {
+        int i = indexOf(txnId);
+        if (i < 0) i = -1 - i;
+        if (i == 0)
+            return this;
+
+        TxnId[] newTxnIds = new TxnId[txnIds.length];
+        System.arraycopy(txnIds, i, newTxnIds, i, newTxnIds.length - i);
+        while (--i >= 0) newTxnIds[i] = txnIds[i].addFlag(UNSTABLE);
+        return new KeyDeps(keys, newTxnIds, keysToTxnIds, txnIdsToKeys);
     }
 
     public boolean contains(TxnId txnId)
@@ -561,16 +584,16 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         return new SortedArrayList<>(txnIds);
     }
 
-    public SortedRelationList<TxnId> txnIds(RoutingKey key)
+    public DepRelationList txnIds(RoutingKey key)
     {
         int keyIndex = keys.indexOf(key);
         if (keyIndex < 0)
-            return SortedRelationList.EMPTY;
+            return DepRelationList.EMPTY;
 
         return txnIdsForKeyIndex(keyIndex);
     }
 
-    public SortedRelationList<TxnId> txnIdsForKeyIndex(int keyIndex)
+    public DepRelationList txnIdsForKeyIndex(int keyIndex)
     {
         int[] keysToTxnIds = keysToTxnIds();
         int start = startOffset(keyIndex);
@@ -579,7 +602,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
     }
 
     @SuppressWarnings("unchecked")
-    public SortedRelationList<TxnId> txnIds(Range range)
+    public DepRelationList txnIds(Range range)
     {
         int startIndex = keys.indexOf(range.start());
         if (startIndex < 0) startIndex = -1 - startIndex;
@@ -590,7 +613,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         else if (range.endInclusive()) ++endIndex;
 
         if (startIndex == endIndex)
-            return SortedRelationList.EMPTY;
+            return DepRelationList.EMPTY;
 
         int[] keysToTxnIds = keysToTxnIds();
         int maxLength = Math.min(txnIds.length, startOffset(endIndex) - startOffset(startIndex));
@@ -632,12 +655,12 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
     }
 
     @SuppressWarnings("unchecked")
-    private SortedRelationList<TxnId> txnIds(int[] ids, int start, int end)
+    private DepRelationList txnIds(int[] ids, int start, int end)
     {
         if (start == end)
-            return SortedRelationList.EMPTY;
+            return DepRelationList.EMPTY;
 
-        return new SortedRelationList<>(txnIds, ids, start, end);
+        return new DepRelationList(txnIds, ids, start, end);
     }
 
     private int startOffset(int keyIndex)
@@ -682,6 +705,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
     {
         @Override public SymmetricComparator<? super RoutingKey> keyComparator() { return RoutingKey::compareTo; }
         @Override public SymmetricComparator<? super TxnId> valueComparator() { return TxnId::compareTo; }
+        @Override public BiFunction<TxnId, TxnId, TxnId> valueMerger() { return TxnId::addFlags; }
         @Override public int compareKeys(RoutingKey a, RoutingKey b) { return a.compareTo(b); }
         @Override public int compareValues(TxnId a, TxnId b) { return a.compareTo(b); }
         @Override public ObjectBuffers<RoutingKey> cachedKeys() { return ArrayBuffers.cachedRoutingKeys(); }

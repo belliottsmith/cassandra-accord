@@ -268,7 +268,13 @@ abstract class PostProcess
         {
             // notify commit uses exclusive bounds, as we use minUndecided
             Timestamp minUndecided = minUndecidedById < 0 ? Timestamp.MAX : byId[minUndecidedById];
-            if (!BTree.isEmpty(loadingPruned)) minUndecided = Timestamp.min(minUndecided, BTree.<Pruning.LoadingPruned>findByIndex(loadingPruned, 0));
+            if (!BTree.isEmpty(loadingPruned))
+            {
+                TxnId minLoadingPruned = bootstrappedAt == null ? BTree.findByIndex(loadingPruned, 0)
+                                                                : BTree.ceil(loadingPruned, TxnId::compareTo, bootstrappedAt);
+
+                minUndecided = Timestamp.nonNullOrMin(minUndecided, minLoadingPruned);
+            }
             int end = findCommit(unmanageds, minUndecided);
             if (end > 0)
             {

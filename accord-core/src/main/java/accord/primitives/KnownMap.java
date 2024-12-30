@@ -190,7 +190,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
         if (owns != touches && !touches.isEmpty())
         {
             Known knownDeps = validForAll.atLeast(foldlWithDefault(touches, KnownMap::reduceKnownFor, MinMax.Nothing, null, i -> false));
-            known = known.with(knownDeps.deps);
+            known = known.with(knownDeps.deps());
         }
         return known;
     }

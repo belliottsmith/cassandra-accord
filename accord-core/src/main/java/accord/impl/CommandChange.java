@@ -26,7 +26,6 @@ import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Cleanup;
 import accord.local.Command;
-import accord.local.CommonAttributes;
 import accord.local.DurableBefore;
 import accord.local.RedundantBefore;
 import accord.local.StoreParticipants;
@@ -39,6 +38,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
 import static accord.api.Journal.Load;
 import static accord.api.Journal.Load.ALL;
@@ -58,9 +58,8 @@ import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.TRUNCATE_WITH_OUTCOME;
-import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
+import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.Status.Durability.NotDurable;
-import static accord.utils.Invariants.illegalState;
 
 public class CommandChange
 {
@@ -252,7 +251,7 @@ public class CommandChange
             return count;
         }
 
-        public Cleanup shouldCleanup(Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore)
+        public Cleanup shouldCleanup(Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore, boolean isPartial)
         {
             if (!nextCalled)
                 return NO;
@@ -260,7 +259,8 @@ public class CommandChange
             if (saveStatus == null || participants == null)
                 return Cleanup.NO;
 
-            Cleanup cleanup = Cleanup.shouldCleanupPartial(agent, txnId, saveStatus, durability, participants, redundantBefore, durableBefore);
+            Cleanup cleanup = isPartial ? Cleanup.shouldCleanupPartial(agent, txnId, saveStatus, durability, participants, redundantBefore, durableBefore)
+                                        : Cleanup.shouldCleanup(agent, txnId, saveStatus, durability, participants, redundantBefore, durableBefore);
             if (this.cleanup != null && this.cleanup.compareTo(cleanup) > 0)
                 cleanup = this.cleanup;
             return cleanup;
@@ -291,7 +291,8 @@ public class CommandChange
                 case NO:
                     return this;
                 default:
-                    throw new IllegalStateException("Unknown cleanup: " + cleanup);}
+                    throw new UnhandledEnum(cleanup);
+            }
         }
 
         public Builder expungePartial(Cleanup cleanup, SaveStatus saveStatus, boolean includeOutcome)
@@ -350,7 +351,7 @@ public class CommandChange
 
         public Command.Minimal asMinimal()
         {
-            return new Command.Minimal(txnId, saveStatus, participants, durability, executeAt, writes);
+            return new Command.Minimal(txnId, saveStatus, participants, durability, executeAt);
         }
 
         public void forceResult(Result newValue)
@@ -364,26 +365,11 @@ public class CommandChange
                 return null;
 
             Invariants.checkState(txnId != null);
-            CommonAttributes.Mutable attrs = new CommonAttributes.Mutable(txnId);
-            if (partialTxn != null)
-                attrs.partialTxn(partialTxn);
-            if (durability != null)
-                attrs.durability(durability);
-            if (participants != null)
-                attrs.setParticipants(participants.filter(StoreParticipants.Filter.LOAD, redundantBefore, txnId, saveStatus.known.executeAt.isDecidedAndKnownToExecute() ? executeAt : null));
-            if (participants != null)
-                attrs.setParticipants(participants);
-            if (partialDeps != null && saveStatus.known.deps.hasProposedOrDecidedDeps())
-                attrs.partialDeps(partialDeps);
+            if (participants == null) participants = StoreParticipants.empty(txnId);
+            else participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.executeAt().isDecidedAndKnownToExecute() ? executeAt : null);
 
-            switch (saveStatus.known.outcome)
-            {
-                case Erased:
-                case WasApply:
-                    writes = null;
-                    result = null;
-                    break;
-            }
+            if (durability == null)
+                durability = NotDurable;
 
             Command.WaitingOn waitingOn = null;
             if (this.waitingOn != null)
@@ -392,52 +378,50 @@ public class CommandChange
             switch (saveStatus.status)
             {
                 case NotDefined:
-                    return saveStatus == SaveStatus.Uninitialised ? Command.NotDefined.uninitialised(attrs.txnId())
-                                                                  : Command.NotDefined.notDefined(attrs, promised);
+                    return saveStatus == SaveStatus.Uninitialised ? Command.NotDefined.uninitialised(txnId)
+                                                                  : Command.NotDefined.notDefined(txnId, saveStatus, durability, participants, promised);
                 case PreAccepted:
-                    return Command.PreAccepted.preAccepted(attrs, executeAt, promised);
+                    return Command.PreAccepted.preaccepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps);
                 case AcceptedInvalidate:
+                case PreNotAccepted:
+                case NotAccepted:
                     if (!saveStatus.known.isDefinitionKnown())
-                        return Command.AcceptedInvalidateWithoutDefinition.acceptedInvalidate(attrs, promised, acceptedOrCommitted);
-                case Accepted:
+                        return Command.NotAcceptedWithoutDefinition.notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps);
+                case AcceptedMedium:
+                case AcceptedSlow:
                 case PreCommitted:
-                    return Command.Accepted.accepted(attrs, saveStatus, executeAt, promised, acceptedOrCommitted);
+                    return Command.Accepted.accepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
 
                 case Committed:
                 case Stable:
-                    return Command.Committed.committed(attrs, saveStatus, executeAt, promised, acceptedOrCommitted, waitingOn);
+                    return Command.Committed.committed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
                 case PreApplied:
                 case Applied:
-                    return Command.Executed.executed(attrs, saveStatus, executeAt, promised, acceptedOrCommitted, waitingOn, writes, result);
+                    return Command.Executed.executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result);
                 case Truncated:
                 case Invalidated:
-                    return truncated(attrs, saveStatus, executeAt, executeAtLeast, writes, result);
+                    return truncated(txnId, saveStatus, durability, participants, executeAt, executeAtLeast, writes, result);
                 default:
-                    throw new IllegalStateException();
+                    throw new UnhandledEnum(saveStatus.status);
             }
         }
 
-        private static Command.Truncated truncated(CommonAttributes.Mutable attrs, SaveStatus status, Timestamp executeAt, Timestamp executesAtLeast, Writes writes, Result result)
+        private static Command.Truncated truncated(TxnId txnId, SaveStatus status, Status.Durability durability, StoreParticipants participants, Timestamp executeAt, Timestamp executesAtLeast, Writes writes, Result result)
         {
             switch (status)
             {
-                default:
-                    throw illegalState("Unhandled SaveStatus: " + status);
+                default: throw new UnhandledEnum(status);
                 case TruncatedApplyWithOutcome:
                 case TruncatedApplyWithDeps:
                 case TruncatedApply:
-                    if (status != TruncatedApplyWithOutcome)
-                        result = null;
-                    if (attrs.txnId().kind().awaitsOnlyDeps())
-                        return Command.Truncated.truncatedApply(attrs, status, executeAt, writes, result, executesAtLeast);
-                    return Command.Truncated.truncatedApply(attrs, status, executeAt, writes, result, null);
+                    return Command.Truncated.truncatedApply(txnId, status, durability, participants, executeAt, writes, result, executesAtLeast);
                 case ErasedOrVestigial:
-                    return Command.Truncated.erasedOrVestigial(attrs.txnId(), attrs.participants());
+                    return Command.Truncated.erasedOrVestigial(txnId, participants);
                 case Erased:
                     // TODO (expected): why are we saving Durability here for erased commands?
-                    return Command.Truncated.erased(attrs.txnId(), attrs.durability(), attrs.participants());
+                    return Command.Truncated.erased(txnId, durability, participants);
                 case Invalidated:
-                    return Command.Truncated.invalidated(attrs.txnId(), attrs.participants());
+                    return Command.Truncated.invalidated(txnId, participants);
             }
         }
 
@@ -524,13 +508,7 @@ public class CommandChange
         flags = collectFlags(before, after, CommandChange::getWaitingOn, true, WAITING_ON, flags);
 
         flags = collectFlags(before, after, Command::writes, false, WRITES, flags);
-
-        // Special-cased for Journal BurnTest integration
-        if ((before != null && after.result() != before.result()) ||
-            (before == null && after.result() != null))
-        {
-            flags = collectFlags(before, after, Command::writes, false, RESULT, flags);
-        }
+        flags = collectFlags(before, after, Command::result, false, RESULT, flags);
 
         return flags;
     }

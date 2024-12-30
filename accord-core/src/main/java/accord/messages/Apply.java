@@ -64,7 +64,7 @@ public class Apply extends TxnRequest<ApplyReply>
     public final PartialDeps deps; // TODO (expected): this should be nullable, and only included if we did not send Commit (or if sending Maximal apply)
     public final @Nullable PartialTxn txn;
     public final @Nullable FullRoute<?> fullRoute;
-    public final Writes writes;
+    public final @Nullable Writes writes;
     public final Result result;
     public final long minEpoch;
 

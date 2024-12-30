@@ -18,6 +18,7 @@
 
 package accord.impl.list;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -30,6 +31,7 @@ import accord.api.Result;
 import accord.coordinate.ExecuteSyncPoint;
 import accord.coordinate.Preempted;
 import accord.coordinate.Timeout;
+import accord.impl.basic.NodeSink;
 import accord.impl.basic.Packet;
 import accord.impl.mock.Network;
 import accord.local.Command;
@@ -40,6 +42,7 @@ import accord.messages.ReplyContext;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -63,14 +66,16 @@ public class ListAgent implements Agent
     final IntSupplier timeoutDelays;
     final LongSupplier queueTimeMillis;
     final TimeService time;
+    final NodeSink.TimeoutSupplier timeoutSupplier;
 
-    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time)
+    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time, NodeSink.TimeoutSupplier timeoutSupplier)
     {
         this.rnd = rnd;
         this.timeout = timeout;
         this.onFailure = onFailure;
         this.retryBootstrap = retryBootstrap;
         this.onStale = onStale;
+        this.timeoutSupplier = timeoutSupplier;
         this.coordinationDelays = coordinationDelays;
         this.progressDelays = progressDelays;
         this.timeoutDelays = timeoutDelays;
@@ -115,7 +120,7 @@ public class ListAgent implements Agent
     @Override
     public void onUncaughtException(Throwable t)
     {
-        if (!(t instanceof Timeout) && !(t instanceof ExecuteSyncPoint.SyncPointErased) && !(t instanceof Preempted))
+        if (!(t instanceof Timeout) && !(t instanceof ExecuteSyncPoint.SyncPointErased) && !(t instanceof Preempted) && !(t instanceof CancellationException) && !(t.getCause() instanceof CancellationException))
             onFailure.accept(t);
     }
 
@@ -190,6 +195,11 @@ public class ListAgent implements Agent
         return unit.convert(expiresAt, MILLISECONDS);
     }
 
+    @Override
+    public long localExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    {
+        return timeoutSupplier.expiresAt();
+    }
 
     public boolean collectMaxApplied()
     {

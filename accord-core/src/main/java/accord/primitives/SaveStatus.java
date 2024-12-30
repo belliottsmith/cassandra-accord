@@ -23,6 +23,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 
 import accord.local.CommandSummaries.SummaryStatus;
+import accord.primitives.Known.PrivilegedVote;
 import accord.primitives.Known.Definition;
 import accord.primitives.Known.KnownDeps;
 import accord.primitives.Known.KnownExecuteAt;
@@ -31,6 +32,12 @@ import accord.primitives.Known.Outcome;
 import accord.primitives.Status.Phase;
 
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
+import static accord.primitives.Known.PrivilegedVote.NoVote;
+import static accord.primitives.Known.PrivilegedVote.VotePreAccept;
+import static accord.primitives.Known.KnownDeps.DepsFromCoordinator;
+import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
+import static accord.primitives.Known.Outcome.Apply;
+import static accord.primitives.Known.Outcome.WasApply;
 import static accord.primitives.SaveStatus.LocalExecution.CleaningUp;
 import static accord.primitives.SaveStatus.LocalExecution.NotReady;
 import static accord.primitives.Known.Definition.DefinitionErased;
@@ -44,9 +51,11 @@ import static accord.primitives.Known.KnownExecuteAt.ExecuteAtErased;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtProposed;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtUnknown;
-import static accord.primitives.Known.KnownRoute.Full;
-import static accord.primitives.Known.KnownRoute.Maybe;
+import static accord.primitives.Known.KnownRoute.FullRoute;
+import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Known.Outcome.Unknown;
+import static accord.primitives.SaveStatus.LocalExecution.ReadyToExclude;
+import static accord.primitives.SaveStatus.LocalExecution.WaitingToExecute;
 import static accord.primitives.Status.Truncated;
 
 /**
@@ -59,40 +68,60 @@ import static accord.primitives.Status.Truncated;
  */
 public enum SaveStatus
 {
-    // TODO (expected): erase Uninitialised in Context once command finishes
-    // TODO (expected): we can use Uninitialised in several places to simplify/better guarantee correct behaviour with truncation
     Uninitialised                   (Status.NotDefined),
-    // TODO (expected): reify PreAcceptedNotDefined and NotDefinedWithSomeRoute (latter to semantically represent outcome of InformHome)
     NotDefined                      (Status.NotDefined),
     PreAccepted                     (Status.PreAccepted),
-    // note: AcceptedInvalidate and AcceptedInvalidateWithDefinition clear any proposed Deps.
-    // This means voters recovering an earlier transaction will not consider the record when excluding the possibility of a fast-path commit.
-    // This is safe, because any Accept that may override the AcceptedInvalidate will construct new Deps that must now witness the recovering transaction.
+    PreAcceptedWithVote             (Status.PreAccepted,                                                                                                    VotePreAccept),
+    PreAcceptedWithDeps             (Status.PreAccepted,            FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsFromCoordinator,    Unknown,    VotePreAccept),
+
+    // note: this status means we have durably cleared any Accepted that may have been inflight, but we must retain DepsFromCoordinator for deciding if a fast path decision may have been taken
+    // note: AcceptedInvalidate(s), PreNotAccepted(s) and NotAccepted(s) clear any proposed Deps.
+    // This means voters recovering an earlier transaction will not consider the record when excluding the possibility of another transaction's fast-path commit.
+    // This is safe, because any Accept that may override the Pre/NotAccepted will construct new Deps that must now witness the recovering transaction.
+
+    PreNotAccepted                  (Status.PreNotAccepted),
+    PreNotAcceptedWithDefinition    (Status.PreNotAccepted,         FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),
+    PreNotAcceptedWithDefAndVote    (Status.PreNotAccepted,         FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown,        VotePreAccept),
+    PreNotAcceptedWithDefAndDeps    (Status.PreNotAccepted,         FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsFromCoordinator,Unknown,        VotePreAccept),
+    NotAccepted                     (Status.NotAccepted),
+    NotAcceptedWithDefinition       (Status.NotAccepted,            FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),
+    NotAcceptedWithDefAndVote       (Status.NotAccepted,            FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown,        VotePreAccept),
+    NotAcceptedWithDefAndDeps       (Status.NotAccepted,            FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsFromCoordinator,Unknown,        VotePreAccept),
     AcceptedInvalidate              (Status.AcceptedInvalidate),
-    AcceptedInvalidateWithDefinition(Status.AcceptedInvalidate,              Full,     DefinitionKnown,   ExecuteAtUnknown,  DepsUnknown,  Unknown),
-    Accepted                        (Status.Accepted),
-    AcceptedWithDefinition          (Status.Accepted,                        Full,     DefinitionKnown,   ExecuteAtProposed, DepsProposed, Unknown),
-    PreCommitted                    (Status.PreCommitted,                                                                                                LocalExecution.ReadyToExclude),
-    PreCommittedWithAcceptedDeps    (Status.PreCommitted,          ACCEPTED, Full,     DefinitionUnknown, ExecuteAtKnown,    DepsProposed, Unknown,      LocalExecution.ReadyToExclude),
-    PreCommittedWithDefinition      (Status.PreCommitted,                    Full,     DefinitionKnown,   ExecuteAtKnown,    DepsUnknown,  Unknown,      LocalExecution.ReadyToExclude),
-    PreCommittedWithDefinitionAndAcceptedDeps(Status.PreCommitted, ACCEPTED, Full,     DefinitionKnown,   ExecuteAtKnown,    DepsProposed, Unknown,      LocalExecution.ReadyToExclude),
-    Committed                       (Status.Committed,                                                                                                   LocalExecution.ReadyToExclude),
-    Stable                          (Status.Stable,                                                                                                      LocalExecution.WaitingToExecute),
-    ReadyToExecute                  (Status.Stable,                                                                                                      LocalExecution.ReadyToExecute),
-    PreApplied                      (Status.PreApplied,                                                                                                  LocalExecution.WaitingToApply),
-    Applying                        (Status.PreApplied,                                                                                                  LocalExecution.Applying),
+    AcceptedInvalidateWithDefinition(Status.AcceptedInvalidate,     FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),
+
+    AcceptedMedium                  (Status.AcceptedMedium),
+    AcceptedMediumWithDefinition    (Status.AcceptedMedium,         FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposedFixed,  Unknown),
+    AcceptedMediumWithDefAndVote    (Status.AcceptedMedium,         FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposedFixed,  Unknown,        VotePreAccept),
+    AcceptedSlow                    (Status.AcceptedSlow),
+    AcceptedSlowWithDefinition      (Status.AcceptedSlow,           FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposed,       Unknown),
+    AcceptedSlowWithDefAndVote      (Status.AcceptedSlow,           FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposed,       Unknown,        VotePreAccept),
+    PreCommitted                    (Status.PreCommitted,                                                                                            ReadyToExclude),
+    PreCommittedWithDefinition      (Status.PreCommitted,           FullRoute,  DefinitionKnown,    ExecuteAtKnown,     DepsUnknown,        Unknown, ReadyToExclude),
+    PreCommittedWithDeps            (Status.PreCommitted, ACCEPTED, FullRoute,  DefinitionUnknown,  ExecuteAtKnown,     DepsProposed,       Unknown, ReadyToExclude),
+    PreCommittedWithFixedDeps       (Status.PreCommitted, ACCEPTED, FullRoute,  DefinitionUnknown,  ExecuteAtKnown,     DepsProposedFixed,  Unknown, ReadyToExclude),
+    PreCommittedWithDefAndDeps      (Status.PreCommitted, ACCEPTED, FullRoute,  DefinitionKnown,    ExecuteAtKnown,     DepsProposed,       Unknown, ReadyToExclude),
+    PreCommittedWithDefAndFixedDeps (Status.PreCommitted, ACCEPTED, FullRoute,  DefinitionKnown,    ExecuteAtKnown,     DepsProposedFixed,  Unknown, ReadyToExclude),
+
+    Committed                       (Status.Committed,                                                                                               ReadyToExclude),
+    Stable                          (Status.Stable,                                                                                                  WaitingToExecute),
+    ReadyToExecute                  (Status.Stable,                                                                                                  LocalExecution.ReadyToExecute),
+
+    PreApplied                      (Status.PreApplied,                                                                                              LocalExecution.WaitingToApply),
+    Applying                        (Status.PreApplied,                                                                                              LocalExecution.Applying),
     // similar to Truncated, but doesn't imply we have any global knowledge about application
-    Applied                         (Status.Applied,                                                                                                     LocalExecution.Applied),
+    Applied                         (Status.Applied,                                                                                                 LocalExecution.Applied),
     // TruncatedApplyWithDeps is a state never adopted within a single replica; it is however a useful state we may enter by combining state from multiple replicas
     // TODO (expected): TruncatedApplyWithDeps should be redundant now we have migrated away from SaveStatus in CheckStatusOk to Known; remove in isolated commit once stable
-    TruncatedApplyWithDeps          (Status.Truncated,                       Full, DefinitionErased, ExecuteAtKnown, DepsKnown,   Outcome.Apply,         CleaningUp),
-    TruncatedApplyWithOutcome       (Status.Truncated,                       Full, DefinitionErased, ExecuteAtKnown, DepsErased,  Outcome.Apply,         CleaningUp),
-    TruncatedApply                  (Status.Truncated,                       Full, DefinitionErased, ExecuteAtKnown, DepsErased,  Outcome.WasApply,      CleaningUp),
+    //   however: we may want to retain it for the case where we want to truncate its payload but need to be able to answer recovery decisions
+    TruncatedApplyWithDeps          (Status.Truncated,              FullRoute,  DefinitionErased,   ExecuteAtKnown,     DepsKnown,          Apply,   CleaningUp),
+    TruncatedApplyWithOutcome       (Status.Truncated,              FullRoute,  DefinitionErased,   ExecuteAtKnown,     DepsErased,         Apply,   CleaningUp),
+    TruncatedApply                  (Status.Truncated,              FullRoute,  DefinitionErased,   ExecuteAtKnown,     DepsErased,         WasApply,CleaningUp),
     // NOTE: Erased should ONLY be adopted on a replica that knows EVERY shard has successfully applied the transaction at all healthy replicas (or else that it is durably invalidated)
-    Erased                          (Status.Truncated,                      Maybe, DefinitionErased, ExecuteAtErased, DepsErased, Outcome.Erased,        CleaningUp),
+    Erased                          (Status.Truncated,              MaybeRoute, DefinitionErased,   ExecuteAtErased,    DepsErased,         Outcome.Erased,CleaningUp),
     // ErasedOrVestigial means the command cannot be completed and is either pre-bootstrap, did not commit, or did not participate in this shard's epoch
-    ErasedOrVestigial               (Status.Truncated,                      Maybe, DefinitionUnknown,ExecuteAtUnknown,DepsUnknown,        Unknown,       CleaningUp),
-    Invalidated                     (Status.Invalidated,                                                                                                 CleaningUp),
+    ErasedOrVestigial               (Status.Truncated,              MaybeRoute, DefinitionUnknown,  ExecuteAtUnknown,   DepsUnknown,        Unknown, CleaningUp),
+    Invalidated                     (Status.Invalidated,                                                                                             CleaningUp),
     ;
 
     /**
@@ -156,6 +185,11 @@ public enum SaveStatus
         this(status, status.phase);
     }
 
+    SaveStatus(Status status, PrivilegedVote privilegedVote)
+    {
+        this(status, status.summary, status.phase, status.minKnown.with(privilegedVote), NotReady);
+    }
+
     SaveStatus(Status status, LocalExecution execution)
     {
         this(status, status.phase, execution);
@@ -176,6 +210,11 @@ public enum SaveStatus
         this(status, route, definition, executeAt, deps, outcome, NotReady);
     }
 
+    SaveStatus(Status status, KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome, PrivilegedVote privilegedVote)
+    {
+        this(status, status.summary, status.phase, new Known(route, definition, executeAt, deps, outcome, privilegedVote), NotReady);
+    }
+
     SaveStatus(Status status, KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome, LocalExecution execution)
     {
         this(status, status.summary, route, definition, executeAt, deps, outcome, execution);
@@ -183,7 +222,7 @@ public enum SaveStatus
 
     SaveStatus(Status status, SummaryStatus summaryStatus, KnownRoute route, Definition definition, KnownExecuteAt executeAt, KnownDeps deps, Outcome outcome, LocalExecution execution)
     {
-        this(status, summaryStatus, status.phase, new Known(route, definition, executeAt, deps, outcome), execution);
+        this(status, summaryStatus, status.phase, new Known(route, definition, executeAt, deps, outcome, NoVote), execution);
     }
 
     SaveStatus(Status status, Phase phase, Known known, LocalExecution execution)
@@ -234,31 +273,83 @@ public enum SaveStatus
         if (known.isInvalidated())
             return Invalidated;
 
+        if (status.compareTo(Status.PreCommitted) < 0)
+        {
+            if (known.executeAt().isDecidedAndKnownToExecute())
+            {
+                switch (status)
+                {
+                    case NotDefined: return PreCommitted;
+                    case PreAccepted: return PreCommittedWithDefinition;
+                    case PreNotAccepted:
+                    case NotAccepted:
+                    case AcceptedMedium:
+                    case AcceptedSlow:
+                    case AcceptedInvalidate:
+                        known = known.with(DepsUnknown);
+                        // if the decision is known, we're really PreCommitted
+                }
+            }
+            else
+            {
+                switch (status)
+                {
+                    case NotDefined: return NotDefined;
+                    case PreAccepted:
+                        return known.is(NoVote) ? PreAccepted : known.is(DepsUnknown) ? PreAcceptedWithVote : PreAcceptedWithDeps;
+                    case PreNotAccepted:
+                        if (!known.isDefinitionKnown())
+                            return PreNotAccepted;
+                        return known.is(NoVote) ? PreNotAcceptedWithDefinition : known.is(DepsUnknown) ? PreNotAcceptedWithDefAndVote : PreNotAcceptedWithDefAndDeps;
+                    case NotAccepted:
+                        if (!known.isDefinitionKnown()) return NotAccepted;
+                        if (!known.hasPrivilegedVote()) return NotAcceptedWithDefinition;
+                        return known.is(DepsUnknown) ? NotAcceptedWithDefAndVote : NotAcceptedWithDefAndDeps;
+                    case AcceptedMedium:
+                        if (!known.isDefinitionKnown()) return AcceptedMedium;
+                        if (!known.hasPrivilegedVote()) return AcceptedMediumWithDefinition;
+                        return AcceptedMediumWithDefAndVote;
+                    case AcceptedSlow:
+                        if (!known.isDefinitionKnown()) return AcceptedSlow;
+                        if (!known.hasPrivilegedVote()) return AcceptedSlowWithDefinition;
+                        return AcceptedSlowWithDefAndVote;
+                    case AcceptedInvalidate:
+                        return known.isDefinitionKnown() ? AcceptedInvalidateWithDefinition : AcceptedInvalidate;
+                        // if the decision is known, we're really PreCommitted
+                }
+            }
+        }
+
         switch (status)
         {
             default: throw new AssertionError("Unexpected status: " + status);
-            case NotDefined: return known.executeAt.isDecidedAndKnownToExecute() ? PreCommitted : NotDefined;
-            case PreAccepted: return known.executeAt.isDecidedAndKnownToExecute() ? PreCommittedWithDefinition : PreAccepted;
+            case PreNotAccepted:
+            case NotAccepted:
+            case AcceptedMedium:
+            case AcceptedSlow:
             case AcceptedInvalidate:
-                // AcceptedInvalidate logically clears any proposed deps and executeAt
-                if (!known.executeAt.isDecidedAndKnownToExecute())
-                    return known.isDefinitionKnown() ? AcceptedInvalidateWithDefinition : AcceptedInvalidate;
-                // If we know the executeAt decision then we do not clear it, and fall-through to PreCommitted
-                // however, we still clear the deps, as any deps we might have previously seen proposed are now expired
-                // TODO (expected, consider): consider clearing Command.partialDeps in this case also
-                known = known.with(DepsUnknown);
-            case Accepted:
-                if (!known.executeAt.isDecidedAndKnownToExecute())
-                    return known.isDefinitionKnown() ? AcceptedWithDefinition : Accepted;
-                // if the decision is known, we're really PreCommitted
             case PreCommitted:
-                if (!known.isDefinitionKnown() || !known.deps.hasCommittedOrDecidedDeps())
+                if (!known.isDefinitionKnown())
                 {
-                    if (known.isDefinitionKnown())
-                        return known.deps == DepsProposed ? PreCommittedWithDefinitionAndAcceptedDeps : PreCommittedWithDefinition;
-                    return known.deps == DepsProposed ? PreCommittedWithAcceptedDeps : PreCommitted;
+                    switch (known.deps())
+                    {
+                        case DepsProposedFixed: return PreCommittedWithFixedDeps;
+                        case DepsProposed:      return PreCommittedWithDeps;
+                        default:                return PreCommitted;
+                    }
                 }
-            case Committed: return known.deps == DepsKnown ? Stable : Committed;
+                switch (known.deps())
+                {
+                    default:                    throw new AssertionError("Unexpected DepsKnown: " + known.deps());
+                    case DepsErased:
+                    case DepsUnknown:
+                    case DepsFromCoordinator:   return PreCommittedWithDefinition; // TODO (required): consider if this is correct
+                    case DepsProposedFixed:     return PreCommittedWithDefAndFixedDeps;
+                    case DepsProposed:          return PreCommittedWithDefAndDeps;
+                    case DepsKnown:
+                    case DepsCommitted:
+                }
+            case Committed: return known.deps() == DepsKnown ? Stable : Committed;
             case Stable: return Stable;
             case PreApplied: return PreApplied;
             case Applied: return Applied;
@@ -266,7 +357,7 @@ public enum SaveStatus
         }
     }
 
-    private static final Known DefinitionOnly = new Known(Full, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown);
+    private static final Known DefinitionOnly = new Known(FullRoute, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown, NoVote);
     public static SaveStatus withDefinition(SaveStatus status)
     {
         return enrich(status, DefinitionOnly);
@@ -279,8 +370,11 @@ public enum SaveStatus
         {
             case NotDefined:
             case PreAccepted:
-            case Accepted:
             case AcceptedInvalidate:
+            case PreNotAccepted:
+            case NotAccepted:
+            case AcceptedMedium:
+            case AcceptedSlow:
             case PreCommitted:
             case Committed:
                 if (known.isSatisfiedBy(status.known))
@@ -295,22 +389,22 @@ public enum SaveStatus
                 {
                     default: throw new AssertionError("Unexpected status: " + status);
                     case ErasedOrVestigial:
-                        if (known.outcome.isInvalidated())
+                        if (known.outcome().isInvalidated())
                             return Invalidated;
 
-                        if (!known.outcome.isOrWasApply() || known.executeAt == ExecuteAtKnown)
+                        if (!known.outcome().isOrWasApply() || known.is(ExecuteAtKnown))
                             return ErasedOrVestigial;
 
                     case Erased:
-                        if (!known.outcome.isOrWasApply() || known.executeAt != ExecuteAtKnown)
+                        if (!known.outcome().isOrWasApply() || !known.is(ExecuteAtKnown))
                             return Erased;
 
                     case TruncatedApply:
-                        if (known.outcome != Outcome.Apply)
+                        if (known.outcome() != Apply)
                             return TruncatedApply;
 
                     case TruncatedApplyWithOutcome:
-                        if (known.deps != DepsKnown)
+                        if (known.deps() != DepsKnown)
                             return TruncatedApplyWithOutcome;
 
                     case TruncatedApplyWithDeps:

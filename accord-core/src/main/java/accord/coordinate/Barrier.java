@@ -56,7 +56,7 @@ import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
 import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
 import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.local.CommandSummaries.TestStartedAt.STARTED_AFTER;
-import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
+import static accord.primitives.Txn.Kind.AnyGloballyVisible;
 import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.checkState;
 import static accord.utils.Invariants.illegalState;

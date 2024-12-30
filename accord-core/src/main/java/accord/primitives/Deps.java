@@ -23,14 +23,19 @@ import accord.local.cfk.CommandsForKey;
 import accord.utils.IndexedFunction;
 import accord.utils.Invariants;
 import accord.utils.MergeFewDisjointSortedListsCursor;
-import accord.utils.SortedCursor;
+import accord.utils.RelationMultiMap;
+import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedList;
+import accord.utils.SortedList.MergeCursor;
 
 import java.util.AbstractList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
+
+import static accord.utils.Invariants.illegalState;
 
 /**
  * A collection of transaction dependencies, keyed by the key or range on which they were adopted.
@@ -60,6 +65,20 @@ public class Deps
 {
     public static final Deps NONE = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
 
+    public interface DepList extends SortedList<TxnId> { }
+
+    public static class DepArrayList extends SortedArrayList<TxnId> implements DepList
+    {
+        public DepArrayList(SortedArrayList<TxnId> copy) { super(copy.backingArrayUnsafe()); }
+        public DepArrayList(TxnId[] array) { super(array); }
+    }
+
+    public static class DepRelationList extends RelationMultiMap.SortedRelationList<TxnId> implements DepList
+    {
+        public static final DepRelationList EMPTY = new DepRelationList(TxnId.NO_TXNIDS, RelationMultiMap.NO_INTS, 0, 0);
+        public DepRelationList(TxnId[] values, int[] ids, int startIndex, int endIndex) { super(values, ids, startIndex, endIndex); }
+    }
+
     public static Builder builder(boolean buildRangeByTxnId)
     {
         return new Builder(buildRangeByTxnId);
@@ -76,6 +95,14 @@ public class Deps
         {
             this.keyBuilder = KeyDeps.builder();
             this.rangeBuilder = buildRangesByTxnId ? RangeDeps.byTxnIdBuilder() : RangeDeps.builderByRange();
+        }
+
+        public AbstractBuilder<T> addNormalise(Unseekable keyOrRange, TxnId txnId)
+        {
+            if (keyOrRange.domain() == txnId.domain()) add(keyOrRange, txnId);
+            else if (keyOrRange.domain() == Routable.Domain.Key) add(keyOrRange.asRange(), txnId);
+            else throw illegalState();
+            return this;
         }
 
         public AbstractBuilder<T> add(Unseekable keyOrRange, TxnId txnId)
@@ -182,13 +209,13 @@ public class Deps
         return directKeyDeps.intersects(txnId, ranges);
     }
 
-    public SortedCursor<TxnId> txnIds(RoutingKey key)
+    public MergeCursor<TxnId, DepList> txnIds(RoutingKey key)
     {
-        SortedList<TxnId> keyDeps = this.keyDeps.txnIds(key);
-        SortedList<TxnId> rangeDeps = this.rangeDeps.computeTxnIds(key);
-        SortedList<TxnId> directKeyDeps = this.directKeyDeps.txnIds(key);
+        DepList keyDeps = this.keyDeps.txnIds(key);
+        DepList rangeDeps = this.rangeDeps.computeTxnIds(key);
+        DepList directKeyDeps = this.directKeyDeps.txnIds(key);
         int count = Math.min(1, keyDeps.size()) + Math.min(1, directKeyDeps.size()) + Math.min(1, rangeDeps.size());
-        MergeFewDisjointSortedListsCursor<TxnId> cursor = new MergeFewDisjointSortedListsCursor<>(count);
+        MergeFewDisjointSortedListsCursor<TxnId, DepList> cursor = new MergeFewDisjointSortedListsCursor<>(count);
         if (keyDeps.size() > 0)
             cursor.add(keyDeps);
         if (rangeDeps.size() > 0)
@@ -201,17 +228,46 @@ public class Deps
 
     public Deps with(Deps that)
     {
-        return new Deps(this.keyDeps.with(that.keyDeps), this.rangeDeps.with(that.rangeDeps), this.directKeyDeps.with(that.directKeyDeps));
+        return select(this, that,this.keyDeps.with(that.keyDeps), this.rangeDeps.with(that.rangeDeps), this.directKeyDeps.with(that.directKeyDeps));
+    }
+
+    public Deps without(Predicate<TxnId> remove)
+    {
+        return select(this.keyDeps.without(remove), this.rangeDeps.without(remove), this.directKeyDeps.without(remove));
     }
 
     public Deps without(Deps that)
     {
-        return new Deps(this.keyDeps.without(that.keyDeps), this.rangeDeps.without(that.rangeDeps), this.directKeyDeps.without(that.directKeyDeps));
+        return select(this.keyDeps.without(that.keyDeps), this.rangeDeps.without(that.rangeDeps), this.directKeyDeps.without(that.directKeyDeps));
+    }
+
+    private Deps select(KeyDeps newKeyDeps, RangeDeps newRangeDeps, KeyDeps newDirectKeyDeps)
+    {
+        return select(this, null, newKeyDeps, newRangeDeps, newDirectKeyDeps);
+    }
+
+    private static Deps select(Deps v1, Deps v2, KeyDeps newKeyDeps, RangeDeps newRangeDeps, KeyDeps newDirectKeyDeps)
+    {
+        if (newKeyDeps == v1.keyDeps && newRangeDeps == v1.rangeDeps && newDirectKeyDeps == v1.directKeyDeps)
+            return v1;
+        if (v2 != null && newKeyDeps == v2.keyDeps && newRangeDeps == v2.rangeDeps && newDirectKeyDeps == v2.directKeyDeps)
+            return v2;
+        return new Deps(newKeyDeps, newRangeDeps, newDirectKeyDeps);
     }
 
     public PartialDeps intersecting(Participants<?> participants)
     {
         return new PartialDeps(participants, keyDeps.intersecting(participants), rangeDeps.intersecting(participants), directKeyDeps.intersecting(participants));
+    }
+
+    public boolean covers(Unseekables<?> participants)
+    {
+        return true;
+    }
+
+    public boolean covers(RoutingKey participant)
+    {
+        return true;
     }
 
     public boolean isEmpty()
@@ -323,6 +379,17 @@ public class Deps
     public TxnId minTxnId(TxnId orElse)
     {
         return TxnId.nonNullOrMin(minTxnId(), orElse);
+    }
+
+    public Deps markUnstableBefore(TxnId txnId)
+    {
+        if (minTxnId(txnId).compareTo(txnId) >= 0)
+            return this;
+
+        KeyDeps keyDeps = this.keyDeps.markUnstableBefore(txnId);
+        RangeDeps rangeDeps = this.rangeDeps.markUnstableBefore(txnId);
+        KeyDeps directKeyDeps = this.directKeyDeps.markUnstableBefore(txnId);
+        return new Deps(keyDeps, rangeDeps, directKeyDeps);
     }
 
     @Override

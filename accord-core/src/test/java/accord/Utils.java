@@ -150,7 +150,7 @@ public class Utils
 
     public static Shard shard(Range range, SortedArrayList<Id> nodes, Set<Id> fastPath)
     {
-        return new Shard(range, nodes, fastPath);
+        return Shard.create(range, nodes, fastPath);
     }
 
     public static Shard shard(Range range, SortedArrayList<Node.Id> nodes)

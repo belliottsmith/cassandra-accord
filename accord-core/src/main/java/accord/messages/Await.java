@@ -62,9 +62,9 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 {
     public static class SerializerSupport
     {
-        public static Await create(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId)
+        public static Await create(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, boolean notifyProgressLog, long minAwaitEpoch, long maxAwaitEpoch, int callbackId)
         {
-            return new Await(txnId, scope, blockedUntil, minAwaitEpoch, maxAwaitEpoch, callbackId);
+            return new Await(txnId, scope, blockedUntil, minAwaitEpoch, maxAwaitEpoch, callbackId, notifyProgressLog);
         }
     }
 
@@ -73,10 +73,11 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     public final BlockedUntil blockedUntil;
     public final long minAwaitEpoch, maxAwaitEpoch;
     public final int callbackId; // < 0 means synchronous await
+    public final boolean notifyProgressLog;
 
-    private transient Node node;
-    private transient Id replyTo;
-    private transient ReplyContext replyContext;
+    transient Node node;
+    transient Id replyTo;
+    transient ReplyContext replyContext;
 
     private transient volatile RemoteListeners.Registration asyncRegistration;
     private static final AtomicReferenceFieldUpdater<Await, RemoteListeners.Registration> registrationUpdater = AtomicReferenceFieldUpdater.newUpdater(Await.class, RemoteListeners.Registration.class, "asyncRegistration");
@@ -91,10 +92,11 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     // we use exactly -1 to make serialization easy (can increment by 1 and store a non-negative integer)
     private static final int SYNCHRONOUS_CALLBACKID = -1;
 
-    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, int callbackId)
+    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, int callbackId, boolean notifyProgressLog)
     {
         this.txnId = txnId;
         this.callbackId = callbackId;
+        this.notifyProgressLog = notifyProgressLog;
         this.scope = computeScope(to, topologies, participants);
         this.blockedUntil = blockedUntil;
         this.maxAwaitEpoch = topologies.currentEpoch();
@@ -102,12 +104,12 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         Invariants.checkState(minAwaitEpoch >= txnId.epoch());
     }
 
-    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil)
+    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, boolean notifyProgressLog)
     {
-        this(to, topologies, txnId, participants, blockedUntil, SYNCHRONOUS_CALLBACKID);
+        this(to, topologies, txnId, participants, blockedUntil, SYNCHRONOUS_CALLBACKID, notifyProgressLog);
     }
 
-    private Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId)
+    private Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
     {
         this.txnId = txnId;
         this.scope = scope;
@@ -115,6 +117,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this.minAwaitEpoch = minAwaitEpoch;
         this.maxAwaitEpoch = maxAwaitEpoch;
         this.callbackId = callbackId;
+        this.notifyProgressLog = notifyProgressLog;
         Invariants.checkState(minAwaitEpoch >= txnId.epoch());
     }
 
@@ -134,8 +137,11 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
         Invariants.checkState(minAwaitEpoch >= txnId.epoch());
-        if (command.saveStatus().compareTo(blockedUntil.minSaveStatus) >= 0)
+        if (command.saveStatus().compareTo(blockedUntil.unblockedFrom) >= 0)
+        {
+            onNotWaiting(safeStore, safeCommand);
             return null;
+        }
 
         Commands.supplementParticipants(safeStore, safeCommand, participants);
 
@@ -144,7 +150,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             RemoteListeners.Registration registered = asyncRegistration;
             if (registered == null)
             {
-                registered = node.remoteListeners().register(txnId, blockedUntil.minSaveStatus, blockedUntil.remoteDurability, replyTo, callbackId);
+                registered = node.remoteListeners().register(txnId, blockedUntil.unblockedFrom, blockedUntil.remoteDurability, replyTo, callbackId);
                 if (!registrationUpdater.compareAndSet(this, null, registered))
                     registered = asyncRegistration;
             }
@@ -158,7 +164,8 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             synchronouslyWaitingOnUpdater.incrementAndGet(this);
         }
 
-        safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, null, participants);
+        if (notifyProgressLog)
+            safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, null, participants);
         return null;
     }
 
@@ -197,7 +204,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             }
             else
             {
-                node.reply(replyTo, replyContext, AwaitOk.Ready, null);
+                onSynchronousAwaitComplete();
             }
         }
     }
@@ -258,19 +265,36 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     @Override
     public boolean notify(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        Command command = safeCommand.current();
-        if (command.saveStatus().compareTo(blockedUntil.minSaveStatus) >= 0)
+        if (!checkOneSynchronousAwait(safeCommand))
             return true;
 
+        onNotWaiting(safeStore, safeCommand);
         if (-1 == synchronouslyWaitingOnUpdater.decrementAndGet(this))
         {
-            node.reply(replyTo, replyContext, AwaitOk.Ready, null);
+            onSynchronousAwaitComplete();
             if (timeout != null)
                 timeout.cancel();
             syncRegistrations = null;
         }
 
         return false;
+    }
+
+    protected boolean checkOneSynchronousAwait(SafeCommand safeCommand)
+    {
+        Command command = safeCommand.current();
+        SaveStatus saveStatus = command.saveStatus();
+        return saveStatus.compareTo(blockedUntil.unblockedFrom) >= 0
+               || (blockedUntil.additionallyUnblockedBy != null && blockedUntil.additionallyUnblockedBy.test(saveStatus));
+    }
+
+    protected void onNotWaiting(SafeCommandStore safeStore, SafeCommand safeCommand)
+    {
+    }
+
+    protected void onSynchronousAwaitComplete()
+    {
+        node.reply(replyTo, replyContext, AwaitOk.Ready, null);
     }
 
     public static class AsyncAwaitComplete implements Request, PreLoadContext, Consumer<SafeCommandStore>

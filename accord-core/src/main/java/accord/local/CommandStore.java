@@ -29,6 +29,7 @@ import accord.api.Agent;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.primitives.RangeDeps;
 import accord.primitives.Routables;
+import accord.primitives.Route;
 import accord.primitives.Unseekables;
 import accord.utils.async.AsyncChain;
 
@@ -513,6 +514,14 @@ public abstract class CommandStore implements AgentExecutor
         return cs;
     }
 
+    public static CommandStore currentOrElseSelect(Node node, Route<?> route)
+    {
+        CommandStore cs = maybeCurrent();
+        if (cs == null)
+            return node.commandStores().select(route);
+        return cs;
+    }
+
     protected static void register(CommandStore store)
     {
         if (!store.inStore())
@@ -587,7 +596,7 @@ public abstract class CommandStore implements AgentExecutor
             AsyncResult<Void> done = this.<Void>submit(empty(), safeStore -> {
                 for (Bootstrap prev : bootstraps)
                 {
-                    Ranges abort = prev.allValid.slice(removedRanges);
+                    Ranges abort = prev.allValid.slice(removedRanges, Minimal);
                     if (!abort.isEmpty())
                         prev.invalidate(abort);
                 }

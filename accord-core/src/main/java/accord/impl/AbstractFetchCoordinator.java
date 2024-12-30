@@ -26,6 +26,7 @@ import java.util.Map;
 import accord.local.Command;
 import accord.local.SafeCommandStore;
 import accord.messages.ReadData;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +56,7 @@ import accord.utils.async.AsyncResults;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import static accord.messages.ReadData.CommitOrReadNack.Redundant;
 import static accord.messages.ReadEphemeralTxnData.retryInLaterEpoch;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.TruncatedApply;
@@ -153,17 +155,10 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                     {
                         fail(to, new RuntimeException(reply.toString()));
                         inflight.remove(key).cancel();
-                        switch ((CommitOrReadNack) reply)
-                        {
-                            default: throw new AssertionError("Unhandled enum: " + reply);
-                            case Redundant:
-                                // TODO (expected): stop fetch sync points from garbage collecting too quickly
-                                // too late, sync point has been erased
-                                break;
-                            case Invalid:
-                            case Rejected:
-                                throw new AssertionError(String.format("Unexpected reply: %s", reply));
-                        }
+                        if (reply != Redundant)
+                            throw new UnhandledEnum((CommitOrReadNack)reply);
+                        // too late, sync point has been erased
+                        // TODO (expected): stop fetch sync points from garbage collecting too quickly
                     }
                     return;
                 }
@@ -185,7 +180,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                     received = ranges;
                 }
 
-                // TODO (now): make sure it works if invoked in either order
+                // TODO (required): make sure it works if invoked in either order
                 inflight.remove(key).started(ok.safeToReadAfter);
                 onReadOk(to, commandStore, ok.data, received);
                 // received must be invoked after submitting the persistence future, as it triggers onDone
@@ -200,10 +195,11 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
             }
 
             @Override
-            public void onCallbackFailure(Node.Id from, Throwable failure)
+            public boolean onCallbackFailure(Node.Id from, Throwable failure)
             {
                 // TODO (soon)
                 logger.error("Fetch coordination failure from " + from, failure);
+                return true;
             }
         });
     }
@@ -286,7 +282,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         @Override
         protected void readComplete(CommandStore commandStore, Data result, Ranges unavailable)
         {
-            Ranges reportUnavailable = unavailable == null ? null : unavailable.slice((Ranges)this.readScope, Minimal);
+            Ranges reportUnavailable = unavailable == null ? null : unavailable.slice((Ranges)this.scope, Minimal);
             super.readComplete(commandStore, result, reportUnavailable);
         }
 
@@ -304,7 +300,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
             long retryInLaterEpoch = retryInLaterEpoch(executeAtEpoch, safeStore, command);
             if (retryInLaterEpoch > 0)
             {
-                Ranges unavailable = ((Ranges)readScope).slice(safeStore.ranges().allAt(executeAtEpoch), Minimal);
+                Ranges unavailable = ((Ranges) scope).slice(safeStore.ranges().allAt(executeAtEpoch), Minimal);
                 readComplete(safeStore.commandStore(), null, unavailable);
             }
             else

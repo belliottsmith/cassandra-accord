@@ -126,9 +126,6 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 callback.accept(null, illegalState("Received Insufficient response to ephemeral read request"));
                 return Action.Aborted;
-            case Invalid:
-                callback.accept(null, illegalState("Submitted a read command to a replica that did not own the range"));
-                return Action.Aborted;
         }
     }
 

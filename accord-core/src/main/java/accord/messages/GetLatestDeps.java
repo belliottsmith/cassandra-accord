@@ -27,10 +27,10 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
 import accord.primitives.Deps;
-import accord.primitives.FullRoute;
 import accord.primitives.LatestDeps;
 import accord.primitives.PartialDeps;
 import accord.primitives.Route;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -53,7 +53,7 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
 
     public final Timestamp executeAt;
 
-    public GetLatestDeps(Id to, Topologies topologies, FullRoute<?> route, TxnId txnId, Timestamp executeAt)
+    public GetLatestDeps(Id to, Topologies topologies, Route<?> route, TxnId txnId, Timestamp executeAt)
     {
         super(to, topologies, txnId, route);
         this.executeAt = executeAt;
@@ -79,20 +79,12 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
         Command command = safeCommand.current();
         PartialDeps coordinatedDeps = command.partialDeps();
         Deps localDeps = null;
-        switch (command.known().deps)
+        if (!command.known().deps().hasCommittedOrDecidedDeps() && !command.hasBeen(Status.Truncated))
         {
-            default: throw new AssertionError("Unhandled KnownDeps: " + command.known().deps);
-            case NoDeps:
-            case DepsErased:
-            case DepsKnown:
-            case DepsCommitted:
-                break;
-            case DepsUnknown:
-            case DepsProposed:
-                localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), executeAt, false);
+            localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), executeAt, false);
         }
 
-        LatestDeps deps = LatestDeps.create(participants.owns(), command.known().deps, command.acceptedOrCommitted(), coordinatedDeps, localDeps);
+        LatestDeps deps = LatestDeps.create(participants.owns(), command.known().deps(), command.acceptedOrCommitted(), coordinatedDeps, localDeps);
         return new GetLatestDepsOk(deps);
     }
 

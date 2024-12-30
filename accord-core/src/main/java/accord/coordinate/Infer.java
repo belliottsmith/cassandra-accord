@@ -29,7 +29,6 @@ import accord.local.SafeCommandStore;
 import accord.primitives.Status;
 import accord.primitives.Known;
 import accord.local.StoreParticipants;
-import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -86,7 +85,7 @@ public class Infer
                 return NotKnownToBeInvalid;
             }
 
-            if (maxKnown.executeAt.hasDecision())
+            if (maxKnown.executeAt().hasDecision())
             {
                 // could be invalidated or committed, but we definitely know which so we don't need to infer anything
                 return NotKnownToBeInvalid;
@@ -111,12 +110,12 @@ public class Infer
         final TxnId txnId;
         // TODO (expected): more consistent handling of transactions that only MAY intersect a commandStore
         //  (e.g. dependencies from an earlier epoch that have not yet committed, or commands that are proposed to execute in a later epoch than eventually agreed)
-        final EpochSupplier lowEpoch, highEpoch;
+        final long lowEpoch, highEpoch;
         final Participants<?> participants;
         final T param;
         final BiConsumer<T, Throwable> callback;
 
-        private CleanupAndCallback(Node node, TxnId txnId, EpochSupplier lowEpoch, EpochSupplier highEpoch, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
+        private CleanupAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
         {
             this.node = node;
             this.txnId = txnId;
@@ -131,14 +130,14 @@ public class Infer
         {
             PreLoadContext loadContext = contextFor(txnId);
             Unseekables<?> propagateTo = isRoute(participants) ? castToRoute(participants).withHomeKey() : participants;
-            node.mapReduceConsumeLocal(loadContext, propagateTo, lowEpoch.epoch(), highEpoch.epoch(), this);
+            node.mapReduceConsumeLocal(loadContext, propagateTo, lowEpoch, highEpoch, this);
         }
 
         @Override
         public Void apply(SafeCommandStore safeStore)
         {
             // we're applying an invalidation, so the record will not be cleaned up until the whole range is truncated
-            StoreParticipants participants = StoreParticipants.invalidate(safeStore, this.participants, txnId);
+            StoreParticipants participants = StoreParticipants.notAccept(safeStore, this.participants, txnId);
             return apply(safeStore, safeStore.get(txnId, participants));
         }
 
@@ -160,12 +159,12 @@ public class Infer
     // TODO (required, consider): low and high bounds are correct?
     static class InvalidateAndCallback<T> extends CleanupAndCallback<T>
     {
-        private InvalidateAndCallback(Node node, TxnId txnId, EpochSupplier lowEpoch, EpochSupplier highEpoch, Participants<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
+        private InvalidateAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
         {
             super(node, txnId, lowEpoch, highEpoch, someUnseekables, param, callback);
         }
 
-        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, EpochSupplier lowEpoch, EpochSupplier highEpoch, Participants<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
+        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
         {
             new InvalidateAndCallback<>(node, txnId, lowEpoch, highEpoch, someUnseekables, param, callback).start();
         }

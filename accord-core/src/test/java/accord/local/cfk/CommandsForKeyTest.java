@@ -51,11 +51,10 @@ import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultLocalListeners.DefaultNotifySink;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.IntKey;
+import accord.local.ICommand.Builder;
 import accord.local.Command;
-import accord.local.Command.AbstractCommand;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
-import accord.local.CommonAttributes;
 import accord.local.Node;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
@@ -91,10 +90,14 @@ import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResults;
 
+import static accord.local.Command.Executed.executed;
 import static accord.local.Command.NotDefined.notDefined;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.SaveStatus.ReadyToExecute;
+import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Durability.NotDurable;
+import static accord.primitives.Txn.Kind.Write;
 
 // TODO (expected): test setting redundant before
 // TODO (expected): test ballot updates
@@ -129,10 +132,10 @@ public class CommandsForKeyTest
     // TODO (expected): randomise ballots
     static class Canon implements NotifySink
     {
-        private static final TxnId MIN = new TxnId(1, 1, Txn.Kind.Read, Key, new Node.Id(1));
+        private static final TxnId MIN = new TxnId(1, 1, 0, Txn.Kind.Read, Key, new Node.Id(1));
 
         // TODO (expected): randomise ratios
-        static final Txn.Kind[] KINDS = new Txn.Kind[] { Txn.Kind.Read, Txn.Kind.Write, Txn.Kind.EphemeralRead, Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint };
+        static final Txn.Kind[] KINDS = new Txn.Kind[] { Txn.Kind.Read, Write, Txn.Kind.EphemeralRead, Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint };
         final RandomSource rnd;
         final Node.Id[] nodeIds;
         final Domain[] domains;
@@ -178,14 +181,13 @@ public class CommandsForKeyTest
                     if (!next.executeAt().equals(next.txnId()) && !CommandsForKey.manages(next.txnId()))
                         removeWaitingOn(next.txnId(), next.executeAt());
                 }
-
             }
         }
 
         private void readyToExecute(Command.Committed committed)
         {
             for (Command pred : committedByExecuteAt.headMap(committed.executeAt(), false).values())
-                Invariants.checkState(pred.hasBeen(Status.Applied) || !committed.txnId().kind().witnesses(pred.txnId()));
+                Invariants.checkState((pred.hasBeen(Status.Applied)) || !committed.txnId().kind().witnesses(pred.txnId()));
             candidates.add(committed.txnId());
         }
 
@@ -202,7 +204,8 @@ public class CommandsForKeyTest
                 {
                     Command.WaitingOn.Update update = new Command.WaitingOn.Update(waitingOn);
                     update.removeWaitingOn(waitingId);
-                    set(committed, Command.Committed.committed(committed, committed, update.build()));
+                    SaveStatus saveStatus = update.isWaiting() ? Stable : ReadyToExecute;
+                    set(committed, Command.Committed.committed(committed, saveStatus, update.build()));
                 }
             }
         }
@@ -224,10 +227,12 @@ public class CommandsForKeyTest
             if (prev.txnId().domain() == Key)
             {
                 for (Command command : committedByExecuteAt.tailMap(prev.executeAt(), false).values())
-                    Invariants.checkState(command.txnId().kind().awaitsOnlyDeps() || !command.txnId().kind().witnesses(prev.txnId()) || command.saveStatus().compareTo(SaveStatus.Stable) < 0 || command.asCommitted().waitingOn.isWaitingOnKey(0));
+                    Invariants.checkState(command.txnId().kind().awaitsOnlyDeps() || !command.txnId().kind().witnesses(prev.txnId()) || command.saveStatus().compareTo(Stable) < 0 || command.asCommitted().waitingOn.isWaitingOnKey(0));
             }
 
-            Command.Committed next = Command.Committed.committed(prev, prev, waitingOn.build());
+            Command.Committed next;
+            if (prev.hasBeen(Status.PreApplied)) next = Command.Executed.executed(prev, prev.saveStatus(), waitingOn.build());
+            else next = Command.Committed.committed(prev, !waitingOn.isWaiting() ? ReadyToExecute : prev.saveStatus(), waitingOn.build());
             set(prev, next);
         }
 
@@ -238,15 +243,18 @@ public class CommandsForKeyTest
 
         static
         {
-            TRANSITIONS.put(SaveStatus.NotDefined, new SaveStatus[] { SaveStatus.PreAccepted, SaveStatus.AcceptedInvalidate, SaveStatus.AcceptedInvalidateWithDefinition, SaveStatus.Accepted, SaveStatus.AcceptedWithDefinition, SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
-            TRANSITIONS.put(SaveStatus.PreAccepted, new SaveStatus[] { SaveStatus.AcceptedInvalidateWithDefinition, SaveStatus.AcceptedWithDefinition, SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.NotDefined, new SaveStatus[] { SaveStatus.PreAccepted, SaveStatus.AcceptedInvalidate, SaveStatus.AcceptedInvalidateWithDefinition, SaveStatus.AcceptedMedium, SaveStatus.AcceptedMediumWithDefinition, SaveStatus.AcceptedSlow, SaveStatus.AcceptedSlowWithDefinition, SaveStatus.Committed, Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.PreAccepted, new SaveStatus[] { SaveStatus.AcceptedInvalidateWithDefinition, SaveStatus.AcceptedMediumWithDefinition, SaveStatus.AcceptedSlowWithDefinition, SaveStatus.Committed, Stable, SaveStatus.Invalidated });
             // permit updated ballot and moving to other statuses
             TRANSITIONS.put(SaveStatus.AcceptedInvalidate, new SaveStatus[] { SaveStatus.Invalidated });
             TRANSITIONS.put(SaveStatus.AcceptedInvalidateWithDefinition, new SaveStatus[] { SaveStatus.Invalidated });
-            TRANSITIONS.put(SaveStatus.Accepted, new SaveStatus[] { SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
-            TRANSITIONS.put(SaveStatus.AcceptedWithDefinition, new SaveStatus[] { SaveStatus.Committed, SaveStatus.Stable, SaveStatus.Invalidated });
-            TRANSITIONS.put(SaveStatus.Committed, new SaveStatus[] { SaveStatus.Stable });
-            TRANSITIONS.put(SaveStatus.Stable, new SaveStatus[] { SaveStatus.Applied });
+            TRANSITIONS.put(SaveStatus.AcceptedMedium, new SaveStatus[] { SaveStatus.Committed, Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.AcceptedMediumWithDefinition, new SaveStatus[] { SaveStatus.Committed, Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.AcceptedSlow, new SaveStatus[] { Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.AcceptedSlowWithDefinition, new SaveStatus[] { Stable, SaveStatus.Invalidated });
+            TRANSITIONS.put(SaveStatus.Committed, new SaveStatus[] { Stable });
+            TRANSITIONS.put(Stable, new SaveStatus[] { SaveStatus.Applied });
+            TRANSITIONS.put(ReadyToExecute, new SaveStatus[] { SaveStatus.Applied });
         }
 
         Canon(RandomSource rnd)
@@ -289,8 +297,8 @@ public class CommandsForKeyTest
                 if (byId.tailMap(prev.txnId(), false).values().stream().anyMatch(c -> c.hasBeen(Status.Committed) && c.txnId().kind().witnesses(prev.txnId())))
                     invalidate = true;
             }
-            Command next = invalidate ? AbstractCommand.validate((AbstractCommand)update(prev, SaveStatus.Invalidated))
-                                      : AbstractCommand.validate((AbstractCommand)update(prev));
+            Command next = invalidate ? Command.validate(update(prev, SaveStatus.Invalidated))
+                                      : Command.validate(update(prev));
             set(prev, next);
             unwitnessed.remove(next.txnId());
             return new CommandUpdate(prev, next);
@@ -318,8 +326,10 @@ public class CommandsForKeyTest
                 case PreAccepted:
                     return preaccepted(prev.txnId());
 
-                case Accepted:
-                case AcceptedWithDefinition:
+                case AcceptedSlow:
+                case AcceptedSlowWithDefinition:
+                case AcceptedMedium:
+                case AcceptedMediumWithDefinition:
                     return accepted(prev.txnId(), generateExecuteAt(prev.txnId()), newStatus);
 
                 case AcceptedInvalidate:
@@ -350,7 +360,7 @@ public class CommandsForKeyTest
                     if (txnId.equals(command.txnId())) continue;
                     if (!txnId.kind().witnesses(command.txnId())) continue;
 
-                    if (command.hasBeen(forStatus.compareTo(Status.Accepted) <= 0 ? Status.Committed : Status.Accepted) || rnd.nextBoolean())
+                    if (command.hasBeen(forStatus.compareTo(Status.AcceptedMedium) <= 0 ? Status.Committed : Status.AcceptedMedium) || rnd.nextBoolean())
                     {
                         unwitnessed.remove(command.txnId());
                         builder.add(command.txnId().domain() == Key ? KEY : RANGE, command.txnId());
@@ -399,7 +409,7 @@ public class CommandsForKeyTest
         {
             TxnId min = MIN;
             TxnId max;
-            if (byId.isEmpty()) max = new TxnId(1, 100, Txn.Kind.Read, Key, nodeIds[0]);
+            if (byId.isEmpty()) max = new TxnId(1, 100, 0, Txn.Kind.Read, Key, nodeIds[0]);
             else
             {
                 max = byId.lastEntry().getValue().txnId();
@@ -409,7 +419,7 @@ public class CommandsForKeyTest
                     case 2:
                         min = max;
                     case 1:
-                        max = new TxnId(Math.min(100, max.epoch() * 2), max.hlc() + 100, max.kind(), max.domain(), max.node);
+                        max = new TxnId(Math.min(100, max.epoch() * 2), max.hlc() + 100, 0, max.kind(), max.domain(), max.node);
                     case 0:
 
                 }
@@ -445,7 +455,7 @@ public class CommandsForKeyTest
             else if (hlc == max.hlc() && max.domain() == Key) domain = Key;
             else domain = rnd.nextBoolean() ? Key : Domain.Range;
 
-            return new TxnId(epoch, hlc, kind, domain, node);
+            return new TxnId(epoch, hlc, 0, kind, domain, node);
         }
 
         Timestamp generateTimestamp(Timestamp min, Timestamp max, boolean unique)
@@ -477,7 +487,7 @@ public class CommandsForKeyTest
 
         Command unwitnessed(TxnId txnId)
         {
-            Command command = notDefined(common(txnId), Ballot.ZERO);
+            Command command = notDefined(builder(txnId), Ballot.ZERO);
             unwitnessed.add(txnId);
             undecided.add(txnId);
             candidates.add(txnId);
@@ -487,61 +497,75 @@ public class CommandsForKeyTest
 
         Command preaccepted(TxnId txnId)
         {
-            return Command.PreAccepted.preAccepted(common(txnId), txnId, Ballot.ZERO);
+            return Command.PreAccepted.preaccepted(builder(txnId), SaveStatus.PreAccepted);
         }
 
         Command acceptedInvalidated(TxnId txnId, SaveStatus saveStatus)
         {
             return saveStatus == SaveStatus.AcceptedInvalidateWithDefinition
-                   ? Command.Accepted.accepted(common(txnId, true), saveStatus, txnId, Ballot.ZERO, Ballot.ZERO)
-                   : Command.AcceptedInvalidateWithoutDefinition.acceptedInvalidate(common(txnId, false), Ballot.ZERO, Ballot.ZERO);
+                   ? Command.Accepted.accepted(builder(txnId, true), saveStatus)
+                   : Command.NotAcceptedWithoutDefinition.acceptedInvalidate(builder(txnId, false));
         }
 
         Command accepted(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus)
         {
-            Deps deps = generateDeps(txnId, txnId, Status.Accepted);
-            return Command.Accepted.accepted(common(txnId, saveStatus.known.definition.isKnown()).partialDeps(deps.intersecting(txnId.domain() == Key ? KEY_ROUTE : RANGE_ROUTE)),
-                                        saveStatus, executeAt, Ballot.ZERO, Ballot.ZERO);
+            Deps deps = generateDeps(txnId, txnId, Status.AcceptedMedium);
+            Builder builder = builder(txnId, saveStatus.known.definition().isKnown())
+                              .partialDeps(deps.intersecting(txnId.domain() == Key ? KEY_ROUTE : RANGE_ROUTE))
+                              .executeAt(executeAt);
+
+            return Command.Accepted.accepted(builder, saveStatus);
         }
 
         Command committed(TxnId txnId, Timestamp executeAt)
         {
             Deps deps = generateDeps(txnId, executeAt, Status.Committed);
-            return Command.Committed.committed(common(txnId).partialDeps(slice(txnId, deps)), SaveStatus.Committed, executeAt, Ballot.ZERO, Ballot.ZERO, null);
+            Builder builder = builder(txnId).partialDeps(slice(txnId, deps))
+                                            .executeAt(executeAt);
+            return Command.Committed.committed(builder, SaveStatus.Committed);
         }
 
         Command stable(TxnId txnId, Timestamp executeAt, @Nullable Command.Committed committed)
         {
             Deps deps = committed == null ? generateDeps(txnId, executeAt, Status.Stable) : committed.partialDeps();
-            CommonAttributes common = common(txnId).partialDeps(slice(txnId, deps));
-            Command.WaitingOn waitingOn = initialiseWaitingOn(txnId, executeAt, common.route(), deps);
-            return Command.Committed.committed(common, SaveStatus.Stable, executeAt, Ballot.ZERO, Ballot.ZERO, waitingOn);
+            Builder builder = builder(txnId).partialDeps(slice(txnId, deps))
+                                            .executeAt(executeAt);
+            builder.waitingOn(initialiseWaitingOn(txnId, executeAt, builder.participants().route(), deps));
+            return Command.Committed.committed(builder, Stable);
         }
 
         Command applied(TxnId txnId, Timestamp executeAt, @Nullable Command.Committed committed)
         {
             Deps deps = committed == null ? generateDeps(txnId, executeAt, Status.Applied) : committed.partialDeps();
-            CommonAttributes common = common(txnId).partialDeps(slice(txnId, deps));
-            Command.WaitingOn waitingOn = committed == null || committed.waitingOn == null ? initialiseWaitingOn(txnId, executeAt, common.route(), deps) : committed.waitingOn;
-            return new Command.Executed(common, SaveStatus.Applied, executeAt, Ballot.ZERO, Ballot.ZERO, waitingOn,
-                                        new Writes(txnId, executeAt, KEYS, null), new Result(){});
+            Command.WaitingOn waitingOn = committed == null || committed.waitingOn == null ? initialiseWaitingOn(txnId, executeAt, committed.participants().route(), deps) : committed.waitingOn;
+            Builder builder = builder(txnId)
+                              .partialDeps(slice(txnId, deps))
+                              .executeAt(executeAt)
+                              .waitingOn(waitingOn)
+                              .result(new Result(){});
+
+            if (txnId.is(Write))
+                builder.writes(new Writes(txnId, executeAt, KEYS, null));
+
+            return executed(builder, SaveStatus.Applied);
         }
 
         Command invalidated(TxnId txnId)
         {
-            return new Command.Truncated(common(txnId), SaveStatus.Invalidated, Timestamp.NONE, null, null);
+            return Command.Truncated.invalidated(txnId, builder(txnId).participants());
         }
 
-        CommonAttributes.Mutable common(TxnId txnId)
+        Builder builder(TxnId txnId)
         {
-            return common(txnId, true);
+            return builder(txnId, true);
         }
 
-        CommonAttributes.Mutable common(TxnId txnId, boolean withDefinition)
+        Builder builder(TxnId txnId, boolean withDefinition)
         {
-            CommonAttributes.Mutable result = new CommonAttributes.Mutable(txnId)
-                   .durability(NotDurable)
-                   .setParticipants(StoreParticipants.all(txnId.is(Key) ? KEY_ROUTE : RANGE_ROUTE));
+            Builder result = new Builder(txnId)
+                             .durability(NotDurable)
+                             .setParticipants(StoreParticipants.all(txnId.is(Key) ? KEY_ROUTE : RANGE_ROUTE))
+                             .promised(Ballot.ZERO).acceptedOrCommitted(Ballot.ZERO);
 
             if (withDefinition)
                 result.partialTxn((txnId.domain() == Key ? KEY_TXN : RANGE_TXN).slice(RANGES, true));
@@ -578,7 +602,7 @@ public class CommandsForKeyTest
     @Test
     public void testOne()
     {
-        test(1379416440687226L, 1000);
+        test(583600505900884L, 1000);
 //        test(System.nanoTime(), 500);
     }
 
@@ -1069,6 +1093,12 @@ public class CommandsForKeyTest
 
         @Override
         public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
+        {
+            return 0;
+        }
+
+        @Override
+        public long localExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
         {
             return 0;
         }

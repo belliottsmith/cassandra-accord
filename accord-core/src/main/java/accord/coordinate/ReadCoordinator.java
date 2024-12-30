@@ -177,16 +177,15 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
     }
 
     @Override
-    public void onCallbackFailure(Id from, Throwable failure)
+    public boolean onCallbackFailure(Id from, Throwable failure)
     {
-        node.agent().onUncaughtException(failure);
-        if (isDone)
-            return;
+        if (isDone) return false;
 
         if (this.failure != null)
             failure.addSuppressed(this.failure);
         this.failure = failure;
         finishOnFailure();
+        return true;
     }
 
     protected void finishOnFailure(Throwable failure, boolean overrideExistingFailure)
@@ -261,19 +260,18 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         to.forEach(this::contact);
     }
 
-    public void start()
+    public final void start()
     {
-        if (!initialise())
-        {
-            finishOnExhaustion();
-        }
-        else
-        {
-            List<Id> contact = new ArrayList<>(maxShardsPerEpoch());
-            if (trySendMore(List::add, contact) != RequestStatus.NoChange)
-                throw new IllegalStateException();
-            start(contact);
-        }
+        if (initialise()) startOnceInitialised();
+        else finishOnExhaustion();
+    }
+
+    protected void startOnceInitialised()
+    {
+        List<Id> contact = new ArrayList<>(maxShardsPerEpoch());
+        if (trySendMore(List::add, contact) != RequestStatus.NoChange)
+            throw new IllegalStateException();
+        start(contact);
     }
 
     @Override

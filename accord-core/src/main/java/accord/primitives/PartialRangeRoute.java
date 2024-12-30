@@ -22,6 +22,7 @@ import java.util.Arrays;
 
 import accord.api.RoutingKey;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_OVERLAPPING;
 import static accord.utils.Invariants.illegalArgument;
@@ -57,7 +58,7 @@ public class PartialRangeRoute extends RangeRoute implements PartialRoute<Range>
         Unseekables.UnseekablesKind kind = that.kind();
         switch (kind)
         {
-            default: throw new AssertionError("Unhandled kind: " + kind);
+            default: throw new UnhandledEnum(kind);
             case FullKeyRoute:
             case PartialKeyRoute:
             case RoutingKeys:

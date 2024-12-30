@@ -35,7 +35,6 @@ import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.CommandStore;
-import accord.local.CommonAttributes;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -366,12 +365,10 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         if (!blockedBy.txnId().isVisible())
             return;
 
-        // ensure we have a record to work with later; otherwise may think has been truncated
-        // TODO (expected): we shouldn't rely on this anymore
         blockedBy.initialise();
         Command command = blockedBy.current();
         SaveStatus saveStatus = command.saveStatus();
-        Invariants.checkState(saveStatus.compareTo(blockedUntil.minSaveStatus) < 0);
+        Invariants.checkState(saveStatus.compareTo(blockedUntil.unblockedFrom) < 0);
 
         StoreParticipants blockedOnStoreParticipants2 = null;
         if (blockedOnParticipants != null || blockedOnRoute != null)
@@ -393,16 +390,16 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
         // first save the route/participant info into the Command if it isn't already there
 
-        CommonAttributes update = blockedBy.current();
+        Command update = blockedBy.current();
         StoreParticipants participants = update.participants();
         StoreParticipants updatedParticipants = participants;
         if (blockedOnStoreParticipants != null) updatedParticipants = updatedParticipants.supplementOrMerge(saveStatus, blockedOnStoreParticipants);
         if (blockedOnStoreParticipants2 != null) updatedParticipants = updatedParticipants.supplementOrMerge(saveStatus, blockedOnStoreParticipants2);
         if (participants != updatedParticipants)
-            update = update.mutable().setParticipants(updatedParticipants);
+            update = update.updateParticipants(updatedParticipants);
 
         if (update != command)
-            command = blockedBy.updateAttributes(safeStore, update);
+            command = blockedBy.incidentalUpdate(update);
 
         // TODO (required): tighten up ExclusiveSyncPoint range bounds
         Invariants.checkState((command.txnId().is(ExclusiveSyncPoint) ? safeStore.ranges().all()

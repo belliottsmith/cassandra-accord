@@ -41,7 +41,6 @@ import javax.annotation.Nonnull;
 
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
-import static accord.primitives.EpochSupplier.constant;
 import static accord.primitives.Route.castToRoute;
 import static accord.primitives.Route.isFullRoute;
 import static accord.primitives.Route.isRoute;
@@ -67,6 +66,7 @@ public class FetchData extends CheckShards<Route<?>>
         }
     }
 
+    // TODO (expected): separate keys we fetch deps and txns for
     private static class FetchRequest
     {
         final Known fetch;
@@ -192,11 +192,11 @@ public class FetchData extends CheckShards<Route<?>>
     {
         Invariants.checkState(req.executeAt == null);
         TxnId txnId = req.txnId;
-        switch (found.outcome)
+        switch (found.outcome())
         {
-            default: throw new AssertionError("Unknown outcome: " + found.outcome);
-            case Invalidated:
-                locallyInvalidateAndCallback(node, txnId, constant(req.lowEpoch), constant(req.highEpoch), req.fetchKeys, new FetchResult(found, req.fetchKeys, null), req.callback);
+            default: throw new AssertionError("Unknown outcome: " + found.outcome());
+            case Abort:
+                locallyInvalidateAndCallback(node, txnId, req.lowEpoch, req.highEpoch, req.fetchKeys, new FetchResult(found, req.fetchKeys, null), req.callback);
                 break;
 
             case Unknown:
@@ -337,10 +337,7 @@ public class FetchData extends CheckShards<Route<?>>
         else
         {
             if (success == ReadCoordinator.Success.Success)
-            {
-                if (!isSufficient(merged))
-                    Invariants.checkState(isSufficient(merged), "Status %s is not sufficient", merged);
-            }
+                Invariants.checkState(isSufficient(merged), "Status %s is not sufficient", merged);
 
             // TODO (expected): should we automatically trigger a new fetch if we find executeAt but did not request enough information? would be more rob ust
             Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, lowEpoch, highEpoch, success.withQuorum, query(), propagateTo, target, (CheckStatusOkFull) merged, callback);

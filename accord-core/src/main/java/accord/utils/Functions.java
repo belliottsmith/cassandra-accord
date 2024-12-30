@@ -81,4 +81,23 @@ public class Functions
         return result;
     }
 
+    public static <I, O> O foldl(I[] array, BiFunction<I, O, O> foldl, O zero)
+    {
+        O result = zero;
+        for (I in : array)
+            result = foldl.apply(in, result);
+        return result;
+    }
+
+    public static <I, O> O foldlNonNull(I[] array, BiFunction<I, O, O> foldl, O zero)
+    {
+        O result = zero;
+        for (I in : array)
+        {
+            if (in != null)
+                result = foldl.apply(in, result);
+        }
+        return result;
+    }
+
 }

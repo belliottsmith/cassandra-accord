@@ -85,18 +85,19 @@ interface NotifySink
             StoreParticipants participants = command.participants();
             if (!participants.hasTouched(key))
             {
+                if (!safeStore.ranges().allSince(command.txnId().epoch()).contains(key))
+                {
+                    // we raced with new topology information letting us know we don't own the epoch
+                    Invariants.checkState(safeStore.ranges().allBefore(command.txnId().epoch()).contains(key));
+                    return;
+                }
+
                 Invariants.checkState(txnId.is(Routable.Domain.Key));
                 // make sure we will notify the CommandsForKey that's waiting
                 safeCommand.updateParticipants(safeStore, command.participants().supplementHasTouched(RoutingKeys.of(key)));
             }
             if (command.saveStatus().compareTo(waitingOnStatus) >= 0)
             {
-                // TODO (required): we expect this invariant to fail periodically today due to how we handle losing ranges
-                //   (specifically at minimum in the case where a CommandsForKey is provided a later transaction as a dependency
-                //    for an earlier transaction in order to permit CFK to fill in that dependency history).
-                //    This should be revisited at the same time as we resolve epoch changes with Recovery, as we expect
-                //    to have earlier epochs continue to maintain recovery state until the new epoch is fully ready
-                //    as this simplifies recovery and makes it more deterministic (avoiding epoch chasing).
                 Invariants.checkState(command.saveStatus().hasBeen(Truncated) || command.participants().touches(key));
                 // if we're committed but not invalidated, that means EITHER we have raced with a commit+
                 // OR we adopted as a dependency a <...?>

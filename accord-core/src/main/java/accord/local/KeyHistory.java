@@ -18,6 +18,8 @@
 
 package accord.local;
 
+import accord.utils.UnhandledEnum;
+
 /**
  * For operations that need information on historical operations, this indicates the
  * amount of data needed.
@@ -63,7 +65,7 @@ public enum KeyHistory
     {
         switch (that)
         {
-            default: throw new AssertionError("Unhandled KeyHistory: " + that);
+            default: throw new UnhandledEnum(that);
             case NONE:
                 return true;
             case RECOVER:

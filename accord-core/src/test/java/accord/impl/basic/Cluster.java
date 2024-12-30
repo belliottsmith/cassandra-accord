@@ -120,6 +120,8 @@ import accord.utils.LazyToString;
 import accord.utils.RandomSource;
 import accord.utils.ReflectionUtils;
 import accord.utils.Timestamped;
+import accord.utils.TriFunction;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -423,10 +425,10 @@ public class Cluster
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get());
+        BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, ListAgent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should never get a stale event");
-        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get()));
+        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null));
         TopologyFactory topologyFactory = new TopologyFactory(initialTopology.maxRf(), initialTopology.ranges().stream().toArray(Range[]::new))
         {
             @Override
@@ -441,7 +443,7 @@ public class Cluster
                                                             prefixes,
                                                             MessageListener.get(),
                                                             () -> queue,
-                                                            (id, onStale) -> globalExecutor.withAgent(agentSupplier.apply(onStale)),
+                                                            (id, onStale, timeoutSupplier) -> globalExecutor.withAgent(agentSupplier.apply(onStale, timeoutSupplier)),
                                                             queue::checkFailures,
                                                             ignore -> {},
                                                             randomSupplier,
@@ -560,7 +562,18 @@ public class Cluster
                 }
 
                 @Override
-                public void validate(CommandStore commandStore, Command command)
+                public void validateRead(CommandStore commandStore, Command command)
+                {
+                    validate(commandStore, command, false);
+                }
+
+                @Override
+                public void validateWrite(CommandStore commandStore, Command command)
+                {
+                    validate(commandStore, command, true);
+                }
+
+                public void validate(CommandStore commandStore, Command command, boolean isWrite)
                 {
                     if (command.txnId().kind() == Txn.Kind.EphemeralRead
                         || command.saveStatus() == SaveStatus.Uninitialised
@@ -575,6 +588,9 @@ public class Cluster
                     command = command.updateParticipants(command.participants().filter(LOAD, commandStore.unsafeGetRedundantBefore(), command.txnId(), command.executeAtIfKnown()));
                     // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
                     Command reconstructed = journal.loadCommand(commandStore.id(), command.txnId(), commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
+                    if (isWrite && reconstructed.saveStatus().is(Status.Truncated))
+                        return;
+
                     List<ReflectionUtils.Difference<?>> diff = ReflectionUtils.recursiveEquals(command, reconstructed);
                     if (!diff.isEmpty() && command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
                         diff.removeIf(v -> v.path.equals(".participants."));
@@ -582,7 +598,7 @@ public class Cluster
                 }
 
                 @Override
-                public void validate(CommandStore commandStore, CommandsForKey cfk)
+                public void validateRead(CommandStore commandStore, CommandsForKey cfk)
                 {
                     if (cfk == null) return;
                     if (cfk.isLoadingPruned()) return;
@@ -602,7 +618,7 @@ public class Cluster
     }
 
     public static Map<MessageType, Stats> run(Id[] nodes, int[] prefixes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
-                                              BiFunction<Id, BiConsumer<Timestamp, Ranges>, AgentExecutor> nodeExecutorSupplier,
+                                              TriFunction<Id, BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, AgentExecutor> nodeExecutorSupplier,
                                               Runnable checkFailures, Consumer<Packet> responseSink,
                                               Supplier<RandomSource> randomSupplier,
                                               Supplier<TimeService> timeServiceSupplier,
@@ -664,7 +680,7 @@ public class Cluster
                 TimeService timeService = timeServiceSupplier.get();
                 LocalConfig localConfig = LocalConfig.DEFAULT;
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
-                AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale);
+                AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale, timeouts);
                 executorMap.put(id, nodeExecutor);
                 Journal journal = journalFactory.apply(id, nodeExecutor.agent());
                 journalMap.put(id, journal);
@@ -1180,7 +1196,7 @@ public class Cluster
             OverrideLinkKind kind = nextKind.get();
             switch (kind)
             {
-                default: throw new AssertionError("Unhandled: " + kind);
+                default: throw new UnhandledEnum(kind);
                 case BOTH: return ignore -> new Link(actionSupplier.get(), latencySupplier.get());
                 case ACTION: return override -> new Link(actionSupplier.get(), override.latencyMicros);
                 case LATENCY: return override -> new Link(override.action, latencySupplier.get());
@@ -1207,7 +1223,7 @@ public class Cluster
             Function<Link, Link> linkOverride = linkOverrideSupplier.get();
             switch (kind)
             {
-                default: throw new AssertionError("Unhandled: " + kind);
+                default: throw new UnhandledEnum(kind);
                 case PAIRED_UNIDIRECTIONAL:
                     return pairedUnidirectionalOverrides(linkOverride, nodesList, random, defaultLinks);
                 case RANDOM_BIDIRECTIONAL:

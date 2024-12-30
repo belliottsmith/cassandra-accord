@@ -63,10 +63,7 @@ public class CollectCalculatedDeps implements Callback<CalculateDepsOk>
     {
         Topologies topologies = node.topology().withUnsyncedEpochs(collectFrom, txnId, executeAt);
         CollectCalculatedDeps collect = new CollectCalculatedDeps(node, topologies, txnId, fullRoute.homeKey(), executeAt, callback);
-        CommandStore store = CommandStore.maybeCurrent();
-        if (store == null)
-            store = node.commandStores().select(fullRoute);
-
+        CommandStore store = CommandStore.currentOrElseSelect(node, fullRoute);
         SortedArrayList<Id> contact = collect.tracker.filterAndRecordFaulty();
         if (contact == null) callback.accept(null, new Exhausted(txnId, collect.homeKey, null));
         else node.send(contact, to -> new CalculateDeps(to, topologies, fullRoute, txnId, executeAt), store, collect);
@@ -97,13 +94,13 @@ public class CollectCalculatedDeps implements Callback<CalculateDepsOk>
     }
 
     @Override
-    public void onCallbackFailure(Id from, Throwable failure)
+    public boolean onCallbackFailure(Id from, Throwable failure)
     {
-        if (isDone)
-            return;
+        if (isDone) return false;
 
         isDone = true;
         callback.accept(null, failure);
+        return true;
     }
 
     private void onQuorum()
