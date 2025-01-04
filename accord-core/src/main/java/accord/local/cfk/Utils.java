@@ -33,6 +33,7 @@ import net.nicoulaj.compilecommand.annotations.Inline;
 import static accord.local.cfk.CommandsForKey.InternalStatus.ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
+import static accord.local.cfk.CommandsForKey.manages;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
 import static accord.utils.SortedArrays.Search.FAST;
@@ -259,6 +260,28 @@ class Utils
         System.arraycopy(additions, 0, prunedIds, 0, prunedIndex);
         System.arraycopy(additions, prunedIndex, additions, 0, additionCount - prunedIndex);
         return prunedIds;
+    }
+
+    static TxnId[] removeUnmanaged(TxnId[] ids)
+    {
+        int count = 0;
+        for (TxnId id : ids)
+            count += manages(id) ? 1 : 0;
+
+        if (count == ids.length)
+            return ids;
+
+        if (count == 0)
+            return NO_TXNIDS;
+
+        TxnId[] result = new TxnId[count];
+        count = 0;
+        for (TxnId id : ids)
+        {
+            if (manages(id))
+                result[count++] = id;
+        }
+        return result;
     }
 
     /**
