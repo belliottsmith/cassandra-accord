@@ -368,7 +368,7 @@ abstract class WaitingState extends BaseTxnState
         }
 
         // TODO (expected): split into txn and deps sources
-        Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, txnId, highEpoch);
+        Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, lowEpoch, highEpoch);
         Invariants.checkState(!slicedRoute.isEmpty());
         if (!command.hasBeen(Status.PreCommitted))
         {
@@ -527,6 +527,7 @@ abstract class WaitingState extends BaseTxnState
         }
         else
         {
+            safeStore.agent().onCaughtException(fail, "Failed fetching data for " + state);
             state.retry(safeStore, safeCommand, owner, blockedUntil);
         }
     }

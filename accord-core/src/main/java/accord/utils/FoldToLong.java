@@ -16,23 +16,9 @@
  * limitations under the License.
  */
 
-package accord.api;
+package accord.utils;
 
-import accord.primitives.Range;
-import accord.primitives.RoutableKey;
-import accord.primitives.Seekable;
-
-/**
- * A key we can find in both the cluster and on disk
- */
-public interface Key extends Seekable, RoutableKey
+public interface FoldToLong<P1>
 {
-    @Override
-    default Key asKey() { return this; }
-
-    @Override
-    default Key slice(Range range) { return this; }
-
-    @Override
-    default Range asRange() { throw new UnsupportedOperationException(); }
+    long apply(P1 p1, long accumulate);
 }

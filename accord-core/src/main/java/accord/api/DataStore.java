@@ -18,8 +18,6 @@
 
 package accord.api;
 
-import javax.annotation.Nullable;
-
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.primitives.Ranges;
@@ -45,14 +43,18 @@ public interface DataStore
          * To be invoked by implementation once we hear back from the replica that it
          * has taken a snapshot to process.
          *
-         * Optional parameter maxApplied can supply the maximum timestamp of any applied
-         * transaction in the data being bootstrapped from this source. If not provided
-         * the store will coordinate a cheap global transaction to calculate a lower bound.
+         * Required parameter maxApplied supplies the maximum timestamp of any applied
+         * transaction in the data being bootstrapped from this source. This can be computed from
+         * the node's local MaxConflicts collection.
+         *
+         * An optional UniqueHlcs parameter can be supplied if the data store in question relies
+         * upon unique 8-byte hlcs for storing data. In this case it is a correctness requirement
+         * to provide information that can be used to seed the receiving node's CommandsForKey data.
          *
          * Note: if the membership has entirely changed, or all other replicas are still themselves
          * bootstrapping, then this *must* be provided for the system to make progress.
          */
-        AbortFetch started(@Nullable Timestamp maxApplied);
+        AbortFetch started(Timestamp maxApplied);
 
         /**
          * To be invoked by implementation once we decide to abort a fetch from a replica,

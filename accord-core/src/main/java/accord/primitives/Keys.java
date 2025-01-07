@@ -101,6 +101,7 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
         return Keys.ofSortedUnique(Arrays.copyOfRange(keys, from, to));
     }
 
+    @Override
     public final Keys intersecting(Seekables<?, ?> intersecting)
     {
         switch (intersecting.domain())
@@ -111,11 +112,13 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
         }
     }
 
+    @Override
     public final Keys intersecting(Seekables<?, ?> intersecting, Slice slice)
     {
         return intersecting(intersecting);
     }
 
+    @Override
     public final Keys intersecting(Unseekables<?> intersecting)
     {
         switch (intersecting.domain())
@@ -126,6 +129,7 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
         }
     }
 
+    @Override
     public final Keys intersecting(Unseekables<?> intersecting, Slice slice)
     {
         return intersecting(intersecting);

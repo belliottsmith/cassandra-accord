@@ -199,6 +199,10 @@ public class ProtocolModifiers
         public static boolean permitLocalExecution() { return permitLocalExecution; }
         public static void setPermitLocalExecution(boolean newPermitLocalExecution) { permitLocalExecution = newPermitLocalExecution; }
 
+        private static boolean requiresUniqueHlcs = true;
+        public static boolean requiresUniqueHlcs() { return requiresUniqueHlcs; }
+        public static void setRequiresUniqueHlcs(boolean newRequiresUniqueHlcs) { requiresUniqueHlcs = newRequiresUniqueHlcs; }
+
         public enum DependencyElision { OFF, ON, IF_DURABLE }
         private static DependencyElision dependencyElision = IF_DURABLE;
         public static DependencyElision dependencyElision() { return dependencyElision; }

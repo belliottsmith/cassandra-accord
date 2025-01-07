@@ -22,6 +22,7 @@ import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.AbstractRanges;
 import accord.primitives.SyncPoint;
+import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.Cancellable;
 
@@ -41,7 +42,8 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
     @Override
     public Cancellable submit()
     {
-        node.markDurable(exclusiveSyncPoint.route.toRanges(), exclusiveSyncPoint.syncId, exclusiveSyncPoint.syncId)
+        TxnId syncIdWithFlags = (TxnId) exclusiveSyncPoint.executeAt;
+        node.markDurable(exclusiveSyncPoint.route.toRanges(), syncIdWithFlags, syncIdWithFlags)
         .addCallback((success, fail) -> {
             if (fail != null) node.reply(replyTo, replyContext, null, fail);
             else node.mapReduceConsumeLocal(this, exclusiveSyncPoint.route, waitForEpoch(), waitForEpoch(), this);

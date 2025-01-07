@@ -40,11 +40,15 @@ public class MaxConflicts extends BTreeReducingRangeMap<Timestamp>
 
     Timestamp get(Routables<?> keysOrRanges)
     {
-        return foldl(keysOrRanges, Timestamp::max, Timestamp.NONE);
+        return foldl(keysOrRanges, Timestamp::mergeMax, Timestamp.NONE);
     }
 
     public MaxConflicts update(Unseekables<?> keysOrRanges, Timestamp maxConflict)
     {
+        // note: we use mergeMax to ensure we take the maximum epoch and hlc independently from any conflict
+        //  this is particularly essential for propagating unique HLCs, so that bootstrap recipients don't
+        //  begin serving reads too early
+        // TODO (required): should use mergeMax, but BTreeReducingRangeMap doesn't support merge functions that return neither input
         return update(this, keysOrRanges, maxConflict, Timestamp::max, MaxConflicts::new, Builder::new);
     }
 

@@ -28,6 +28,7 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
 
+import static accord.local.Cleanup.Input.FULL;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.PreApplied;
 import static accord.primitives.Status.Invalidated;
@@ -41,7 +42,7 @@ public abstract class AbstractLoader implements Journal.Loader
         TxnId txnId = command.txnId();
         if (command.status() != Truncated && command.status() != Invalidated)
         {
-            Cleanup cleanup = Cleanup.shouldCleanup(safeStore, command, command.participants());
+            Cleanup cleanup = Cleanup.shouldCleanup(FULL, safeStore, command, command.participants());
             switch (cleanup)
             {
                 case NO:

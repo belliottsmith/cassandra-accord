@@ -26,15 +26,15 @@ import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
 import static accord.primitives.SaveStatus.Erased;
-import static accord.primitives.SaveStatus.ErasedOrVestigial;
+import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 
-public class ErasedSafeCommand extends SafeCommand
+public class RetiredSafeCommand extends SafeCommand
 {
     final Command erased;
 
-    public ErasedSafeCommand(TxnId txnId, SaveStatus saveStatus)
+    public RetiredSafeCommand(TxnId txnId, SaveStatus saveStatus)
     {
         super(txnId);
         this.erased = erased(txnId, saveStatus);
@@ -42,8 +42,8 @@ public class ErasedSafeCommand extends SafeCommand
 
     public static Command erased(TxnId txnId, SaveStatus saveStatus)
     {
-        Invariants.checkArgument(saveStatus.compareTo(Erased) >= 0);
-        return new Command.Truncated(txnId, saveStatus, saveStatus == ErasedOrVestigial ? NotDurable : UniversalOrInvalidated, StoreParticipants.empty(txnId), null, null, null);
+        Invariants.checkArgument(saveStatus.compareTo(Vestigial) >= 0);
+        return new Command.Truncated(txnId, saveStatus, saveStatus == Erased ? UniversalOrInvalidated : NotDurable, StoreParticipants.empty(txnId), null, null, null);
     }
 
     @Override

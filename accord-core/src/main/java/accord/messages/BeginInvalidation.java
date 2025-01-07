@@ -66,22 +66,21 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
         StoreParticipants participants = StoreParticipants.notAccept(safeStore, this.participants, txnId);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
-        boolean acceptedFastPath;
         Ballot supersededBy;
         Participants<?> truncated;
         if (command.is(Status.Truncated))
         {
-            acceptedFastPath = false;
             supersededBy = null;
             truncated = participants.owns();
         }
         else
         {
             boolean promised = Commands.preacceptInvalidate(safeCommand, ballot);
-            acceptedFastPath = command.executeAt() != null && command.executeAt().equals(command.txnId());
             supersededBy = promised ? null : safeCommand.current().promised();
             truncated = null;
         }
+
+        boolean acceptedFastPath = BeginRecovery.acceptsFastPath(txnId, participants, command.saveStatus(), command.executeAt());
         return new InvalidateReply(supersededBy, command.acceptedOrCommitted(), command.saveStatus(), acceptedFastPath, command.route(), command.homeKey(), truncated);
     }
 

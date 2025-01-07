@@ -386,10 +386,10 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             listener.onEpochClosed(ranges, epoch);
     }
 
-    public void receiveRedundant(Ranges ranges, long epoch)
+    public void receiveRetired(Ranges ranges, long epoch)
     {
         for (Listener listener : listeners)
-            listener.onEpochRedundant(ranges, epoch);
+            listener.onEpochRetired(ranges, epoch);
     }
 
     protected void truncateTopologiesPreListenerNotify(long epoch) {}

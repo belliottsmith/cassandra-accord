@@ -47,6 +47,7 @@ import accord.utils.WrappableException;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
+import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.Outcome.Apply;
 import static accord.primitives.ProgressToken.APPLIED;
 import static accord.primitives.ProgressToken.INVALIDATED;
@@ -195,7 +196,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             else
                             {
                                 known = full.knownFor(txnId, trySendTo, trySendTo);
-                                Invariants.checkState(known.executeAt().isDecidedAndKnownToExecute() && known.outcome() == Apply);
+                                Invariants.checkState(known.isExecuteAtKnown() && known.outcome() == Apply);
 
                                 if (!known.is(DepsKnown))
                                 {
@@ -240,13 +241,29 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 }
 
                 Txn txn = full.partialTxn.reconstitute(route);
-                if (known.executeAt().isDecidedAndKnownToExecute() && known.is(DepsKnown) && known.outcome() == Apply)
+                if (known.is(ApplyAtKnown) && known.outcome() == Apply)
                 {
-                    Deps deps = full.stableDeps.reconstitute(route());
-                    node.withEpoch(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
-                        node.coordinationAdapter(txnId, Recovery).persist(node, topologies, route(), txnId, txn, full.executeAt, deps, full.writes, full.result, node.agent());
+                    Deps deps;
+                    Participants<?> missingDeps;
+                    if (known.is(DepsKnown))
+                    {
+                        deps = full.stableDeps.reconstitute(route);
+                        missingDeps = route.slice(0, 0);
+                    }
+                    else
+                    {
+                        Participants<?> hasDeps = full.map.knownFor(Known.DepsOnly, route);
+                        missingDeps = route.without(hasDeps);
+                        // convert to plain Deps as when we merge with latest deps we may erroneously keep the
+                        // PartialDeps if e.g. an empty range of deps is found
+                        deps = new Deps(full.stableDeps.reconstitutePartial(hasDeps));
+                    }
+                    LatestDeps.withCommitted(node, txnId, full.executeAt, deps, route, missingDeps, callback, mergedDeps -> {
+                        node.withEpoch(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
+                            node.coordinationAdapter(txnId, Recovery).persist(node, topologies, route, txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, node.agent());
+                        });
+                        callback.accept(APPLIED, null);
                     });
-                    callback.accept(APPLIED, null);
                 }
                 else
                 {

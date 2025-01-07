@@ -38,7 +38,7 @@ import static accord.primitives.Status.Truncated;
 
 interface NotifySink
 {
-    void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key);
+    void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc);
 
     void waitingOn(SafeCommandStore safeStore, TxnInfo txn, RoutingKey key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk);
 
@@ -47,21 +47,21 @@ interface NotifySink
         static final DefaultNotifySink INSTANCE = new DefaultNotifySink();
 
         @Override
-        public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key)
+        public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc)
         {
             SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
-            if (safeCommand != null) notWaiting(safeStore, safeCommand, key);
+            if (safeCommand != null) notWaiting(safeStore, safeCommand, key, uniqueHlc);
             else
             {
                 PreLoadContext context = PreLoadContext.contextFor(txnId);
-                safeStore.commandStore().execute(context, safeStore0 -> notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key))
+                safeStore.commandStore().execute(context, safeStore0 -> notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc))
                          .begin(safeStore.agent());
             }
         }
 
-        private void notWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, RoutingKey key)
+        private void notWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, RoutingKey key, long uniqueHlc)
         {
-            Commands.removeWaitingOnKeyAndMaybeExecute(safeStore, safeCommand, key);
+            Commands.removeWaitingOnKeyAndMaybeExecute(safeStore, safeCommand, key, uniqueHlc);
         }
 
         @Override

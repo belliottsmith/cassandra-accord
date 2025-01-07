@@ -577,7 +577,7 @@ public class Cluster
                 {
                     if (command.txnId().kind() == Txn.Kind.EphemeralRead
                         || command.saveStatus() == SaveStatus.Uninitialised
-                        || command.saveStatus() == SaveStatus.ErasedOrVestigial
+                        || command.saveStatus() == SaveStatus.Vestigial
                         || command.saveStatus() == SaveStatus.Erased)
                         return;
 
@@ -909,7 +909,7 @@ public class Cluster
                 Command afterCommand = e.getValue().value();
                 if (beforeCommand == null)
                 {
-                    Invariants.checkArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus() == SaveStatus.ErasedOrVestigial);
+                    Invariants.checkArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus() == SaveStatus.Vestigial);
                     continue;
                 }
                 if (afterCommand.hasBeen(Status.Truncated))

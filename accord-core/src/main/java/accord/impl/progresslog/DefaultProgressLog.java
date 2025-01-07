@@ -99,11 +99,15 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     private final Map<TxnId, StackTraceElement[]> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
 
     private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
+    private static final RunInvoker[] EMPTY_AWAITING_EPOCH_BUFFER = new RunInvoker[0];
 
     // The tasks whose timers have elapsed and are going to be run
     // The queue is drained here first before processing tasks so that tasks can modify the queue
     private Object[] runBuffer;
     private int runBufferCount;
+    private RunInvoker[] awaitingEpochBuffer = EMPTY_AWAITING_EPOCH_BUFFER;
+    private int awaitingEpochBufferCount;
+    private boolean isAwaitingEpoch;
 
     private long nextInvokerId;
 
@@ -437,12 +441,15 @@ public class DefaultProgressLog implements ProgressLog, Runnable
                 return;
             }
 
-            // drain to a buffer to avoid reentrancy
-            runBufferCount = 0;
+            processAwaitingEpoch();
+            // drain to a buffer to avoid reentrancy in timers
             runBuffer = EMPTY_RUN_BUFFER;
+            runBufferCount = 0;
             timers.advance(nowMicros, this, DefaultProgressLog::addToRunBuffer);
             processRunBuffer(nowMicros);
             cachedAny().forceDiscard(runBuffer, runBufferCount);
+            if (awaitingEpochBufferCount > 0)
+                rerunWithPendingEpoch();
         }
         catch (Throwable t)
         {
@@ -457,23 +464,40 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         runBuffer[runBufferCount++] = add;
     }
 
+    private void rerunWithPendingEpoch()
+    {
+        if (isAwaitingEpoch)
+            return;
+        
+        long minEpoch = Long.MAX_VALUE;
+        for (int i = 0 ; i < awaitingEpochBufferCount ; ++i)
+            minEpoch = Math.min(awaitingEpochBuffer[i].run.txnId.epoch(), minEpoch);
+        Invariants.checkArgument(minEpoch != Long.MAX_VALUE);
+        isAwaitingEpoch = true;
+        node.withEpoch(minEpoch, (success, fail) -> commandStore.execute(() -> {
+            isAwaitingEpoch = false;
+            run();
+        }));
+    }
+
     // TODO (expected): invoke immediately if the command is already loaded
     private void processRunBuffer(long nowMicros)
     {
+        long hasEpoch = node.topology().epoch();
         for (int i = 0; i < runBufferCount; ++i)
         {
             TxnState run = (TxnState) runBuffer[i];
             Invariants.checkState(!run.isScheduled());
             TxnStateKind runKind = run.wasScheduledTimer();
             validatePreRunState(run, runKind);
-
             long pendingTimerDeadline = run.pendingTimerDeadline();
+            boolean invokeBoth = false;
             if (pendingTimerDeadline > 0)
             {
                 run.clearPendingTimerDelay();
                 if (pendingTimerDeadline <= nowMicros)
                 {
-                    invoke(run, runKind.other());
+                    invokeBoth = true;
                 }
                 else
                 {
@@ -482,11 +506,39 @@ public class DefaultProgressLog implements ProgressLog, Runnable
                 }
             }
 
-            invoke(run, runKind);
+            long epoch = run.txnId.epoch();
+            if (epoch <= hasEpoch)
+            {
+                invoke(invoker(run, runKind));
+                if (invokeBoth) invoke(invoker(run, runKind.other()));
+            }
+            else
+            {
+                int count = invokeBoth ? 2 : 1;
+                if (awaitingEpochBufferCount + count >= awaitingEpochBuffer.length)
+                    awaitingEpochBuffer = Arrays.copyOf(awaitingEpochBuffer, Math.max(8, awaitingEpochBufferCount * 2));
+                awaitingEpochBuffer[awaitingEpochBufferCount++] = invoker(run, runKind);
+                if (invokeBoth) awaitingEpochBuffer[awaitingEpochBufferCount++] = invoker(run, runKind.other());
+            }
         }
 
         Arrays.fill(runBuffer, 0, runBufferCount, null);
         runBufferCount = 0;
+    }
+
+    private void processAwaitingEpoch()
+    {
+        long hasEpoch = node.topology().epoch();
+        int retainCount = 0;
+        for (int i = 0 ; i < awaitingEpochBufferCount ; ++i)
+        {
+            RunInvoker awaiting = awaitingEpochBuffer[i];
+            if (awaiting.run.txnId.epoch() <= hasEpoch) invoke(awaiting);
+            else awaitingEpochBuffer[retainCount++] = awaiting;
+        }
+        awaitingEpochBufferCount = retainCount;
+        if (retainCount == 0) awaitingEpochBuffer = EMPTY_AWAITING_EPOCH_BUFFER;
+        else if (retainCount < awaitingEpochBuffer.length / 2) awaitingEpochBuffer = Arrays.copyOf(awaitingEpochBuffer, retainCount);
     }
 
     private void validatePreRunState(TxnState run, TxnStateKind kind)
@@ -495,14 +547,17 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         Invariants.checkState(progress != NoneExpected && progress != Querying);
     }
 
-    void invoke(TxnState run, TxnStateKind runKind)
+    void invoke(RunInvoker invoker)
+    {
+        commandStore.execute(contextFor(invoker.run.txnId), invoker)
+                    .begin(commandStore.agent());
+    }
+
+    RunInvoker invoker(TxnState run, TxnStateKind runKind)
     {
         RunInvoker invoker = new RunInvoker(nextInvokerId(), run, runKind);
         registerActive(runKind, run.txnId, invoker);
-        node.withEpoch(run.txnId.epoch(), commandStore.agent(), () -> {
-            commandStore.execute(contextFor(run.txnId), invoker)
-                        .begin(commandStore.agent());
-        });
+        return invoker;
     }
 
     class RunInvoker implements Consumer<SafeCommandStore>
@@ -762,4 +817,6 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             return current.homeRetryCounter();
         }
     }
+
+
 }

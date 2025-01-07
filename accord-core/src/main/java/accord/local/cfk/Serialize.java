@@ -142,7 +142,18 @@ public class Serialize
 
         int commandCount = cfk.size();
         if (commandCount == 0)
-            return ByteBuffer.allocate(1);
+        {
+            if (!cfk.hasMaxUniqueHlc())
+                return ByteBuffer.allocate(1);
+
+            int size = 1 + VIntCoding.sizeOfUnsignedVInt(cfk.maxUniqueHlc);
+            ByteBuffer result = ByteBuffer.allocate(size);
+            VIntCoding.writeUnsignedVInt32(1, result);
+            VIntCoding.writeUnsignedVInt(cfk.maxUniqueHlc, result);
+            Invariants.checkState(!result.hasRemaining());
+            result.flip();
+            return result;
+        }
 
         int[] nodeIds = cachedInts().getInts(Math.min(64, Math.max(4, commandCount)));
         try
@@ -297,7 +308,7 @@ public class Serialize
                               | (overrideCount           > 0  ? HAS_STATUS_OVERRIDES_HEADER_BIT   : 0)
                               | (cfk.bootstrappedAt() != null ? HAS_BOOTSTRAPPED_AT_HEADER_BIT    : 0)
                               | (hasBoundsFlags(cfk)          ? HAS_BOUNDS_FLAGS_HEADER_BIT       : 0)
-                              | (hasMaxHlc(cfk)               ? HAS_MAX_HLC_HEADER_BIT            : 0)
+                              | (cfk.hasMaxUniqueHlc()        ? HAS_MAX_HLC_HEADER_BIT            : 0)
             ;
 
             int headerBytes = (maxHeaderBits+7)/8;
@@ -326,7 +337,7 @@ public class Serialize
             totalBytes += bytesHistogram[minBasicBytes] * (headerBytes + getHlcBytes(hlcBytesLookup, getHlcFlag(hlcFlagLookup, minBasicBytes - headerBytes)));
             for (int i = minBasicBytes + 1 ; i <= maxBasicBytes ; ++i)
                 totalBytes += (bytesHistogram[i] - bytesHistogram[i-1]) * (headerBytes + getHlcBytes(hlcBytesLookup, getHlcFlag(hlcFlagLookup, i - headerBytes)));
-            totalBytes += sizeOfUnsignedVInt(commandCount);
+            totalBytes += sizeOfUnsignedVInt(commandCount + 1);
             totalBytes += sizeOfUnsignedVInt(nodeIdCount);
             totalBytes += sizeOfUnsignedVInt(nodeIds[0]);
             for (int i = 1 ; i < nodeIdCount ; ++i)
@@ -362,7 +373,7 @@ public class Serialize
                     totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, bootstrappedAt.node.id));
                 }
                 if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
-                    totalBytes += sizeOfUnsignedVInt(cfk.maxHlc - prevHlc);
+                    totalBytes += sizeOfVInt(cfk.maxUniqueHlc - prevHlc);
             }
             totalBytes += sizeOfUnsignedVInt(prunedBeforeIndex + 1);
 
@@ -425,7 +436,7 @@ public class Serialize
             totalBytes += sizeOfUnsignedVInt(cfk.unmanagedCount() - unmanagedPendingCommitCount);
 
             ByteBuffer out = ByteBuffer.allocate(totalBytes);
-            VIntCoding.writeUnsignedVInt32(commandCount, out);
+            VIntCoding.writeUnsignedVInt32(commandCount + 1, out);
             VIntCoding.writeUnsignedVInt32(nodeIdCount, out);
             VIntCoding.writeUnsignedVInt32(nodeIds[0], out);
             for (int i = 1 ; i < nodeIdCount ; ++i) // TODO (desired): can encode more efficiently as a stream of N bit integers
@@ -455,7 +466,7 @@ public class Serialize
                     VIntCoding.writeUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, bootstrappedAt.node.id), out);
                 }
                 if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
-                    VIntCoding.writeUnsignedVInt(cfk.maxHlc - prevHlc, out);
+                    VIntCoding.writeVInt(cfk.maxUniqueHlc - prevHlc, out);
             }
             VIntCoding.writeUnsignedVInt32(prunedBeforeIndex + 1, out);
 
@@ -698,9 +709,15 @@ public class Serialize
             return null;
 
         in = in.duplicate();
-        int commandCount = VIntCoding.readUnsignedVInt32(in);
-        if (commandCount == 0)
-            return new CommandsForKey(key);
+        int commandCount = VIntCoding.readUnsignedVInt32(in) - 1;
+        if (commandCount <= 0)
+        {
+            if (commandCount == -1)
+                return new CommandsForKey(key);
+
+            long maxUniqueHlc = VIntCoding.readUnsignedVInt(in);
+            return new CommandsForKey(key).updateUniqueHlc(maxUniqueHlc);
+        }
 
         TxnId[] txnIds = cachedTxnIds().get(commandCount);
         int[] commandFlags = cachedInts().getInts(commandCount);
@@ -726,7 +743,7 @@ public class Serialize
         }
 
         RedundantBefore.Entry boundsInfo;
-        long prevEpoch, prevHlc, maxHlc;
+        long prevEpoch, prevHlc, maxUniqueHlc = 0;
         {
             long startEpoch, endEpoch;
             {
@@ -753,9 +770,8 @@ public class Serialize
                 Node.Id node = nodeIds[VIntCoding.readUnsignedVInt32(in)];
                 boundsInfo = boundsInfo.withBootstrappedAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
             }
-            maxHlc = boundsInfo.gcBefore.hlc();
             if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
-                maxHlc += VIntCoding.readUnsignedVInt(in);
+                maxUniqueHlc = boundsInfo.gcBefore.hlc() + VIntCoding.readVInt(in);
         }
         int prunedBeforeIndex = VIntCoding.readUnsignedVInt32(in) - 1;
 
@@ -1013,7 +1029,7 @@ public class Serialize
         }
         cachedTxnIds().forceDiscard(txnIds, commandCount);
 
-        return CommandsForKey.SerializerSupport.create(key, txns, maxHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], boundsInfo);
+        return CommandsForKey.SerializerSupport.create(key, txns, maxUniqueHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], boundsInfo);
     }
 
     private static TxnInfo create(RedundantBefore.Entry boundsInfo, @Nonnull TxnId txnId, InternalStatus status, int statusOverrides, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
@@ -1054,13 +1070,6 @@ public class Serialize
     }
 
     private static final int RX_FLAGS = new TxnId(0, 0, MEDIUM_PATH_TRACK_STABLE.bits, ExclusiveSyncPoint, Domain.Range, Node.Id.NONE).flags();
-
-    private static boolean hasMaxHlc(CommandsForKey cfk)
-    {
-        long maxHlc = cfk.maxHlc;
-        TxnInfo maxWrite = cfk.maxAppliedWrite();
-        return cfk.redundantBefore().hlc() < maxHlc && (maxWrite == null || maxWrite.hlc() < maxHlc);
-    }
 
     private static int hlcBytesLookupToHlcFlagLookup(int bytesLookup)
     {

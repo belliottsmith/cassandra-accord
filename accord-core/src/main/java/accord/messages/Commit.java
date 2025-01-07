@@ -265,7 +265,8 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.ASYNC;
+        // TODO (expected): need to guarantee execution order then can make this ASYNC
+        return KeyHistory.SYNC;
     }
 
     @Override
@@ -308,7 +309,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         if (reply != null || failure != null)
             node.reply(replyTo, replyContext, reply, failure);
         else if (kind.saveStatus == Committed)
-            node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null), null);
+            node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null);
     }
 
     @Override

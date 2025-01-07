@@ -78,6 +78,7 @@ import accord.primitives.Route;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
+import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
@@ -87,6 +88,7 @@ import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
+import static accord.local.Cleanup.Input.FULL;
 import static accord.local.KeyHistory.ASYNC;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Range;
@@ -94,7 +96,7 @@ import static accord.primitives.Routables.Slice.Minimal;
 import static accord.local.KeyHistory.SYNC;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.Erased;
-import static accord.primitives.SaveStatus.ErasedOrVestigial;
+import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.NotDefined;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.Status.Applied;
@@ -104,6 +106,8 @@ import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
+import static accord.primitives.Txn.Kind.Read;
+import static accord.primitives.Txn.Kind.SyncPoint;
 import static accord.utils.Invariants.illegalState;
 import static java.lang.String.format;
 
@@ -116,9 +120,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     final NavigableMap<Timestamp, GlobalCommand> commandsByExecuteAt = new TreeMap<>();
     private final NavigableMap<RoutableKey, GlobalCommandsForKey> commandsForKey = new TreeMap<>();
 
-    // TODO (find library, efficiency): this is obviously super inefficient, need some range map
     private final TreeMap<TxnId, RangeCommand> rangeCommands = new TreeMap<>();
-    // TODO (desired): use `redundantBefore` information instead
     protected Timestamp maxRedundant = Timestamp.NONE;
 
     private InMemorySafeStore current;
@@ -284,7 +286,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             GlobalCommand globalCommand = commands.get(txnId);
 ;            Invariants.checkState(globalCommand != null && !globalCommand.isEmpty());
             Command command = globalCommand.value();
-            Cleanup cleanup = Cleanup.shouldCleanup(agent, txnId, command.saveStatus(), command.durability(), command.participants(), unsafeGetRedundantBefore(), durableBefore());
+            Cleanup cleanup = Cleanup.shouldCleanup(FULL, agent, txnId, command.executeAt(), command.saveStatus(), command.durability(), command.participants(), unsafeGetRedundantBefore(), durableBefore());
             Invariants.checkState(command.hasBeen(Applied)
                                   || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
                                   || (durableBefore().min(txnId) == NotDurable &&
@@ -578,7 +580,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         protected final Map<TxnId, InMemorySafeCommand> commands;
         private final Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey;
         private final Set<Object> hasLoaded = new ObjectHashSet<>();
-        private CommandSummaries.Snapshot commandsForRanges;
+        private ByTxnIdSnapshot commandsForRanges;
 
         public InMemorySafeStore(InMemoryCommandStore commandStore,
                                  RangesForEpoch ranges,
@@ -680,7 +682,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return;
 
             // TODO (expected): consider removing if erased
-            if (updated.saveStatus() == Erased || updated.saveStatus() == ErasedOrVestigial)
+            if (updated.saveStatus() == Erased || updated.saveStatus() == Vestigial)
                 return;
 
             Ranges slice = ranges(txnId, updated.executeAtOrTxnId());
@@ -763,7 +765,12 @@ public abstract class InMemoryCommandStore extends CommandStore
                     summaries.put(summary.txnId, summary);
             }
 
-            return commandsForRanges = () -> summaries;
+            final Kinds kinds = new Kinds(Read, ExclusiveSyncPoint, SyncPoint);
+            return commandsForRanges = new ByTxnIdSnapshot()
+            {
+                @Override public boolean mayContainAny(Txn.Kind kind) { return kinds.test(kind); }
+                @Override public NavigableMap<Timestamp, Summary> byTxnId() { return summaries; }
+            };
         }
 
         private boolean visitForKey(Unseekables<?> keysOrRanges, Predicate<CommandsForKey> forEach)
@@ -784,7 +791,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public <P1, P2> void visit(Unseekables<?> keysOrRanges, Timestamp startedBefore, Txn.Kind.Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
+        public <P1, P2> void visit(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
         {
             visitForKey(keysOrRanges, cfk -> { cfk.visit(startedBefore, testKind, visitor, p1, p2); return true; });
             commandsForRanges().visit(keysOrRanges, startedBefore, testKind, visitor, p1, p2);
@@ -792,7 +799,7 @@ public abstract class InMemoryCommandStore extends CommandStore
 
         // TODO (expected): instead of accepting a slice, accept the min/max epoch and let implementation handle it
         @Override
-        public boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Txn.Kind.Kinds testKind, TestStartedAt testStartedAt, Timestamp testStartedAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit)
+        public boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, TestStartedAt testStartedAt, Timestamp testStartedAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit)
         {
             return visitForKey(keysOrRanges, cfk -> cfk.visit(testTxnId, testKind, testStartedAt, testStartedAtTimestamp, computeIsDep, null, visit))
                    && commandsForRanges().visit(keysOrRanges, testTxnId, testKind, testStartedAt, testStartedAtTimestamp, computeIsDep, visit);

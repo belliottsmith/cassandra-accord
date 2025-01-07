@@ -61,13 +61,12 @@ import com.google.common.annotations.VisibleForTesting;
 import static accord.local.Command.Committed.committed;
 import static accord.local.Command.Executed.executed;
 import static accord.local.Command.NotAcceptedWithoutDefinition.notAccepted;
-import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
-import static accord.primitives.SaveStatus.ErasedOrVestigial;
+import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.NotAccepted;
 import static accord.primitives.SaveStatus.PreNotAccepted;
 import static accord.primitives.SaveStatus.ReadyToExecute;
@@ -287,14 +286,21 @@ public abstract class Command implements ICommand
     public @Nullable Writes writes() { return null; }
     public @Nullable Result result() { return null; }
     public @Nullable WaitingOn waitingOn() { return null; }
+
     /**
      * Only meaningful when txnId.kind().awaitsOnlyDeps()
      */
-    public @Nullable Timestamp executesAtLeast() { return null; }
+    public @Nullable Timestamp executesAtLeast()
+    {
+        WaitingOn waitingOn = waitingOn();
+        if (waitingOn == null)
+            return null;
+        return waitingOn.executeAtLeast();
+    }
 
     public final Timestamp executeAtIfKnownElseTxnId()
     {
-        if (known().is(ExecuteAtKnown))
+        if (known().isExecuteAtKnown())
             return executeAt();
         return txnId();
     }
@@ -306,7 +312,7 @@ public abstract class Command implements ICommand
 
     public final Timestamp executeAtIfKnown(Timestamp orElse)
     {
-        if (known().is(ExecuteAtKnown))
+        if (known().isExecuteAtKnown())
             return executeAt();
         return orElse;
     }
@@ -402,7 +408,6 @@ public abstract class Command implements ICommand
 
     public static class Truncated extends Command
     {
-
         public static Truncated erased(Command command)
         {
             Durability durability = Durability.mergeAtLeast(command.durability(), UniversalOrInvalidated);
@@ -414,14 +419,14 @@ public abstract class Command implements ICommand
             return validate(new Truncated(txnId, SaveStatus.Erased, durability, participants, null, null, null));
         }
 
-        public static Truncated erasedOrVestigial(Command command)
+        public static Truncated vestigial(Command command)
         {
-            return erasedOrVestigial(command.txnId(), command.participants());
+            return vestigial(command.txnId(), command.participants());
         }
 
-        public static Truncated erasedOrVestigial(TxnId txnId, StoreParticipants participants)
+        public static Truncated vestigial(TxnId txnId, StoreParticipants participants)
         {
-            return validate(new Truncated(txnId, SaveStatus.ErasedOrVestigial, NotDurable, participants, null, null, null));
+            return validate(new Truncated(txnId, SaveStatus.Vestigial, NotDurable, participants, null, null, null));
         }
 
         public static Truncated truncatedApply(Command command)
@@ -431,7 +436,7 @@ public abstract class Command implements ICommand
 
         public static Truncated truncatedApply(Command command, @Nonnull StoreParticipants participants)
         {
-            Invariants.checkArgument(command.known().executeAt().isDecidedAndKnownToExecute());
+            Invariants.checkArgument(command.known().isExecuteAtKnown());
             Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
             if (command.txnId().awaitsOnlyDeps())
             {
@@ -737,14 +742,6 @@ public abstract class Command implements ICommand
         }
 
         @Override
-        public final Timestamp executesAtLeast()
-        {
-            if (!txnId().awaitsOnlyDeps()) return null;
-            if (status().hasBeen(Stable)) return waitingOn.executeAtLeast(executeAt());
-            return null;
-        }
-
-        @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
             Invariants.checkState(partialDeps().covers(participants.stillTouches()));
@@ -1017,6 +1014,11 @@ public abstract class Command implements ICommand
             return other.getClass() == WaitingOn.class && this.equals((WaitingOn) other);
         }
 
+        public boolean equalBitSets(WaitingOn other)
+        {
+            return this.waitingOn.equals(other.waitingOn) && Objects.equals(this.appliedOrInvalidated, other.appliedOrInvalidated);
+        }
+
         boolean equals(WaitingOn other)
         {
             return this.keys.equals(other.keys)
@@ -1063,7 +1065,8 @@ public abstract class Command implements ICommand
             private SimpleBitSet waitingOn;
             private @Nullable SimpleBitSet appliedOrInvalidated;
             private Timestamp executeAtLeast;
-            private boolean executeAtLeastUpdated;
+            private long uniqueHlc;
+            private boolean executeAtLeastOrUniqueHlcUpdated;
 
             public Update(WaitingOn waitingOn)
             {
@@ -1074,6 +1077,8 @@ public abstract class Command implements ICommand
                 this.appliedOrInvalidated = waitingOn.appliedOrInvalidated;
                 if (waitingOn.getClass() == WaitingOnWithExecuteAt.class)
                     executeAtLeast = ((WaitingOnWithExecuteAt) waitingOn).executeAtLeast;
+                if (waitingOn.getClass() == WaitingOnWithMinUniqueHlc.class)
+                    uniqueHlc = ((WaitingOnWithMinUniqueHlc) waitingOn).uniqueHlc;
             }
 
             public Update(Committed committed)
@@ -1156,7 +1161,7 @@ public abstract class Command implements ICommand
             {
                 return !(waitingOn instanceof ImmutableBitSet)
                        || (appliedOrInvalidated != null && !(appliedOrInvalidated instanceof ImmutableBitSet))
-                       || executeAtLeastUpdated;
+                       || executeAtLeastOrUniqueHlcUpdated;
             }
 
             public TxnId txnId(int i)
@@ -1272,11 +1277,22 @@ public abstract class Command implements ICommand
             public void updateExecuteAtLeast(TxnId txnId, Timestamp executeAtLeast)
             {
                 Invariants.checkState(txnId.awaitsOnlyDeps());
+                Invariants.checkState(uniqueHlc == 0);
                 Invariants.checkState(executeAtLeast.compareTo(txnId) > 0);
                 if (this.executeAtLeast == null || this.executeAtLeast.compareTo(executeAtLeast) < 0)
                 {
                     this.executeAtLeast = executeAtLeast;
-                    this.executeAtLeastUpdated = true;
+                    this.executeAtLeastOrUniqueHlcUpdated = true;
+                }
+            }
+
+            public void updateUniqueHlc(Timestamp executeAt, long uniqueHlc)
+            {
+                Invariants.checkState(executeAtLeast == null);
+                if (uniqueHlc > executeAt.hlc() && uniqueHlc > this.uniqueHlc)
+                {
+                    this.uniqueHlc = uniqueHlc;
+                    this.executeAtLeastOrUniqueHlcUpdated = true;
                 }
             }
 
@@ -1393,8 +1409,10 @@ public abstract class Command implements ICommand
             public WaitingOn build()
             {
                 WaitingOn result = new WaitingOn(keys, directRangeDeps, directKeyDeps, ensureImmutable(waitingOn), ensureImmutable(appliedOrInvalidated));
-                if (executeAtLeast == null)
+                if (executeAtLeast == null && uniqueHlc == 0)
                     return result;
+                if (executeAtLeast == null)
+                    return new WaitingOnWithMinUniqueHlc(result, uniqueHlc);
                 return new WaitingOnWithExecuteAt(result, executeAtLeast);
             }
 
@@ -1410,6 +1428,11 @@ public abstract class Command implements ICommand
                 Collections.reverse(waitingOnKeys);
                 return "keys=" + waitingOnKeys + ", txnIds=" + waitingOnTxnIds;
             }
+        }
+
+        public long minUniqueHlc()
+        {
+            return 0;
         }
     }
 
@@ -1443,6 +1466,33 @@ public abstract class Command implements ICommand
         boolean equals(WaitingOnWithExecuteAt other)
         {
             return super.equals(other) && executeAtLeast.equals(other.executeAtLeast);
+        }
+    }
+
+    public static final class WaitingOnWithMinUniqueHlc extends WaitingOn
+    {
+        public final long uniqueHlc;
+        public WaitingOnWithMinUniqueHlc(WaitingOn waitingOn, long uniqueHlc)
+        {
+            super(waitingOn);
+            this.uniqueHlc = uniqueHlc;
+        }
+
+        @Override
+        public long minUniqueHlc()
+        {
+            return uniqueHlc;
+        }
+
+        @Override
+        public boolean equals(Object other)
+        {
+            return other.getClass() == WaitingOnWithMinUniqueHlc.class && this.equals((WaitingOnWithMinUniqueHlc) other);
+        }
+
+        boolean equals(WaitingOnWithMinUniqueHlc other)
+        {
+            return super.equals(other) && uniqueHlc == other.uniqueHlc;
         }
     }
 
@@ -1613,7 +1663,7 @@ public abstract class Command implements ICommand
                 if (txnId.awaitsOnlyDeps())
                     return validateCommandClass(status, TruncatedAwaitsOnlyDeps.class, klass);
             case Erased:
-            case ErasedOrVestigial:
+            case Vestigial:
             case Invalidated:
                 return validateCommandClass(status, Truncated.class, klass);
             default:
@@ -1656,6 +1706,7 @@ public abstract class Command implements ICommand
                     Invariants.checkState(executeAt == null || executeAt.compareTo(validate.txnId()) >= 0);
                     break;
                 case ExecuteAtKnown:
+                case ApplyAtKnown:
                 case ExecuteAtProposed:
                     Invariants.checkState(executeAt != null && executeAt.compareTo(validate.txnId()) >= 0);
                     break;
@@ -1727,7 +1778,7 @@ public abstract class Command implements ICommand
 
     public static Durability durability(Durability durability, SaveStatus status)
     {
-        if (durability == NotDurable && status.compareTo(SaveStatus.PreApplied) >= 0 && status.compareTo(ErasedOrVestigial) < 0)
+        if (durability == NotDurable && status.compareTo(SaveStatus.PreApplied) >= 0 && status.compareTo(Vestigial) < 0)
             return Local; // not necessary anywhere, but helps for logical consistency
         return durability;
     }

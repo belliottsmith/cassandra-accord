@@ -25,10 +25,12 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Known.KnownDeps;
 import accord.primitives.Participants;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 
 public class RecoverAwait extends Await
 {
@@ -57,8 +59,15 @@ public class RecoverAwait extends Await
         if (!knownDeps.hasProposedOrDecidedDeps())
             return;
 
-        if ((knownDeps.hasCommittedOrDecidedDeps() ? command.executeAt() : command.txnId()).compareTo(recoverId) < 0)
+        if ((knownDeps.hasCommittedOrDecidedDeps() ? command.executeAt() : txnId).compareTo(recoverId) < 0)
+        {
+            if (txnId.is(Txn.Kind.ExclusiveSyncPoint) && txnId.hlc() > recoverId.hlc() && command.executeAt().is(HLC_BOUND))
+            {
+                rejects = true;
+                node.reply(replyTo, replyContext, SimpleReply.Nack, null);
+            }
             return;
+        }
 
         Participants<?> participants = scope.intersecting(command.participants().owns(), Minimal);
         if (!command.partialDeps().participants(recoverId).containsAll(participants))

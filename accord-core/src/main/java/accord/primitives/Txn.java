@@ -103,12 +103,12 @@ public interface Txn
 
         public static class Kinds extends TinyEnumSet<Kind>
         {
-            Kinds(Kind ... kinds)
+            public Kinds(Kind ... kinds)
             {
                 super(kinds);
             }
 
-            private Kinds(int bitset)
+            public Kinds(int bitset)
             {
                 super(bitset);
             }

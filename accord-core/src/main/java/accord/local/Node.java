@@ -377,7 +377,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     @Override
-    public void onEpochRedundant(Ranges ranges, long epoch)
+    public void onEpochRetired(Ranges ranges, long epoch)
     {
         topology.onEpochRedundant(ranges, epoch);
     }
@@ -551,7 +551,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return commandStores.mapReduceConsume(context, key, minEpoch, maxEpoch, mapReduceConsume);
     }
 
-    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
         return commandStores.mapReduceConsume(context, keys, minEpoch, maxEpoch, mapReduceConsume);
     }
@@ -690,6 +690,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
      */
     public TxnId nextTxnId(Txn.Kind rw, Domain domain, int flags)
     {
+        Invariants.checkState(domain == Domain.Key || rw != Txn.Kind.Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
         TxnId txnId = new TxnId(uniqueNow(), flags, rw, domain);
         Invariants.checkState((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;

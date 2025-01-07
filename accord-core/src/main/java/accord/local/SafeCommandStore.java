@@ -210,11 +210,6 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         else throw illegalArgument("%s was not specified in %s", key, context());
     }
 
-    public long preAcceptTimeout()
-    {
-        return agent().preAcceptTimeout();
-    }
-
     /** Get anything already referenced (should include anything in PreLoadContext). If returned, should be initialised. */
     protected abstract SafeCommand getInternal(TxnId txnId);
     /** Get if available */
@@ -252,17 +247,17 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
 
-        TxnId txnId = updated.txnId();
         if (newSaveStatus.known.isDefinitionKnown() && !oldSaveStatus.known.isDefinitionKnown())
         {
             Ranges ranges = updated.participants().touches().toRanges();
-            commandStore().markExclusiveSyncPoint(this, txnId, ranges);
+            commandStore().markExclusiveSyncPoint(this, updated.txnId(), ranges);
         }
 
         if (newSaveStatus == Applied && oldSaveStatus != Applied)
         {
             Ranges ranges = updated.participants().touches().toRanges();
-            commandStore().markExclusiveSyncPointLocallyApplied(this, txnId, ranges);
+            TxnId txnIdWithFlags = (TxnId)updated.executeAt();
+            commandStore().markExclusiveSyncPointLocallyApplied(this, txnIdWithFlags, ranges);
         }
     }
 
@@ -388,7 +383,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 RoutingKey key = keys.get(i);
                 TxnId maxTxnId = txnIdsForKey.get(txnIdsForKey.size() - 1);
                 // TODO (required): convert to O(n) merge
-                RedundantStatus status = redundantBefore.status(maxTxnId, key);
+                RedundantStatus status = redundantBefore.status(maxTxnId, null, key);
                 switch (status)
                 {
                     default: throw new UnhandledEnum(status);
@@ -408,7 +403,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                     case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
                     case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
                     case SHARD_REDUNDANT:
-                    case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
+                    case TRUNCATE_BEFORE:
                     case GC_BEFORE:
                 }
             }

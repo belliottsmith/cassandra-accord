@@ -62,9 +62,11 @@ import accord.utils.async.AsyncResults;
 import org.agrona.collections.LongHashSet;
 
 import static accord.api.ConfigurationService.EpochReady.DONE;
+import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.PreLoadContext.empty;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.checkState;
 import static accord.utils.Invariants.illegalState;
@@ -350,8 +352,8 @@ public abstract class CommandStore implements AgentExecutor
     {
         Timestamp executeAt = updated.executeAt();
         if (executeAt == null) return;
-        if (prev != null && prev.executeAt() != null && prev.executeAt().compareTo(executeAt) >= 0) return;
-
+        if (prev != null && prev.executeAt() != null && prev.executeAt().compareToStrict(executeAt) >= 0) return;
+        executeAt = executeAt.flattenUniqueHlc(); // this is what guarantees a bootstrap recipient can compute uniqueHlc safely
         MaxConflicts updatedMaxConflicts = maxConflicts.update(updated.participants().hasTouched(), executeAt);
         updateMaxConflicts(executeAt, updatedMaxConflicts);
     }
@@ -439,29 +441,19 @@ public abstract class CommandStore implements AgentExecutor
     {
         NodeCommandStoreService node = safeStore.node();
 
-        boolean isExpired = node.now() - txnId.hlc() >= safeStore.preAcceptTimeout() && !txnId.isSyncPoint();
+        boolean isExpired = node.now() - txnId.hlc() >= safeStore.agent().preAcceptTimeout() && !txnId.isSyncPoint();
         if (rejectBefore != null && !isExpired)
             isExpired = rejectBefore.rejects(txnId, keys);
 
         if (isExpired)
             return node.uniqueNow(txnId).asRejected();
 
-        if (txnId.is(ExclusiveSyncPoint))
-            return txnId;
-
-        // TODO (expected): reject if any transaction exists with a higher timestamp OR a higher epoch
-        //   this permits us to agree fast path decisions across epoch changes
         // TODO (expected): we should (perhaps) separate conflicts for reads and writes
-        Timestamp min = TxnId.max(txnId, maxConflicts.get(keys));
+        Timestamp min = TxnId.mergeMax(txnId, maxConflicts.get(keys));
         if (permitFastPath && txnId == min && txnId.epoch() >= node.epoch())
             return txnId;
 
         return node.uniqueNow(min);
-    }
-
-    public Timestamp maxConflict(Routables<?> keysOrRanges)
-    {
-        return maxConflicts.get(keysOrRanges);
     }
 
     protected void unsafeRunIn(Runnable fn)
@@ -642,18 +634,22 @@ public abstract class CommandStore implements AgentExecutor
             return;
         }
 
-        safeStore.dataStore().snapshot(slicedRanges, globalSyncId).begin((success, fail) -> {
-            if (fail != null)
-            {
-                agent.onHandledException(fail, "Unsuccessful dataStore snapshot; unable to update GC markers");
-                return;
-            }
+        // TODO (desired): not all systems care about HLC_BOUND for GC, make configurable
+        if (globalSyncId.is(HLC_BOUND) || !requiresUniqueHlcs())
+        {
+            safeStore.dataStore().snapshot(slicedRanges, globalSyncId).begin((success, fail) -> {
+                if (fail != null)
+                {
+                    agent.onCaughtException(fail, "Unsuccessful dataStore snapshot; unable to update GC markers");
+                    return;
+                }
 
-            execute(PreLoadContext.empty(), safeStore0 -> {
-                RedundantBefore addGc = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, globalSyncId, globalSyncId, globalSyncId, TxnId.NONE);
-                safeStore0.upsertRedundantBefore(addGc);
-            }).begin(agent());
-        });
+                execute(PreLoadContext.empty(), safeStore0 -> {
+                    RedundantBefore addGc = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, globalSyncId, globalSyncId, globalSyncId, TxnId.NONE);
+                    safeStore0.upsertRedundantBefore(addGc);
+                }).begin(agent());
+            });
+        }
     }
 
     protected void updatedRedundantBefore(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
@@ -795,6 +791,7 @@ public abstract class CommandStore implements AgentExecutor
     final synchronized void markSafeToRead(Timestamp forBootstrapAt, Timestamp at, Ranges ranges)
     {
         execute(empty(), safeStore -> {
+            // TODO (required): handle weird edge cases like newer at having a lower HLC than prior existing at, but higher epoch
             Ranges validatedSafeToRead = redundantBefore.validateSafeToRead(forBootstrapAt, ranges);
             safeStore.setSafeToRead(purgeAndInsert(safeToRead, at, validatedSafeToRead));
             updateMaxConflicts(ranges, at);

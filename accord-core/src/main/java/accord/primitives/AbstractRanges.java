@@ -157,7 +157,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     }
 
     @Override
-    public final boolean intersects(AbstractKeys<?> keys)
+    public final boolean intersects(AbstractUnseekableKeys keys)
     {
         return findNextIntersection(0, keys, 0) >= 0;
     }
@@ -168,6 +168,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return SortedArrays.findNextIntersection(this.ranges, 0, that.ranges, 0, Range::compareIntersecting) >= 0;
     }
 
+    @Override
     public final boolean intersects(Range that)
     {
         return indexOf(that, FAST) >= 0;
@@ -186,6 +187,12 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     // returns ri in low 32 bits, ki in top, or -1 if no match found
     @Override
     public final long findNextIntersection(int ri, AbstractKeys<?> keys, int ki)
+    {
+        return swapHighLow32b(SortedArrays.findNextIntersectionWithMultipleMatches(keys.keys, ki, ranges, ri));
+    }
+
+    @Override
+    public final long findNextIntersection(int ri, AbstractUnseekableKeys keys, int ki)
     {
         return swapHighLow32b(SortedArrays.findNextIntersectionWithMultipleMatches(keys.keys, ki, ranges, ri));
     }

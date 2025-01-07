@@ -91,7 +91,7 @@ public class AbstractConfigurationServiceTest
         }
 
         @Override
-        public void onEpochRedundant(Ranges ranges, long epoch)
+        public void onEpochRetired(Ranges ranges, long epoch)
         {
         }
 

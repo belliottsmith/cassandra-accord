@@ -58,6 +58,12 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         update(safeStore, nextCommand, prevCfk, prevCfk.update(nextCommand));
     }
 
+    public void updateUniqueHlc(SafeCommandStore safeStore, long uniqueHlc)
+    {
+        CommandsForKey prevCfk = current();
+        update(safeStore, null, prevCfk, prevCfk.updateUniqueHlc(uniqueHlc));
+    }
+
     // equivalent to update, but for async callbacks with additional validation around pruning
     public void callback(SafeCommandStore safeStore, Command nextCommand)
     {

@@ -49,6 +49,7 @@ import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtErased;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
+import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtProposed;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtUnknown;
 import static accord.primitives.Known.KnownRoute.FullRoute;
@@ -114,13 +115,14 @@ public enum SaveStatus
     // TruncatedApplyWithDeps is a state never adopted within a single replica; it is however a useful state we may enter by combining state from multiple replicas
     // TODO (expected): TruncatedApplyWithDeps should be redundant now we have migrated away from SaveStatus in CheckStatusOk to Known; remove in isolated commit once stable
     //   however: we may want to retain it for the case where we want to truncate its payload but need to be able to answer recovery decisions
-    TruncatedApplyWithDeps          (Status.Truncated,              FullRoute,  DefinitionErased,   ExecuteAtKnown,     DepsKnown,          Apply,   CleaningUp),
-    TruncatedApplyWithOutcome       (Status.Truncated,              FullRoute,  DefinitionErased,   ExecuteAtKnown,     DepsErased,         Apply,   CleaningUp),
-    TruncatedApply                  (Status.Truncated,              FullRoute,  DefinitionErased,   ExecuteAtKnown,     DepsErased,         WasApply,CleaningUp),
+    TruncatedApplyWithDeps          (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsKnown,          Apply,   CleaningUp),
+    TruncatedApplyWithOutcome       (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         Apply,   CleaningUp),
+//    TruncatedApplyWithRoute         (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
+    TruncatedApply                  (Status.Truncated,              MaybeRoute, DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
+    // Vestigial means the command cannot be completed and is either pre-bootstrap, did not commit, or did not participate in this shard's epoch
+    Vestigial                       (Status.Truncated,              MaybeRoute, DefinitionUnknown,  ExecuteAtUnknown,   DepsUnknown,        Unknown, CleaningUp),
     // NOTE: Erased should ONLY be adopted on a replica that knows EVERY shard has successfully applied the transaction at all healthy replicas (or else that it is durably invalidated)
     Erased                          (Status.Truncated,              MaybeRoute, DefinitionErased,   ExecuteAtErased,    DepsErased,         Outcome.Erased,CleaningUp),
-    // ErasedOrVestigial means the command cannot be completed and is either pre-bootstrap, did not commit, or did not participate in this shard's epoch
-    ErasedOrVestigial               (Status.Truncated,              MaybeRoute, DefinitionUnknown,  ExecuteAtUnknown,   DepsUnknown,        Unknown, CleaningUp),
     Invalidated                     (Status.Invalidated,                                                                                             CleaningUp),
     ;
 
@@ -275,7 +277,7 @@ public enum SaveStatus
 
         if (status.compareTo(Status.PreCommitted) < 0)
         {
-            if (known.executeAt().isDecidedAndKnownToExecute())
+            if (known.isExecuteAtKnown())
             {
                 switch (status)
                 {
@@ -388,12 +390,12 @@ public enum SaveStatus
                 switch (status)
                 {
                     default: throw new AssertionError("Unexpected status: " + status);
-                    case ErasedOrVestigial:
+                    case Vestigial:
                         if (known.outcome().isInvalidated())
                             return Invalidated;
 
                         if (!known.outcome().isOrWasApply() || known.is(ExecuteAtKnown))
-                            return ErasedOrVestigial;
+                            return Vestigial;
 
                     case Erased:
                         if (!known.outcome().isOrWasApply() || !known.is(ExecuteAtKnown))
@@ -462,13 +464,20 @@ public enum SaveStatus
 
             SaveStatus status = getStatus.apply(item);
             Ballot ballot = getAcceptedOrCommittedBallot.apply(item);
-            boolean update = max == null
-                             || maxStatus.phase.compareTo(status.phase) < 0
-                             || (maxStatus.phase.tieBreakWithBallot ? maxStatus.phase == status.phase && maxBallot.compareTo(ballot) < 0
-                                                                    : maxStatus.compareTo(status) < 0);
-
-            if (!update)
-                continue;
+            if (max != null)
+            {
+                if (maxStatus.phase.compareTo(status.phase) > 0) continue;
+                if (maxStatus.phase == status.phase)
+                {
+                    if (maxStatus.phase.tieBreakWithBallot)
+                    {
+                        int c = maxBallot.compareTo(ballot);
+                        if (c > 0) continue;
+                        if (c == 0 && maxStatus.compareTo(status) >= 0) continue;
+                    }
+                    else if (maxStatus.compareTo(status) >= 0) continue;
+                }
+            }
 
             max = item;
             maxStatus = status;

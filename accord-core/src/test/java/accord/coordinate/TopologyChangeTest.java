@@ -72,7 +72,7 @@ public class TopologyChangeTest
             TxnId txnId1 = node1.nextTxnId(Write, Key);
             Txn txn1 = writeTxn(keys);
             getUninterruptibly(node1.coordinate(txnId1, txn1));
-            getUninterruptibly(node1.commandStores().forEach(contextFor(txnId1), keys, 1, 1, safeStore -> {
+            getUninterruptibly(node1.commandStores().forEach(contextFor(txnId1), keys.toParticipants(), 1, 1, safeStore -> {
                 StoreParticipants participants = StoreParticipants.read(safeStore, keys.toParticipants(), txnId1);
                 Command command = safeStore.get(txnId1, participants).current();
                 Assertions.assertTrue(command.partialDeps().isEmpty());
@@ -99,7 +99,7 @@ public class TopologyChangeTest
             cluster.nodes(4, 5).forEach(node -> {
                 try
                 {
-                    getUninterruptibly(node.commandStores().forEach(contextFor(txnId1, txnId2), keys, 2, 2, safeStore -> {
+                    getUninterruptibly(node.commandStores().forEach(contextFor(txnId1, txnId2), keys.toParticipants(), 2, 2, safeStore -> {
                         StoreParticipants participants = StoreParticipants.update(safeStore, keys.toParticipants(), txnId2.epoch(), txnId2, txnId2.epoch());
                         Command command = safeStore.get(txnId2, participants).current();
                         Assertions.assertTrue(command.partialDeps().contains(txnId1));

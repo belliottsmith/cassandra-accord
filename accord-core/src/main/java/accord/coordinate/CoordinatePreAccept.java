@@ -42,7 +42,7 @@ import accord.utils.WrappableException;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
 import static accord.coordinate.tracking.RequestStatus.Success;
-import static accord.primitives.Timestamp.mergeMax;
+import static accord.primitives.Timestamp.mergeMaxAndFlags;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
@@ -149,7 +149,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     void onPreAccepted(Topologies topologies)
     {
         // TODO (expected): we do not have to take max here if we have enough fast path votes (this may unnecessarily force us onto the slow path)
-        Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
+        Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
         node.withEpoch(executeAt.epoch(), this, t -> WrappableException.wrap(t), () -> {
             onPreAccepted(topologies, executeAt, oks);
         });

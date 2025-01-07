@@ -92,11 +92,11 @@ public enum Status
      * To solve this problem we simply permit the executeAt we discover for B to be propagated to A* without
      * its dependencies. Though this does complicate the state machine a little.
      */
-    PreCommitted      (Accept,     PREACCEPTED,  FullRoute,  DefinitionUnknown, ExecuteAtKnown,   DepsUnknown,   Unknown),
+    PreCommitted      (Commit,     PREACCEPTED,  FullRoute,  DefinitionUnknown, ExecuteAtKnown,   DepsUnknown,   Unknown),
     Committed         (Commit,     COMMITTED,    FullRoute,  DefinitionKnown,   ExecuteAtKnown,   DepsCommitted, Unknown),
     Stable            (Execute,    STABLE,       FullRoute,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,     Unknown),
-    PreApplied        (Persist,    STABLE,       FullRoute,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,     Outcome.Apply),
-    Applied           (Persist,    APPLIED,      FullRoute,  DefinitionKnown,   ExecuteAtKnown,   DepsKnown,     Outcome.Apply),
+    PreApplied        (Persist,    STABLE,       FullRoute,  DefinitionKnown,   ApplyAtKnown,     DepsKnown,     Outcome.Apply),
+    Applied           (Persist,    APPLIED,      FullRoute,  DefinitionKnown,   ApplyAtKnown,     DepsKnown,     Outcome.Apply),
     // TODO (required): TruncatedApply should be treated as APPLIED for summary status; when computing recovery decisions
     //  anything already APPLIED should be treated as not witnessing anything being recovered from preaccept status
     //  EXCEPT this cannot apply for touches \notin owns... consider some more how we handle this case

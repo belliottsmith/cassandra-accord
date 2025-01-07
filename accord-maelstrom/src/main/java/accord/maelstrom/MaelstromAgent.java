@@ -81,7 +81,7 @@ public class MaelstromAgent implements Agent
     }
 
     @Override
-    public void onHandledException(Throwable t, String context)
+    public void onCaughtException(Throwable t, String context)
     {
     }
 

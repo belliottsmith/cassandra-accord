@@ -16,23 +16,34 @@
  * limitations under the License.
  */
 
-package accord.api;
+package accord.primitives;
 
-import accord.primitives.Range;
-import accord.primitives.RoutableKey;
-import accord.primitives.Seekable;
+import accord.local.Node.Id;
 
-/**
- * A key we can find in both the cluster and on disk
- */
-public interface Key extends Seekable, RoutableKey
+public final class TimestampWithUniqueHlc extends Timestamp
 {
-    @Override
-    default Key asKey() { return this; }
+    final long uniqueHlc;
+
+    public TimestampWithUniqueHlc(Timestamp copy, long uniqueHlc)
+    {
+        super(copy);
+        this.uniqueHlc = uniqueHlc;
+    }
+
+    public TimestampWithUniqueHlc(long epoch, long hlc, long uniqueHlc, int flags, Id node)
+    {
+        super(epoch, hlc, flags, node);
+        this.uniqueHlc = uniqueHlc;
+    }
+
+    public long uniqueHlc()
+    {
+        return uniqueHlc;
+    }
 
     @Override
-    default Key slice(Range range) { return this; }
-
-    @Override
-    default Range asRange() { throw new UnsupportedOperationException(); }
+    public boolean hasDistinctHlcAndUniqueHlc()
+    {
+        return true;
+    }
 }

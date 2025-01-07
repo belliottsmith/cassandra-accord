@@ -113,6 +113,12 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
                     callback.accept(null, new Redundant(txnId, route.homeKey(), executeAt));
                     break;
                 case Rejected:
+                    if (stableTracker.recordFailure(from) == Failed)
+                    {
+                        isDone = true;
+                        callback.accept(null, new Preempted(txnId, route.homeKey()));
+                    }
+                    break;
                 case Insufficient:
                     node.send(from, new Commit(CommitWithTxn, from, allTopologies,
                                                txnId, txn, route, ballot, executeAt, stabiliseDeps));

@@ -41,9 +41,11 @@ import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -56,6 +58,7 @@ import static accord.messages.ReadData.CommitOrReadNack.Insufficient;
 import static accord.messages.ReadData.CommitOrReadNack.Redundant;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -121,6 +124,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     transient Timestamp executeAt;
     private Data data;
+    private long uniqueHlc;
     transient IntHashSet waitingOn, reading;
     transient int waitingOnCount;
     transient Ranges unavailable;
@@ -324,7 +328,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         // Unless failed always ack to indicate setup has completed otherwise the counter never gets to -1
         if ((reply == null || !reply.isFinal()) && failure == null)
         {
-            onOneSuccess(-1, null, true);
+            onOneSuccess(-1, null);
             if (reply != null)
                 reply(reply, null);
         }
@@ -355,6 +359,18 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         // TODO (required): do we need to check unavailable again on completion, or throughout execution?
         //    e.g. if we are marked stale and begin processing later commands
         Ranges unavailable = unavailable(safeStore, command);
+        if (txnId.is(Write))
+        {
+            long uniqueHlc = command.asCommitted().waitingOn().minUniqueHlc();
+            if (uniqueHlc > 0)
+            {
+                synchronized (this)
+                {
+                    this.uniqueHlc = Math.max(this.uniqueHlc, uniqueHlc);
+                }
+            }
+        }
+
         CommandStore unsafeStore = safeStore.commandStore();
         beginRead(safeStore, command.executeAt(), command.partialTxn(), unavailable).begin((next, throwable) -> {
             if (throwable != null)
@@ -385,18 +401,18 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
             int storeId = commandStore.id();
             cancelSelf = listeners.remove(storeId);
-            clear = onOneSuccessInternal(storeId, unavailable, false);
+            clear = onOneSuccessInternal(storeId, unavailable);
         }
         cancelSelf.cancel();
         cleanup(clear);
     }
 
-    protected void onOneSuccess(int storeId, @Nullable Ranges newUnavailable, boolean registration)
+    protected void onOneSuccess(int storeId, @Nullable Ranges newUnavailable)
     {
-        cleanup(onOneSuccessInternal(storeId, newUnavailable, registration));
+        cleanup(onOneSuccessInternal(storeId, newUnavailable));
     }
 
-    protected synchronized Cancellable onOneSuccessInternal(int storeId, @Nullable Ranges newUnavailable, boolean registration)
+    protected synchronized Cancellable onOneSuccessInternal(int storeId, @Nullable Ranges newUnavailable)
     {
         if (storeId >= 0)
         {
@@ -419,9 +435,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
         switch (state)
         {
-            default:
-                throw new AssertionError("Unknown state: " + state);
-
+            default: throw new UnhandledEnum(state);
             case RETURNED:
                 throw illegalState("ReadOk was sent, yet ack called again");
 
@@ -432,7 +446,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
             case PENDING:
                 state = State.RETURNED;
-                reply(constructReadOk(unavailable, data), null);
+                reply(constructReadOk(unavailable, data, uniqueHlc), null);
                 return clearUnsafe();
         }
     }
@@ -508,10 +522,16 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
     }
 
-    protected ReadOk constructReadOk(Ranges unavailable, Data data)
+    @Override
+    public Unseekables<?> keys()
+    {
+        return scope;
+    }
+
+    protected ReadOk constructReadOk(Ranges unavailable, Data data, long uniqueHlc)
     {
         if (data != null) data.validateReply(txnId, executeAt);
-        return new ReadOk(unavailable, data);
+        return new ReadOk(unavailable, data, uniqueHlc);
     }
 
     protected void reply(ReadReply reply, Throwable fail)
@@ -594,13 +614,19 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
          * TODO (required): narrow to only the *intersecting* ranges that are unavailable, or do so on the recipient
          */
         public final @Nullable Ranges unavailable;
-
         public final @Nullable Data data;
+        public final long uniqueHlc;
 
-        public ReadOk(@Nullable Ranges unavailable, @Nullable Data data)
+        protected ReadOk(@Nullable Ranges unavailable, @Nullable Data data)
+        {
+            this(unavailable, data, 0);
+        }
+
+        public ReadOk(@Nullable Ranges unavailable, @Nullable Data data, long uniqueHlc)
         {
             this.unavailable = unavailable;
             this.data = data;
+            this.uniqueHlc = uniqueHlc;
         }
 
         @Override
@@ -635,7 +661,11 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         @Override
         public String toString()
         {
-            return "ReadOk{" + data + (unavailable == null ? "" : ", unavailable:" + unavailable) + ", futureEpoch=" + futureEpoch + '}';
+            return "ReadOk{" + data
+                   + (unavailable == null ? "" : ", unavailable:" + unavailable)
+                   + (uniqueHlc == 0 ? "" : ", hlc:" + uniqueHlc)
+                   + (futureEpoch == 0 ? "" : ", futureEpoch=" + futureEpoch)
+                   + '}';
         }
 
         @Override

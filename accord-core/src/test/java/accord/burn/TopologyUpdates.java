@@ -107,7 +107,7 @@ public class TopologyUpdates
     {
         executors.apply(originator.id()).execute(() -> {
             MessageTask.begin(originator, cluster, executors.apply(originator.id()), "EpochComplete:" + epoch, (node, from, onDone) -> {
-                node.onEpochRedundant(ranges, epoch);
+                node.onEpochRetired(ranges, epoch);
                 onDone.accept(true);
             });
         });

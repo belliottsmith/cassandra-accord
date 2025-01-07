@@ -307,7 +307,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
 
         public Timestamp executeAtIfKnown()
         {
-            if (maxKnown().executeAt().isDecidedAndKnownToExecute())
+            if (maxKnown().isExecuteAtKnown())
                 return executeAt;
             return null;
         }

@@ -541,7 +541,7 @@ public class Json
                 in.endArray();
             }
             in.endArray();
-            return new ReadOk(Ranges.EMPTY, result);
+            return new ReadOk(Ranges.EMPTY, result, 0);
         }
     };
 

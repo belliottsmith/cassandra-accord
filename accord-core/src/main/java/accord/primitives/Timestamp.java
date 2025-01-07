@@ -49,8 +49,23 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public enum Flag
     {
+        /**
+         * To be used only by executeAt responses during PreAccept. Can never be taken at the same time as REJECTED.
+         */
         REJECTED(0x0800),
-        UNSTABLE(0x0800);
+
+        /**
+         * To be used only by TxnId inside of Dep collections. Can never be taken at the same time as REJECTED.
+         */
+        UNSTABLE(0x0800),
+
+        /**
+         * An ExclusiveSyncPoint that marks its executeAt with this flag can be used to cleanup HLCs.
+         * This means it did not witness any conflicts in a future epoch, and so all transactions that
+         * might take a lower HLC must have been witnessed.
+         */
+        HLC_BOUND(0x0400)
+        ;
         public final int bit;
 
         Flag(int bit)
@@ -141,7 +156,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     }
 
     @Override
-    public long epoch()
+    public final long epoch()
     {
         return epoch(msb);
     }
@@ -149,12 +164,19 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     /**
      * A hybrid logical clock with implementation-defined resolution
      */
-    public long hlc()
+    public final long hlc()
     {
         return highHlc(msb) | lowHlc(lsb);
     }
 
-    public int flags()
+    public long uniqueHlc() { return hlc(); }
+
+    public boolean hasDistinctHlcAndUniqueHlc()
+    {
+        return false;
+    }
+
+    public final int flags()
     {
         return flags(lsb);
     }
@@ -212,22 +234,22 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return addFlags(this, merge, Timestamp::new);
     }
 
-    static <T extends Timestamp> T addFlags(T a, T b, Factory<T> factory)
+    static <T extends Timestamp> T addFlags(T to, T from, Factory<T> factory)
     {
-        long newLsb = a.lsb | (b.lsb & MERGE_FLAGS);
-        if (a.lsb == newLsb)
-            return a;
-        if (b.lsb == newLsb && a.msb == b.msb && a.node.equals(b.node))
-            return b;
-        return factory.create(a.msb, newLsb, a.node);
+        long newLsb = to.lsb | (from.lsb & MERGE_FLAGS);
+        if (to.lsb == newLsb)
+            return to;
+        if (from.lsb == newLsb && to.msb == from.msb && to.node.equals(from.node))
+            return from;
+        return factory.create(to.msb, newLsb, to.node);
     }
 
-    static <T extends Timestamp> T addFlags(T a, int addFlags, Factory<T> factory)
+    static <T extends Timestamp> T addFlags(T to, int addFlags, Factory<T> factory)
     {
-        long newLsb = a.lsb | addFlags;
-        if (a.lsb == newLsb)
-            return a;
-        return factory.create(a.msb, newLsb, a.node);
+        long newLsb = to.lsb | addFlags;
+        if (to.lsb == newLsb)
+            return to;
+        return factory.create(to.msb, newLsb, to.node);
     }
 
     public Timestamp logicalNext(Id node)
@@ -280,9 +302,18 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     {
         if (this == that) return 0;
         int c = Long.compareUnsigned(this.msb, that.msb);
-        if (c == 0) c = Long.compareUnsigned(this.lsb, that.lsb);
+        if (c == 0) c = Long.compare(lowHlc(this.lsb), lowHlc(that.lsb));
+        if (c == 0) c = Long.compare(this.uniqueHlc(), that.uniqueHlc());
+        if (c == 0) c = Long.compare(this.flags(), that.flags());
         if (c == 0) c = this.node.compareTo(that.node);
         return c;
+    }
+
+    public Timestamp flattenUniqueHlc()
+    {
+        if (!hasDistinctHlcAndUniqueHlc())
+            return this;
+        return new Timestamp(epoch(), uniqueHlc(), flags(), node);
     }
 
     @Override
@@ -299,11 +330,11 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     }
 
     /**
-     * Include flag bits in identity
+     * Include flag bits in identity and any uniqueHlc
      */
     public boolean equalsStrict(Timestamp that)
     {
-        return this.msb == that.msb && this.lsb == that.lsb && this.node.equals(that.node);
+        return this.msb == that.msb && this.lsb == that.lsb && this.node.equals(that.node) && uniqueHlc() == that.uniqueHlc();
     }
 
     @Override
@@ -318,9 +349,10 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     }
 
     /**
-     * Take the maximum of the two, but merge any mergeable flags
+     * The resulting timestamp will have max(a.hlc,b.hlc) and max(a.epoch, b.epoch),
+     * and any mergeable flag in either a or b
      */
-    public static Timestamp mergeMax(Timestamp a, Timestamp b)
+    public static Timestamp mergeMaxAndFlags(Timestamp a, Timestamp b)
     {
         // Note: it is not safe to take the highest HLC while retaining the current node;
         //       however, it is safe to take the highest epoch, as the originating node will always advance the hlc()
@@ -328,16 +360,15 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
                                                : b.addFlags(a).withEpochAtLeast(a.epoch());
     }
 
-    public static <T extends Timestamp> T rejectedOrMax(T a, T b)
+    /**
+     * The resulting timestamp will have max(a.hlc,b.hlc) and max(a.epoch, b.epoch)
+     */
+    public static Timestamp mergeMax(Timestamp a, Timestamp b)
     {
-        return a.compareTo(b) >= 0 ? a : b;
-    }
-
-    public static Timestamp rejectStale(Timestamp maybeReject, Timestamp ifOnOrBefore)
-    {
-        if (maybeReject.compareTo(ifOnOrBefore) > 0)
-            return maybeReject;
-        return maybeReject.asRejected();
+        // Note: it is not safe to take the highest HLC while retaining the current node;
+        //       however, it is safe to take the highest epoch, as the originating node will always advance the hlc()
+        return a.compareToWithoutEpoch(b) >= 0 ? a.withEpochAtLeast(b.epoch())
+                                               : b.withEpochAtLeast(a.epoch());
     }
 
     public static <T extends Timestamp> T nonNullOrMax(T a, T b)
@@ -421,7 +452,9 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public String toStandardString()
     {
-        return "[" + epoch() + ',' + hlc() + ',' + Integer.toBinaryString(flags()) + ',' + node + ']';
+        long hlc = hlc();
+        long uniqueHlc = uniqueHlc();
+        return "[" + epoch() + ',' + hlc + (hlc == uniqueHlc ? "" : "+" + (uniqueHlc - hlc)) + ',' + flags() + ',' + node + ']';
     }
 
     public static Timestamp fromString(String string)

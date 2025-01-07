@@ -81,7 +81,7 @@ extends SafeCommandStore
         if (with.keys().domain() == Routable.Domain.Range)
             return with.isSubsetOf(this.context) ? with : null;
 
-        if (!context().keyHistory().satisfies(with.keyHistory()))
+        if (!context().keyHistory().satisfiesIfPresent(with.keyHistory()))
             return null;
 
         try (Caches caches = tryGetCaches())

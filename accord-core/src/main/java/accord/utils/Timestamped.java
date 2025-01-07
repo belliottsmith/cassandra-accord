@@ -44,21 +44,32 @@ public class Timestamped<T>
     public static <T> Timestamped<T> merge(Timestamped<T> a, Timestamped<T> b, BiPredicate<T, T> testPrefix, BiPredicate<T, T> testEquality)
     {
         int c = a.timestamp.compareTo(b.timestamp);
-        if (c == 0)
-        {
-            Invariants.checkArgument(testEquality.test(a.data, b.data), "%s != %s", a, b);
-            return a;
-        }
-        else if (c < 0)
-        {
-            Invariants.checkArgument(testPrefix.test(a.data, b.data), "%s >= %s", a, b);
-            return b;
-        }
-        else
-        {
-            Invariants.checkArgument(testPrefix.test(b.data, a.data), "%s <= %s", a, b);
-            return a;
-        }
+        int c2 = Long.compare(a.timestamp.uniqueHlc(), b.timestamp.uniqueHlc());
+        Invariants.checkState(normaliseCmp(c) == normaliseCmp(c2));
+        validateCmp(c, a, b, testPrefix, testEquality, true);
+        validateCmp(c2, a, b, testPrefix, testEquality, true);
+        return c >= 0 ? a : b;
+    }
+
+    private static int normaliseCmp(int c)
+    {
+        return c < 0 ? -1 : c > 0 ? 1 : 0;
+    }
+
+    public static <T> Timestamped<T> mergeNew(Timestamped<T> a, Timestamped<T> b, BiPredicate<T, T> testPrefix, BiPredicate<T, T> testEquality)
+    {
+        int c = a.timestamp.compareTo(b.timestamp);
+        validateCmp(c, a, b, testPrefix, testEquality, false);
+        validateCmp(Long.compare(a.timestamp.uniqueHlc(), b.timestamp.uniqueHlc()), a, b, testPrefix, testEquality, false);
+        return c >= 0 ? a : b;
+    }
+
+    private static <T> void validateCmp(int cmp, Timestamped<T> a, Timestamped<T> b, BiPredicate<T, T> testPrefix, BiPredicate<T, T> testEquality, boolean permitBackwards)
+    {
+        if (cmp == 0) Invariants.checkArgument(testEquality.test(a.data, b.data), "%s != %s", a, b);
+        else if (cmp < 0) Invariants.checkArgument(testPrefix.test(a.data, b.data), "%s >= %s", a, b);
+        else if (permitBackwards) Invariants.checkArgument(testPrefix.test(b.data, a.data), "%s <= %s", a, b);
+        else Invariants.illegalState("Trying to write old data %s < %s", b, a);
     }
 
     public static <T> Timestamped<T> mergeEqual(Timestamped<T> a, Timestamped<T> b, BiPredicate<T, T> testEquality)

@@ -18,14 +18,18 @@
 
 package accord.impl;
 
+import java.util.function.BiPredicate;
 import java.util.function.Function;
+import java.util.function.ToLongFunction;
 
 import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Cleanup;
+import accord.local.Cleanup.Input;
 import accord.local.Command;
+import accord.local.Command.WaitingOn;
 import accord.local.DurableBefore;
 import accord.local.RedundantBefore;
 import accord.local.StoreParticipants;
@@ -54,11 +58,24 @@ import static accord.impl.CommandChange.Field.PARTICIPANTS;
 import static accord.impl.CommandChange.Field.PROMISED;
 import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
+import static accord.impl.CommandChange.Field.MIN_UNIQUE_HLC;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.TRUNCATE_WITH_OUTCOME;
+import static accord.local.Command.Accepted.accepted;
+import static accord.local.Command.Committed.committed;
+import static accord.local.Command.Executed.executed;
+import static accord.local.Command.NotAcceptedWithoutDefinition.notAccepted;
+import static accord.local.Command.NotDefined.notDefined;
+import static accord.local.Command.NotDefined.uninitialised;
+import static accord.local.Command.PreAccepted.preaccepted;
+import static accord.local.Command.Truncated.erased;
+import static accord.local.Command.Truncated.invalidated;
+import static accord.local.Command.Truncated.truncatedApply;
+import static accord.local.Command.Truncated.vestigial;
 import static accord.local.StoreParticipants.Filter.LOAD;
+import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Status.Durability.NotDurable;
 
 public class CommandChange
@@ -71,6 +88,7 @@ public class CommandChange
         PARTIAL_DEPS,
         EXECUTE_AT,
         EXECUTES_AT_LEAST,
+        MIN_UNIQUE_HLC,
         DURABILITY,
         ACCEPTED,
         PROMISED,
@@ -93,6 +111,7 @@ public class CommandChange
 
         protected Timestamp executeAt;
         protected Timestamp executeAtLeast;
+        protected long minUniqueHlc;
         protected SaveStatus saveStatus;
         protected Status.Durability durability;
 
@@ -206,6 +225,7 @@ public class CommandChange
 
             executeAt = null;
             executeAtLeast = null;
+            minUniqueHlc = 0;
             saveStatus = null;
             durability = null;
 
@@ -237,7 +257,7 @@ public class CommandChange
             this.txnId = txnId;
             durability = NotDurable;
             acceptedOrCommitted = promised = Ballot.ZERO;
-            waitingOn = (txn, deps) -> null;
+            waitingOn = (txn, deps, executeAtLeast, uniqueHlc) -> null;
             result = null;
         }
 
@@ -251,7 +271,7 @@ public class CommandChange
             return count;
         }
 
-        public Cleanup shouldCleanup(Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore, boolean isPartial)
+        public Cleanup shouldCleanup(Input input, Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore)
         {
             if (!nextCalled)
                 return NO;
@@ -259,8 +279,7 @@ public class CommandChange
             if (saveStatus == null || participants == null)
                 return Cleanup.NO;
 
-            Cleanup cleanup = isPartial ? Cleanup.shouldCleanupPartial(agent, txnId, saveStatus, durability, participants, redundantBefore, durableBefore)
-                                        : Cleanup.shouldCleanup(agent, txnId, saveStatus, durability, participants, redundantBefore, durableBefore);
+            Cleanup cleanup = Cleanup.shouldCleanup(input, agent, txnId, executeAt, saveStatus, durability, participants, redundantBefore, durableBefore);
             if (this.cleanup != null && this.cleanup.compareTo(cleanup) > 0)
                 cleanup = this.cleanup;
             return cleanup;
@@ -276,9 +295,6 @@ public class CommandChange
                 case EXPUNGE:
                 case ERASE:
                     return null;
-
-                case EXPUNGE_PARTIAL:
-                    return expungePartial(cleanup, saveStatus, true);
 
                 case VESTIGIAL:
                 case INVALIDATE:
@@ -304,28 +320,28 @@ public class CommandChange
             builder.nextCalled = true;
 
             Invariants.checkState(saveStatus != null);
-            builder.flags = setFieldChanged(SAVE_STATUS, builder.flags);
+            builder.flags = setChanged(SAVE_STATUS, builder.flags);
             builder.saveStatus = saveStatus;
-            builder.flags = setFieldChanged(CLEANUP, builder.flags);
+            builder.flags = setChanged(CLEANUP, builder.flags);
             builder.cleanup = cleanup;
             if (executeAt != null)
             {
-                builder.flags = setFieldChanged(EXECUTE_AT, builder.flags);
+                builder.flags = setChanged(EXECUTE_AT, builder.flags);
                 builder.executeAt = executeAt;
             }
             if (durability != null)
             {
-                builder.flags = setFieldChanged(DURABILITY, builder.flags);
+                builder.flags = setChanged(DURABILITY, builder.flags);
                 builder.durability = durability;
             }
             if (participants != null)
             {
-                builder.flags = setFieldChanged(PARTICIPANTS, builder.flags);
+                builder.flags = setChanged(PARTICIPANTS, builder.flags);
                 builder.participants = participants;
             }
             if (includeOutcome && builder.writes != null)
             {
-                builder.flags = setFieldChanged(WRITES, builder.flags);
+                builder.flags = setChanged(WRITES, builder.flags);
                 builder.writes = writes;
             }
 
@@ -342,7 +358,7 @@ public class CommandChange
 
             if (saveStatus != null)
             {
-                builder.flags = setFieldChanged(SAVE_STATUS, builder.flags);
+                builder.flags = setChanged(SAVE_STATUS, builder.flags);
                 builder.saveStatus = saveStatus;
             }
 
@@ -366,38 +382,37 @@ public class CommandChange
 
             Invariants.checkState(txnId != null);
             if (participants == null) participants = StoreParticipants.empty(txnId);
-            else participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.executeAt().isDecidedAndKnownToExecute() ? executeAt : null);
+            else participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.isExecuteAtKnown() ? executeAt : null);
 
             if (durability == null)
                 durability = NotDurable;
 
-            Command.WaitingOn waitingOn = null;
+            WaitingOn waitingOn = null;
             if (this.waitingOn != null)
-                waitingOn = this.waitingOn.provide(txnId, partialDeps);
+                waitingOn = this.waitingOn.provide(txnId, partialDeps, executeAtLeast, minUniqueHlc);
 
             switch (saveStatus.status)
             {
                 case NotDefined:
-                    return saveStatus == SaveStatus.Uninitialised ? Command.NotDefined.uninitialised(txnId)
-                                                                  : Command.NotDefined.notDefined(txnId, saveStatus, durability, participants, promised);
+                    return saveStatus == SaveStatus.Uninitialised ? uninitialised(txnId)
+                                                                  : notDefined(txnId, saveStatus, durability, participants, promised);
                 case PreAccepted:
-                    return Command.PreAccepted.preaccepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps);
+                    return preaccepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps);
                 case AcceptedInvalidate:
                 case PreNotAccepted:
                 case NotAccepted:
                     if (!saveStatus.known.isDefinitionKnown())
-                        return Command.NotAcceptedWithoutDefinition.notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps);
+                        return notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps);
                 case AcceptedMedium:
                 case AcceptedSlow:
                 case PreCommitted:
-                    return Command.Accepted.accepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
-
+                    return accepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
                 case Committed:
                 case Stable:
-                    return Command.Committed.committed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
+                    return committed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
                 case PreApplied:
                 case Applied:
-                    return Command.Executed.executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result);
+                    return executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result);
                 case Truncated:
                 case Invalidated:
                     return truncated(txnId, saveStatus, durability, participants, executeAt, executeAtLeast, writes, result);
@@ -414,14 +429,14 @@ public class CommandChange
                 case TruncatedApplyWithOutcome:
                 case TruncatedApplyWithDeps:
                 case TruncatedApply:
-                    return Command.Truncated.truncatedApply(txnId, status, durability, participants, executeAt, writes, result, executesAtLeast);
-                case ErasedOrVestigial:
-                    return Command.Truncated.erasedOrVestigial(txnId, participants);
+                    return truncatedApply(txnId, status, durability, participants, executeAt, writes, result, executesAtLeast);
+                case Vestigial:
+                    return vestigial(txnId, participants);
                 case Erased:
                     // TODO (expected): why are we saving Durability here for erased commands?
-                    return Command.Truncated.erased(txnId, durability, participants);
+                    return erased(txnId, durability, participants);
                 case Invalidated:
-                    return Command.Truncated.invalidated(txnId, participants);
+                    return invalidated(txnId, participants);
             }
         }
 
@@ -430,6 +445,8 @@ public class CommandChange
             return "Builder {" +
                    "txnId=" + txnId +
                    ", executeAt=" + executeAt +
+                   ", executeAtLeast=" + executeAtLeast +
+                   ", uniqueHlc=" + minUniqueHlc +
                    ", saveStatus=" + saveStatus +
                    ", durability=" + durability +
                    ", acceptedOrCommitted=" + acceptedOrCommitted +
@@ -449,15 +466,15 @@ public class CommandChange
 
     public interface WaitingOnProvider
     {
-        Command.WaitingOn provide(TxnId txnId, PartialDeps deps);
+        WaitingOn provide(TxnId txnId, PartialDeps deps, Timestamp executeAtLeast, long uniqueHlc);
     }
 
-    public static Command.WaitingOn getWaitingOn(Command command)
+    public static long getMinUniqueHlc(Command command)
     {
-        if (command instanceof Command.Committed)
-            return command.asCommitted().waitingOn();
-
-        return null;
+        WaitingOn waitingOn = command.waitingOn();
+        if (waitingOn == null)
+            return 0;
+        return waitingOn.minUniqueHlc();
     }
 
     /**
@@ -492,8 +509,11 @@ public class CommandChange
         if (before == null && after == null)
             return flags;
 
-        flags = collectFlags(before, after, Command::executeAt, true, EXECUTE_AT, flags);
+        // TODO (expected): derive this from precomputed bit masking on Known, only testing equality of objects we can't infer directly
+        flags = collectFlags(before, after, Command::executeAt, Timestamp::equalsStrict, true, EXECUTE_AT, flags);
         flags = collectFlags(before, after, Command::executesAtLeast, true, EXECUTES_AT_LEAST, flags);
+        flags = collectFlags(before, after, CommandChange::getMinUniqueHlc, MIN_UNIQUE_HLC, flags);
+
         flags = collectFlags(before, after, Command::saveStatus, false, SAVE_STATUS, flags);
         flags = collectFlags(before, after, Command::durability, false, DURABILITY, flags);
 
@@ -503,41 +523,51 @@ public class CommandChange
         flags = collectFlags(before, after, Command::participants, true, PARTICIPANTS, flags);
         flags = collectFlags(before, after, Command::partialTxn, false, PARTIAL_TXN, flags);
         flags = collectFlags(before, after, Command::partialDeps, false, PARTIAL_DEPS, flags);
-
-        // TODO: waitingOn vs WaitingOnWithExecutedAt?
-        flags = collectFlags(before, after, CommandChange::getWaitingOn, true, WAITING_ON, flags);
+        flags = collectFlags(before, after, Command::waitingOn, WaitingOn::equalBitSets, true, WAITING_ON, flags);
 
         flags = collectFlags(before, after, Command::writes, false, WRITES, flags);
         flags = collectFlags(before, after, Command::result, false, RESULT, flags);
 
+        // make sure we have enough information to decide whether to expunge timestamps (for unique ApplyAt HLC guarantees)
+        if (isChanged(EXECUTE_AT, flags) && after.saveStatus().known.is(ApplyAtKnown))
+        {
+            flags = setChanged(PARTICIPANTS, flags);
+            flags = setChanged(SAVE_STATUS, flags);
+        }
         return flags;
     }
 
     private static <OBJ, VAL> int collectFlags(OBJ lo, OBJ ro, Function<OBJ, VAL> convert, boolean allowClassMismatch, Field field, int flags)
+    {
+        return collectFlags(lo, ro, convert, Object::equals, allowClassMismatch, field, flags);
+    }
+
+    private static <OBJ, VAL> int collectFlags(OBJ lo, OBJ ro, Function<OBJ, VAL> convert, BiPredicate<VAL, VAL> equals, boolean allowClassMismatch, Field field, int flags)
     {
         VAL l = null;
         VAL r = null;
         if (lo != null) l = convert.apply(lo);
         if (ro != null) r = convert.apply(ro);
 
-        if (l == r)
-            return flags; // no change
-
-        if (r == null)
-            flags = setFieldIsNull(field, flags);
-
-        if (l == null || r == null)
-            return setFieldChanged(field, flags);
-
-        assert allowClassMismatch || l.getClass() == r.getClass() : String.format("%s != %s", l.getClass(), r.getClass());
-
-        if (l.equals(r))
-            return flags; // no change
-
-        return setFieldChanged(field, flags);
+        if (l == r) return flags; // no change
+        if (r == null) return setFieldIsNullAndChanged(field, flags);
+        if (l == null) return setChanged(field, flags);
+        Invariants.checkState(allowClassMismatch || l.getClass() == r.getClass(), "%s != %s", l.getClass(), r.getClass());
+        if (equals.test(l, r)) return flags; // no change
+        return setChanged(field, flags);
     }
 
-    // TODO (required): calculate flags once
+    private static <OBJ> int collectFlags(OBJ lo, OBJ ro, ToLongFunction<OBJ> convert, Field field, int flags)
+    {
+        long l = 0, r = 0;
+        if (lo != null) l = convert.applyAsLong(lo);
+        if (ro != null) r = convert.applyAsLong(ro);
+
+        return l == r ? flags:
+                r == 0 ? setFieldIsNullAndChanged(field, flags)
+                       : setChanged(field, flags);
+    }
+
     public static boolean anyFieldChanged(int flags)
     {
         return (flags >>> 16) != 0;
@@ -549,13 +579,13 @@ public class CommandChange
         return flags;
     }
 
-    public static int setFieldChanged(Field field, int oldFlags)
+    public static int setChanged(Field field, int oldFlags)
     {
         return oldFlags | (0x10000 << field.ordinal());
     }
 
     @VisibleForTesting
-    public static boolean getFieldChanged(Field field, int oldFlags)
+    public static boolean isChanged(Field field, int oldFlags)
     {
         return (oldFlags & (0x10000 << field.ordinal())) != 0;
     }
@@ -571,13 +601,13 @@ public class CommandChange
         return i == 32 ? null : FIELDS[i];
     }
 
-    public static int unsetIterableFields(Field field, int iterable)
+    public static int unsetIterable(Field field, int iterable)
     {
         return iterable & ~(1 << field.ordinal());
     }
 
     @VisibleForTesting
-    public static boolean getFieldIsNull(Field field, int oldFlags)
+    public static boolean isNull(Field field, int oldFlags)
     {
         return (oldFlags & (1 << field.ordinal())) != 0;
     }
@@ -590,6 +620,11 @@ public class CommandChange
     public static int setFieldIsNull(Field field, int oldFlags)
     {
         return oldFlags | (1 << field.ordinal());
+    }
+
+    public static int setFieldIsNullAndChanged(Field field, int oldFlags)
+    {
+        return oldFlags | (0x10001 << field.ordinal());
     }
 
 }

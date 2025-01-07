@@ -108,7 +108,7 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     }
 
     @Override
-    public final boolean intersects(AbstractKeys<?> keys)
+    public final boolean intersects(AbstractUnseekableKeys keys)
     {
         return findNextIntersection(0, keys, 0) >= 0;
     }
@@ -156,11 +156,18 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     }
 
     @Override
+    public final long findNextIntersection(int thisIdx, AbstractUnseekableKeys that, int thatIdx)
+    {
+        return SortedArrays.findNextIntersection(this.keys, thisIdx, that.keys, thatIdx, RoutableKey::compareAsRoutingKey);
+    }
+
+    @Override
     public final long findNextIntersection(int thisIndex, Routables<K> with, int withIndex)
     {
         return findNextIntersection(thisIndex, (AbstractKeys<?>) with, withIndex);
     }
 
+    @Override
     public Stream<K> stream()
     {
         return Stream.of(keys);
@@ -311,6 +318,7 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
             forEach.accept(key);
     }
 
+    @Override
     public final FullKeyRoute toRoute(RoutingKey homeKey)
     {
         return toRoutingKeysArray(homeKey, false, (routingKeys, homeKeyIndex, isParticipatingHomeKey) -> new FullKeyRoute(routingKeys[homeKeyIndex], routingKeys));

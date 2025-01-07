@@ -287,7 +287,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         }
 
         @Override
-        protected ReadOk constructReadOk(Ranges unavailable, Data data)
+        protected ReadOk constructReadOk(Ranges unavailable, Data data, long uniqueHlc)
         {
             Timestamp safeToReadAfter = safeToReadAfter();
             Invariants.checkState(data == null || safeToReadAfter != null);

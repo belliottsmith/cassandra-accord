@@ -168,7 +168,7 @@ public class Invalidate implements Callback<InvalidateReply>
         // first look to see if it has already been decided/invalidated
         // check each shard independently - if we find any that can be invalidated, do so
         InvalidateReply max = InvalidateReply.max(replies.unsafeValuesBackingArray());
-        InvalidateReply maxNotTruncated = !max.maxKnowledgeStatus.is(Status.Truncated) ? max : InvalidateReply.maxNotTruncated(replies.unsafeValuesBackingArray());
+        InvalidateReply maxNotTruncated = !max.maxStatus.is(Status.Truncated) ? max : InvalidateReply.maxNotTruncated(replies.unsafeValuesBackingArray());
 
         if (maxNotTruncated != null)
         {
@@ -183,6 +183,8 @@ public class Invalidate implements Callback<InvalidateReply>
                     break;
 
                 case PreAccepted:
+                case PreNotAccepted:
+                case NotAccepted:
                     if (tracker.isSafeToInvalidate() || transitivelyInvokedByPriorInvalidation)
                         break;
 
@@ -227,11 +229,11 @@ public class Invalidate implements Callback<InvalidateReply>
             }
         }
 
-        if (max != maxNotTruncated)
+        if (max != maxNotTruncated || max.maxStatus != max.maxKnowledgeStatus)
         {
             Invariants.checkState(maxNotTruncated == null || !maxNotTruncated.maxKnowledgeStatus.hasBeen(Status.PreCommitted));
             isDone = true;
-            if (!tracker.isAnyNotTruncated())
+            if (!tracker.isAnyNotTruncated()) // TODO (required): this check may be insufficient unless we do not permit shards to truncate when e.g. pre-bootstrap. If we require this, document it!
             {
                 commitInvalidate();
             }

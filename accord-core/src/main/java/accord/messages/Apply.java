@@ -194,7 +194,8 @@ public class Apply extends TxnRequest<ApplyReply>
     @Override
     public KeyHistory keyHistory()
     {
-        return KeyHistory.ASYNC;
+        // TODO (expected): need to guarantee execution order then can make this ASYNC
+        return KeyHistory.SYNC;
     }
 
     @Override

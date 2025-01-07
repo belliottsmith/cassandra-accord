@@ -236,7 +236,7 @@ public class StoreParticipants
 
     /**
      * touches, but excluding any stale, pre-bootstrap or retired ranges that are also shard redundant,
-     * as we do not need to do anything with these keys locally
+     * as we do not need to do anything with these keys locally.
      */
     public Participants<?> stillTouches()
     {

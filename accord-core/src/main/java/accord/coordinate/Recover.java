@@ -48,7 +48,6 @@ import accord.primitives.ProgressToken;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.topology.Topology;
@@ -75,7 +74,6 @@ import static accord.messages.BeginRecovery.RecoverOk.maxAccepted;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedNotTruncated;
 import static accord.primitives.Known.KnownDeps.DepsCommitted;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
-import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.TxnId.MediumPath.MEDIUM_PATH_WAIT_ON_RECOVERY;
@@ -370,7 +368,9 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         Deps earlierWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.earlierWait);
         Deps earlierNoWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.earlierNoWait);
         Deps laterWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.laterWait);
+        Deps laterNoWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.laterNoWait);
         earlierWait = earlierWait.without(earlierNoWait);
+        laterWait = laterWait.without(laterNoWait);
         if (!earlierWait.isEmpty() || !laterWait.isEmpty())
         {
             Propose.NotAccept.proposeAndPersistNotAccept(node, ballot, txnId, route.homeKey(), route, node.agent());
@@ -379,7 +379,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             // ruling out a fast path decision for us and changing our recovery decision).
             // So, we wait for these commands to commit and recompute supersedingRejects for them.
             AsyncChainCombiner.reduce(await(node, earlierWait, HasCommittedDeps),
-                                      await(node, laterWait,    CommittedOrNotAccepted), (a, b) -> a|b)
+                                      await(node, laterWait,   CommittedOrNotAccepted), (a, b) -> a|b)
                               .begin((rejects, failure) -> {
                 if (failure != null) accept(null, failure);
                 else if (rejects) invalidate(recoverOks);
@@ -414,26 +414,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     private void withCommittedOrStableDeps(KnownDeps atLeast, List<RecoverOk> nullableRecoverOkList, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
         LatestDeps.MergedCommitResult merged = LatestDeps.mergeCommit(atLeast, executeAt, nullableRecoverOkList, txnId, ok -> ok == null ? null : ok.deps);
-        node.withEpoch(executeAt.epoch(), failureCallback, () -> {
-            Unseekables<?> missing = route.without(merged.sufficientFor);
-            if (missing.isEmpty())
-            {
-                withDeps.accept(merged.deps);
-            }
-            else
-            {
-                CollectLatestDeps.withLatestDeps(node, txnId, route, missing, executeAt, (extraDeps, fail) -> {
-                    if (fail != null)
-                    {
-                        failureCallback.accept(null, fail);
-                    }
-                    else
-                    {
-                        withDeps.accept(merged.deps.with(LatestDeps.mergeCommit(DepsUnknown, executeAt, extraDeps, executeAt, i -> i).deps));
-                    }
-                });
-            }
-        });
+        LatestDeps.withCommitted(node, txnId, executeAt, merged.deps, route, route.without(merged.sufficientFor), failureCallback, withDeps);
     }
 
     private void invalidate(SortedListMap<Id, RecoverOk> recoverOks)

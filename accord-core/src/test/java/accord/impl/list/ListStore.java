@@ -330,7 +330,7 @@ public class ListStore implements DataStore
 
     public void writeUnsafe(Key key, Timestamped<int[]> value)
     {
-        data.merge(key,value, ListStore::merge);
+        data.merge(key, value, ListStore::merge);
     }
 
     private void checkReadAccess(Timestamp executeAt, Key key)

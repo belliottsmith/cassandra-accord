@@ -94,7 +94,8 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, txnId.epoch(), executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        switch (Commands.accept(safeStore, safeCommand, participants, txnId, kind, ballot, scope, executeAt, partialDeps))
+        AcceptOutcome outcome = Commands.accept(safeStore, safeCommand, participants, txnId, kind, ballot, scope, executeAt, partialDeps);
+        switch (outcome)
         {
             default: throw new IllegalStateException();
             case Redundant:

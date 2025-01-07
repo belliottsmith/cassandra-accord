@@ -59,14 +59,15 @@ public interface Routables<K extends Routable> extends Iterable<K>
     }
     default boolean intersects(Range range) { return findNext(0, range, FAST) >= 0; }
     boolean intersects(AbstractRanges ranges);
-    boolean intersects(AbstractKeys<?> keys);
-    default boolean intersects(Routables<?> routables)
+    default boolean intersects(Ranges ranges) { return intersects((AbstractRanges)ranges); }
+    boolean intersects(AbstractUnseekableKeys keys);
+    default boolean intersects(Unseekables<?> unseekables)
     {
-        switch (routables.domain())
+        switch (unseekables.domain())
         {
-            default: throw new AssertionError();
-            case Key: return intersects((AbstractKeys<?>) routables);
-            case Range: return intersects((AbstractRanges) routables);
+            default: throw new UnhandledEnum(unseekables.domain());
+            case Key: return intersects((AbstractUnseekableKeys) unseekables);
+            case Range: return intersects((AbstractRanges) unseekables);
         }
     }
 
@@ -98,6 +99,13 @@ public interface Routables<K extends Routable> extends Iterable<K>
      * the resultant {@code thisIndex} and high bits {@code withIndex}.
      */
     long findNextIntersection(int thisIndex, AbstractKeys<?> with, int withIndex);
+
+    /**
+     * Search forwards from {code thisIndex} and {@code withIndex} to find the first entries in each collection
+     * that intersect with each other. Return their position packed in a long, with low bits representing
+     * the resultant {@code thisIndex} and high bits {@code withIndex}.
+     */
+    long findNextIntersection(int thisIndex, AbstractUnseekableKeys with, int withIndex);
 
     /**
      * Search forwards from {code thisIndex} and {@code withIndex} to find the first entries in each collection

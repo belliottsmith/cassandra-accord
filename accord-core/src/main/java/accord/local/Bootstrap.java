@@ -61,8 +61,6 @@ import static accord.utils.Invariants.illegalState;
  *   We also support aborting ranges that are no longer owned by the store, which may be passed down to the
  *   FetchCoordinator (or other implementation-defined coordinator).
  *
- * 
- *
  * Important callback points:
  *   - Bootstrap.Attempt.starting()
  *       Invoked by system/impl, indicating we have sought a snapshot on a remote replica
@@ -221,7 +219,7 @@ class Bootstrap
                     return;
 
                 Timestamp safeToReadAt = maxAppliedLessOrEqualTo.compareTo(globalSyncId) <= 0 ? globalSyncId : maxAppliedLessOrEqualTo.next();
-                safeToReadAts = ReducingRangeMap.add(safeToReadAts, state.ranges, safeToReadAt);
+                safeToReadAts = ReducingRangeMap.add(safeToReadAts, state.ranges, safeToReadAt, Timestamp::mergeMax);
                 maybeComplete(state.ranges);
             }
         }

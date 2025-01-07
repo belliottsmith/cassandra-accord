@@ -119,7 +119,7 @@ public class PartialDeps extends Deps
     public Deps reconstitute(FullRoute<?> route)
     {
         if (!covers(route.participants()))
-            throw new IllegalArgumentException();
+            throw illegalArgument(covering + " does not cover " + route);
         return new Deps(keyDeps, rangeDeps, directKeyDeps);
     }
 
@@ -127,9 +127,9 @@ public class PartialDeps extends Deps
     public PartialDeps reconstitutePartial(Participants<?> covering)
     {
         if (!covers(covering))
-            throw new IllegalArgumentException();
+            throw illegalArgument(this.covering + " does not cover " + covering);
 
         if (covers(covering)) return this;
-        else throw illegalArgument(this + " does not cover " + covering);
+        else throw illegalArgument(this.covering + " does not cover " + covering);
     }
 }

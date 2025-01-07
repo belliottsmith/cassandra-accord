@@ -33,10 +33,12 @@ import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Result;
 import accord.impl.CommandChange;
-import accord.impl.ErasedSafeCommand;
+import accord.impl.RetiredSafeCommand;
 import accord.impl.InMemoryCommandStore;
 import accord.local.Cleanup;
 import accord.local.Command;
+import accord.local.Command.WaitingOnWithExecuteAt;
+import accord.local.Command.WaitingOnWithMinUniqueHlc;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.Commands;
@@ -63,6 +65,7 @@ import static accord.impl.CommandChange.Field.ACCEPTED;
 import static accord.impl.CommandChange.Field.DURABILITY;
 import static accord.impl.CommandChange.Field.EXECUTES_AT_LEAST;
 import static accord.impl.CommandChange.Field.EXECUTE_AT;
+import static accord.impl.CommandChange.Field.MIN_UNIQUE_HLC;
 import static accord.impl.CommandChange.Field.PARTIAL_DEPS;
 import static accord.impl.CommandChange.Field.PARTIAL_TXN;
 import static accord.impl.CommandChange.Field.PARTICIPANTS;
@@ -71,8 +74,9 @@ import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
+import static accord.local.Cleanup.Input.FULL;
 import static accord.primitives.SaveStatus.Erased;
-import static accord.primitives.SaveStatus.ErasedOrVestigial;
+import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
@@ -107,16 +111,15 @@ public class InMemoryJournal implements Journal
             return null;
 
         Builder builder = reconstruct(saved, ALL);
-        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore, false);
+        Cleanup cleanup = builder.shouldCleanup(FULL, agent, redundantBefore, durableBefore);
         switch (cleanup)
         {
             case VESTIGIAL:
-            case EXPUNGE_PARTIAL:
-            case EXPUNGE:
-                return ErasedSafeCommand.erased(txnId, ErasedOrVestigial);
+                return RetiredSafeCommand.erased(txnId, Vestigial);
 
+            case EXPUNGE:
             case ERASE:
-                return ErasedSafeCommand.erased(txnId, Erased);
+                return RetiredSafeCommand.erased(txnId, Erased);
         }
 
         return builder.construct(redundantBefore);
@@ -129,13 +132,12 @@ public class InMemoryJournal implements Journal
         if (builder == null || builder.isEmpty())
             return null;
 
-        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore, false);
+        Cleanup cleanup = builder.shouldCleanup(FULL, agent, redundantBefore, durableBefore);
         switch (cleanup)
         {
             case VESTIGIAL:
-            case EXPUNGE_PARTIAL:
-            case EXPUNGE:
             case ERASE:
+            case EXPUNGE:
                 return null;
         }
 
@@ -158,6 +160,7 @@ public class InMemoryJournal implements Journal
         if (saved == null)
             return null;
 
+        // TODO (expected): match C* and visit in reverse order
         Builder builder = null;
         for (Diff diff : saved)
         {
@@ -311,7 +314,7 @@ public class InMemoryJournal implements Journal
                     continue; // Already truncated
 
                 Command command = builder.construct(store.unsafeGetRedundantBefore());
-                Cleanup cleanup = Cleanup.shouldCleanup(store.agent(), command, store.unsafeGetRedundantBefore(), store.durableBefore());
+                Cleanup cleanup = Cleanup.shouldCleanup(FULL, store.agent(), command, store.unsafeGetRedundantBefore(), store.durableBefore());
                 switch (cleanup)
                 {
                     case NO:
@@ -483,9 +486,10 @@ public class InMemoryJournal implements Journal
             while (iterable != 0)
             {
                 Field field = nextSetField(iterable);
-                if (!getFieldChanged(field, flags) || getFieldIsNull(field, flags))
+                if (isNull(field, flags))
                 {
-                    iterable = unsetIterableFields(field, iterable);
+                    Invariants.checkState(isChanged(field, flags));
+                    iterable = unsetIterable(field, iterable);
                     continue;
                 }
 
@@ -496,6 +500,9 @@ public class InMemoryJournal implements Journal
                         break;
                     case EXECUTES_AT_LEAST:
                         changes.put(EXECUTES_AT_LEAST, after.executesAtLeast());
+                        break;
+                    case MIN_UNIQUE_HLC:
+                        changes.put(MIN_UNIQUE_HLC, after.waitingOn().minUniqueHlc());
                         break;
                     case SAVE_STATUS:
                         changes.put(SAVE_STATUS, after.saveStatus());
@@ -519,8 +526,14 @@ public class InMemoryJournal implements Journal
                         changes.put(PARTIAL_DEPS, after.partialDeps());
                         break;
                     case WAITING_ON:
-                        Command.WaitingOn waitingOn = getWaitingOn(after);
-                        changes.put(WAITING_ON, (WaitingOnProvider) (txnId, deps) -> waitingOn);
+                        Command.WaitingOn waitingOn = after.waitingOn();
+                        changes.put(WAITING_ON, (WaitingOnProvider) (txnId, deps, executeAtLeast, minUniqueHlc) -> {
+                            Invariants.checkState(waitingOn.executeAtLeast() == null || waitingOn.executeAtLeast().compareTo(executeAtLeast) <= 0);
+                            Invariants.checkState(waitingOn.minUniqueHlc() == 0 || waitingOn.minUniqueHlc() <= minUniqueHlc);
+                            if (executeAtLeast != waitingOn.executeAtLeast()) return new WaitingOnWithExecuteAt(waitingOn, executeAtLeast);
+                            if (minUniqueHlc != waitingOn.minUniqueHlc()) return new WaitingOnWithMinUniqueHlc(waitingOn, minUniqueHlc);
+                            return waitingOn;
+                        });
                         break;
                     case WRITES:
                         changes.put(WRITES, after.writes());
@@ -531,7 +544,7 @@ public class InMemoryJournal implements Journal
                     case CLEANUP:
                 }
 
-                iterable = unsetIterableFields(field, iterable);
+                iterable = unsetIterable(field, iterable);
             }
         }
     }
@@ -554,22 +567,20 @@ public class InMemoryJournal implements Journal
             while (iterable != 0)
             {
                 Field field = nextSetField(iterable);
-                if (getFieldChanged(field, diff.flags))
+
+                this.flags = setChanged(field, this.flags);
+                if (isNull(field, diff.flags))
                 {
-                    this.flags = setFieldChanged(field, this.flags);
-                    if (getFieldIsNull(field, diff.flags))
-                    {
-                        this.flags = setFieldIsNull(field, this.flags);
-                        setNull(field);
-                    }
-                    else
-                    {
-                        this.flags = unsetFieldIsNull(field, this.flags);
-                        deserialize(diff, field);
-                    }
+                    this.flags = setFieldIsNull(field, this.flags);
+                    setNull(field);
+                }
+                else
+                {
+                    this.flags = unsetFieldIsNull(field, this.flags);
+                    deserialize(diff, field);
                 }
 
-                iterable = unsetIterableFields(field, iterable);
+                iterable = unsetIterable(field, iterable);
             }
         }
 
@@ -582,6 +593,9 @@ public class InMemoryJournal implements Journal
                     break;
                 case EXECUTES_AT_LEAST:
                     executeAtLeast = null;
+                    break;
+                case MIN_UNIQUE_HLC:
+                    minUniqueHlc = 0;
                     break;
                 case SAVE_STATUS:
                     saveStatus = null;
@@ -627,6 +641,9 @@ public class InMemoryJournal implements Journal
                     break;
                 case EXECUTES_AT_LEAST:
                     executeAtLeast = Invariants.nonNull((Timestamp) diff.changes.get(EXECUTES_AT_LEAST));
+                    break;
+                case MIN_UNIQUE_HLC:
+                    minUniqueHlc = (Long)diff.changes.get(MIN_UNIQUE_HLC);
                     break;
                 case SAVE_STATUS:
                     saveStatus = Invariants.nonNull((SaveStatus) diff.changes.get(SAVE_STATUS));

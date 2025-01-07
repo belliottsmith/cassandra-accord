@@ -28,11 +28,11 @@ import java.util.function.LongSupplier;
 import accord.api.Agent;
 import accord.api.ProgressLog;
 import accord.api.Result;
+import accord.coordinate.CoordinationFailed;
 import accord.coordinate.ExecuteSyncPoint;
-import accord.coordinate.Preempted;
-import accord.coordinate.Timeout;
 import accord.impl.basic.NodeSink;
 import accord.impl.basic.Packet;
+import accord.impl.basic.SimulatedFault;
 import accord.impl.mock.Network;
 import accord.local.Command;
 import accord.local.Node;
@@ -120,13 +120,14 @@ public class ListAgent implements Agent
     @Override
     public void onUncaughtException(Throwable t)
     {
-        if (!(t instanceof Timeout) && !(t instanceof ExecuteSyncPoint.SyncPointErased) && !(t instanceof Preempted) && !(t instanceof CancellationException) && !(t.getCause() instanceof CancellationException))
+        if (!(t instanceof CoordinationFailed) && !(t instanceof SimulatedFault) && !(t instanceof ExecuteSyncPoint.SyncPointErased) && !(t instanceof CancellationException) && !(t.getCause() instanceof CancellationException))
             onFailure.accept(t);
     }
 
     @Override
-    public void onHandledException(Throwable t, String context)
+    public void onCaughtException(Throwable t, String context)
     {
+        onUncaughtException(t);
     }
 
     @Override

@@ -50,11 +50,11 @@ import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
-import accord.primitives.Routables;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.utils.Invariants;
@@ -325,12 +325,12 @@ public abstract class CommandStores
                             .collect(Collectors.joining(", "));
         }
 
-        public long earliestLaterEpochThatFullyCovers(long sinceEpoch, Routables<?> keysOrRanges)
+        public long earliestLaterEpochThatFullyCovers(long sinceEpoch, Unseekables<?> keysOrRanges)
         {
             return Math.max(sinceEpoch, epochs[0]);
         }
 
-        public long latestEarlierEpochThatFullyCovers(long beforeEpoch, Routables<?> keysOrRanges)
+        public long latestEarlierEpochThatFullyCovers(long beforeEpoch, Unseekables<?> keysOrRanges)
         {
             int i = ceilIndex(beforeEpoch);
             long latest = beforeEpoch;
@@ -618,12 +618,12 @@ public abstract class CommandStores
         return forEach(context, RoutingKeys.of(key), minEpoch, maxEpoch, forEach, true);
     }
 
-    public AsyncChain<Void> forEach(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
+    public AsyncChain<Void> forEach(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
     {
         return forEach(context, keys, minEpoch, maxEpoch, forEach, true);
     }
 
-    private AsyncChain<Void> forEach(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach, boolean matchesMultiple)
+    private AsyncChain<Void> forEach(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach, boolean matchesMultiple)
     {
         return this.mapReduce(context, keys, minEpoch, maxEpoch, new MapReduce<SafeCommandStore, Void>()
         {
@@ -652,7 +652,7 @@ public abstract class CommandStores
     }
 
     /**
-     * See {@link #mapReduceConsume(PreLoadContext, Routables, long, long, MapReduceConsume)}
+     * See {@link #mapReduceConsume(PreLoadContext, Unseekables, long, long, MapReduceConsume)}
      */
     public <O> Cancellable mapReduceConsume(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
     {
@@ -666,9 +666,9 @@ public abstract class CommandStores
      * Note that {@code reduce} and {@code accept} are invoked by only one thread, and never concurrently with {@code apply},
      * so they do not require mutual exclusion.
      *
-     * Implementations are expected to invoke {@link #mapReduceConsume(PreLoadContext, Routables, long, long, MapReduceConsume)}
+     * Implementations are expected to invoke {@link #mapReduceConsume(PreLoadContext, Unseekables, long, long, MapReduceConsume)}
      */
-    protected <O> Cancellable mapReduceConsume(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    protected <O> Cancellable mapReduceConsume(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
     {
         AsyncChain<O> reduced = mapReduce(context, keys, minEpoch, maxEpoch, mapReduceConsume);
         return reduced.begin(mapReduceConsume);
@@ -680,7 +680,7 @@ public abstract class CommandStores
         return reduced.begin(mapReduceConsume);
     }
 
-    public <O> AsyncChain<O> mapReduce(PreLoadContext context, Routables<?> keys, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
+    public <O> AsyncChain<O> mapReduce(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
         AsyncChain<O> chain = null;
         BiFunction<O, O, O> reducer = mapReduce::reduce;

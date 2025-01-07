@@ -20,7 +20,9 @@ package accord.primitives;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.IntStream;
@@ -30,6 +32,8 @@ import javax.annotation.Nullable;
 import com.google.common.collect.ImmutableList;
 
 import accord.api.RoutingKey;
+import accord.coordinate.CollectLatestDeps;
+import accord.local.Node;
 import accord.primitives.Known.KnownDeps;
 import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
@@ -42,6 +46,7 @@ import static accord.primitives.Known.KnownDeps.DepsErased;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
+import static accord.primitives.Known.KnownDeps.DepsUnknown;
 
 public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 {
@@ -53,6 +58,29 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         {
             return new LatestDeps(inclusiveEnds, starts, values);
         }
+    }
+
+    public static void withCommitted(Node node, TxnId txnId, Timestamp executeAt, Deps mergeDeps, FullRoute<?> route, Unseekables<?> missing, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
+    {
+        node.withEpoch(executeAt.epoch(), failureCallback, () -> {
+            if (missing.isEmpty())
+            {
+                withDeps.accept(mergeDeps);
+            }
+            else
+            {
+                CollectLatestDeps.withLatestDeps(node, txnId, route, missing, executeAt, (extraDeps, fail) -> {
+                    if (fail != null)
+                    {
+                        failureCallback.accept(null, fail);
+                    }
+                    else
+                    {
+                        withDeps.accept(LatestDeps.mergeCommit(DepsUnknown, executeAt, extraDeps, executeAt, i -> i).deps.with(mergeDeps));
+                    }
+                });
+            }
+        });
     }
 
     public static class MergedCommitResult

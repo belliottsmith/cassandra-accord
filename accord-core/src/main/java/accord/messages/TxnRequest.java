@@ -29,7 +29,6 @@ import accord.local.SafeCommandStore;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
-import accord.primitives.Routables;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -119,7 +118,7 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
     protected abstract @Nullable Cancellable submit();
 
     // finds the first topology index that intersects with the node
-    protected static int latestRelevantEpochIndex(Node.Id node, Topologies topologies, Routables<?> route)
+    protected static int latestRelevantEpochIndex(Node.Id node, Topologies topologies, Unseekables<?> route)
     {
         Ranges latest = topologies.current().rangesForNode(node);
 

@@ -284,6 +284,17 @@ class Utils
         return result;
     }
 
+    static void removeNonIdentityFlags(TxnId[] ids, int count)
+    {
+        while (--count >= 0)
+        {
+            TxnId cur = ids[count];
+            TxnId upd = cur.withoutNonIdentityFlags();
+            if (upd != cur)
+                ids[count] = upd;
+        }
+    }
+
     /**
      * If a {@code missing} contains {@code removeTxnId}, return a new array without it (or NO_TXNIDS if the only entry)
      */

@@ -135,7 +135,7 @@ abstract class PostProcess
         void doNotify(SafeCommandStore safeStore, RoutingKey key, NotifySink notifySink)
         {
             for (TxnId txnId : notify)
-                notifySink.notWaiting(safeStore, txnId, key);
+                notifySink.notWaiting(safeStore, txnId, key, 0);
         }
     }
 

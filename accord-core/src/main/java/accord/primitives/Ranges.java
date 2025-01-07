@@ -86,6 +86,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         return ofSortedAndDeoverlapped(Ranges::ofSortedAndDeoverlappedUnchecked, selection);
     }
 
+    @Override
     public Stream<Range> stream()
     {
         return Stream.of(ranges);

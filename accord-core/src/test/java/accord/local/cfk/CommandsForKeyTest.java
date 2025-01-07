@@ -211,12 +211,14 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key)
+        public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc)
         {
             Command.Committed prev = byId.get(txnId).asCommitted();
             Command.WaitingOn.Update waitingOn = new Command.WaitingOn.Update(prev.waitingOn);
             if (!waitingOn.removeWaitingOn(key))
                 return;
+
+            waitingOn.updateUniqueHlc(prev.executeAt(), uniqueHlc);
 
             if (!prev.txnId().kind().awaitsOnlyDeps())
             {
@@ -1038,7 +1040,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void onHandledException(Throwable t, String context)
+        public void onCaughtException(Throwable t, String context)
         {
             throw new UnsupportedOperationException();
         }

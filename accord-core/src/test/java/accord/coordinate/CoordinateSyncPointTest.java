@@ -89,7 +89,7 @@ class CoordinateSyncPointTest
 
         awaitApplied(n1, removed);
 
-        n1.onEpochRedundant(Ranges.single(removed), t2.epoch());
+        n1.onEpochRetired(Ranges.single(removed), t2.epoch());
         awaitApplied(n1, removed);
 
         n1.onEpochClosed(Ranges.single(removed), t2.epoch());
@@ -128,7 +128,7 @@ class CoordinateSyncPointTest
             }
             else if (request instanceof Commit)
             {
-                onSuccess(args, new ReadData.ReadOk(null, null));
+                onSuccess(args, new ReadData.ReadOk(null, null, 0));
             }
             else if (request instanceof Apply)
             {
@@ -136,7 +136,7 @@ class CoordinateSyncPointTest
             }
             else if (request instanceof WaitUntilApplied)
             {
-                onSuccess(args, new ReadData.ReadOk(null, null));
+                onSuccess(args, new ReadData.ReadOk(null, null, 0));
             }
             else
             {

@@ -178,6 +178,13 @@ public class Deps
      */
     public final KeyDeps directKeyDeps;
 
+    public Deps(Deps copy)
+    {
+        this.keyDeps = copy.keyDeps;
+        this.directKeyDeps = copy.directKeyDeps;
+        this.rangeDeps = copy.rangeDeps;
+    }
+
     public Deps(KeyDeps keyDeps, RangeDeps rangeDeps, KeyDeps directKeyDeps)
     {
         this.keyDeps = keyDeps;

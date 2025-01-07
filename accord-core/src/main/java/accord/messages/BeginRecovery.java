@@ -63,6 +63,8 @@ import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.Phase;
 import static accord.primitives.Status.PreAccepted;
+import static accord.primitives.Timestamp.Flag.HLC_BOUND;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
 import static accord.primitives.TxnId.MediumPath.MEDIUM_PATH_WAIT_ON_RECOVERY;
 import static accord.utils.Invariants.illegalState;
@@ -182,6 +184,33 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
 
                     if (c < 0)
                     {
+                        if (testTxnId.is(ExclusiveSyncPoint) && testTxnId.hlc() > txnId.hlc())
+                        {
+                            switch (status)
+                            {
+                                default: throw new UnhandledEnum(status);
+                                case APPLIED:
+                                case STABLE:
+                                case COMMITTED:
+                                case ACCEPTED:
+                                    if (testExecuteAt.is(HLC_BOUND))
+                                    {
+                                        if (txnId.toString().equals("[2,1048,65(RR),15]"))
+                                            System.out.println();
+                                        supersedingRejects = true;
+                                        return false;
+                                    }
+                                    if (status != ACCEPTED) break;
+                                case PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE:
+                                case PREACCEPTED:
+                                    ensureLaterWait().add(keyOrRange, testTxnId);
+                                    break;
+                                case INVALIDATED:
+                                case NOTACCEPTED:
+                                case NOT_DIRECTLY_WITNESSED:
+                            }
+                            return true;
+                        }
                         switch (dep)
                         {
                             default: throw new UnhandledEnum(dep);
@@ -197,6 +226,8 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                                  * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
                                  * has not witnessed us we can safely invalidate.
                                  */
+                                if (txnId.toString().equals("[2,1048,65(RR),15]"))
+                                    System.out.println();
                                 supersedingRejects = true;
                                 return false;
 
@@ -242,6 +273,8 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                                  * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
                                  * has not witnessed us we can safely invalidate (us).
                                  */
+                                if (txnId.toString().equals("[2,1048,65(RR),15]"))
+                                    System.out.println();
                                 supersedingRejects = true;
                                 return false;
 
@@ -343,8 +376,13 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         Timestamp executeAt = command.executeAt();
         Writes writes = command.writes();
         Result result = command.result();
-        boolean acceptsFastPath = participants.owns().isEmpty() || (txnId.hasPrivilegedCoordinator() ? saveStatus.known.hasPrivilegedVote() : executeAt.equals(txnId));
+        boolean acceptsFastPath = acceptsFastPath(txnId, participants, saveStatus, executeAt);
         return new RecoverOk(txnId, saveStatus.status, accepted, executeAt, deps, earlierWait, earlierNoWait, laterWait, laterNoWait, acceptsFastPath, supersedingRejects, writes, result);
+    }
+
+    static boolean acceptsFastPath(TxnId txnId, StoreParticipants participants, SaveStatus saveStatus, @Nullable Timestamp executeAt)
+    {
+        return participants.owns().isEmpty() || (txnId.hasPrivilegedCoordinator() ? saveStatus.known.hasPrivilegedVote() : txnId.equals(executeAt));
     }
 
     @Override

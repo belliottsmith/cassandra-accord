@@ -61,15 +61,14 @@ import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
-import static accord.local.Cleanup.ERASE;
+import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.NO;
-import static accord.local.Cleanup.VESTIGIAL;
 import static accord.local.Cleanup.shouldCleanup;
 import static accord.local.Command.Truncated.erased;
-import static accord.local.Command.Truncated.erasedOrVestigial;
 import static accord.local.Command.Truncated.invalidated;
 import static accord.local.Command.Truncated.truncatedApply;
 import static accord.local.Command.Truncated.truncatedApplyWithOutcome;
+import static accord.local.Command.Truncated.vestigial;
 import static accord.local.Commands.Validated.INSUFFICIENT;
 import static accord.local.Commands.Validated.UPDATE_TXN_IGNORE_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_KEEP_DEPS;
@@ -78,12 +77,13 @@ import static accord.local.KeyHistory.INCR;
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
-import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.local.StoreParticipants.Filter.UPDATE;
 import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
+import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
+import static accord.primitives.Known.Outcome.Apply;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.Erased;
@@ -97,7 +97,6 @@ import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
 import static accord.primitives.Status.Durability;
 import static accord.primitives.Status.Invalidated;
-import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Known.KnownRoute.FullRoute;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
@@ -454,9 +453,11 @@ public class Commands
     public static ApplyOutcome apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, Result result)
     {
         Command command = safeCommand.current();
-        if (command.hasBeen(PreApplied) && executeAt.equals(command.executeAt()))
+        if (command.hasBeen(PreApplied))
         {
-            logger.trace("{}: skipping apply - already executed ({})", txnId, command.status());
+            logger.trace("{}: skipping apply - already preapplied ({})", txnId, command.status());
+            if (command.executeAt() != null && !executeAt.equalsStrict(command.executeAt()) && command.saveStatus().compareTo(Erased) < 0)
+                safeStore.agent().onInconsistentTimestamp(command, command.executeAt(), executeAt);
             return ApplyOutcome.Redundant;
         }
         else if (command.hasBeen(PreCommitted) && !executeAt.equals(command.executeAt()))
@@ -526,15 +527,14 @@ public class Commands
         }
     }
 
-    protected static void postApply(SafeCommandStore safeStore, TxnId txnId)
+    protected static void postApply(SafeCommandStore safeStore, Command command)
     {
-        logger.trace("{} applied, setting status to Applied and notifying listeners", txnId);
-        SafeCommand safeCommand = safeStore.get(txnId);
-        Command original = safeCommand.current();
-        if (!original.hasBeen(Applied))
+        logger.trace("{} applied, setting status to Applied and notifying listeners", command);
+        if (!command.hasBeen(Applied))
         {
+            SafeCommand safeCommand = safeStore.get(command.txnId());
             safeCommand.applied(safeStore);
-            safeStore.notifyListeners(safeCommand, original);
+            safeStore.notifyListeners(safeCommand, command);
         }
     }
 
@@ -548,17 +548,8 @@ public class Commands
         return safeStore.ranges().allAt(executeAt.epoch());
     }
 
-    public static AsyncChain<Void> applyChain(SafeCommandStore safeStore, PreLoadContext context, TxnId txnId, Participants<?> executes)
+    public static AsyncChain<Void> applyChain(SafeCommandStore safeStore, Command.Executed command)
     {
-        Command command = safeStore.get(txnId).current();
-        if (command.hasBeen(Applied))
-            return AsyncChains.success(null);
-        return apply(safeStore, context, txnId, executes);
-    }
-
-    public static AsyncChain<Void> apply(SafeCommandStore safeStore, PreLoadContext context, TxnId txnId, Participants<?> executes)
-    {
-        Command.Executed command = safeStore.get(txnId).current().asExecuted();
         // TODO (required): make sure we are correctly handling (esp. C* side with validation logic) executing a transaction
         //  that was pre-bootstrap for some range (so redundant and we may have gone ahead of), but had to be executed locally
         //  for another range
@@ -567,12 +558,15 @@ public class Commands
         //  the only reason it will be slow is because Memtable flushes are backed-up (which will be reported elsewhere)
         // TODO (required): this is anyway non-monotonic and milliseconds granularity
         long t0 = safeStore.node().now();
+        TxnId txnId = command.txnId();
+        Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
         return command.writes().apply(safeStore, executes, command.partialTxn())
-               .flatMap(unused -> unsafeStore.submit(context, ss -> {
+                      // TODO (expected): once we guarantee execution order KeyHistory can be ASYNC
+               .flatMap(unused -> unsafeStore.submit(contextFor(txnId, executes, SYNC), ss -> {
                    Command cmd = ss.get(txnId).current();
                    if (!cmd.hasBeen(Applied))
                        ss.agent().metricsEventsListener().onApplied(cmd, t0);
-                   postApply(ss, txnId);
+                   postApply(ss, command);
                    return null;
                }));
     }
@@ -586,32 +580,11 @@ public class Commands
         if (!executes.isEmpty())
             return command.writes().apply(safeStore, executes, command.partialTxn())
                           .flatMap(unused -> unsafeStore.submit(context, ss -> {
-                              postApply(ss, command.txnId());
+                              postApply(ss, command);
                               return null;
                           }));
         else
             return AsyncChains.success(null);
-    }
-
-    private static void apply(SafeCommandStore safeStore, Command.Executed command, Participants<?> executes)
-    {
-        CommandStore unsafeStore = safeStore.commandStore();
-        TxnId txnId = command.txnId();
-        // TODO (expected): there is some coupling going on here - concept of TIMESTAMPS only needed if implementation tracks on apply
-        PreLoadContext context = contextFor(command.txnId(), executes, SYNC);
-        // this is sometimes called from a listener update, which will not have the keys in context
-        if (safeStore.canExecuteWith(context))
-        {
-            applyChain(safeStore, context, txnId, executes).begin(safeStore.agent());
-        }
-        else
-        {
-            unsafeStore.submit(context, ss -> {
-                // TODO (expected): should we recompute executes since async?
-                applyChain(ss, context, txnId, executes).begin(ss.agent());
-                return null;
-            }).begin(safeStore.agent());
-        }
     }
 
     public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, boolean alwaysNotifyListeners, boolean notifyWaitingOn)
@@ -662,21 +635,18 @@ public class Commands
 
             case PreApplied:
                 Command.Executed executed = command.asExecuted();
-                Participants<?> executes = !txnId.is(Write) ? null
-                                                            : executed.participants().stillExecutes()
-                                                                      .intersecting(executed.writes().keys);
-                if (executes == null || executes.isEmpty())
-                {
-                    logger.trace("{}: applying no-op", txnId);
-                    safeCommand.applied(safeStore);
-                    safeStore.notifyListeners(safeCommand, command);
-                }
-                else
+                if (txnId.is(Write) && executed.writes().keys.intersects(executed.participants().stillExecutes()))
                 {
                     safeCommand.applying(safeStore);
                     safeStore.notifyListeners(safeCommand, command);
                     logger.trace("{}: applying", command.txnId());
-                    apply(safeStore, executed, executes);
+                    applyChain(safeStore, executed).begin(safeStore.agent());
+                }
+                else
+                {
+                    logger.trace("{}: applying no-op", txnId);
+                    safeCommand.applied(safeStore);
+                    safeStore.notifyListeners(safeCommand, command);
                 }
                 return true;
             default:
@@ -722,7 +692,7 @@ public class Commands
         Command dependency = dependencySafeCommand.current();
         Invariants.checkState(dependency.hasBeen(PreCommitted));
         TxnId dependencyId = dependency.txnId();
-        if (waitingId.awaitsOnlyDeps() && dependency.known().is(ExecuteAtKnown) && dependency.executeAt().compareTo(waitingId) > 0)
+        if (waitingId.awaitsOnlyDeps() && dependency.known().isExecuteAtKnown() && dependency.executeAt().compareTo(waitingId) > 0)
             waitingOn.updateExecuteAtLeast(waitingId, dependency.executeAt());
 
         if (dependency.hasBeen(Truncated))
@@ -734,7 +704,7 @@ public class Commands
                 case TruncatedApplyWithOutcome:
                 case TruncatedApplyWithDeps:
                     Invariants.checkState(dependency.executeAt().compareTo(waitingExecuteAt) < 0 || waitingId.awaitsOnlyDeps() || !dependency.txnId().witnesses(waitingId));
-                case ErasedOrVestigial:
+                case Vestigial:
                 case Erased:
                     logger.trace("{}: {} is truncated. Stop listening and removing from waiting on commit set.", waitingId, dependencyId);
                     break;
@@ -763,7 +733,7 @@ public class Commands
         {
             Participants<?> participants = waiting.partialDeps().participants(dependency.txnId());
             Participants<?> executes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
-            RedundantStatus status = safeStore.redundantBefore().status(dependencyId, executes);
+            RedundantStatus status = safeStore.redundantBefore().status(dependencyId, waitingExecuteAt, executes);
             switch (status)
             {
                 case WAS_OWNED_PARTIALLY_RETIRED:
@@ -803,7 +773,7 @@ public class Commands
         }
     }
 
-    public static void removeWaitingOnKeyAndMaybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, RoutingKey key)
+    public static void removeWaitingOnKeyAndMaybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, RoutingKey key, long uniqueHlc)
     {
         Command current = safeCommand.current();
         if (current.saveStatus().compareTo(SaveStatus.Applied) >= 0)
@@ -824,6 +794,8 @@ public class Commands
 
         Update waitingOn = new Update(committed);
         waitingOn.removeWaitingOnKey(keyIndex);
+        if (uniqueHlc > 0)
+            waitingOn.updateUniqueHlc(committed.executeAt(), uniqueHlc);
         safeCommand.updateWaitingOn(waitingOn);
         if (!waitingOn.isWaiting())
             maybeExecute(safeStore, safeCommand, false, true);
@@ -839,7 +811,7 @@ public class Commands
         if (executeAt == null) executeAt = command.executeAtIfKnown();
         if (participants.route() == null || executeAt == null)
         {
-            safeCommand.update(safeStore, Command.Truncated.erasedOrVestigial(command));
+            safeCommand.update(safeStore, Command.Truncated.vestigial(command));
             if (participants.route() != null && !safeStore.coordinateRanges(command.txnId()).contains(participants.route().homeKey()))
                 safeStore.progressLog().clear(command.txnId());
         }
@@ -858,11 +830,6 @@ public class Commands
             }
             safeStore.progressLog().clear(command.txnId());
         }
-    }
-
-    public static void setErased(SafeCommandStore safeStore, SafeCommand safeCommand)
-    {
-        purge(safeStore, safeCommand, ERASE, true);
     }
 
     /**
@@ -930,7 +897,6 @@ public class Commands
                               || store.redundantBefore().preBootstrapOrStale(command.txnId(), participants.owns()) == FULLY
                               || (force && participants.executes() != null && participants.stillExecutes().isEmpty())
         , "Command %s could not be purged", command);
-        Invariants.checkState(cleanup != VESTIGIAL || participants.stillOwns().isEmpty() || store.redundantBefore().status(command.txnId(), participants.owns()).compareTo(WAS_OWNED_RETIRED) <= 0);
 
         return purge(command, participants, cleanup);
     }
@@ -948,17 +914,20 @@ public class Commands
 
             case TRUNCATE_WITH_OUTCOME:
                 Invariants.checkArgument(!command.hasBeen(Truncated), "%s", command);
+                Invariants.checkArgument(command.known().is(Apply));
+                Invariants.checkArgument(command.known().is(ApplyAtKnown));
                 result = truncatedApplyWithOutcome(command.asExecuted());
                 break;
 
             case TRUNCATE:
                 Invariants.checkState(command.saveStatus().compareTo(TruncatedApply) < 0);
+                Invariants.checkArgument(command.known().is(ApplyAtKnown));
                 result = truncatedApply(command, newParticipants);
                 break;
 
             case VESTIGIAL:
                 Invariants.checkState(command.saveStatus().compareTo(Erased) < 0);
-                result = erasedOrVestigial(command);
+                result = vestigial(command);
                 break;
 
             case ERASE:
@@ -973,7 +942,7 @@ public class Commands
     private static boolean validateSafeToCleanup(RedundantBefore redundantBefore, Command command, @Nonnull StoreParticipants participants)
     {
         TxnId txnId = command.txnId();
-        RedundantStatus status = redundantBefore.status(txnId, participants.owns());
+        RedundantStatus status = redundantBefore.status(txnId, null, participants.owns());
         switch (status)
         {
             default: throw new UnhandledEnum(status);
@@ -988,7 +957,7 @@ public class Commands
             case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
             case SHARD_REDUNDANT:
             case GC_BEFORE:
-            case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
+            case TRUNCATE_BEFORE:
                 Invariants.paranoid(!command.hasBeen(PreCommitted) || command.participants().stillExecutes().isEmpty());
             case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
             case PRE_BOOTSTRAP_OR_STALE:
@@ -1002,7 +971,7 @@ public class Commands
     public static boolean maybeCleanup(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, @Nonnull StoreParticipants newParticipants)
     {
         StoreParticipants cleanupParticipants = newParticipants.filter(LOAD, safeStore, command.txnId(), command.executeAtIfKnown());
-        Cleanup cleanup = shouldCleanup(safeStore, command, cleanupParticipants);
+        Cleanup cleanup = shouldCleanup(FULL, safeStore, command, cleanupParticipants);
         if (cleanup == NO)
         {
             if (cleanupParticipants == newParticipants)
@@ -1047,7 +1016,7 @@ public class Commands
                 if (execute != context)
                 {
                     if (execute != null)
-                        context = PreLoadContext.contextFor(context.keys().without(execute.keys()), INCR);
+                        context = contextFor(context.keys().without(execute.keys()), INCR);
 
                     Invariants.checkState(!context.keys().isEmpty());
                     safeStore = safeStore; // prevent accidental usage inside lambda
@@ -1097,7 +1066,7 @@ public class Commands
                     depSafe = safeStore.get(loadDepId);
                     if (depSafe.current().saveStatus() == Uninitialised)
                     {
-                        RedundantStatus redundantStatus = safeStore.redundantBefore().status(loadDepId, waiting.partialDeps().participants(loadDepId));
+                        RedundantStatus redundantStatus = safeStore.redundantBefore().status(loadDepId, null, waiting.partialDeps().participants(loadDepId));
                         switch (redundantStatus)
                         {
                             default: throw new AssertionError("Unexpected redundant status: " + redundantStatus);
@@ -1113,7 +1082,7 @@ public class Commands
                             case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
                             case SHARD_REDUNDANT:
                             case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-                            case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
+                            case TRUNCATE_BEFORE:
                             case GC_BEFORE:
                                 removeRedundantDependencies(safeStore, waitingSafe, loadDepId);
                                 depSafe = null;
@@ -1179,7 +1148,7 @@ public class Commands
                     Command dep = depSafe.current();
                     SaveStatus depStatus = dep.saveStatus();
                     SaveStatus.LocalExecution depExecution = depStatus.execution;
-                    if (!waitingId.awaitsOnlyDeps() && depStatus.known.is(ExecuteAtKnown) && dep.executeAt().compareTo(waiting.executeAt()) > 0)
+                    if (!waitingId.awaitsOnlyDeps() && depStatus.known.isExecuteAtKnown() && dep.executeAt().compareTo(waiting.executeAt()) > 0)
                         depExecution = SaveStatus.LocalExecution.Applied;
 
                     Participants<?> participants = null;
@@ -1189,7 +1158,7 @@ public class Commands
                         participants = waiting.partialDeps().participants(dep.txnId());
                         Participants<?> executes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
 
-                        RedundantStatus redundantStatus = safeStore.redundantBefore().status(dep.txnId(), executes);
+                        RedundantStatus redundantStatus = safeStore.redundantBefore().status(dep.txnId(), null, executes);
                         switch (redundantStatus)
                         {
                             default: throw new AssertionError("Unknown redundant status: " + redundantStatus);
@@ -1213,7 +1182,7 @@ public class Commands
                             case PARTIALLY_SHARD_REDUNDANT:
                             case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
                             case SHARD_REDUNDANT:
-                            case GC_BEFORE_OR_SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
+                            case TRUNCATE_BEFORE:
                             case GC_BEFORE:
                                 Invariants.checkState(dep.hasBeen(Applied) || !dep.hasBeen(PreCommitted));
                             case PRE_BOOTSTRAP_OR_STALE:
@@ -1434,10 +1403,10 @@ public class Commands
             }
         }
 
-        if (!expectKnown.deps().hasPreAcceptedOrProposedOrDecidedDeps())
+        if (!expectKnown.hasAnyDeps())
             return UPDATE_TXN_IGNORE_DEPS;
 
-        if (haveKnown.is(DepsKnown) || (haveKnown.deps() == expectKnown.deps() && (ballot == null || ballot.equals(cur.acceptedOrCommitted()))))
+        if (haveKnown.is(DepsKnown) || (haveKnown.equalDeps(expectKnown) && (ballot == null || ballot.equals(cur.acceptedOrCommitted()))))
             return UPDATE_TXN_KEEP_DEPS;
 
         if (!containsAll(partialDeps, participants.stillTouches()))

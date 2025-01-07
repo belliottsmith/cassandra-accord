@@ -25,8 +25,11 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.utils.Invariants;
+import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 
+import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
+import static accord.primitives.Known.KnownExecuteAt.IS_EXECUTE_AT_KNOWN;
 import static accord.primitives.Known.PrivilegedVote.VotePreAccept;
 import static accord.primitives.Known.PrivilegedVote.NoVote;
 import static accord.primitives.Known.Definition.DefinitionErased;
@@ -75,6 +78,7 @@ public class Known
     public static final Known Nothing = new Known(MaybeRoute, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown, NoVote);
     public static final Known DefinitionOnly = new Known(MaybeRoute, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown, NoVote);
     public static final Known DefinitionAndRoute = new Known(FullRoute, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown, NoVote);
+    public static final Known DepsOnly = new Known(MaybeRoute, DefinitionUnknown, ExecuteAtUnknown, DepsKnown, Unknown, NoVote);
     public static final Known Apply = new Known(FullRoute, DefinitionUnknown, ExecuteAtKnown, DepsKnown, Outcome.Apply, NoVote);
     public static final Known Invalidated = new Known(MaybeRoute, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Outcome.Abort, NoVote);
 
@@ -262,12 +266,12 @@ public class Known
 
         if (definition() == DefinitionUnknown || definition() == DefinitionErased)
         {
-            if (executeAt().isDecidedAndKnownToExecute())
+            if (isExecuteAtKnown())
                 return SaveStatus.PreCommitted;
             return SaveStatus.NotDefined;
         }
 
-        if (!executeAt().isDecidedAndKnownToExecute())
+        if (!isExecuteAtKnown())
             return SaveStatus.PreAccepted;
 
         // cannot propagate proposed deps; and cannot propagate known deps without executeAt
@@ -278,13 +282,15 @@ public class Known
         switch (outcome())
         {
             default: throw new UnhandledEnum(outcome());
+            case Apply:
+                if (is(ApplyAtKnown))
+                    return SaveStatus.PreApplied;
+
             case Unknown:
             case WasApply:
             case Erased:
                 return SaveStatus.Stable;
 
-            case Apply:
-                return SaveStatus.PreApplied;
         }
     }
 
@@ -344,13 +350,13 @@ public class Known
 
     public boolean isDecidedToExecute()
     {
-        return executeAt().isDecidedAndKnownToExecute() || outcome().isOrWasApply();
+        return isExecuteAtKnown() || outcome().isOrWasApply();
     }
 
     public String toString()
     {
         return Stream.of(definition().isKnown() ? "Definition" : null,
-                         executeAt().isDecidedAndKnownToExecute() ? "ExecuteAt" : null,
+                         executeAt() == ExecuteAtKnown ? "ExecuteAt" : executeAt() == ApplyAtKnown ? "ApplyAt" : null,
                          deps().hasDecidedDeps() ? "Deps" : null,
                          outcome().isDecided() ? outcome().toString() : null
         ).filter(Objects::nonNull).collect(Collectors.joining(",", "[", "]"));
@@ -413,64 +419,134 @@ public class Known
         return (encoded & ROUTE_MASK) - route.ordinal();
     }
 
+    private int definitionOrdinal()
+    {
+        return (encoded & DEFINITION_MASK) >>> DEFINITION_SHIFT;
+    }
+
     public Definition definition()
     {
-        return Definition.VALUES[(encoded & DEFINITION_MASK) >>> DEFINITION_SHIFT];
+        return Definition.VALUES[definitionOrdinal()];
     }
 
     public boolean is(Definition definition)
     {
-        return ((encoded & DEFINITION_MASK) >> DEFINITION_SHIFT) == definition.ordinal();
+        return definitionOrdinal() == definition.ordinal();
     }
 
     public int compareTo(Definition definition)
     {
-        return ((encoded & DEFINITION_MASK) >> DEFINITION_SHIFT) - definition.ordinal();
+        return definitionOrdinal() - definition.ordinal();
+    }
+
+    public boolean equalDefinition(Known that)
+    {
+        return definitionOrdinal() == that.definitionOrdinal();
+    }
+
+    public int compareDefinition(Known that)
+    {
+        return definitionOrdinal() - that.definitionOrdinal();
+    }
+
+    private int executeAtOrdinal()
+    {
+        return (encoded & EXECUTE_AT_MASK) >> EXECUTE_AT_SHIFT;
     }
 
     public KnownExecuteAt executeAt()
     {
-        return KnownExecuteAt.VALUES[(encoded & EXECUTE_AT_MASK) >>> EXECUTE_AT_SHIFT];
+        return KnownExecuteAt.VALUES[executeAtOrdinal()];
     }
 
     public boolean is(KnownExecuteAt executeAt)
     {
-        return ((encoded & EXECUTE_AT_MASK) >> EXECUTE_AT_SHIFT) == executeAt.ordinal();
+        return executeAtOrdinal() == executeAt.ordinal();
+    }
+
+    public boolean isExecuteAtKnown()
+    {
+        return TinyEnumSet.contains(IS_EXECUTE_AT_KNOWN, executeAtOrdinal());
     }
 
     public int compareTo(KnownExecuteAt executeAt)
     {
-        return ((encoded & EXECUTE_AT_MASK) >> EXECUTE_AT_SHIFT) - executeAt.ordinal();
+        return executeAtOrdinal() - executeAt.ordinal();
     }
 
+    public boolean equalExecuteAt(Known that)
+    {
+        return executeAtOrdinal() == that.executeAtOrdinal();
+    }
+
+    public int compareExecuteAt(Known that)
+    {
+        return executeAtOrdinal() - that.executeAtOrdinal();
+    }
+
+    private int depsOrdinal()
+    {
+        return (encoded & DEPS_MASK) >>> DEPS_SHIFT;
+    }
+    
     public KnownDeps deps()
     {
-        return KnownDeps.VALUES[(encoded & DEPS_MASK) >>> DEPS_SHIFT];
+        return KnownDeps.VALUES[depsOrdinal()];
+    }
+
+    public boolean hasAnyDeps()
+    {
+        return TinyEnumSet.contains(KnownDeps.HAS_ANY, depsOrdinal());
     }
 
     public boolean is(KnownDeps deps)
     {
-        return ((encoded & DEPS_MASK) >> DEPS_SHIFT) == deps.ordinal();
+        return depsOrdinal() == deps.ordinal();
     }
 
     public int compareTo(KnownDeps deps)
     {
-        return ((encoded & DEPS_MASK) >> DEPS_SHIFT) - deps.ordinal();
+        return depsOrdinal() - deps.ordinal();
+    }
+
+    public boolean equalDeps(Known that)
+    {
+        return depsOrdinal() == that.depsOrdinal();
+    }
+
+    public int compareDeps(Known that)
+    {
+        return depsOrdinal() - that.depsOrdinal();
+    }
+    
+    private int outcomeOrdinal()
+    {
+        return (encoded & OUTCOME_MASK) >>> OUTCOME_SHIFT;
     }
 
     public Outcome outcome()
     {
-        return Outcome.VALUES[(encoded & OUTCOME_MASK) >>> OUTCOME_SHIFT];
+        return Outcome.VALUES[outcomeOrdinal()];
     }
 
     public boolean is(Outcome outcome)
     {
-        return ((encoded & OUTCOME_MASK) >> OUTCOME_SHIFT) == outcome.ordinal();
+        return outcomeOrdinal() == outcome.ordinal();
     }
 
     public int compareTo(Outcome outcome)
     {
-        return ((encoded & OUTCOME_MASK) >> OUTCOME_SHIFT) - outcome.ordinal();
+        return outcomeOrdinal() - outcome.ordinal();
+    }
+
+    public boolean equalOutcome(Known that)
+    {
+        return outcomeOrdinal() == that.outcomeOrdinal();
+    }
+
+    public int compareOutcome(Known that)
+    {
+        return outcomeOrdinal() - that.outcomeOrdinal();
     }
 
     public boolean is(PrivilegedVote privilegedVote)
@@ -563,11 +639,18 @@ public class Known
         ExecuteAtKnown,
 
         /**
+         * A decision to execute the transaction is known to have been reached, and the associated executeAt timestamp
+         * as well as any uniqueHlc that may be associated with it
+         */
+        ApplyAtKnown,
+
+        /**
          * A decision to invalidate the transaction is known to have been reached
          */
         NoExecuteAt
         ;
 
+        static final int IS_EXECUTE_AT_KNOWN = TinyEnumSet.encode(ExecuteAtKnown, ApplyAtKnown);
         private static final KnownExecuteAt[] VALUES = values();
 
         /**
@@ -589,9 +672,9 @@ public class Known
         /**
          * Is known to execute, and when.
          */
-        public boolean isDecidedAndKnownToExecute()
+        public boolean isKnown()
         {
-            return this == ExecuteAtKnown;
+            return this == ExecuteAtKnown | this == ApplyAtKnown;
         }
 
         public KnownExecuteAt atLeast(KnownExecuteAt that)
@@ -620,7 +703,7 @@ public class Known
             int c = compareTo(that);
             KnownExecuteAt max = c >= 0 ? this : that;
             KnownExecuteAt min = c <= 0 ? this : that;
-            return max != NoExecuteAt || min != ExecuteAtKnown;
+            return max != NoExecuteAt || (min != ExecuteAtKnown && min != ApplyAtKnown);
         }
     }
 
@@ -678,6 +761,7 @@ public class Known
          */
         NoDeps(Invalidate);
 
+        private static final int HAS_ANY = TinyEnumSet.encode(DepsFromCoordinator, DepsProposed, DepsProposedFixed, DepsCommitted, DepsKnown);
         private static final KnownDeps[] VALUES = values();
 
         public final Status.Phase phase;
@@ -694,20 +778,7 @@ public class Known
 
         public boolean hasPreAcceptedOrProposedOrDecidedDeps()
         {
-            switch (this)
-            {
-                default: throw new UnhandledEnum(this);
-                case DepsFromCoordinator:
-                case DepsCommitted:
-                case DepsProposed:
-                case DepsProposedFixed:
-                case DepsKnown:
-                    return true;
-                case NoDeps:
-                case DepsErased:
-                case DepsUnknown:
-                    return false;
-            }
+            return TinyEnumSet.contains(HAS_ANY, this);
         }
 
         public boolean hasProposedOrDecidedDeps()

@@ -48,6 +48,7 @@ import accord.primitives.FullRoute;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
+import accord.primitives.TimestampWithUniqueHlc;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
@@ -87,8 +88,10 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     final Deps stableDeps;
     final Topologies allTopologies;
     final BiConsumer<? super Result, Throwable> callback;
+
     private Participants<?> readScope;
     private Data data;
+    private long uniqueHlc;
 
     ExecuteTxn(Node node, Topologies topologies, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, BiConsumer<? super Result, Throwable> callback)
     {
@@ -178,6 +181,11 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             if (next != null)
                 data = data == null ? next : data.merge(next);
 
+            if (txnId.is(Txn.Kind.Write) && ok.uniqueHlc > 0)
+            {
+                Invariants.checkState(ok.uniqueHlc > executeAt.hlc());
+                uniqueHlc = Math.max(uniqueHlc, ok.uniqueHlc);
+            }
             return ok.unavailable == null ? Approve : ApprovePartial;
         }
 
@@ -202,6 +210,13 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     {
         if (failure == null)
         {
+            Timestamp executeAt = this.executeAt;
+            if (txnId.is(Txn.Kind.Write) && uniqueHlc != 0)
+            {
+                Invariants.checkState(uniqueHlc > executeAt.hlc());
+                executeAt = new TimestampWithUniqueHlc(executeAt, uniqueHlc);
+            }
+
             Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, data) : null;
             Result result = txn.result(txnId, executeAt, data);
             adapter().persist(node, allTopologies, route, txnId, txn, executeAt, stableDeps, writes, result, callback);

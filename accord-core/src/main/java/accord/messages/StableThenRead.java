@@ -21,6 +21,7 @@ package accord.messages;
 import javax.annotation.Nullable;
 
 import accord.local.Commands;
+import accord.local.KeyHistory;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -103,6 +104,12 @@ public class StableThenRead extends ReadData
     protected ExecuteOn executeOn()
     {
         return EXECUTE_ON;
+    }
+
+    @Override
+    public KeyHistory keyHistory()
+    {
+        return KeyHistory.ASYNC;
     }
 
     @Override

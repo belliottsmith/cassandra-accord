@@ -159,7 +159,7 @@ public interface ConfigurationService
          * Called when all TxnId with an epoch equal to or before this that interact with this range have been executed,
          * in whatever epoch they execute in. Once the whole range is covered this epoch is redundant, and may be cleaned up.
          */
-        void onEpochRedundant(Ranges ranges, long epoch);
+        void onEpochRetired(Ranges ranges, long epoch);
 
         default void onRemoveNode(long epoch, Node.Id removed) {}
     }

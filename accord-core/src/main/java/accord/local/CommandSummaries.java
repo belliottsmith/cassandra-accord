@@ -30,6 +30,7 @@ import accord.primitives.Ranges;
 import accord.primitives.Routable;
 import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
@@ -265,9 +266,10 @@ public interface CommandSummaries
      */
     <P1, P2> void visit(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visit, P1 p1, P2 p2);
 
-    interface Snapshot extends CommandSummaries
+    interface ByTxnIdSnapshot extends CommandSummaries
     {
         NavigableMap<Timestamp, Summary> byTxnId();
+        default boolean mayContainAny(Txn.Kind kind) { return true; }
 
         default boolean visit(Unseekables<?> keysOrRanges,
                               TxnId testTxnId,

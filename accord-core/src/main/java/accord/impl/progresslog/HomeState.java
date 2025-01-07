@@ -176,6 +176,7 @@ abstract class HomeState extends WaitingState
         {
             if (fail != null)
             {
+                safeStore.agent().onCaughtException(fail, "Failed recovering " + state);
                 state.incrementHomeRetryCounter();
                 state.set(safeStore, instance, status, Queued);
             }

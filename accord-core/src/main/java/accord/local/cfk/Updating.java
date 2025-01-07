@@ -66,6 +66,7 @@ import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Utils.insertMissing;
 import static accord.local.cfk.Utils.mergeAndFilterMissing;
 import static accord.local.cfk.Utils.missingTo;
+import static accord.local.cfk.Utils.removeNonIdentityFlags;
 import static accord.local.cfk.Utils.removeOneMissing;
 import static accord.local.cfk.Utils.removePrunedAdditions;
 import static accord.local.cfk.Utils.removeUnmanaged;
@@ -114,7 +115,7 @@ class Updating
         // TODO (expected): do not calculate any deps or additions if we're transitioning from Stable to Applied; wasted effort and might trigger LoadPruned
         Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, mayExecute, command);
         if (newInfoObj.getClass() != InfoWithAdditions.class)
-            return insertOrUpdate(cfk, insertPos, plainTxnId, curInfo, (TxnInfo)newInfoObj, false, null);
+            return insertOrUpdate(cfk, insertPos, plainTxnId, curInfo, (TxnInfo)newInfoObj, false, null, command);
 
         InfoWithAdditions newInfoWithAdditions = (InfoWithAdditions) newInfoObj;
         TxnId[] additions = newInfoWithAdditions.additions;
@@ -135,6 +136,7 @@ class Updating
                 prunedIds = insertLoadPruned.isEmpty() ? NO_TXNIDS : insertLoadPruned.toArray(TxnId[]::new);
             }
         }
+        removeNonIdentityFlags(additions, additionCount);
 
         int committedByExecuteAtUpdatePos = committedByExecuteAtUpdatePos(cfk.committedByExecuteAt, curInfo, newInfo);
         TxnInfo[] newCommittedByExecuteAt = updateCommittedByExecuteAt(cfk, committedByExecuteAtUpdatePos, newInfo, false);
@@ -193,7 +195,7 @@ class Updating
         if (curInfo == null && insertPos <= cfk.prunedBeforeById)
             ++newPrunedBeforeById;
 
-        long newMaxHlc = updateMaxHlc(cfk, newInfo);
+        long newMaxHlc = updateMaxUniqueHlc(cfk, newInfo, command);
         return LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
     }
 
@@ -229,8 +231,9 @@ class Updating
         if (depsKnownBefore != plainTxnId)
         {
             depsKnownBeforePos = Arrays.binarySearch(byId, insertPos, byId.length, depsKnownBefore);
-            Invariants.checkState(depsKnownBeforePos < 0);
-            depsKnownBeforePos = -1 - depsKnownBeforePos;
+            // depsKnownBeforePos can be positive if we have a uniqueHlc but agreed the TxnId as the executeAt
+            if (depsKnownBeforePos < 0)
+                depsKnownBeforePos = -1 - depsKnownBeforePos;
         }
 
         int txnIdsIndex = 0;
@@ -323,7 +326,7 @@ class Updating
         return new InfoWithAdditions(info, additions, additionCount);
     }
 
-    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, boolean wasPruned, @Nullable TxnId[] loadingAsPrunedFor)
+    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, boolean wasPruned, @Nullable TxnId[] loadingAsPrunedFor, Command command)
     {
         if (curInfo == newInfo)
             return cfk;
@@ -391,7 +394,7 @@ class Updating
         if (curInfo == null && pos <= cfk.prunedBeforeById)
             ++newPrunedBeforeById;
 
-        long newMaxHlc = updateMaxHlc(cfk, newInfo);
+        long newMaxHlc = updateMaxUniqueHlc(cfk, newInfo, command);
         return cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo);
     }
 
@@ -730,24 +733,16 @@ class Updating
         }
     }
 
-    private static long updateMaxHlc(CommandsForKey cfk, TxnInfo newInfo)
+    private static long updateMaxUniqueHlc(CommandsForKey cfk, TxnInfo newInfo, Command update)
     {
-        long maxHlc = cfk.maxHlc;
+        long maxUniqueHlc = cfk.maxUniqueHlc;
         if (newInfo.is(APPLIED) && newInfo.is(Write))
         {
-            long newHlc = newInfo.executeAt.hlc();
-            if (maxHlc < newHlc)
-            {
-                maxHlc = newHlc;
-            }
-            else
-            {
-                TxnInfo prevApplied = cfk.maxAppliedWrite();
-                if (prevApplied == null || !prevApplied.equals(newInfo))
-                    ++maxHlc;
-            }
+            long newUniqueHlc = update.executeAt().uniqueHlc();
+            if (maxUniqueHlc < newUniqueHlc)
+                maxUniqueHlc = newUniqueHlc;
         }
-        return maxHlc;
+        return maxUniqueHlc;
     }
 
     static void updateUnmanagedAsync(CommandStore commandStore, TxnId txnId, RoutingKey key, NotifySink notifySink)
@@ -969,6 +964,7 @@ class Updating
                     {
                         missingCount -= prunedIndex;
                         System.arraycopy(missing, prunedIndex, missing, 0, missingCount);
+                        removeNonIdentityFlags(missing, missingCount);
                         int minUndecidedMissingIndex = 0;
                         while (minUndecidedMissingIndex < missingCount && !cfk.mayExecute(missing[minUndecidedMissingIndex]))
                             ++minUndecidedMissingIndex;
@@ -1005,7 +1001,7 @@ class Updating
                 {
                     int prunedBeforeById = cfk.prunedBeforeById;
                     Invariants.checkState(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
-                    newCfk = new CommandsForKey(cfk.key(), cfk.boundsInfo, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, cfk.maxHlc, newLoadingPruned, prunedBeforeById, newUnmanaged);
+                    newCfk = new CommandsForKey(cfk.key(), cfk.boundsInfo, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, newLoadingPruned, prunedBeforeById, newUnmanaged);
                 }
 
                 CommandsForKeyUpdate result = newCfk;
@@ -1037,6 +1033,8 @@ class Updating
             if (effectiveExecutesAt != null && effectiveExecutesAt.compareTo(command.waitingOn.executeAtLeast(txnId)) > 0)
             {
                 Command.WaitingOn.Update waitingOn = new Command.WaitingOn.Update(command.waitingOn);
+                if (effectiveExecutesAt instanceof TxnInfo)
+                    effectiveExecutesAt = ((TxnInfo) effectiveExecutesAt).plainExecuteAt();
                 waitingOn.updateExecuteAtLeast(txnId, effectiveExecutesAt);
                 safeCommand.updateWaitingOn(waitingOn);
             }

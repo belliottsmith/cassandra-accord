@@ -52,8 +52,8 @@ import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.messages.Apply.participates;
+import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
-import static accord.primitives.Timestamp.mergeMax;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.checkArgument;
 
@@ -164,18 +164,20 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     @Override
     void onPreAccepted(Topologies topologies, Timestamp executeAt, SortedListMap<Node.Id, PreAcceptOk> oks)
     {
-        Timestamp checkRejected = oks.foldlNonNullValues((ok, prev) -> mergeMax(ok.witnessedAt, prev), Timestamp.NONE);
-        if (checkRejected.is(REJECTED))
+        if (executeAt.is(REJECTED))
         {
-            proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, checkRejected, this);
+            proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, this);
         }
         else
         {
+            TxnId withFlags = txnId;
+            if (txnId.is(ExclusiveSyncPoint) && txnId.epoch() == executeAt.epoch())
+                withFlags = txnId.addFlag(HLC_BOUND);
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             if (tracker.hasFastPathAccepted())
-                adapter.execute(node, topologies, route, FAST, txnId, txn, txnId, deps, this);
+                adapter.execute(node, topologies, route, FAST, txnId, txn, withFlags, deps, this);
             else if (tracker.hasMediumPathAccepted())
-                adapter.propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, this);
+                adapter.propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, this);
             else
                 adapter.propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, this);
         }

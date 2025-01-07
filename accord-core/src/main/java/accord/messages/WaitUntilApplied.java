@@ -28,7 +28,7 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
 import static accord.primitives.SaveStatus.Applied;
-import static accord.primitives.SaveStatus.ErasedOrVestigial;
+import static accord.primitives.SaveStatus.Vestigial;
 
 /**
  * Wait until the transaction has been applied locally
@@ -43,7 +43,7 @@ public class WaitUntilApplied extends ReadData
         }
     }
 
-    private static final ExecuteOn EXECUTE_ON = new ExecuteOn(Applied, ErasedOrVestigial);
+    private static final ExecuteOn EXECUTE_ON = new ExecuteOn(Applied, Vestigial);
     private final long minEpoch;
     private long retryInLaterEpoch;
 
@@ -83,15 +83,15 @@ public class WaitUntilApplied extends ReadData
         long retryInLaterEpoch = ReadEphemeralTxnData.retryInLaterEpoch(executeAtEpoch, safeStore, command);
         if (retryInLaterEpoch > this.retryInLaterEpoch)
             this.retryInLaterEpoch = retryInLaterEpoch;
-        onOneSuccess(safeStore.commandStore().id(), unavailable(safeStore, command), false);
+        onOneSuccess(safeStore.commandStore().id(), unavailable(safeStore, command));
     }
 
     @Override
-    protected ReadOk constructReadOk(Ranges unavailable, Data data)
+    protected ReadOk constructReadOk(Ranges unavailable, Data data, long uniqueHlc)
     {
         if (retryInLaterEpoch > 0)
             return new ReadOkWithFutureEpoch(unavailable, data, retryInLaterEpoch);
-        return new ReadOk(unavailable, data);
+        return new ReadOk(unavailable, data, uniqueHlc);
     }
 
     @Override

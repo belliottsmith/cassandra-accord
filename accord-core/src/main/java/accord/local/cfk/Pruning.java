@@ -244,7 +244,7 @@ public class Pruning
             }
             int newPrunedBeforeId = cfk.prunedBeforeById - prunedCount;
             return new CommandsForKey(cfk.key, cfk.boundsInfo, false, newById, cfk.committedByExecuteAt,
-                                      nextUndecided(newById, 0, cfk), cfk.maxAppliedWriteByExecuteAt, cfk.maxHlc,
+                                      nextUndecided(newById, 0, cfk), cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc,
                                       cfk.loadingPruned, newPrunedBeforeId, cfk.unmanageds);
         }
         int pos = cfk.insertPos(pruneBefore);
@@ -459,7 +459,7 @@ public class Pruning
         cachedAny().forceDiscard(removedExecuteAts, removedExecuteAtCount);
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
         Invariants.checkState(newById[retainCount] == newPrunedBefore);
-        return new CommandsForKey(cfk.key, cfk.boundsInfo, newById, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.maxHlc, cfk.loadingPruned, retainCount, cfk.unmanageds);
+        return new CommandsForKey(cfk.key, cfk.boundsInfo, newById, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds);
     }
 
     /**
