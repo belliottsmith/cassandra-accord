@@ -479,7 +479,13 @@ public interface Txn
         int count = keys.size();
         switch (count)
         {
-            case 0: return AsyncChains.success(null);
+            case 0:
+            {
+                return read().readDirect(commandStore, null, executeAt).map(i -> {
+                    Invariants.nonNull(i, "Read.readDirect is not allowed to return null");
+                    return i;
+                });
+            }
             case 1: return read().readDirect(commandStore, keys.get(0), executeAt);
             default:
             {

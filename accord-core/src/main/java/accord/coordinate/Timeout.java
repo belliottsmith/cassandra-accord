@@ -34,7 +34,7 @@ public class Timeout extends CoordinationFailed
         super(txnId, homeKey);
     }
 
-    protected Timeout(@Nullable TxnId txnId, @Nullable RoutingKey homeKey, Timeout cause)
+    public Timeout(@Nullable TxnId txnId, @Nullable RoutingKey homeKey, Throwable cause)
     {
         super(txnId, homeKey, cause);
     }

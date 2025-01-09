@@ -46,7 +46,7 @@ public abstract class CoordinationFailed extends RuntimeException implements Wra
         this.homeKey = homeKey;
     }
 
-    protected CoordinationFailed(@Nullable TxnId txnId, @Nullable RoutingKey homeKey, CoordinationFailed cause)
+    protected CoordinationFailed(@Nullable TxnId txnId, @Nullable RoutingKey homeKey, Throwable cause)
     {
         super(cause);
         this.txnId = txnId;

@@ -26,16 +26,14 @@ import org.junit.jupiter.api.Test;
 
 import accord.api.LocalListeners;
 import accord.api.Result;
-import accord.api.RoutingKey;
-import accord.impl.progresslog.DefaultProgressLogs;
 import accord.impl.mock.MockCluster;
 import accord.impl.mock.MockStore;
+import accord.impl.progresslog.DefaultProgressLogs;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.FullKeyRoute;
 import accord.primitives.FullRangeRoute;
-import accord.primitives.FullRoute;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Txn;
@@ -232,10 +230,5 @@ public class CoordinateTransactionTest
             listener.accept(safeStore, command);
             return true;
         };
-    }
-
-    private static FullRoute<RoutingKey> toRoute(Keys keys)
-    {
-        return keys.toRoute(keys.get(0).toUnseekable());
     }
 }

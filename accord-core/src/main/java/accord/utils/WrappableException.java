@@ -18,6 +18,9 @@
 
 package accord.utils;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+
 public interface WrappableException<T extends Throwable & WrappableException<T>>
 {
     /**
@@ -53,6 +56,34 @@ public interface WrappableException<T extends Throwable & WrappableException<T>>
         }
         else
         {
+            // Don't try to wrap in the same type if we have to wrap with RuntimeException anyways
+            if (!(t instanceof RuntimeException))
+                throw new RuntimeException(t);
+
+            // Support adhoc wrapping using reflection since we can't access exception types external to Accord
+            Class<? extends Throwable> clazz = t.getClass();
+            try
+            {
+                Constructor<?> constructor = null;
+                for (Constructor<?> candidate : clazz.getConstructors())
+                {
+                    Class<?>[] parameters = candidate.getParameterTypes();
+                    if (parameters.length != 1)
+                        continue;
+                    if (parameters[0].isAssignableFrom(clazz))
+                    {
+                        constructor = candidate;
+                        break;
+                    }
+                }
+                if (constructor != null)
+                    return (Throwable)constructor.newInstance(t);
+            }
+            // OK to ignore these as we can always throw a runtime exception
+            catch (InstantiationException e) {}
+            catch (IllegalAccessException e) {}
+            catch (InvocationTargetException e) {}
+            // Failed to wrap in the same type so use RuntimeException
             return new RuntimeException(t);
         }
     }

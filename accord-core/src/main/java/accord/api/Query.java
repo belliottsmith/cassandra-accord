@@ -27,6 +27,8 @@ import accord.primitives.TxnId;
 
 /**
  * The computational/transformation part of a client query
+ *
+ * Query will be invoked at a coordinator before Update
  */
 public interface /**/Query
 {

@@ -22,19 +22,22 @@ public enum BarrierType
 {
     // Only wait until the barrier is achieved locally, and possibly don't trigger the barrier remotely.
     // Local barriers are only on the `minEpoch` provided and have utility limited to establishing
-    // no more transactions will occur in an earlier before minEpoch
-    local(false, true),
-    // Wait until the barrier has been achieved at a quorum globally
-    global_sync(true, false),
-    // Trigger the global barrier, but only block on creation of the barrier and local application
-    global_async(true, true);
+    // no more transactions will occur in an epoch before minEpoch
+    // Only keys (not ranges) are supported
+    local(false, false),
+    // Wait until the barrier has been achieved at a quorum globally and is also locally applied (global happens before semantics)
+    global_sync(true, true),
+    // Trigger the global barrier, but only block on creation of the barrier and local application (local happens before semantics)
+    global_async(true, false);
 
     public final boolean global;
-    public final boolean async;
 
-    BarrierType(boolean global, boolean async)
+    // Whether to wait for persist to achieve quorum synchronously
+    public final boolean waitOnGlobalQuorum;
+
+    BarrierType(boolean global, boolean waitOnGlobalQuorum)
     {
         this.global = global;
-        this.async = async;
+        this.waitOnGlobalQuorum = waitOnGlobalQuorum;
     }
 }

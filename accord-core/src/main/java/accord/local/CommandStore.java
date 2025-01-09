@@ -18,28 +18,6 @@
 
 package accord.local;
 
-import accord.api.Journal;
-import accord.api.LocalListeners;
-import accord.api.ProgressLog;
-import accord.api.DataStore;
-
-import javax.annotation.Nullable;
-import accord.api.Agent;
-
-import accord.local.CommandStores.RangesForEpoch;
-import accord.local.RedundantBefore.Bounds;
-import accord.local.RedundantStatus.SomeStatus;
-import accord.primitives.RangeDeps;
-import accord.primitives.Routables;
-import accord.primitives.Status.Durability;
-import accord.primitives.Unseekables;
-import accord.utils.async.AsyncChain;
-
-import accord.api.ConfigurationService.EpochReady;
-import accord.utils.DeterministicIdentitySet;
-import accord.utils.Invariants;
-import accord.utils.async.AsyncResult;
-
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.Collections;
 import java.util.Map;
@@ -52,15 +30,33 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSortedMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Agent;
+import accord.api.ConfigurationService.EpochReady;
+import accord.api.DataStore;
+import accord.api.Journal;
+import accord.api.LocalListeners;
+import accord.api.ProgressLog;
+import accord.local.CommandStores.RangesForEpoch;
+import accord.local.RedundantBefore.Bounds;
+import accord.local.RedundantStatus.SomeStatus;
+import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
+import accord.primitives.Routables;
+import accord.primitives.Status.Durability;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
+import accord.utils.DeterministicIdentitySet;
+import accord.utils.Invariants;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import org.agrona.collections.LongHashSet;
 
@@ -879,6 +875,13 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     public boolean isBootstrapping()
     {
         return !bootstraps.isEmpty();
+    }
+
+    public void updateMinHlc(long minHlc)
+    {
+        Timestamp timestamp = Timestamp.fromValues(rangesForEpoch.epochs[rangesForEpoch.epochs.length - 1], minHlc, 0, node.id());
+        MaxConflicts updated = maxConflicts.update(rangesForEpoch.all(), timestamp);
+        setMaxConflicts(updated);
     }
 
     public static NavigableMap<TxnId, Ranges> emptyBootstrapBeganAt()

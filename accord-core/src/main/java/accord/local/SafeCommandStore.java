@@ -33,10 +33,12 @@ import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.local.cfk.UpdateUnmanagedMode;
 import accord.primitives.AbstractUnseekableKeys;
+import accord.primitives.FullRoute;
 import accord.primitives.KeyDeps;
 import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
+import accord.primitives.Routables;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -567,15 +569,6 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         Invariants.require(listeningTo.current().saveStatus().compareTo(await) < 0);
         Invariants.require(!CommandsForKey.managesExecution(listeningTo.txnId()));
         commandStore().listeners.register(listeningTo.txnId(), await, waiting);
-    }
-
-    public LocalListeners.Registered registerAndInvoke(TxnId txnId, RoutingKey someKey, LocalListeners.ComplexListener listener)
-    {
-        StoreParticipants participants = StoreParticipants.read(this, Participants.singleton(txnId.domain(), someKey), txnId);
-        LocalListeners.Registered registered = register(txnId, listener);
-        if (!listener.notify(this, get(txnId, participants)))
-            registered.cancel();
-        return registered;
     }
 
     public LocalListeners.Registered register(TxnId txnId, LocalListeners.ComplexListener listener)

@@ -819,6 +819,10 @@ public abstract class CommandStores implements AsyncExecutorFactory
         Snapshot snapshot = current;
         for (ShardHolder shard : snapshot.shards)
             list.add(shard.store.build(empty(), forEach));
+
+        if (list.isEmpty())
+            return AsyncResults.success(null);
+
         return AsyncChains.reduce(list, Reduce.toNull());
     }
 
