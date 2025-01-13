@@ -1363,11 +1363,12 @@ public class Commands
                      .setParticipants(participants)
                      .partialDeps(deps.intersecting(participants.stillTouches()));
         }
-        else
+        else if (participants.executes() != null && (upd.participants().executes() == null || !upd.participants().hasFullRoute()))
         {
             // unsafe to update participants.touches() without updating deps, as we expect them to cover the same keys and ranges
-            if (participants.executes() != null && upd.participants().executes() == null)
-                upd = upd.mutable().setParticipants(upd.participants().withExecutes(participants.executes(), participants.stillExecutes()));
+            upd = upd.mutable().setParticipants(upd.participants()
+                                                   .withExecutes(participants.executes(), participants.stillExecutes())
+                                                   .supplement(participants.route()));
         }
 
         return upd;

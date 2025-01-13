@@ -232,6 +232,14 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         }
 
         @Override
+        public CommitOrReadNack apply(SafeCommandStore safeStore)
+        {
+            StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
+            SafeCommand safeCommand = safeStore.get(txnId, participants);
+            return apply(safeStore, safeCommand, participants);
+        }
+
+        @Override
         protected CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
         {
             if (txnId.hasPrivilegedCoordinator() && path == FAST && safeCommand.current().status() != PreAccepted)

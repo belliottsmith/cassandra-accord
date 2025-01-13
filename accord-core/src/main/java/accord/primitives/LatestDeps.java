@@ -38,6 +38,7 @@ import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 
 import static accord.primitives.Known.KnownDeps.DepsCommitted;
+import static accord.primitives.Known.KnownDeps.DepsErased;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
@@ -83,6 +84,9 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         // the second parameter will be used only for merging any localDeps
         static <T extends AbstractEntry> T reduce(T a, T b, BiFunction<T, T, T> merge)
         {
+            if (a.known == DepsErased || b.known == DepsErased)
+                return a.known.compareTo(b.known) >= 0 ? a : b;
+
             int c = a.known.phase.compareTo(b.known.phase);
             if (c == 0 && a.known.phase.tieBreakWithBallot) c = a.ballot.compareTo(b.ballot);
             if (c < 0)
@@ -397,7 +401,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         private static <V> TriFunction<Ranges, MergeEntry, BiFunction<Deps, Ranges, V>, Stream<V>> forCommitOrStable(Predicate<KnownDeps> test, SuccessCollector success)
         {
             return (Ranges ranges, MergeEntry e, BiFunction<Deps, Ranges, V> getter) -> {
-                if (!test.test(e.known))
+                if (e.known == DepsErased || !test.test(e.known))
                     return Stream.empty();
 
                 success.add(ranges.get(0), e.known);
@@ -423,7 +427,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                     case DepsCommitted:
                     case DepsKnown:
                         return Stream.of(getter.apply(e.coordinatedDeps, ranges));
-                    case DepsErased: case NoDeps:
+                    case NoDeps:
                     throw new AssertionError("Invalid KnownDeps for commit: " + e.known);
                 }
             };
