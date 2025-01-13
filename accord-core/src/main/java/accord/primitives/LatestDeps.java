@@ -83,7 +83,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         // the second parameter will be used only for merging any localDeps
         static <T extends AbstractEntry> T reduce(T a, T b, BiFunction<T, T, T> merge)
         {
-            int c = a.known.compareTo(b.known);
+            int c = a.known.phase.compareTo(b.known.phase);
             if (c == 0 && a.known.phase.tieBreakWithBallot) c = a.ballot.compareTo(b.ballot);
             if (c < 0)
             {
@@ -330,7 +330,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             if (size() == 0)
                 return new MergedCommitResult(Deps.NONE, Ranges.EMPTY);
 
-            SuccessCollector sufficientFor = new SuccessCollector();
+            SuccessCollector sufficientFor = new SuccessCollector(true);
             KeyDeps keyDeps =  KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.keyDeps.slice(r)));
             KeyDeps directKeyDeps = KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.directKeyDeps.slice(r)));
             RangeDeps rangeDeps = RangeDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.rangeDeps.slice(r)));
@@ -360,26 +360,36 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
         static class SuccessCollector extends ArrayList<Range>
         {
+            final boolean hasSeenCommit;
             int hasMedium = 0;
+
+            SuccessCollector(boolean hasSeenCommit)
+            {
+                this.hasSeenCommit = hasSeenCommit;
+            }
+
             void add(Range range, KnownDeps known)
             {
                 add(range);
-                switch (known)
+                if (!hasSeenCommit)
                 {
-                    default: throw new UnhandledEnum(known);
-                    case DepsUnknown:
-                    case DepsFromCoordinator:
-                    case DepsProposed:
-                    case DepsCommitted:
-                        Invariants.checkState(hasMedium <= 0, "Highest ballot for %s had %s, but another range had DepsProposedFixed", range, known);
-                        hasMedium = -1;
-                        break;
-                    case DepsProposedFixed:
-                        Invariants.checkState(hasMedium >= 0, "Highest ballot for %s had DepsProposedFixed, but another range had %s", range, known);
-                        hasMedium = 1;
-                        break;
-                    case DepsKnown:
-                        break;
+                    switch (known)
+                    {
+                        default: throw new UnhandledEnum(known);
+                        case DepsUnknown:
+                        case DepsFromCoordinator:
+                        case DepsProposed:
+                        case DepsCommitted:
+                            Invariants.checkState(hasMedium <= 0, "Highest ballot for %s had %s, but another range had DepsProposedFixed", range, known);
+                            hasMedium = -1;
+                            break;
+                        case DepsProposedFixed:
+                            Invariants.checkState(hasMedium >= 0, "Highest ballot for %s had DepsProposedFixed, but another range had a slow path or no proposal", range);
+                            hasMedium = 1;
+                            break;
+                        case DepsKnown:
+                            break;
+                    }
                 }
             }
         }
