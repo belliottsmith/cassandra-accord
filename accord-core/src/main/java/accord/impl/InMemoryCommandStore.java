@@ -212,7 +212,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                             if (intersectingParticipants.isEmpty())
                                 continue;
 
-                            if (!cur.txnId().witnesses().test(prev.txnId()) && !cur.partialDeps().contains(prev.txnId()))
+                            if (!cur.txnId().witnesses(prev.txnId()) && !cur.partialDeps().contains(prev.txnId()))
                                 continue;
 
                             Participants<?> depParticipants = cur.partialDeps().participants(prev.txnId());

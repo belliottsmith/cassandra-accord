@@ -259,6 +259,16 @@ public class TxnId extends Timestamp
         return kind().witnesses();
     }
 
+    public boolean witnesses(TxnId txnId)
+    {
+        return Kind.witnesses(kindOrdinal(flagsUnmasked()), kindOrdinal(txnId.flagsUnmasked()));
+    }
+
+    public boolean witnessedBy(TxnId txnId)
+    {
+        return txnId.witnesses(this);
+    }
+
     public Kinds witnessedBy()
     {
         return kind().witnessedBy();

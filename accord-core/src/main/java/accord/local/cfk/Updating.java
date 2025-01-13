@@ -241,7 +241,7 @@ class Updating
             int c = t.compareTo(d);
             if (c == 0)
             {
-                if (d.is(UNSTABLE) && t.compareTo(COMMITTED) < 0)
+                if (d.is(UNSTABLE) && t.compareTo(COMMITTED) < 0 && t.witnesses(d))
                 {
                     if (missingCount == missing.length)
                         missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount * 2));
@@ -255,7 +255,7 @@ class Updating
             {
                 // we expect to be missing ourselves
                 // we also permit any transaction we have recorded as COMMITTED or later to be missing, as recovery will not need to consult our information
-                if (txnIdsIndex != updatePos && txnIdsIndex < depsKnownBeforePos && t.compareTo(COMMITTED) < 0 && plainTxnId.kind().witnesses(t))
+                if (txnIdsIndex != updatePos && txnIdsIndex < depsKnownBeforePos && t.compareTo(COMMITTED) < 0 && plainTxnId.witnesses(t))
                 {
                     if (missingCount == missing.length)
                         missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount * 2));
@@ -265,7 +265,7 @@ class Updating
             }
             else
             {
-                if (plainTxnId.kind().witnesses(d))
+                if (plainTxnId.witnesses(d))
                 {
                     if (additionCount >= additions.length)
                         additions = cachedTxnIds().resize(additions, additionCount, Math.max(8, additionCount * 2));
@@ -287,9 +287,13 @@ class Updating
         {
             do
             {
-                if (additionCount >= additions.length)
-                    additions = cachedTxnIds().resize(additions, additionCount, Math.max(8, additionCount * 2));
-                additions[additionCount++] = deps.cur().withoutNonIdentityFlags();
+                TxnId d = deps.cur();
+                if (plainTxnId.witnesses(d))
+                {
+                    if (additionCount >= additions.length)
+                        additions = cachedTxnIds().resize(additions, additionCount, Math.max(8, additionCount * 2));
+                    additions[additionCount++] = deps.cur().withoutNonIdentityFlags();
+                }
                 deps.advance();
             }
             while (deps.hasCur());
@@ -301,7 +305,7 @@ class Updating
                 if (txnIdsIndex != updatePos && byId[txnIdsIndex].compareTo(COMMITTED) < 0)
                 {
                     TxnId txnId = byId[txnIdsIndex].plainTxnId();
-                    if ((plainTxnId.kind().witnesses(txnId)))
+                    if ((plainTxnId.witnesses(txnId)))
                     {
                         if (missingCount == missing.length)
                             missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount * 2));
@@ -644,7 +648,7 @@ class Updating
                     {
                         for (int i = pos; i <= maxAppliedWriteByExecuteAt; ++i)
                         {
-                            if (committedByExecuteAt[pos].kind().witnesses(newInfo) && reportLinearizabilityViolations())
+                            if (committedByExecuteAt[pos].witnesses(newInfo) && reportLinearizabilityViolations())
                                 logger.error("Linearizability violation on key {}: {} is committed to execute (at {}) before {} that should witness it but has already applied (at {})", cfk.key, newInfo.plainTxnId(), newInfo.plainExecuteAt(), committedByExecuteAt[i].plainTxnId(), committedByExecuteAt[i].plainExecuteAt());
                         }
                     }
@@ -864,7 +868,7 @@ class Updating
                 if (c >= 0)
                 {
                     TxnInfo txn = byId[j];
-                    if (c == 0 || txn.is(waitingTxnId.witnesses()))
+                    if (c == 0 || txn.witnessedBy(waitingTxnId))
                     {
                         if (i >= waitingFromIndex && waitingToApply)
                         {
@@ -928,7 +932,7 @@ class Updating
                 {
                     TxnInfo txn = byId[w];
                     if (!txn.mayExecute()
-                        || !txn.is(waitingTxnId.witnesses())
+                        || !txn.witnessedBy(waitingTxnId)
                         || txn.isAtLeast(APPLIED))
                         continue;
 

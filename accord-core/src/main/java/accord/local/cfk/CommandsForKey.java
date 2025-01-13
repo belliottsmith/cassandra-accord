@@ -2186,7 +2186,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
                     for (TxnId missingId : txn.missing())
                     {
-                        Invariants.checkState(txn.kind().witnesses(missingId));
+                        Invariants.checkState(txn.witnesses(missingId));
                         TxnInfo missingInfo = get(missingId, byId);
                         Invariants.checkState(missingInfo.status().compareTo(InternalStatus.COMMITTED) < 0);
                         Invariants.checkState(txn.depsKnownBefore().compareTo(missingId) >= 0);

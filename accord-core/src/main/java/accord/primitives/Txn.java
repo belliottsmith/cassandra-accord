@@ -154,11 +154,13 @@ public interface Txn
         // in future: BlindWrite, Interactive?
 
         private static final Kind[] VALUES = Kind.values();
+        private static final int COUNT = VALUES.length;
         private static final long ENCODED_ORDINAL_INFO;
+        private static final long ENCODED_WITNESSES_INFO;
         private static final long IS_VISIBLE_ORDINAL_INFO_OFFSET = 0;
-        private static final long IS_SYNCPOINT_ORDINAL_INFO_OFFSET = VALUES.length;
-        private static final long IS_SYSTEM_ORDINAL_INFO_OFFSET = 2 * VALUES.length;
-        private static final long AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET = 3 * VALUES.length;
+        private static final long IS_SYNCPOINT_ORDINAL_INFO_OFFSET = COUNT;
+        private static final long IS_SYSTEM_ORDINAL_INFO_OFFSET = 2 * COUNT;
+        private static final long AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET = 3 * COUNT;
 
         static
         {
@@ -174,6 +176,19 @@ public interface Txn
                 if (kind.awaitsOnlyDeps()) encodedOrdinalInfo |= 1L << (AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET + kind.ordinal());
             }
             ENCODED_ORDINAL_INFO = encodedOrdinalInfo;
+            Invariants.checkState(COUNT * COUNT <= 64);
+            int offset = 0;
+            long encodedWitnessesInfo = 0L;
+            for (Kind witness : VALUES)
+            {
+                for (Kind witnessed : VALUES)
+                {
+                    if (witness.witnesses().test(witnessed))
+                        encodedWitnessesInfo |= 1L << offset;
+                    ++offset;
+                }
+            }
+            ENCODED_WITNESSES_INFO = encodedWitnessesInfo;
         }
 
         private final char shortName;
@@ -273,12 +288,22 @@ public interface Txn
 
         public boolean witnesses(TxnId txnId)
         {
-            return witnesses().test(txnId);
+            return witnesses(ordinal(), TxnId.kindOrdinal(txnId.flagsUnmasked()));
         }
 
         public boolean witnesses(Kind kind)
         {
-            return witnesses().test(kind);
+            return witnesses(this.ordinal(), kind.ordinal());
+        }
+
+        static boolean witnesses(int witnessOrdinal, int witnessedOrdinal)
+        {
+            return 0 != ((1L << (witnessOrdinal * COUNT + witnessedOrdinal)) & ENCODED_WITNESSES_INFO);
+        }
+
+        public boolean witnessedBy(Kind kind)
+        {
+            return kind.witnesses(this);
         }
 
         public Kinds witnessedBy()

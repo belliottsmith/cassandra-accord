@@ -723,7 +723,7 @@ public class Commands
                 case TruncatedApply:
                 case TruncatedApplyWithOutcome:
                 case TruncatedApplyWithDeps:
-                    Invariants.checkState(dependency.executeAt().compareTo(waitingExecuteAt) < 0 || waitingId.awaitsOnlyDeps() || !dependency.txnId().kind().witnesses(waitingId));
+                    Invariants.checkState(dependency.executeAt().compareTo(waitingExecuteAt) < 0 || waitingId.awaitsOnlyDeps() || !dependency.txnId().witnesses(waitingId));
                 case ErasedOrVestigial:
                 case Erased:
                     logger.trace("{}: {} is truncated. Stop listening and removing from waiting on commit set.", waitingId, dependencyId);

@@ -24,23 +24,38 @@ public class TinyEnumSet<E extends Enum<E>>
 
     public TinyEnumSet(Enum<E> ... values)
     {
+        this.bitset = encode(values);
+    }
+
+    public static <E extends Enum<E>> int encode(Enum<E> ... values)
+    {
         int bitset = 0;
         for (Enum<E> v : values)
         {
             Invariants.checkArgument(v.ordinal() < 32);
             bitset |= 1 << v.ordinal();
         }
-        this.bitset = bitset;
+        return bitset;
+    }
+
+    public static <E extends Enum<E>> boolean contains(int bitset, E value)
+    {
+        return contains(bitset, value.ordinal());
+    }
+
+    public static boolean contains(int bitset, int ordinal)
+    {
+        return 0 != (bitset & (1 << ordinal));
     }
 
     public boolean contains(E value)
     {
-        return contains(value.ordinal());
+        return contains(bitset, value.ordinal());
     }
 
     public boolean contains(int ordinal)
     {
-        return 0 != (bitset & (1 << ordinal));
+        return contains(bitset, ordinal);
     }
 }
 

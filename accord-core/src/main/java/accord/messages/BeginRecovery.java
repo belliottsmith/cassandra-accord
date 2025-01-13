@@ -173,7 +173,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                 @Override
                 public boolean visit(Unseekable keyOrRange, TxnId testTxnId, Timestamp testExecuteAt, SummaryStatus status, IsDep dep)
                 {
-                    if (status == NOT_DIRECTLY_WITNESSED || !txnId.is(testTxnId.witnesses()))
+                    if (status == NOT_DIRECTLY_WITNESSED || !txnId.witnessedBy(testTxnId))
                         return true;
 
                     int c = testTxnId.compareTo(txnId);
