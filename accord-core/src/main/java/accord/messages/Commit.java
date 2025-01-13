@@ -127,6 +127,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         CommitWithTxn (      HasTxn,                 HasDeps, Committed),
         // We retain HasNewlyOwnedTxnRanges for the later eventuality where we permit fast path decisions if the fast quorum is valid for all topologies and everyone agrees on the execution timestamp.
         StableFastPath(      HasNewlyOwnedTxnRanges, HasDeps, SaveStatus.Stable),
+        StableMediumPath(    NoTxn,                  NoDeps,  SaveStatus.Stable),
         StableSlowPath(      NoTxn,                  NoDeps,  SaveStatus.Stable),
         StableWithTxnAndDeps(HasTxn,                 HasDeps, SaveStatus.Stable);
 
@@ -281,7 +282,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
 
-        switch (Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps))
+        switch (Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps, kind))
         {
             default:
             case Success:

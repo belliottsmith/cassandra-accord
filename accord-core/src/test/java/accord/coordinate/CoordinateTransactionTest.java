@@ -277,7 +277,7 @@ public class CoordinateTransactionTest
                     PartialDeps.Builder depsBuilder = PartialDeps.builder(safeStore.ranges().currentRanges(), true);
                     depsBuilder.add(key, blockingTxnId);
                     PartialDeps partialDeps = depsBuilder.build();
-                    Commands.commit(safeStore, safeCommand, participants, SaveStatus.Stable, Ballot.ZERO, txnId, route, command.partialTxn(), txnId, partialDeps);
+                    Commands.commit(safeStore, safeCommand, participants, SaveStatus.Stable, Ballot.ZERO, txnId, route, command.partialTxn(), txnId, partialDeps, null);
                     Commands.apply(safeStore, safeCommand, participants, txnId, route, txnId, partialDeps, command.partialTxn(), txn.execute(txnId, txnId, null), txn.query().compute(txnId, txnId, keys, null, null, null));
                 }));
 

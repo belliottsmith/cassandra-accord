@@ -62,6 +62,7 @@ import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.messages.Commit.Kind.StableFastPath;
+import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.messages.Commit.Kind.StableSlowPath;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
 import static accord.primitives.SaveStatus.Stable;
@@ -136,8 +137,8 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         {
             default: throw new UnhandledEnum(path);
             case FAST:    return StableFastPath;
-            case SLOW:
-            case MEDIUM:  return StableSlowPath;
+            case MEDIUM:  return StableMediumPath;
+            case SLOW:    return StableSlowPath;
             case RECOVER: return StableWithTxnAndDeps;
         }
     }
@@ -235,7 +236,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         {
             if (txnId.hasPrivilegedCoordinator() && path == FAST && safeCommand.current().status() != PreAccepted)
                 return CommitOrReadNack.Rejected;
-            Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps);
+            Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind());
             return super.apply(safeStore, safeCommand, participants);
         }
 

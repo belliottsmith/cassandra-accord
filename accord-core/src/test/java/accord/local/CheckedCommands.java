@@ -80,7 +80,7 @@ public class CheckedCommands
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command before = safeCommand.current();
-        Commands.CommitOutcome result = Commands.commit(safeStore, safeCommand, participants, saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps);
+        Commands.CommitOutcome result = Commands.commit(safeStore, safeCommand, participants, saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps, null);
         Command after = safeCommand.current();
         if (result != Commands.CommitOutcome.Success) throw illegalState("Command mutation rejected: " + result);
         consumer.accept(before, after);

@@ -403,6 +403,14 @@ public class StoreParticipants
         return new FullStoreParticipants(route, owns, executes, touches, hasTouched);
     }
 
+    public StoreParticipants withExecutes(Participants<?> executes, Participants<?> stillExecutes)
+    {
+        if (executes == stillExecutes)
+            return update(route, owns, executes, touches(), hasTouched());
+
+        return new FilteredStoreParticipants(route, owns, executes, touches(), hasTouched(), stillOwns(), stillTouches(), stillExecutes);
+    }
+
     // TODO (required): retire this method, merge with executes()
     public Ranges executeRanges(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt)
     {

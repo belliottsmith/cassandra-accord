@@ -270,7 +270,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 break;
 
             case Stable:
-                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, ballot, txnId, route, partialTxn, executeAtIfKnown, stableDeps));
+                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, ballot, txnId, route, partialTxn, executeAtIfKnown, stableDeps, null));
                 break;
 
             case Committed:
