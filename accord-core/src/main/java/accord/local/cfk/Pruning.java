@@ -339,7 +339,7 @@ public class Pruning
                     case TRANSITIVE:
                     case TRANSITIVE_VISIBLE:
                     case PREACCEPTED_WITHOUT_DEPS:
-                    case PREACCEPTED_WITH_COORDINATOR_DEPS:
+                    case PREACCEPTED_WITH_DEPS:
                     case PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE:
                     case NOTACCEPTED:
                     case ACCEPTED:

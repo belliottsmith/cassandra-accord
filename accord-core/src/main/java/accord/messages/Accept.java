@@ -165,7 +165,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     public String toString() {
         return "Accept{" +
                 "kind: " + kind +
-                "ballot: " + ballot +
+                ", ballot: " + ballot +
                 ", txnId: " + txnId +
                 ", executeAt: " + executeAt +
                 ", deps: " + partialDeps +

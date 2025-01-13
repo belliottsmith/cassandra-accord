@@ -230,17 +230,31 @@ public class Deps
 
     public Deps with(Deps that)
     {
-        return new Deps(this.keyDeps.with(that.keyDeps), this.rangeDeps.with(that.rangeDeps), this.directKeyDeps.with(that.directKeyDeps));
+        return select(this, that,this.keyDeps.with(that.keyDeps), this.rangeDeps.with(that.rangeDeps), this.directKeyDeps.with(that.directKeyDeps));
     }
 
     public Deps without(Predicate<TxnId> remove)
     {
-        return new Deps(this.keyDeps.without(remove), this.rangeDeps.without(remove), this.directKeyDeps.without(remove));
+        return select(this.keyDeps.without(remove), this.rangeDeps.without(remove), this.directKeyDeps.without(remove));
     }
 
     public Deps without(Deps that)
     {
-        return new Deps(this.keyDeps.without(that.keyDeps), this.rangeDeps.without(that.rangeDeps), this.directKeyDeps.without(that.directKeyDeps));
+        return select(this.keyDeps.without(that.keyDeps), this.rangeDeps.without(that.rangeDeps), this.directKeyDeps.without(that.directKeyDeps));
+    }
+
+    private Deps select(KeyDeps newKeyDeps, RangeDeps newRangeDeps, KeyDeps newDirectKeyDeps)
+    {
+        return select(this, null, newKeyDeps, newRangeDeps, newDirectKeyDeps);
+    }
+
+    private static Deps select(Deps v1, Deps v2, KeyDeps newKeyDeps, RangeDeps newRangeDeps, KeyDeps newDirectKeyDeps)
+    {
+        if (newKeyDeps == v1.keyDeps && newRangeDeps == v1.rangeDeps && newDirectKeyDeps == v1.directKeyDeps)
+            return v1;
+        if (v2 != null && newKeyDeps == v2.keyDeps && newRangeDeps == v2.rangeDeps && newDirectKeyDeps == v2.directKeyDeps)
+            return v2;
+        return new Deps(newKeyDeps, newRangeDeps, newDirectKeyDeps);
     }
 
     public PartialDeps intersecting(Participants<?> participants)

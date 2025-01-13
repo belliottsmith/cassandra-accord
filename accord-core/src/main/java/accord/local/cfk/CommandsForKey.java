@@ -811,8 +811,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
         TRANSITIVE                             (SummaryStatus.NOT_DIRECTLY_WITNESSED,                false, false, false, false),
         TRANSITIVE_VISIBLE                     (SummaryStatus.NOT_DIRECTLY_WITNESSED,                false, false, false, false),
         PREACCEPTED_WITHOUT_DEPS               (SummaryStatus.PREACCEPTED,                           false, false, true,  false),
-        PREACCEPTED_WITH_COORDINATOR_DEPS      (SummaryStatus.PREACCEPTED,                           false, true,  true,  false),
-        PRENOTACCEPTED_WITH_COORDINATOR_DEPS   (SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE, false, true,  true,  false),
+        PREACCEPTED_WITH_DEPS                  (SummaryStatus.PREACCEPTED,                           false, true,  true,  false),
+        PRENOTACCEPTED_WITH_DEPS               (SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE, false, true,  true,  false),
         PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE  (SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE, false, false, true,  false),
         NOTACCEPTED_WITH_COORDINATOR_DEPS      (SummaryStatus.NOTACCEPTED,                           false, true,  true,  false),
         NOTACCEPTED                            (SummaryStatus.NOTACCEPTED,                           false, false, true,  false),
@@ -837,19 +837,32 @@ public class CommandsForKey extends CommandsForKeyUpdate
         static
         {
             FROM_SAVE_STATUS.put(SaveStatus.PreAccepted, PREACCEPTED_WITHOUT_DEPS);
-            FROM_SAVE_STATUS.put(SaveStatus.PreAcceptedWithDeps, PREACCEPTED_WITH_COORDINATOR_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.PreAcceptedWithVote, PREACCEPTED_WITHOUT_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.PreAcceptedWithDeps, PREACCEPTED_WITH_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidate, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
             FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidateWithDefinition, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
             FROM_SAVE_STATUS.put(SaveStatus.PreNotAccepted, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithVote, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithDeps, PRENOTACCEPTED_WITH_DEPS);
             FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithDefinition, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.NotAccepted, NOTACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDefinition, NOTACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithDefAndVote, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithDefAndDeps, PRENOTACCEPTED_WITH_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.NotAccepted, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithVote, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDeps, PRENOTACCEPTED_WITH_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDefinition, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDefAndVote, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
+            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDefAndDeps, PRENOTACCEPTED_WITH_DEPS);
             FROM_SAVE_STATUS.put(SaveStatus.Accepted, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.AcceptedWithDefinition, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.AcceptedSlow, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.AcceptedSlowWithDefinition, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommitted, PREACCEPTED_WITHOUT_DEPS);
             FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefinition, PREACCEPTED_WITHOUT_DEPS);
             FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDeps, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithFixedDeps, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefAndDeps, ACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefAndFixedDeps, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.Committed, COMMITTED);
             FROM_SAVE_STATUS.put(SaveStatus.Stable, STABLE);
             FROM_SAVE_STATUS.put(SaveStatus.ReadyToExecute, STABLE);
@@ -864,6 +877,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
             //  superseding APPLIED command?
             // TODO (expected): if we truncate (but don't invalidate) a command that had not been decided, we should probably erase it?
             FROM_SAVE_STATUS.put(SaveStatus.Invalidated, INVALIDATED);
+            for (SaveStatus saveStatus : SaveStatus.values())
+                Invariants.checkState(FROM_SAVE_STATUS.get(saveStatus) != null || saveStatus.is(Status.Truncated) || saveStatus.is(Status.NotDefined));
 
             SummaryStatus[] summaryStatuses = SummaryStatus.values();
             TO_SUMMARY_STATUS = Arrays.copyOf(summaryStatuses, summaryStatuses.length + 1);
