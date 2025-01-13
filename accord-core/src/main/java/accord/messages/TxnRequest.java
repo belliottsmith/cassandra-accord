@@ -47,17 +47,17 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
     {
         public final long minEpoch; // TODO (low priority, clarity): can this just always be TxnId.epoch?
 
-        public WithUnsynced(Id to, Topologies topologies, TxnId txnId, FullRoute<?> route)
+        public WithUnsynced(Id to, Topologies topologies, TxnId txnId, Route<?> route)
         {
             this(to, topologies, txnId, route, latestRelevantEpochIndex(to, topologies, route));
         }
 
-        public WithUnsynced(Id to, Topologies topologies, FullRoute<?> route)
+        public WithUnsynced(Id to, Topologies topologies, Route<?> route)
         {
             this(to, topologies, TxnId.NONE, route, latestRelevantEpochIndex(to, topologies, route));
         }
 
-        protected WithUnsynced(Id to, Topologies topologies, TxnId txnId, FullRoute<?> route, int startIndex)
+        protected WithUnsynced(Id to, Topologies topologies, TxnId txnId, Route<?> route, int startIndex)
         {
             super(to, topologies, route, txnId, startIndex);
             this.minEpoch = topologies.oldestEpoch();

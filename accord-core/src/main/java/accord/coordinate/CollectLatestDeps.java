@@ -73,7 +73,7 @@ public class CollectLatestDeps implements Callback<GetLatestDepsOk>
 
         SortedArrayList<Id> contact = collect.tracker.filterAndRecordFaulty();
         if (contact == null) callback.accept(null, new Exhausted(txnId, collect.homeKey, null));
-        else node.send(contact, to -> new GetLatestDeps(to, topologies, fullRoute, txnId, executeAt), store, collect);
+        else node.send(contact, to -> new GetLatestDeps(to, topologies, fullRoute.intersecting(collectFrom), txnId, executeAt), store, collect);
     }
 
     @Override

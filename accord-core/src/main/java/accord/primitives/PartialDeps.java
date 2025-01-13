@@ -70,7 +70,7 @@ public class PartialDeps extends Deps
 
     public boolean covers(Unseekables<?> participants)
     {
-        return covering.intersectsAll(participants);
+        return covering.containsAll(participants);
     }
 
     public boolean covers(RoutingKey key)

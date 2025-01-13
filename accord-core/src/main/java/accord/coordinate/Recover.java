@@ -392,7 +392,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void withCommittedOrStableDeps(KnownDeps atLeast, List<RecoverOk> nullableRecoverOkList, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        LatestDeps.MergedCommitResult merged = LatestDeps.mergeCommit(atLeast, txnId, executeAt, nullableRecoverOkList, txnId, ok -> ok == null ? null : ok.deps);
+        LatestDeps.MergedCommitResult merged = LatestDeps.mergeCommit(atLeast, executeAt, nullableRecoverOkList, txnId, ok -> ok == null ? null : ok.deps);
         node.withEpoch(executeAt.epoch(), failureCallback, () -> {
             Unseekables<?> missing = route.without(merged.sufficientFor);
             if (missing.isEmpty())
@@ -408,7 +408,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     }
                     else
                     {
-                        withDeps.accept(merged.deps.with(LatestDeps.mergeCommit(DepsUnknown, txnId, executeAt, extraDeps, executeAt, i -> i).deps));
+                        withDeps.accept(merged.deps.with(LatestDeps.mergeCommit(DepsUnknown, executeAt, extraDeps, executeAt, i -> i).deps));
                     }
                 });
             }

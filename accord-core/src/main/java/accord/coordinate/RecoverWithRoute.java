@@ -208,7 +208,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                                             return;
                                         }
 
-                                        LatestDeps.MergedCommitResult mergedCommit = LatestDeps.mergeCommit(DepsUnknown, txnId, full.executeAt, deps, full.executeAt, i -> i);
+                                        LatestDeps.MergedCommitResult mergedCommit = LatestDeps.mergeCommit(DepsUnknown, full.executeAt, deps, full.executeAt, i -> i);
                                         Route<?> canSendTo = trySendTo.without(collect).with((Participants) collect.slice(mergedCommit.sufficientFor, Minimal));
                                         Deps stableDeps = full.stableDeps.with(mergedCommit.deps).intersecting(canSendTo);
                                         node.coordinationAdapter(txnId, Recovery).persist(node, null, route, canSendTo, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, null);
@@ -239,7 +239,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 }
 
                 Txn txn = full.partialTxn.reconstitute(route);
-                if (known.executeAt().isDecidedAndKnownToExecute() && !known.is(DepsKnown) && known.outcome() == Apply)
+                if (known.executeAt().isDecidedAndKnownToExecute() && known.is(DepsKnown) && known.outcome() == Apply)
                 {
                     Deps deps = full.stableDeps.reconstitute(route());
                     node.withEpoch(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {

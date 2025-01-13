@@ -30,6 +30,7 @@ import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.LatestDeps;
 import accord.primitives.PartialDeps;
+import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -53,7 +54,7 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
 
     public final Timestamp executeAt;
 
-    public GetLatestDeps(Id to, Topologies topologies, FullRoute<?> route, TxnId txnId, Timestamp executeAt)
+    public GetLatestDeps(Id to, Topologies topologies, Route<?> route, TxnId txnId, Timestamp executeAt)
     {
         super(to, topologies, txnId, route);
         this.executeAt = executeAt;
@@ -81,7 +82,6 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
         Deps localDeps = null;
         if (!command.known().deps().hasCommittedOrDecidedDeps())
         {
-            // TODO (required): consider owns vs touches - should be touches?
             localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), executeAt, false);
         }
 
