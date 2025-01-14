@@ -49,7 +49,6 @@ import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Routables;
 import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
 import accord.primitives.TxnId.FastPath;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies.Single;
@@ -446,7 +445,8 @@ public class TopologyManager
 
     private final TopologySorter.Supplier sorter;
     private final TopologiesCollectors topologiesCollectors;
-    private final FastPathCalculator fastPathCalculator;
+    private final BestFastPath bestFastPath;
+    private final SupportsPrivilegedFastPath supportsPrivilegedFastPath;
     private final Agent agent;
     private final Id self;
     private final Scheduler scheduler;
@@ -460,7 +460,8 @@ public class TopologyManager
     {
         this.sorter = sorter;
         this.topologiesCollectors = new TopologiesCollectors(sorter);
-        this.fastPathCalculator = new FastPathCalculator(self);
+        this.bestFastPath = new BestFastPath(self);
+        this.supportsPrivilegedFastPath = new SupportsPrivilegedFastPath(self);
         this.agent = agent;
         this.self = self;
         this.scheduler = scheduler;
@@ -701,7 +702,12 @@ public class TopologyManager
 
     public FastPath selectFastPath(Routables<?> select, long epoch)
     {
-        return withSufficientEpochsAtLeast(select, epoch, epoch, epochState -> epochState.synced, fastPathCalculator);
+        return withSufficientEpochsAtLeast(select, epoch, epoch, epochState -> epochState.synced, bestFastPath);
+    }
+
+    public boolean supportsPrivilegedFastPath(Routables<?> select, long epoch)
+    {
+        return withSufficientEpochsAtLeast(select, epoch, epoch, epochState -> epochState.synced, supportsPrivilegedFastPath);
     }
 
     public Topologies withOpenEpochs(Routables<?> select, @Nullable EpochSupplier min, @Nullable EpochSupplier max)
@@ -760,11 +766,11 @@ public class TopologyManager
         }
     }
 
-    static class FastPathCalculator implements Collectors<FastPath, FastPath>
+    static class BestFastPath implements Collectors<FastPath, FastPath>
     {
         final Id self;
 
-        FastPathCalculator(Id self)
+        BestFastPath(Id self)
         {
             this.self = self;
         }
@@ -802,6 +808,40 @@ public class TopologyManager
             if (a == UNOPTIMISED || b == UNOPTIMISED) return UNOPTIMISED;
             if (a == PRIVILEGED_COORDINATOR_WITH_DEPS || b == PRIVILEGED_COORDINATOR_WITH_DEPS) return PRIVILEGED_COORDINATOR_WITH_DEPS;
             return PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
+        }
+    }
+
+    static class SupportsPrivilegedFastPath implements Collectors<Boolean, Boolean>
+    {
+        final Id self;
+
+        SupportsPrivilegedFastPath(Id self)
+        {
+            this.self = self;
+        }
+
+        @Override
+        public Boolean update(Boolean collector, EpochState epoch, Routables<?> select, boolean permitMissing)
+        {
+            return collector && one(epoch, select, permitMissing);
+        }
+
+        @Override
+        public Boolean one(EpochState epoch, Routables<?> routables, boolean permitMissing)
+        {
+            return epoch.local.ranges.containsAll(routables);
+        }
+
+        @Override
+        public Boolean multi(Boolean result)
+        {
+            return result;
+        }
+
+        @Override
+        public Boolean allocate(int count)
+        {
+            return true;
         }
     }
 

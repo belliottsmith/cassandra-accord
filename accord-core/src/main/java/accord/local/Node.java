@@ -96,8 +96,9 @@ import accord.utils.async.Cancellable;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
 import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
-import static accord.api.ProtocolModifiers.Toggles.permittedMediumPath;
+import static accord.api.ProtocolModifiers.Toggles.defaultMediumPath;
 import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
+import static accord.primitives.TxnId.FastPath.UNOPTIMISED;
 import static accord.utils.Invariants.illegalState;
 import static java.lang.String.format;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -681,7 +682,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public TxnId nextTxnId(Txn.Kind rw, Domain domain)
     {
-        return nextTxnId(rw, domain, permittedMediumPath().bits);
+        return nextTxnId(rw, domain, defaultMediumPath().bits);
     }
 
     /**
@@ -699,39 +700,43 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         Seekables<?, ?> keys = txn.keys();
         Txn.Kind kind = txn.kind();
         Domain domain = keys.domain();
-        TxnId txnId;
-        if (!usePrivilegedCoordinator()) txnId = nextTxnId(kind, domain);
-        else txnId = nextTxnId(kind, domain, this, keys, Node::computeTxnIdFlags);
-        return txnId;
-    }
+        if (!usePrivilegedCoordinator())
+            return nextTxnId(kind, domain);
 
-    public interface ComputeFlags<P1, P2>
-    {
-        int flags(P1 p1, P2 p2, long epoch);
-    }
-
-    public <P1, P2> TxnId nextTxnId(Txn.Kind rw, Domain domain, P1 p1, P2 p2, ComputeFlags<P1, P2> computeFlags)
-    {
         Timestamp now = uniqueNow();
-        int flags = computeFlags.flags(p1, p2, now.epoch());
-        TxnId txnId = new TxnId(uniqueNow(), flags, rw, domain);
+        int flags = computeBestDefaultTxnIdFlags(keys, now.epoch());
+        TxnId txnId = new TxnId(now, flags, kind, domain);
         Invariants.checkState((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
+    }
+
+    private int computeBestDefaultTxnIdFlags(Routables<?> keys, long epoch)
+    {
+        if (!topology.hasEpoch(epoch) || !usePrivilegedCoordinator())
+            return defaultMediumPath().bits;
+
+        TxnId.FastPath fastPath = ensurePermitted(topology().selectFastPath(keys, epoch));
+        return fastPath.bits | defaultMediumPath().bits;
+    }
+
+    public TxnId nextTxnId(Txn txn, TxnId.FastPath fastPath, TxnId.MediumPath mediumPath)
+    {
+        Seekables<?, ?> keys = txn.keys();
+        Txn.Kind kind = txn.kind();
+        Domain domain = keys.domain();
+
+        Timestamp now = uniqueNow();
+        fastPath = ensurePermitted(fastPath);
+        if (fastPath != UNOPTIMISED && (!topology.hasEpoch(now.epoch()) || !topology.supportsPrivilegedFastPath(keys, now.epoch())))
+            fastPath = UNOPTIMISED;
+
+        return nextTxnId(kind, domain, fastPath.bits | mediumPath.bits);
     }
 
     public AsyncResult<Result> coordinate(Txn txn)
     {
         TxnId txnId = nextTxnId(txn);
         return coordinate(txnId, txn);
-    }
-
-    private static int computeTxnIdFlags(Node self, Routables<?> keys, long epoch)
-    {
-        if (!self.topology.hasEpoch(epoch) || !usePrivilegedCoordinator())
-            return permittedMediumPath().bits;
-
-        TxnId.FastPath fastPath = ensurePermitted(self.topology().selectFastPath(keys, epoch));
-        return fastPath.bits | permittedMediumPath().bits;
     }
 
     public AsyncResult<Result> coordinate(TxnId txnId, Txn txn)

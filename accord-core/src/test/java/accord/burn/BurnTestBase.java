@@ -87,6 +87,9 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
+import accord.primitives.TxnId;
+import accord.primitives.TxnId.FastPath;
+import accord.primitives.TxnId.MediumPath;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.utils.DefaultRandom;
@@ -137,6 +140,40 @@ public class BurnTestBase
         Int2ObjectHashMap<int[]> prefixKeyUpdates = new Int2ObjectHashMap<>();
         double readInCommandStore = random.nextDouble();
         Function<int[], Range> nextRange = randomRanges(random);
+
+        FastPath[] fastPaths;
+        switch (random.nextInt(0, 2))
+        {
+            default: throw new IllegalStateException();
+            case 0: fastPaths = new FastPath[] { FastPath.UNOPTIMISED }; break;
+            case 1: fastPaths = new FastPath[] { FastPath.UNOPTIMISED, random.nextBoolean() ? FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS : FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS }; break;
+            case 2: fastPaths = new FastPath[] { FastPath.UNOPTIMISED, FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS, FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS };
+        }
+
+        MediumPath[] mediumPaths;
+        {
+            MediumPath[] values = MediumPath.values();
+            int size = random.nextInt(1, values.length);
+            if (size == values.length)
+            {
+                mediumPaths = values;
+            }
+            else
+            {
+                mediumPaths = new MediumPath[size];
+                int sourceSize = values.length;
+                while (--size >= 0)
+                {
+                    int index = random.nextInt(0, sourceSize);
+                    mediumPaths[size] = values[index];
+                    values[index] = values[--sourceSize];
+                }
+                Arrays.sort(mediumPaths);
+            }
+        }
+
+        RandomSource txnIdRandom = random.fork();
+        BiFunction<Node, Txn, TxnId> txnIdGenerator = (node, txn) -> node.nextTxnId(txn, txnIdRandom.pick(fastPaths), txnIdRandom.pick(mediumPaths));
 
         for (int count = 0 ; count < operations ; ++count)
         {
@@ -197,7 +234,7 @@ public class BurnTestBase
                     return new Txn.InMemory(kind, new Keys(requestKeys), read, query, update);
                 };
             }
-            packets.add(new Packet(client, node, Long.MAX_VALUE, count, new ListRequest(description, txnGenerator, listener)));
+            packets.add(new Packet(client, node, Long.MAX_VALUE, count, new ListRequest(description, txnGenerator, txnIdGenerator, listener)));
         }
 
         return packets;

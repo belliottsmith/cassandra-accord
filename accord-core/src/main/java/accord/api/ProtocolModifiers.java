@@ -187,9 +187,9 @@ public class ProtocolModifiers
         public static void setPermittedFastPaths(FastPaths newPermittedFastPaths) { permittedFastPaths = newPermittedFastPaths; }
         public static FastPath ensurePermitted(FastPath path) { return path.toPermitted(permittedFastPaths); }
 
-        private static MediumPath permittedMediumPath = MediumPath.MEDIUM_PATH_WAIT_ON_RECOVERY;
-        public static MediumPath permittedMediumPath() { return permittedMediumPath; }
-        public static void setPermittedMediumPath(MediumPath newPermittedMediumPath) { permittedMediumPath = newPermittedMediumPath; }
+        private static MediumPath defaultMediumPath = MediumPath.MEDIUM_PATH_WAIT_ON_RECOVERY;
+        public static MediumPath defaultMediumPath() { return defaultMediumPath; }
+        public static void setDefaultMediumPath(MediumPath newDefaultMediumPath) { defaultMediumPath = newDefaultMediumPath; }
 
         private static boolean filterDuplicateDependenciesFromAcceptReply = true;
         public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
