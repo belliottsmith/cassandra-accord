@@ -93,7 +93,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 TxnId awaitId = waitOn.txnId(i);
                 Participants<?> participants = waitOn.participants(awaitId);
                 Topologies topologies;
-                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().select(participants, awaitId.epoch());
+                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch());
                 else topologies = node.topology().forEpoch(participants, awaitId.epoch());
                 requests.add(SynchronousRecoverAwait.awaitAny(node, topologies, awaitId, blockedUntil, true, participants, recoverId));
             }

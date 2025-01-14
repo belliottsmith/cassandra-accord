@@ -107,12 +107,6 @@ public class TxnId extends Timestamp
         }
     }
 
-    public static class MediumPaths extends TinyEnumSet<MediumPath>
-    {
-        public MediumPaths(MediumPath... values) { super(values); }
-        public boolean permitsAny() { return bitset != 0; }
-    }
-
     private static final int DOMAIN_AND_KIND_MASK = 0xf;
     public static final TxnId[] NO_TXNIDS = new TxnId[0];
 
@@ -201,12 +195,12 @@ public class TxnId extends Timestamp
 
     public boolean is(FastPath fastPath)
     {
-        return fastPathOrdinal(flagsUnmasked()) == fastPath.ordinal();
+        return 0 != (flagsUnmasked() & fastPath.bits);
     }
 
     public boolean is(MediumPath mediumPath)
     {
-        return fastPathOrdinal(flagsUnmasked()) == mediumPath.ordinal();
+        return 0 != (flagsUnmasked() & mediumPath.bits);
     }
 
     public TxnId withoutNonIdentityFlags()
@@ -371,12 +365,12 @@ public class TxnId extends Timestamp
 
     public static int fastPathOrdinal(int flags)
     {
-        return (flags >> 4) & 3;
+        return (flags >>> 4) & 3;
     }
 
     public static int mediumPathOrdinal(int flags)
     {
-        return (flags >> 6) & 3;
+        return (flags >>> 6) & 3;
     }
 
     private static int domainOrdinal(int flags)

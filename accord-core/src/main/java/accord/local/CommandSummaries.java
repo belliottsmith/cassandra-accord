@@ -109,13 +109,13 @@ public interface CommandSummaries
 
             protected final Unseekables<?> searchKeysOrRanges;
             protected final RedundantBefore redundantBefore;
-            // TODO (desired): separate out Kinds we need before/after primaryTxnId/executeAt
+            // TODO (expected): separate out Kinds we need before/after primaryTxnId/executeAt
             protected final Kinds testKind;
             protected final TxnId minTxnId;
             protected final Timestamp maxTxnId;
             @Nullable protected final TxnId findAsDep;
 
-            // TODO (desired): provide executeAt to PreLoadContext so we can more aggressively filter what we load, esp. by Kind
+            // TODO (expected): provide executeAt to PreLoadContext so we can more aggressively filter what we load, esp. by Kind
             public static Loader loader(RedundantBefore redundantBefore, PreLoadContext context)
             {
                 return loader(redundantBefore, context.primaryTxnId(), context.keyHistory(), context.keys());

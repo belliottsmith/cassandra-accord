@@ -242,7 +242,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         @Override
         protected CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
         {
-            if (txnId.hasPrivilegedCoordinator() && path == FAST && safeCommand.current().status() != PreAccepted)
+            if (txnId.hasPrivilegedCoordinator() && path == FAST && (!safeCommand.current().promised().equals(Ballot.ZERO) || safeCommand.current().status() != PreAccepted))
                 return CommitOrReadNack.Rejected;
             Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind());
             return super.apply(safeStore, safeCommand, participants);

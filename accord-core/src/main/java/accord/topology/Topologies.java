@@ -83,7 +83,9 @@ public interface Topologies extends TopologySorter
 
     int maxShardsPerEpoch();
 
-    Topologies select(Participants<?> participants, long sinceEpoch);
+    Topologies selectSince(Participants<?> participants, long sinceEpoch);
+
+    Topologies selectEpoch(Participants<?> participants, long epoch);
 
     default void forEach(IndexedConsumer<Topology> consumer)
     {
@@ -204,9 +206,17 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topologies select(Participants<?> participants, long sinceEpoch)
+        public Topologies selectSince(Participants<?> participants, long sinceEpoch)
         {
             Invariants.checkState(sinceEpoch <= currentEpoch());
+            Topology subset = topology.select(participants);
+            return subset == topology ? this : new Single(sorter, subset);
+        }
+
+        @Override
+        public Topologies selectEpoch(Participants<?> participants, long epoch)
+        {
+            Invariants.checkState(epoch == currentEpoch());
             Topology subset = topology.select(participants);
             return subset == topology ? this : new Single(sorter, subset);
         }
@@ -469,7 +479,7 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topologies select(Participants<?> participants, long sinceEpoch)
+        public Topologies selectSince(Participants<?> participants, long sinceEpoch)
         {
             Topology[] subsets = null;
             int limit = topologies.length;
@@ -497,6 +507,17 @@ public interface Topologies extends TopologySorter
                 return new Multi(supplier, Arrays.copyOf(topologies, limit));
             }
             return new Multi(supplier, subsets);
+        }
+
+        @Override
+        public Topologies selectEpoch(Participants<?> participants, long epoch)
+        {
+            if (!containsEpoch(epoch))
+                throw new IndexOutOfBoundsException();
+
+            Topology superset = getEpoch(epoch);
+            Topology subset = superset.select(participants);
+            return new Single(sorter, subset);
         }
     }
 
