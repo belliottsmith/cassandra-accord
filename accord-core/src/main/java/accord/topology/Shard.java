@@ -121,7 +121,7 @@ public class Shard
 
     public boolean acceptsFastPath(TxnId txnId, int accepts)
     {
-        return accepts > fastQuorumSize(txnId);
+        return accepts >= fastQuorumSize(txnId);
     }
 
     public int fastQuorumSize(TxnId txnId)

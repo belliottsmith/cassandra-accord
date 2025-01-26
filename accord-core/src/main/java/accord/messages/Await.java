@@ -109,7 +109,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this(to, topologies, txnId, participants, blockedUntil, SYNCHRONOUS_CALLBACKID, notifyProgressLog);
     }
 
-    private Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
+    Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
     {
         this.txnId = txnId;
         this.scope = scope;

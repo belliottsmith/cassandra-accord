@@ -1048,7 +1048,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                     partiallyBootstrapping = new Int2ObjectHashMap<>();
                 RoutingKeys prev = partiallyBootstrapping.get(txnIdx);
                 RoutingKeys remaining = prev;
-                if (remaining == null) remaining = builder.directKeyDeps.participatingKeys(txnIdx);
+                if (remaining == null) remaining = builder.directKeyDeps.participants(txnIdx);
                 else Invariants.require(!remaining.isEmpty());
                 remaining = remaining.without(range);
                 if (prev == null) Invariants.require(!remaining.isEmpty());
@@ -1063,9 +1063,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             foldl(directKeyDeps.keys(), (e, s, d, b) -> {
                 // TODO (desired, efficiency): foldlInt so we can track the lower rangeidx bound and not revisit unnecessarily
                 // find the txnIdx below which we are known to be fully redundant locally due to having been applied or invalidated
-                int bootstrapIdx = d.txnIds().find(e.bootstrappedAt);
+                int bootstrapIdx = d.txnIdsWithFlags().find(e.bootstrappedAt);
                 if (bootstrapIdx < 0) bootstrapIdx = -1 - bootstrapIdx;
-                int appliedIdx = d.txnIds().find(e.locallyAppliedOrInvalidatedBefore);
+                int appliedIdx = d.txnIdsWithFlags().find(e.locallyAppliedOrInvalidatedBefore);
                 if (appliedIdx < 0) appliedIdx = -1 - appliedIdx;
 
                 // remove intersecting transactions with known redundant txnId
@@ -1125,16 +1125,16 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         RangeDeps rangeDeps = builder.directRangeDeps;
         // TODO (required, consider): slice to only those ranges we own, maybe don't even construct rangeDeps.covering()
         foldl(participants, (e, s, d, b) -> {
-            int bootstrapIdx = d.txnIds().find(e.bootstrappedAt);
+            int bootstrapIdx = d.txnIdsWithFlags().find(e.bootstrappedAt);
             if (bootstrapIdx < 0) bootstrapIdx = -1 - bootstrapIdx;
             s.bootstrapIdx = bootstrapIdx;
 
-            int appliedIdx = d.txnIds().find(e.locallyAppliedOrInvalidatedBefore);
+            int appliedIdx = d.txnIdsWithFlags().find(e.locallyAppliedOrInvalidatedBefore);
             if (appliedIdx < 0) appliedIdx = -1 - appliedIdx;
             if (e.locallyAppliedOrInvalidatedBefore.epoch() >= e.endOwnershipEpoch)
             {
                 // for range transactions, we should not infer that a still-owned range is redundant because a not-owned range that overlaps is redundant
-                int altAppliedIdx = d.txnIds().find(TxnId.minForEpoch(e.endOwnershipEpoch));
+                int altAppliedIdx = d.txnIdsWithFlags().find(TxnId.minForEpoch(e.endOwnershipEpoch));
                 if (altAppliedIdx < 0) altAppliedIdx = -1 - altAppliedIdx;
                 if (altAppliedIdx < appliedIdx) appliedIdx = altAppliedIdx;
             }

@@ -23,16 +23,21 @@ import java.util.Collection;
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import javax.annotation.Nullable;
 
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Result;
+import accord.api.RoutingKey;
 import accord.coordinate.tracking.RecoveryTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Accept;
 import accord.primitives.Known.KnownDeps;
+import accord.primitives.Range;
+import accord.primitives.Ranges;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Status;
 import accord.messages.BeginRecovery;
 import accord.messages.BeginRecovery.RecoverOk;
@@ -51,6 +56,7 @@ import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.topology.Topology;
+import accord.utils.ArrayBuffers.BufferList;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
 import accord.utils.UnhandledEnum;
@@ -59,47 +65,40 @@ import accord.utils.async.AsyncChainCombiner;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import static accord.api.ProgressLog.BlockedUntil.CommittedOrNotAccepted;
+import static accord.api.ProgressLog.BlockedUntil.CommittedOrNotFastPathCommit;
 import static accord.api.ProgressLog.BlockedUntil.HasCommittedDeps;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
+import static accord.coordinate.Recover.InferredFastPath.Reject;
+import static accord.coordinate.Recover.InferredFastPath.Unknown;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
-import static accord.messages.Accept.Kind.MEDIUM;
 import static accord.messages.Accept.Kind.SLOW;
 import static accord.messages.BeginRecovery.RecoverOk.maxAccepted;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedNotTruncated;
 import static accord.primitives.Known.KnownDeps.DepsCommitted;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedMedium;
-import static accord.primitives.TxnId.MediumPath.MEDIUM_PATH_WAIT_ON_RECOVERY;
+import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
 import static accord.utils.Invariants.illegalState;
+import static accord.utils.SortedArrays.Search.CEIL;
+import static accord.utils.SortedArrays.Search.FLOOR;
 
 public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
-    AsyncResult<Boolean> await(Node node, Deps waitOn, BlockedUntil blockedUntil)
+    public enum InferredFastPath
     {
-        long requireEpoch = waitOn.maxTxnId(txnId).epoch();
-        return node.withEpoch(requireEpoch, () -> {
-            TxnId recoverId = this.txnId;
-            List<AsyncResult<Boolean>> requests = new ArrayList<>();
-            for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
-            {
-                TxnId awaitId = waitOn.txnId(i);
-                Participants<?> participants = waitOn.participants(awaitId);
-                Topologies topologies;
-                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch());
-                else topologies = node.topology().forEpoch(participants, awaitId.epoch());
-                requests.add(SynchronousRecoverAwait.awaitAny(node, topologies, awaitId, blockedUntil, true, participants, recoverId));
-            }
-            if (requests.isEmpty())
-                return AsyncResults.success(false);
-            return AsyncChainCombiner.reduce(requests, (a,b) -> a|b).beginAsResult();
-        }).beginAsResult();
+        Accept, Unknown, Reject;
+
+        public InferredFastPath merge(InferredFastPath that)
+        {
+            return compareTo(that) >= 0 ? this : that;
+        }
     }
 
     private final CoordinationAdapter<Result> adapter;
@@ -306,7 +305,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     //     however, note that we may have taken the fast path and recovered, so we can only do this if acceptedOrCommitted=Ballot.ZERO
                     //     (otherwise recovery was attempted and did not invalidate, so it must have determined it needed to complete)
                     Deps proposeDeps = LatestDeps.mergeProposal(recoverOkList, ok -> ok == null ? null : ok.deps);
-                    propose(status == AcceptedMedium && txnId.is(MEDIUM_PATH_WAIT_ON_RECOVERY) ? MEDIUM : SLOW, acceptOrCommitNotTruncated.executeAt, proposeDeps);
+                    propose(SLOW, acceptOrCommitNotTruncated.executeAt, proposeDeps);
                     return;
                 }
 
@@ -315,10 +314,6 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     invalidate(recoverOks);
                     return;
                 }
-
-                case PreNotAccepted:
-                case NotAccepted:
-                    break;
 
                 case NotDefined:
                 case PreAccepted:
@@ -355,40 +350,68 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             }
         }
 
-        if (tracker.rejectsFastPath(txnId) || supersedingRejects(recoverOkList)
-            || (txnId.hasPrivilegedCoordinator() && recoverOks.get(txnId.node) != null))
-        {
-            invalidate(recoverOks);
-            return;
-        }
-
         Invariants.require(committedExecuteAt == null || committedExecuteAt.equals(txnId));
-        // should all be PreAccept
-        Deps proposeDeps = LatestDeps.mergeProposal(recoverOkList, ok -> ok == null ? null : ok.deps);
-        Deps earlierWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.earlierWait);
-        Deps earlierNoWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.earlierNoWait);
-        Deps laterWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.laterWait);
-        Deps laterNoWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.laterNoWait);
-        earlierWait = earlierWait.without(earlierNoWait);
-        laterWait = laterWait.without(laterNoWait);
-        if (!earlierWait.isEmpty() || !laterWait.isEmpty())
-        {
-            Propose.NotAccept.proposeAndPersistNotAccept(node, ballot, txnId, route.homeKey(), route, node.agent());
-            // If there exist commands that were proposed a later execution time than us that have not witnessed us,
-            // we have to be certain these commands have not successfully committed without witnessing us (thereby
-            // ruling out a fast path decision for us and changing our recovery decision).
-            // So, we wait for these commands to commit and recompute supersedingRejects for them.
-            AsyncChainCombiner.reduce(await(node, earlierWait, HasCommittedDeps),
-                                      await(node, laterWait,   CommittedOrNotAccepted), (a, b) -> a|b)
-                              .begin((rejects, failure) -> {
-                if (failure != null) accept(null, failure);
-                else if (rejects) invalidate(recoverOks);
-                else propose(SLOW, txnId, proposeDeps);
-            });
-            return;
-        }
 
-        propose(SLOW, txnId, proposeDeps);
+        boolean coordinatorInRecoveryQuorum = recoverOks.get(txnId.node) != null;
+        Participants<?> extraCoordVotes = extraCoordinatorVotes(txnId, coordinatorInRecoveryQuorum, recoverOkList);
+        Participants<?> extraRejects = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.laterCoordRejects)
+                                           .intersecting(route, id -> !recoverOks.containsKey(id.node));
+        InferredFastPath fastPath;
+        if (txnId.hasPrivilegedCoordinator() && coordinatorInRecoveryQuorum) fastPath = Reject;
+        else fastPath = merge(
+            supersedingRejects(recoverOkList) ? Reject : Unknown,
+            tracker.inferFastPathDecision(txnId, extraCoordVotes, extraRejects)
+        );
+
+        switch (fastPath)
+        {
+            case Reject:
+            {
+                invalidate(recoverOks);
+                return;
+            }
+            case Accept:
+            {
+                propose(SLOW, txnId, recoverOkList);
+                return;
+            }
+            case Unknown:
+            {
+                // should all be PreAccept
+                Deps earlierWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.earlierWait);
+                Deps earlierNoWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.earlierNoWait);
+                earlierWait = earlierWait.without(earlierNoWait);
+                Deps laterWitnessedCoordRejects = Deps.merge(recoverOks, recoverOks.domainSize(), (map, i) -> selectCoordinatorReplies(map.getKey(i), map.getValue(i)), Function.identity());
+
+                if (!earlierWait.isEmpty() || !laterWitnessedCoordRejects.isEmpty())
+                {
+                    // If there exist commands that were proposed a later execution time than us that have not witnessed us,
+                    // we have to be certain these commands have not successfully committed without witnessing us (thereby
+                    // ruling out a fast path decision for us and changing our recovery decision).
+                    // So, we wait for these commands to commit and recompute supersedingRejects for them.
+                    AsyncChainCombiner.reduce(awaitEarlier(node, earlierWait, HasCommittedDeps),
+                                              awaitLater(node, laterWitnessedCoordRejects, CommittedOrNotFastPathCommit, extraCoordVotes),
+                                              InferredFastPath::merge)
+                                      .begin((inferred, failure) -> {
+                                          if (failure != null) accept(null, failure);
+                                          else
+                                          {
+                                              switch (inferred)
+                                              {
+                                                  default: throw new UnhandledEnum(inferred);
+                                                  case Accept: propose(SLOW, txnId, recoverOkList); break;
+                                                  case Unknown: retry(committedExecuteAt); break;
+                                                  case Reject: invalidate(recoverOks); break;
+                                              }
+                                          }
+                                      });
+                }
+                else
+                {
+                    propose(SLOW, txnId, recoverOkList);
+                }
+            }
+        }
     }
 
     private static boolean supersedingRejects(List<RecoverOk> oks)
@@ -399,6 +422,39 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 return true;
         }
         return false;
+    }
+
+    private static InferredFastPath merge(InferredFastPath a, InferredFastPath b)
+    {
+        boolean accept = a == InferredFastPath.Accept || b == InferredFastPath.Accept;
+        boolean reject = a == Reject || b == Reject;
+        Invariants.require(!accept || !reject);
+        return accept ? InferredFastPath.Accept : reject ? Reject : Unknown;
+    }
+
+    private static Participants<?> extraCoordinatorVotes(TxnId txnId, boolean coordinatorInQuorum, List<RecoverOk> oks)
+    {
+        if (!txnId.hasPrivilegedCoordinator())
+            return null;
+
+        Participants<?> result = Participants.empty(txnId);
+        if (coordinatorInQuorum)
+            return result;
+
+        for (RecoverOk ok : oks)
+        {
+            if (ok != null && ok.coordinatorAcceptsFastPath != null)
+                result = Participants.merge(result, (Participants) ok.coordinatorAcceptsFastPath);
+        }
+        return result;
+    }
+
+    private static Deps selectCoordinatorReplies(Id from, RecoverOk ok)
+    {
+        if (ok == null)
+            return null;
+
+        return ok.laterCoordRejects.with(id -> from.equals(id.node));
     }
 
     private void withCommittedDeps(List<RecoverOk> nullableRecoverOkList, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
@@ -445,6 +501,12 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         locallyInvalidateAndCallback(node, txnId, reportLowEpoch, highEpoch, route, ProgressToken.INVALIDATED, callback);
     }
 
+    private void propose(Accept.Kind kind, Timestamp executeAt, List<RecoverOk> recoverOkList)
+    {
+        Deps proposeDeps = LatestDeps.mergeProposal(recoverOkList, ok -> ok == null ? null : ok.deps);
+        propose(kind, executeAt, proposeDeps);
+    }
+
     private void propose(Accept.Kind kind, Timestamp executeAt, Deps deps)
     {
         node.withEpoch(executeAt.epoch(), this, () -> {
@@ -458,6 +520,97 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         if (executeAt != null && executeAt.epoch() != (this.committedExecuteAt == null ? txnId : this.committedExecuteAt).epoch())
             topologies = node.topology().select(route, txnId, executeAt, QuorumEpochIntersections.recover);
         Recover.recover(node, topologies, ballot, txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
+    }
+
+    AsyncResult<InferredFastPath> awaitEarlier(Node node, Deps waitOn, BlockedUntil blockedUntil)
+    {
+        long requireEpoch = waitOn.maxTxnId(txnId).epoch();
+        return node.withEpoch(requireEpoch, () -> {
+            TxnId recoverId = this.txnId;
+            List<AsyncResult<InferredFastPath>> requests = new ArrayList<>();
+            for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
+            {
+                TxnId awaitId = waitOn.txnId(i);
+                Invariants.require(awaitId.compareTo(recoverId) < 0);
+                Participants<?> participants = waitOn.participants(awaitId);
+
+                Topologies topologies;
+                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch());
+                else topologies = node.topology().forEpoch(participants, awaitId.epoch());
+                requests.add(SynchronousRecoverAwait.awaitAny(node, topologies, awaitId, blockedUntil, true, participants, recoverId));
+            }
+            if (requests.isEmpty())
+                return AsyncResults.success(InferredFastPath.Accept);
+            return AsyncChainCombiner.reduce(requests, InferredFastPath::merge).beginAsResult();
+        }).beginAsResult();
+    }
+
+    AsyncResult<InferredFastPath> awaitLater(Node node, Deps waitOn, BlockedUntil blockedUntil, @Nullable Participants<?> selfCoordVotes)
+    {
+        if (waitOn.isEmpty())
+            return AsyncResults.success(InferredFastPath.Accept);
+
+        Participants<?> reliesOnAwaitIdCoordVote;
+        Topology topology = tracker.topologies().current();
+        switch (route.domain())
+        {
+            default: throw new UnhandledEnum(route.domain());
+            case Key:
+                try (BufferList<RoutingKey> tmp = new BufferList<>())
+                {
+                    for (int j = 0 ; j < route.size() ; ++j)
+                    {
+                        RoutingKey key = (RoutingKey)route.get(j);
+                        RecoveryTracker.RecoveryShardTracker shardTracker = tracker.get(0, topology.indexForKey(key));
+                        if (shardTracker.fastPathReliesOnUnwitnessedCoordinatorVote(txnId, selfCoordVotes))
+                            tmp.add(key);
+                    }
+                    reliesOnAwaitIdCoordVote = RoutingKeys.ofSortedUnique(tmp);
+                }
+                break;
+            case Range:
+                try (BufferList<Range> tmp = new BufferList<>())
+                {
+                    for (int j = 0 ; j < route.size() ; ++j)
+                    {
+                        Range range = (Range)route.get(j);
+                        for (int k = topology.indexForRange(range, CEIL), maxk = topology.indexForRange(range, FLOOR); k <= maxk ; k++)
+                        {
+                            RecoveryTracker.RecoveryShardTracker shardTracker = tracker.get(0, k);
+                            if (shardTracker.fastPathReliesOnUnwitnessedCoordinatorVote(txnId, selfCoordVotes))
+                                tmp.add(range.slice(shardTracker.shard.range));
+                        }
+                    }
+                    reliesOnAwaitIdCoordVote = Ranges.ofSortedAndDeoverlapped(tmp.toArray(Range[]::new));
+                }
+        }
+
+        if (reliesOnAwaitIdCoordVote.isEmpty())
+            return AsyncResults.success(InferredFastPath.Accept);
+
+        long requireEpoch = waitOn.maxTxnId(txnId).epoch();
+        return node.withEpoch(requireEpoch, () -> {
+            TxnId recoverId = this.txnId;
+            List<AsyncResult<InferredFastPath>> requests = new ArrayList<>();
+            for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
+            {
+                TxnId awaitId = waitOn.txnId(i);
+                Invariants.require(awaitId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
+                Invariants.require(awaitId.compareTo(recoverId) > 0);
+                Participants<?> participants = waitOn.participants(awaitId)
+                                                     .intersecting(reliesOnAwaitIdCoordVote, Minimal);
+                if (participants.isEmpty())
+                    continue;
+
+                Topologies topologies;
+                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch());
+                else topologies = node.topology().forEpoch(participants, awaitId.epoch());
+                requests.add(SynchronousRecoverAwait.awaitAny(node, topologies, awaitId, blockedUntil, true, participants, recoverId));
+            }
+            if (requests.isEmpty())
+                return AsyncResults.success(InferredFastPath.Accept);
+            return AsyncChainCombiner.reduce(requests, InferredFastPath::merge).beginAsResult();
+        }).beginAsResult();
     }
 
     @Override

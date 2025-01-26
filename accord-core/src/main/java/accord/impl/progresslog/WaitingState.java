@@ -26,15 +26,14 @@ import accord.api.ProgressLog.BlockedUntil;
 import accord.coordinate.AsynchronousAwait;
 import accord.coordinate.FetchData;
 import accord.local.Command;
+import accord.local.CommandStores.RangesForEpoch;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
-import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
-import accord.primitives.Ranges;
 import accord.primitives.Routables;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
@@ -66,7 +65,6 @@ import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitHome;
 import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitSlice;
 import static accord.impl.progresslog.WaitingState.CallbackKind.Fetch;
 import static accord.impl.progresslog.WaitingState.CallbackKind.FetchRoute;
-import static accord.primitives.EpochSupplier.constant;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 /**
@@ -90,12 +88,14 @@ abstract class WaitingState extends BaseTxnState
     private static final int HOME_SATISFIES_SHIFT = 5;
     private static final long HOME_SATISFIES_MASK = 0x7;
     private static final int AWAIT_SHIFT = 8;
-    private static final int AWAIT_BITS = 32;
+    private static final int AWAIT_BITS = 28;
     private static final long AWAIT_MASK = (1L << AWAIT_BITS) - 1;
+    private static final int AWAIT_EPOCH_SHIFT = AWAIT_SHIFT + AWAIT_BITS;
+    private static final int AWAIT_EPOCH_BITS = 4;
     private static final long SET_MASK = ~((PROGRESS_MASK << PROGRESS_SHIFT) | (BLOCKED_UNTIL_MASK << BLOCKED_UNTIL_SHIFT));
     private static final long INITIALISED_MASK = (PROGRESS_MASK << PROGRESS_SHIFT) | (BLOCKED_UNTIL_MASK << BLOCKED_UNTIL_SHIFT) | (HOME_SATISFIES_MASK << HOME_SATISFIES_SHIFT);
 
-    private static final int RETRY_COUNTER_SHIFT = AWAIT_SHIFT + AWAIT_BITS;
+    private static final int RETRY_COUNTER_SHIFT = AWAIT_EPOCH_SHIFT + AWAIT_EPOCH_BITS;
     private static final long RETRY_COUNTER_MASK = 0x7;
     static final int WAITING_STATE_END_SHIFT = RETRY_COUNTER_SHIFT + 3;
 
@@ -234,51 +234,105 @@ abstract class WaitingState extends BaseTxnState
     /*
      * Ranges may have moved between command stores locally so extend to a later epoch to invoke those command stores
      */
-    static EpochSupplier lowEpoch(SafeCommandStore safeStore, TxnId txnId, Command command)
+    long updateLowEpoch(SafeCommandStore safeStore, TxnId txnId, Command command)
+    {
+        long lowEpoch = computeLowEpoch(safeStore, txnId, command);
+        int offset = safeStore.ranges().indexOffset(lowEpoch, txnId.epoch());
+        if (offset >= 3)
+        {
+            offset = 3;
+            lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(lowEpoch, command.maxContactable());
+        }
+        encodedState = encodedState & ~(0x3L << AWAIT_EPOCH_SHIFT);
+        encodedState |= ((long)offset) << AWAIT_EPOCH_SHIFT;
+        return lowEpoch;
+    }
+
+    static long computeLowEpoch(SafeCommandStore safeStore, TxnId txnId, Command command)
     {
         StoreParticipants participants = command.participants();
+        long txnIdEpoch = txnId.epoch();
         if (txnId.is(ExclusiveSyncPoint))
         {
-            long newEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnId.epoch(), participants.hasTouched());
-            if (newEpoch < txnId.epoch())
-                return constant(newEpoch);
-            return txnId;
+            long newEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnIdEpoch, participants.hasTouched());
+            return Math.min(newEpoch, txnIdEpoch);
         }
 
         if (command.known().deps().hasPreAcceptedOrProposedOrDecidedDeps() && participants.touchesOnlyOwned())
-            return txnId;
+            return txnIdEpoch;
 
         if (participants.route() == null)
-            return txnId;
+            return txnIdEpoch;
 
-        Participants<?> unsynced = safeStore.node().topology().unsyncedOnly(participants.route(), txnId.epoch());
+        Participants<?> unsynced = safeStore.node().topology().unsyncedOnly(participants.route(), txnIdEpoch);
         if (unsynced == null || unsynced.isEmpty())
-            return txnId;
+            return txnIdEpoch;
 
-        long lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnId.epoch(), unsynced);
-        if (lowEpoch >= txnId.epoch())
-            return txnId;
-
-        return constant(lowEpoch);
+        long lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnIdEpoch, unsynced);
+        return Math.min(lowEpoch, txnIdEpoch);
     }
 
-    static EpochSupplier highEpoch(SafeCommandStore safeStore, TxnId txnId, BlockedUntil blockedUntil, Command command, Timestamp executeAt)
+    long readLowEpoch(SafeCommandStore safeStore, TxnId txnId, Route<?> route)
+    {
+        int offset = (int) ((encodedState >>> AWAIT_EPOCH_SHIFT) & 0x3);
+        RangesForEpoch ranges = safeStore.ranges();
+        long epoch = ranges.epochAtIndex(Math.max(0, ranges.floorIndex(txnId.epoch())) - offset);
+        if (offset < 3)
+            return epoch;
+        return safeStore.ranges().latestEarlierEpochThatFullyCovers(epoch, route);
+    }
+
+    boolean hasNewLowEpoch(SafeCommandStore safeStore, TxnId txnId, long prevLowEpoch, long newLowEpoch)
+    {
+        if (prevLowEpoch == newLowEpoch)
+            return false;
+        RangesForEpoch ranges = safeStore.ranges();
+        int prevOffset = Math.min(3, ranges.indexOffset(prevLowEpoch, txnId.epoch()));
+        int newOffset = Math.min(3, ranges.indexOffset(newLowEpoch, txnId.epoch()));
+        return prevOffset != newOffset;
+    }
+
+    long updateHighEpoch(SafeCommandStore safeStore, TxnId txnId, BlockedUntil blockedUntil, Command command, Timestamp executeAt)
+    {
+        long highEpoch = computeHighEpoch(safeStore, txnId, blockedUntil, command, executeAt);
+        int offset = safeStore.ranges().indexOffset(txnId.epoch(), highEpoch);
+        if (offset >= 3)
+        {
+            offset = 3;
+            highEpoch = safeStore.ranges().earliestLaterEpochThatFullyCovers(highEpoch, command.maxContactable());
+        }
+        encodedState = encodedState & ~(0xCL << AWAIT_EPOCH_SHIFT);
+        encodedState |= ((long)offset) << (AWAIT_EPOCH_SHIFT + 2);
+        return highEpoch;
+    }
+
+    static long computeHighEpoch(SafeCommandStore safeStore, TxnId txnId, BlockedUntil blockedUntil, Command command, Timestamp executeAt)
     {
         long epoch = blockedUntil.fetchEpoch(txnId, executeAt);
-        epoch = Math.max(epoch, safeStore.ranges().earliestLaterEpochThatFullyCovers(epoch, command.participants().hasTouched()));
-        return constant(epoch);
+        return Math.max(epoch, safeStore.ranges().earliestLaterEpochThatFullyCovers(epoch, command.participants().hasTouched()));
     }
 
-    private static Route<?> slicedRoute(SafeCommandStore safeStore, TxnId txnId, Command command, BlockedUntil blockedUntil)
+    long readHighEpoch(SafeCommandStore safeStore, TxnId txnId, Route<?> route)
     {
-        Timestamp executeAt = command.executeAtIfKnown();
-        EpochSupplier toLocalEpoch = highEpoch(safeStore, txnId, blockedUntil, command, executeAt);
-
-        Ranges ranges = safeStore.ranges().allBetween(txnId.epoch(), toLocalEpoch);
-        return command.route().slice(ranges);
+        int offset = (int) ((encodedState >>> (AWAIT_EPOCH_SHIFT + 2)) & 0x3);
+        RangesForEpoch ranges = safeStore.ranges();
+        long epoch = ranges.epochAtIndex(Math.max(0, ranges.floorIndex(txnId.epoch())) + offset);
+        if (offset < 3)
+            return epoch;
+        return safeStore.ranges().earliestLaterEpochThatFullyCovers(epoch, route);
     }
 
-    private static Route<?> slicedRoute(SafeCommandStore safeStore, TxnId txnId, Route<?> route, EpochSupplier fromLocalEpoch, EpochSupplier toLocalEpoch)
+    boolean hasNewHighEpoch(SafeCommandStore safeStore, TxnId txnId, long prevHighEpoch, long newHighEpoch)
+    {
+        if (prevHighEpoch == newHighEpoch)
+            return false;
+        RangesForEpoch ranges = safeStore.ranges();
+        int prevOffset = Math.min(3, ranges.indexOffset(txnId.epoch(), prevHighEpoch));
+        int newOffset = Math.min(3, ranges.indexOffset(txnId.epoch(), newHighEpoch));
+        return prevOffset != newOffset;
+    }
+
+    private static Route<?> slicedRoute(SafeCommandStore safeStore, TxnId txnId, Route<?> route, long fromLocalEpoch, long toLocalEpoch)
     {
         Route<?> result = StoreParticipants.touches(safeStore, fromLocalEpoch, txnId, toLocalEpoch, route);
         if (result.isEmpty())
@@ -291,9 +345,9 @@ abstract class WaitingState extends BaseTxnState
         return blockedUntil.waitsOn == HOME ? slicedRoute.homeKeyOnlyRoute() : slicedRoute;
     }
 
-    private static Route<?> fetchRoute(Route<?> slicedRoute, Route<?> awaitRoute, BlockedUntil blockedUntil, SafeCommandStore safeStore, EpochSupplier lowEpoch, TxnId txnId, EpochSupplier highEpoch, Route<?> route)
+    private static Route<?> fetchRoute(Route<?> slicedRoute, Route<?> awaitRoute, BlockedUntil blockedUntil, SafeCommandStore safeStore, long lowEpoch, TxnId txnId, long highEpoch, Route<?> route)
     {
-        if (lowEpoch.epoch() < txnId.epoch())
+        if (lowEpoch < txnId.epoch())
             return StoreParticipants.touches(safeStore, lowEpoch, txnId, highEpoch, route);
         if (blockedUntil.waitsOn == blockedUntil.fetchFrom)
             return awaitRoute;
@@ -349,12 +403,12 @@ abstract class WaitingState extends BaseTxnState
         TxnId txnId = safeCommand.txnId();
         // first make sure we have enough information to obtain the command locally
         Timestamp executeAt = command.executeAtIfKnown();
-        EpochSupplier lowEpoch = lowEpoch(safeStore, txnId, command);
-        EpochSupplier highEpoch = highEpoch(safeStore, txnId, blockedUntil, command, executeAt);
         Participants<?> fetchKeys = Invariants.nonNull(command.maxContactable());
 
         if (!Route.isRoute(fetchKeys))
         {
+            long lowEpoch = updateLowEpoch(safeStore, txnId, command);
+            long highEpoch = updateHighEpoch(safeStore, txnId, blockedUntil, command, executeAt);
             fetchRoute(owner, blockedUntil, txnId, executeAt, lowEpoch, highEpoch, fetchKeys);
             return;
         }
@@ -367,6 +421,10 @@ abstract class WaitingState extends BaseTxnState
             return;
         }
 
+        long prevLowEpoch = readLowEpoch(safeStore, txnId, route);
+        long prevHighEpoch = readHighEpoch(safeStore, txnId, route);
+        long lowEpoch = updateLowEpoch(safeStore, txnId, command);
+        long highEpoch = updateHighEpoch(safeStore, txnId, blockedUntil, command, executeAt);
         // TODO (expected): split into txn and deps sources
         Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, lowEpoch, highEpoch);
         Invariants.require(!slicedRoute.isEmpty());
@@ -391,6 +449,22 @@ abstract class WaitingState extends BaseTxnState
         }
 
         int roundSize = awaitRoundSize(awaitRoute);
+        if (hasNewLowEpoch(safeStore, txnId, prevLowEpoch, lowEpoch) || hasNewHighEpoch(safeStore, txnId, prevHighEpoch, highEpoch))
+        {
+            // update round counters because we have changed the epochs involved
+            Route<?> prevSlicedRoute = slicedRoute(safeStore, txnId, route, prevLowEpoch, prevHighEpoch);
+            Route<?> prevAwaitRoute = awaitRoute(prevSlicedRoute, blockedUntil);
+            int prevRoundSize = awaitRoundSize(prevAwaitRoute);
+            int prevRoundIndex = awaitRoundIndex(prevRoundSize);
+            int prevRoundStart = prevRoundIndex * prevRoundSize;
+            int newRoundIndex = -1;
+            if (prevRoundStart < prevAwaitRoute.size())
+                newRoundIndex = (int)awaitRoute.findNextIntersection(0, (Routables)prevAwaitRoute, prevRoundStart + prevRoundIndex);
+            if (newRoundIndex < 0)
+                newRoundIndex = awaitRoute.size();
+            updateAwaitRound(newRoundIndex, roundSize);
+        }
+
         int roundIndex = awaitRoundIndex(roundSize);
         int roundStart = roundIndex * roundSize;
         if (roundStart >= awaitRoute.size())
@@ -439,8 +513,8 @@ abstract class WaitingState extends BaseTxnState
                 state.setHomeSatisfies(newHomeSatisfies);
             }
 
-            EpochSupplier fromLocalEpoch = lowEpoch(safeStore, txnId, command);
-            EpochSupplier toLocalEpoch = highEpoch(safeStore, txnId, blockedUntil, command, command.executeAtOrTxnId());
+            long fromLocalEpoch = state.readLowEpoch(safeStore, txnId, route);
+            long toLocalEpoch = state.readHighEpoch(safeStore, txnId, route);
             Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, fromLocalEpoch, toLocalEpoch); // the actual local keys we care about
             Route<?> awaitRoute = awaitRoute(slicedRoute, blockedUntil); // either slicedRoute or just the home key
 
@@ -470,7 +544,9 @@ abstract class WaitingState extends BaseTxnState
 
                 case AwaitSlice:
                     Invariants.require(awaitRoute == slicedRoute);
-                    if (roundStart < roundSize)
+                    // In a production system it is safe for the roundIndex to get corrupted as we will just start polling a bit early,
+                    // but for testing we would like to know it has happened.
+                    if (Invariants.expect(roundStart < roundSize))
                     {
                         if (notReady == null)
                         {
@@ -488,15 +564,6 @@ abstract class WaitingState extends BaseTxnState
                             state.set(safeStore, owner, blockedUntil, Awaiting);
                         }
                         break;
-                    }
-                    else
-                    {
-                        // In a production system it is safe for the roundIndex to get corrupted as we will just start polling a bit early,
-                        // but for testing we would like to know it has happened.
-                        // This might happen if we derived the Route differently for some reason, e.g. due to topology information changing in an unexpected way.
-                        // But, it could also be indicative of a benign bug.
-                        // We could wire the route through recursively each callback to avoid this, but it seems simpler to just be robust to problems here.
-                        Invariants.expect(false);
                     }
 
                 case FetchRoute:
@@ -613,7 +680,10 @@ abstract class WaitingState extends BaseTxnState
 
             callbackId >>= 1;
             SafeCommand safeCommand = Invariants.nonNull(safeStore.unsafeGet(txnId));
-            Route<?> slicedRoute = slicedRoute(safeStore, txnId, safeCommand.current(), blockedUntil);
+            Route<?> route = Route.castToRoute(safeCommand.current().maxContactable());
+            long lowEpoch = readLowEpoch(safeStore, txnId, route);
+            long highEpoch = readLowEpoch(safeStore, txnId, route);
+            Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, lowEpoch, highEpoch);
 
             int roundSize = awaitRoundSize(slicedRoute);
             int roundIndex = awaitRoundIndex(roundSize);
@@ -646,7 +716,7 @@ abstract class WaitingState extends BaseTxnState
         }
     }
 
-    static void fetchRoute(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, EpochSupplier lowEpoch, EpochSupplier highEpoch, Participants<?> fetchKeys)
+    static void fetchRoute(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, long lowEpoch, long highEpoch, Participants<?> fetchKeys)
     {
         // TODO (desired): fetch only the route
         // we MUSt allocate before calling withEpoch to register cancellation, as async
@@ -654,12 +724,12 @@ abstract class WaitingState extends BaseTxnState
         FetchData.fetch(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchKeys, lowEpoch, highEpoch, invoker);
     }
 
-    static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, EpochSupplier lowEpoch, EpochSupplier highEpoch, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
+    static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, long lowEpoch, long highEpoch, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
     {
         Invariants.require(!slicedRoute.isEmpty());
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
-        FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, fetchRoute, maxRoute, slicedRoute, lowEpoch, highEpoch, executeAt, invoker);
+        FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchRoute, maxRoute, slicedRoute, lowEpoch, highEpoch, invoker);
     }
 
     void awaitHomeKey(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route)

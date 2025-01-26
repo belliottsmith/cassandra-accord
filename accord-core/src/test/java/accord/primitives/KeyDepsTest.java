@@ -80,7 +80,7 @@ public class KeyDepsTest
             Map<TxnId, List<RoutingKey>> reverseLookup = new HashMap<>();
             for (RoutingKey key : keyDeps.keys)
             {
-                for (TxnId id : keyDeps.txnIds(key))
+                for (TxnId id : keyDeps.txnIdsWithFlags(key))
                     reverseLookup.computeIfAbsent(id, ignore -> new ArrayList<>()).add(key);
             }
             for (RoutingKey key : keyDeps.keys)
@@ -165,13 +165,13 @@ public class KeyDepsTest
 
                 // all other keys are fine?
                 for (RoutingKey otherKey : expectedKeys)
-                    Assertions.assertEquals(deps.test.txnIds(otherKey), without.txnIds(otherKey), "txnIds(" + otherKey + ") without " + key);
+                    Assertions.assertEquals(deps.test.txnIdsWithFlags(otherKey), without.txnIdsWithFlags(otherKey), "txnIds(" + otherKey + ") without " + key);
 
                 // check each TxnId
-                for (TxnId txnId : deps.test.txnIds())
+                for (TxnId txnId : deps.test.txnIdsWithFlags())
                 {
-                    RoutingKeys expected = (RoutingKeys) deps.test.participatingKeys(txnId).without(withoutKeys);
-                    Assertions.assertEquals(expected, without.participatingKeys(txnId), () -> "TxnId " + txnId + " is expected to be removed for key " + key);
+                    RoutingKeys expected = (RoutingKeys) deps.test.participants(txnId).without(withoutKeys);
+                    Assertions.assertEquals(expected, without.participants(txnId), () -> "TxnId " + txnId + " is expected to be removed for key " + key);
                 }
             }
         });
@@ -179,7 +179,7 @@ public class KeyDepsTest
 
     private static RoutingKeys get(accord.primitives.KeyDeps deps, TxnId txnId)
     {
-        return deps.participatingKeys(txnId);
+        return deps.participants(txnId);
     }
 
     @Test
@@ -436,7 +436,7 @@ public class KeyDepsTest
             for (Map.Entry<TxnId, List<RoutingKey>> e : canonicalInverted.entrySet())
             {
                 Assertions.assertArrayEquals(toArray(e.getValue(), RoutingKey[]::new),
-                                             test.participatingKeys(e.getKey()).stream().toArray(RoutingKey[]::new));
+                                             test.participants(e.getKey()).stream().toArray(RoutingKey[]::new));
             }
 
             StringBuilder builder = new StringBuilder();

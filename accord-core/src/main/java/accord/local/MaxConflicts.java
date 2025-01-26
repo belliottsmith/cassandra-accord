@@ -48,8 +48,7 @@ public class MaxConflicts extends BTreeReducingRangeMap<Timestamp>
         // note: we use mergeMax to ensure we take the maximum epoch and hlc independently from any conflict
         //  this is particularly essential for propagating unique HLCs, so that bootstrap recipients don't
         //  begin serving reads too early
-        // TODO (required): should use mergeMax, but BTreeReducingRangeMap doesn't support merge functions that return neither input
-        return update(this, keysOrRanges, maxConflict, Timestamp::max, MaxConflicts::new, Builder::new);
+        return update(this, keysOrRanges, maxConflict, Timestamp::mergeMax, MaxConflicts::new, Builder::new);
     }
 
     private static class Builder extends AbstractBoundariesBuilder<RoutingKey, Timestamp, MaxConflicts>

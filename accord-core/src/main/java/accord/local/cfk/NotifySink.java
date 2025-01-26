@@ -53,8 +53,7 @@ interface NotifySink
             if (safeCommand != null) notWaiting(safeStore, safeCommand, key, uniqueHlc);
             else
             {
-                PreLoadContext context = PreLoadContext.contextFor(txnId);
-                safeStore.commandStore().execute(context, safeStore0 -> notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc))
+                safeStore.commandStore().execute(txnId, safeStore0 -> notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc))
                          .begin(safeStore.agent());
             }
         }
@@ -68,10 +67,9 @@ interface NotifySink
         public void waitingOn(SafeCommandStore safeStore, TxnInfo notify, RoutingKey key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk)
         {
             TxnId txnId = notify.plainTxnId();
-            PreLoadContext context = PreLoadContext.contextFor(txnId);
 
-            if (safeStore.canExecuteWith(context)) doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);
-            else safeStore.commandStore().execute(context, safeStore0 -> {
+            if (safeStore.canExecuteWith(txnId)) doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);
+            else safeStore.commandStore().execute(txnId, safeStore0 -> {
                 doNotifyWaitingOn(safeStore0, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);
             }).begin(safeStore.agent());
         }

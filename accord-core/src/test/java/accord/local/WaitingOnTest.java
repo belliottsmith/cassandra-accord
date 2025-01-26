@@ -80,7 +80,7 @@ class WaitingOnTest
     private static void validateDirectKeyTxnReachable(WaitingOn waitingOn)
     {
         // property: direct key txn are reachable
-        for (TxnId expected : waitingOn.directKeyDeps.txnIds())
+        for (TxnId expected : waitingOn.directKeyDeps.txnIdsWithFlags())
         {
             Assertions.assertThat(waitingOn.indexOf(expected))
                       .describedAs("Txn %s came from directKeyDeps but indexOf does not match", expected)

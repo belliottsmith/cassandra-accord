@@ -123,7 +123,7 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId txnId = node.nextTxnId(Write, Range);
+            TxnId txnId = node.nextTxnId(Read, Range);
             Ranges keys = ranges(range(1, 2));
             Txn txn = writeTxn(keys);
             FullRangeRoute route = keys.toRoute(keys.get(0).someIntersectingRoutingKey(null));
@@ -189,7 +189,7 @@ public class CoordinateTransactionTest
             // Should be able to find the txnid now and wait for local application
             TxnId initiatingBarrierSyncTxnId = AsyncChains.getBlocking(localInitiatingBarrier.coordinateSyncPoint).syncId;
             Semaphore barrierAppliedLocally = new Semaphore(0);
-            node.ifLocal(PreLoadContext.contextFor(initiatingBarrierSyncTxnId), key(3).toUnseekable(), epoch, (safeStore) ->
+            node.ifLocal(initiatingBarrierSyncTxnId, key(3).toUnseekable(), epoch, (safeStore) ->
                 safeStore.registerAndInvoke(initiatingBarrierSyncTxnId, key(3).toUnseekable(),
                     commandListener((safeStore2, command) -> {
                         if (command.current().is(Applied))
@@ -259,7 +259,7 @@ public class CoordinateTransactionTest
             AsyncResult<SyncPoint<Range>> asyncInclusiveSyncFuture = CoordinateSyncPoint.inclusive(node, ranges);
             SyncPoint<Range> localSyncPoint = getUninterruptibly(asyncInclusiveSyncFuture);
             Semaphore localSyncOccurred = new Semaphore(0);
-            node.commandStores().ifLocal(PreLoadContext.contextFor(localSyncPoint.syncId), key, epoch, epoch, safeStore ->
+            node.commandStores().ifLocal(localSyncPoint.syncId, key, epoch, epoch, safeStore ->
                 safeStore.registerAndInvoke(localSyncPoint.syncId, key.toUnseekable(),
                     commandListener((safeStore2, command) -> {
                         if (command.current().hasBeen(Applied))

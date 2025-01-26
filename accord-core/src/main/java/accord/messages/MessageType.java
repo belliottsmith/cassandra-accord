@@ -40,8 +40,6 @@ public class MessageType
     public static final MessageType ACCEPT_REQ                        = remote("ACCEPT_REQ",                        true );
     public static final MessageType ACCEPT_RSP                        = remote("ACCEPT_RSP",                        false);
     public static final MessageType NOT_ACCEPT_REQ                    = remote("NOT_ACCEPT_REQ",                    true );
-    public static final MessageType CALCULATE_DEPS_REQ                = remote("CALCULATE_DEPS_REQ",                false);
-    public static final MessageType CALCULATE_DEPS_RSP                = remote("CALCULATE_DEPS_RSP",                false);
     public static final MessageType GET_LATEST_DEPS_REQ               = remote("GET_LATEST_DEPS_REQ",               false);
     public static final MessageType GET_LATEST_DEPS_RSP               = remote("GET_LATEST_DEPS_RSP",               false);
     public static final MessageType GET_EPHEMERAL_READ_DEPS_REQ       = remote("GET_EPHEMERAL_READ_DEPS_REQ",       false);
@@ -64,6 +62,8 @@ public class MessageType
     public static final MessageType BEGIN_INVALIDATE_RSP              = remote("BEGIN_INVALIDATE_RSP",              false);
     public static final MessageType AWAIT_REQ                         = remote("AWAIT_REQ",                         false);
     public static final MessageType AWAIT_RSP                         = remote("AWAIT_RSP",                         false);
+    public static final MessageType RECOVER_AWAIT_REQ                 = remote("RECOVER_AWAIT_REQ",                 false);
+    public static final MessageType RECOVER_AWAIT_RSP                 = remote("RECOVER_AWAIT_RSP",                 false);
     public static final MessageType ASYNC_AWAIT_COMPLETE_REQ          = remote("ASYNC_AWAIT_COMPLETE_RSP",          false);
     public static final MessageType WAIT_UNTIL_APPLIED_REQ            = remote("WAIT_UNTIL_APPLIED_REQ",            false);
     public static final MessageType APPLY_THEN_WAIT_UNTIL_APPLIED_REQ = remote("APPLY_THEN_WAIT_UNTIL_APPLIED_REQ", true );

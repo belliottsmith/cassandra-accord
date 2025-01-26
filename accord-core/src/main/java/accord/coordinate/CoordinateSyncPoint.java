@@ -185,8 +185,8 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
 
     public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint)
     {
-        // TODO (required): consider, document and add invariants checking if this topologies is correct in all cases
-        //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching )
+        // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
+        //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
         sendApply(node, to, syncPoint, participates(node, syncPoint.route, syncPoint.syncId, syncPoint.executeAt));
     }
 

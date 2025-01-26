@@ -72,7 +72,7 @@ public class TopologyChangeTest
             TxnId txnId1 = node1.nextTxnId(Write, Key);
             Txn txn1 = writeTxn(keys);
             getUninterruptibly(node1.coordinate(txnId1, txn1));
-            getUninterruptibly(node1.commandStores().forEach(contextFor(txnId1), keys.toParticipants(), 1, 1, safeStore -> {
+            getUninterruptibly(node1.commandStores().forEach(txnId1, keys.toParticipants(), 1, 1, safeStore -> {
                 StoreParticipants participants = StoreParticipants.read(safeStore, keys.toParticipants(), txnId1);
                 Command command = safeStore.get(txnId1, participants).current();
                 Assertions.assertTrue(command.partialDeps().isEmpty());

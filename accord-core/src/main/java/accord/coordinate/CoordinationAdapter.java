@@ -283,9 +283,10 @@ public interface CoordinationAdapter<R>
             @Override
             public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
-                // TODO (required, consider): remember and document why we don't use fast path for exclusive sync points
-                if (path == FAST) stabilise(node, any, route, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
-                else super.execute(node, any, route, path, txnId, txn, executeAt, deps, callback);
+                // We cannot use the fast path for sync points as their visibility is asymmetric wrt other transactions,
+                // so we could recover to include different transactions than those we fast path committed with.
+                Invariants.require(path != FAST);
+                super.execute(node, any, route, path, txnId, txn, executeAt, deps, callback);
             }
         }
 

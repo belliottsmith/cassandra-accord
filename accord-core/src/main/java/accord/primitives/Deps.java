@@ -35,6 +35,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -218,9 +219,9 @@ public class Deps
 
     public MergeCursor<TxnId, DepList> txnIds(RoutingKey key)
     {
-        DepList keyDeps = this.keyDeps.txnIds(key);
-        DepList rangeDeps = this.rangeDeps.computeTxnIds(key);
-        DepList directKeyDeps = this.directKeyDeps.txnIds(key);
+        DepList keyDeps = this.keyDeps.txnIdsWithFlags(key);
+        DepList rangeDeps = this.rangeDeps.computeTxnIdsWithFlags(key);
+        DepList directKeyDeps = this.directKeyDeps.txnIdsWithFlags(key);
         int count = Math.min(1, keyDeps.size()) + Math.min(1, directKeyDeps.size()) + Math.min(1, rangeDeps.size());
         MergeFewDisjointSortedListsCursor<TxnId, DepList> cursor = new MergeFewDisjointSortedListsCursor<>(count);
         if (keyDeps.size() > 0)
@@ -236,6 +237,11 @@ public class Deps
     public Deps with(Deps that)
     {
         return select(this, that,this.keyDeps.with(that.keyDeps), this.rangeDeps.with(that.rangeDeps), this.directKeyDeps.with(that.directKeyDeps));
+    }
+
+    public Deps with(Predicate<TxnId> include)
+    {
+        return without(include.negate());
     }
 
     public Deps without(Predicate<TxnId> remove)
@@ -328,6 +334,15 @@ public class Deps
             case Key:   return CommandsForKey.managesExecution(txnId) ? keyDeps.participants(txnId) : directKeyDeps.participants(txnId);
             case Range: return rangeDeps.participants(txnId);
         }
+    }
+
+    public Participants<?> intersecting(Participants<?> participants, Predicate<TxnId> txnIds)
+    {
+        RoutingKeys selectKeys = keyDeps.participants(txnIds);
+        selectKeys = selectKeys.with(directKeyDeps.participants(txnIds));
+        Ranges selectRanges = rangeDeps.participants(txnIds);
+        return participants.intersecting(selectKeys, Minimal)
+                           .with((Participants) participants.intersecting((Unseekables<?>) selectRanges, Minimal));
     }
 
     // NOTE: filter only applied to keyDeps

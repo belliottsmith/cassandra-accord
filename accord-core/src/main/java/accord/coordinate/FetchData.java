@@ -27,7 +27,6 @@ import accord.primitives.Known;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.Propagate;
-import accord.primitives.EpochSupplier;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
@@ -67,7 +66,7 @@ public class FetchData extends CheckShards<Route<?>>
     }
 
     // TODO (expected): separate keys we fetch deps and txns for
-    private static class FetchRequest
+    public static class FetchRequest
     {
         final Known fetch;
         final TxnId txnId;
@@ -78,7 +77,12 @@ public class FetchData extends CheckShards<Route<?>>
         final long lowEpoch, highEpoch;
         final BiConsumer<? super FetchResult, Throwable> callback;
 
-        public FetchRequest(Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, EpochSupplier lowEpoch, EpochSupplier highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+        public FetchRequest(Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, BiConsumer<? super FetchResult, Throwable> callback)
+        {
+            this(fetch, txnId, invalidIf, executeAt, fetchKeys, Long.MIN_VALUE, Long.MIN_VALUE, callback);
+        }
+
+        public FetchRequest(Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
         {
             this.fetch = fetch;
             this.invalidIf = invalidIf;
@@ -87,8 +91,8 @@ public class FetchData extends CheckShards<Route<?>>
             this.callback = callback;
             this.srcEpoch = fetch.fetchEpoch(txnId, executeAt);
             this.fetchKeys = fetchKeys;
-            this.lowEpoch = lowEpoch == null ? txnId.epoch() : lowEpoch.epoch();
-            this.highEpoch = highEpoch == null ? srcEpoch : highEpoch.epoch();
+            this.lowEpoch = lowEpoch == Long.MIN_VALUE ? txnId.epoch() : lowEpoch;
+            this.highEpoch = highEpoch == Long.MIN_VALUE ? srcEpoch : highEpoch;
         }
 
         Ranges localRanges(Node node)
@@ -97,16 +101,26 @@ public class FetchData extends CheckShards<Route<?>>
         }
     }
 
-    public static void fetch(Known fetch, Node node, TxnId txnId, @Nullable Timestamp executeAt, Participants<?> someKeys, @Nullable EpochSupplier localLowEpoch, @Nullable EpochSupplier localHighEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void fetch(Known fetch, Node node, TxnId txnId, @Nullable Timestamp executeAt, Participants<?> someKeys, long localLowEpoch, long localHighEpoch, BiConsumer<? super FetchResult, Throwable> callback)
     {
         fetch(fetch, node, txnId, NotKnownToBeInvalid, executeAt, someKeys, localLowEpoch, localHighEpoch, callback);
     }
 
-    public static void fetch(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> someKeys, @Nullable EpochSupplier localLowEpoch, @Nullable EpochSupplier localHighEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void fetch(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, long localLowEpoch, long localHighEpoch, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        FetchRequest request = new FetchRequest(fetch, txnId, invalidIf, executeAt, someKeys, localLowEpoch, localHighEpoch, callback);
-        if (someKeys.kind().isRoute()) fetch(node, castToRoute(someKeys), request);
-        else fetchViaSomeRoute(node, someKeys, request);
+        fetch(node, new FetchRequest(fetch, txnId, invalidIf, executeAt, fetchKeys, localLowEpoch, localHighEpoch, callback));
+    }
+
+    public static void fetch(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, BiConsumer<? super FetchResult, Throwable> callback)
+    {
+        fetch(node, new FetchRequest(fetch, txnId, invalidIf, executeAt, fetchKeys, callback));
+    }
+
+    public static void fetch(Node node, FetchRequest request)
+    {
+        Participants<?> fetchKeys = request.fetchKeys;
+        if (fetchKeys.kind().isRoute()) fetch(node, castToRoute(fetchKeys), request);
+        else fetchViaSomeRoute(node, fetchKeys, request);
     }
 
     public static void fetch(Node node, Route<?> route, FetchRequest request)
@@ -134,15 +148,15 @@ public class FetchData extends CheckShards<Route<?>>
     /**
      * Do not make an attempt to discern what keys need to be contacted; fetch from only the specific remote keys that were requested.
      */
-    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, Route<?> query, Route<?> maxRoute, Participants<?> localKeys, @Nullable EpochSupplier lowEpoch, @Nullable EpochSupplier highEpoch, @Nullable Timestamp executeAt, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, Participants<?> localKeys, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        fetchSpecific(fetch, node, txnId, NotKnownToBeInvalid, query, maxRoute, localKeys, lowEpoch, highEpoch, executeAt, callback);
+        fetchSpecific(fetch, node, txnId, NotKnownToBeInvalid, executeAt, query, maxRoute, localKeys, lowEpoch, highEpoch, callback);
     }
 
     /**
      * Do not make an attempt to discern what keys need to be contacted; fetch from only the specific remote keys that were requested.
      */
-    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, Route<?> query, Route<?> maxRoute, Participants<?> localKeys, @Nullable EpochSupplier lowEpoch, @Nullable EpochSupplier highEpoch, @Nullable Timestamp executeAt, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, Participants<?> localKeys, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
     {
         fetchSpecific(node, query, maxRoute, new FetchRequest(fetch, txnId, invalidIf, executeAt, localKeys, lowEpoch, highEpoch, callback));
     }

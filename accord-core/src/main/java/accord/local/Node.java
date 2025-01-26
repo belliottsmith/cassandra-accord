@@ -478,7 +478,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public Timestamp uniqueNow(Timestamp atLeast)
     {
         Timestamp cur = now.get();
-        if (cur.compareTo(atLeast) < 0)
+        if (!cur.isAtLeastByEpochAndHlc(atLeast))
         {
             long topologyEpoch = topology.epoch();
             if (atLeast.epoch() > topologyEpoch)

@@ -299,7 +299,17 @@ public abstract class CommandStores
             return ranges[Math.max(since, 0)];
         }
 
-        private int floorIndex(long epoch)
+        public Ranges rangesAtIndex(int index)
+        {
+            return ranges[index];
+        }
+
+        public long epochAtIndex(int index)
+        {
+            return epochs[index];
+        }
+
+        public int floorIndex(long epoch)
         {
             int i = Arrays.binarySearch(epochs, epoch);
             if (i < 0) i = -2 - i;
@@ -311,6 +321,18 @@ public abstract class CommandStores
             int i = Arrays.binarySearch(epochs, epoch);
             if (i < 0) i = -1 - i;
             return i;
+        }
+
+        public int indexOffset(long lowEpoch, long highEpoch)
+        {
+            if (lowEpoch == highEpoch)
+                return 0;
+
+            int lowIndex = Math.max(0, floorIndex(lowEpoch));
+            int highIndex = lowIndex;
+            while (highIndex + 1 < epochs.length && epochs[highIndex + 1] <= highEpoch)
+                ++highIndex;
+            return highIndex - lowIndex;
         }
 
         public @Nonnull Ranges currentRanges()

@@ -57,6 +57,7 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE_VISIBLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
+import static accord.local.cfk.CommandsForKey.executesIgnoreBootstrap;
 import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
@@ -736,7 +737,7 @@ class Updating
     private static long updateMaxUniqueHlc(CommandsForKey cfk, TxnInfo newInfo, Command update)
     {
         long maxUniqueHlc = cfk.maxUniqueHlc;
-        if (newInfo.is(APPLIED) && newInfo.is(Write))
+        if (newInfo.is(APPLIED) && newInfo.is(Write) && (newInfo.mayExecute() || executesIgnoreBootstrap(cfk.boundsInfo, newInfo, newInfo.executeAt)))
         {
             long newUniqueHlc = update.executeAt().uniqueHlc();
             if (maxUniqueHlc < newUniqueHlc)
@@ -794,7 +795,7 @@ class Updating
         Timestamp compareExecuteAt = waitingTxnId.awaitsOnlyDeps() ? Timestamp.MAX : command.executeAt();
 
         TxnInfo[] byId = cfk.byId;
-        RelationMultiMap.SortedRelationList<TxnId> txnIds = command.partialDeps().keyDeps.txnIds(cfk.key());
+        RelationMultiMap.SortedRelationList<TxnId> txnIds = command.partialDeps().keyDeps.txnIdsWithFlags(cfk.key());
         TxnId[] missing = NO_TXNIDS;
         int missingCount = 0;
         // we only populate dependencies to facilitate execution, not for any distributed decision,

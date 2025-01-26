@@ -1160,11 +1160,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                 keys = command.asCommitted().waitingOn.keys;
 
             if (keys != null)
-            {
                 return PreLoadContext.contextFor(txnId, keys, keyHistory);
-            }
 
-            return PreLoadContext.contextFor(txnId);
+            return txnId;
         }
 
         @Override

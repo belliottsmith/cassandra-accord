@@ -190,7 +190,7 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
             TxnId txnId = async.txnId;
             long epoch = txnId.epoch();
             RoutingKey homeKey = route.homeKey();
-            node.commandStores().ifLocal(contextFor(txnId), homeKey, epoch, epoch, safeStore -> register(safeStore, txnId, homeKey))
+            node.commandStores().ifLocal(txnId, homeKey, epoch, epoch, safeStore -> register(safeStore, txnId, homeKey))
                 .begin(node.agent());
         }
 
@@ -289,7 +289,7 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
                 //noinspection SillyAssignment,ConstantConditions
                 safeStore = safeStore; // prevent use in lambda
                 safeStore.commandStore()
-                         .execute(contextFor(found.txnId), safeStoreWithTxn -> register(safeStoreWithTxn, found.txnId, found.key))
+                         .execute(found.txnId, safeStoreWithTxn -> register(safeStoreWithTxn, found.txnId, found.key))
                          .begin(node.agent());
             }
             return found;

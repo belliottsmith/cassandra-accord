@@ -29,6 +29,7 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Accept;
 import accord.messages.Accept.AcceptReply;
+import accord.messages.Accept.Kind;
 import accord.messages.Callback;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -51,15 +52,13 @@ import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 import static accord.primitives.Status.AcceptedInvalidate;
-import static accord.primitives.Status.NotAccepted;
-import static accord.primitives.Status.PreNotAccepted;
-import static accord.primitives.TxnId.MediumPath.MEDIUM_PATH_TRACK_STABLE;
+import static accord.primitives.TxnId.MediumPath.TRACK_STABLE;
 import static accord.utils.Invariants.debug;
 
 abstract class Propose<R> implements Callback<AcceptReply>
 {
     final Node node;
-    final Accept.Kind kind;
+    final Kind kind;
     final Ballot ballot;
     final TxnId txnId;
     final Txn txn;
@@ -72,7 +71,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
     final BiConsumer<? super R, Throwable> callback;
     private boolean isDone;
 
-    Propose(Node node, Topologies topologies, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
+    Propose(Node node, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
         this.node = node;
         this.kind = kind;
@@ -167,14 +166,15 @@ abstract class Propose<R> implements Callback<AcceptReply>
 
     void onAccepted()
     {
-        if (kind == Accept.Kind.MEDIUM)
-        {
+        // TODO (desired): can we avoid merging on original preaccept? Would be nice to be able to reduce range txn dep calculation cost.
+        //  I think probably not possible, as we could have a recovery coordinator for some id' < id contact us before our original coordinator does.
+        //  In this case either id' needs to wait (which requires potentially more states like the alternative medium path)
+        //  Or we must pick it up as an Unstable dependency here.
+        Deps deps = mergeDeps();
+        if (kind == Kind.MEDIUM)
             adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, txnId, txn, executeAt, deps, callback);
-        }
         else
-        {
-            adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, mergeDeps(), callback);
-        }
+            adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, deps, callback);
     }
 
     Deps mergeDeps()
@@ -183,8 +183,9 @@ abstract class Propose<R> implements Callback<AcceptReply>
         if (Faults.discardPreAcceptDeps(txnId))
             return deps;
 
-        if (txnId.is(MEDIUM_PATH_TRACK_STABLE))
+        if (txnId.is(TRACK_STABLE))
         {
+            // we must not propose as stable any dep < txnId that we did not witness in our original preaccept
             if (!filterDuplicateDependenciesFromAcceptReply())
                 deps = deps.without(this.deps);
 
@@ -249,24 +250,6 @@ abstract class Propose<R> implements Callback<AcceptReply>
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
                         callback.accept(null, new Invalidated(txnId, invalidateWithParticipant));
                     });
-                }
-            });
-        }
-
-        public static NotAccept proposeAndPersistNotAccept(Node node, Ballot ballot, TxnId txnId, RoutingKey participatingKey, Route<?> commitNotAcceptTo, BiConsumer<?, Throwable> callback)
-        {
-            return proposeNotAccept(node, PreNotAccepted, ballot, txnId, participatingKey, (success, fail) -> {
-                if (fail != null)
-                {
-                    if (callback != null)
-                        callback.accept(null, fail);
-                }
-                else
-                {
-                    Topologies topologies = node.topology().forEpoch(commitNotAcceptTo, txnId.epoch());
-                    node.send(topologies.nodes(), to -> new Accept.NotAccept(NotAccepted, ballot, txnId, commitNotAcceptTo));
-                    if (callback != null)
-                        callback.accept(null, null);
                 }
             });
         }

@@ -56,6 +56,11 @@ public interface Participants<K extends Unseekable> extends Unseekables<K>
         return domain == Routable.Domain.Range ? Ranges.EMPTY : RoutingKeys.EMPTY;
     }
 
+    static Participants<?> empty(TxnId txnId)
+    {
+        return txnId.is(Routable.Domain.Range) ? Ranges.EMPTY : RoutingKeys.EMPTY;
+    }
+
     static Participants<?> singleton(Routable.Domain domain, RoutingKey key)
     {
         return domain == Routable.Domain.Range ? Ranges.of(key.asRange()) : RoutingKeys.of(key);

@@ -1096,6 +1096,9 @@ public class RelationMultiMap
     @Inline
     public static int[] invert(int[] src, int srcLength, int srcKeyCount, int trgKeyCount)
     {
+        if (src.length == 0)
+            return src;
+
         int[] trg = new int[trgKeyCount + srcLength - srcKeyCount];
 
         // first pass, count number of txnId per key

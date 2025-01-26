@@ -23,7 +23,6 @@ import java.util.function.BiConsumer;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Status;
@@ -35,7 +34,6 @@ import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 
-import static accord.local.PreLoadContext.contextFor;
 import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Route.castToRoute;
 import static accord.primitives.Route.isRoute;
@@ -128,9 +126,8 @@ public class Infer
 
         void start()
         {
-            PreLoadContext loadContext = contextFor(txnId);
             Unseekables<?> propagateTo = isRoute(participants) ? castToRoute(participants).withHomeKey() : participants;
-            node.mapReduceConsumeLocal(loadContext, propagateTo, lowEpoch, highEpoch, this);
+            node.mapReduceConsumeLocal(txnId, propagateTo, lowEpoch, highEpoch, this);
         }
 
         @Override

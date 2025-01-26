@@ -67,8 +67,6 @@ import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
 import static accord.primitives.SaveStatus.Vestigial;
-import static accord.primitives.SaveStatus.NotAccepted;
-import static accord.primitives.SaveStatus.PreNotAccepted;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Durability.Local;
@@ -1377,7 +1375,7 @@ public abstract class Command implements ICommand
 
                 if (propagate.appliedOrInvalidated != null && !propagate.appliedOrInvalidated.isEmpty())
                 {
-                    forEachIntersection(propagate.directRangeDeps.txnIds(), directRangeDeps.txnIds(),
+                    forEachIntersection(propagate.directRangeDeps.txnIdsWithFlags(), directRangeDeps.txnIdsWithFlags(),
                                         (from, to, ignore, i1, i2) -> {
                                             if (from.get(i1))
                                                 to.setAppliedOrInvalidatedDirectRangeTxn(i2);
@@ -1385,7 +1383,7 @@ public abstract class Command implements ICommand
 
                     if (propagate.directKeyDeps != KeyDeps.NONE)
                     {
-                        forEachIntersection(propagate.directKeyDeps.txnIds(), directKeyDeps.txnIds(),
+                        forEachIntersection(propagate.directKeyDeps.txnIdsWithFlags(), directKeyDeps.txnIdsWithFlags(),
                                             (from, to, ignore, i1, i2) -> {
                                                 if (from.get(i1))
                                                     to.setAppliedOrInvalidatedDirectKeyTxn(i2);
@@ -1515,7 +1513,7 @@ public abstract class Command implements ICommand
         else if (command.executeAt() == null && command.status().phase == Phase.Accept)
         {
             SaveStatus prevSaveStatus = command.saveStatus();
-            Invariants.require(prevSaveStatus == AcceptedInvalidate || prevSaveStatus == PreNotAccepted || prevSaveStatus == NotAccepted);
+            Invariants.require(prevSaveStatus == AcceptedInvalidate);
             // TODO (desired): reconsider this special-casing
             return Command.Accepted.accepted(command.txnId(), SaveStatus.enrich(prevSaveStatus, SaveStatus.PreAccepted.known), command.durability(), participants, promised, executeAt, partialTxn, partialDeps, command.acceptedOrCommitted());
         }
@@ -1542,14 +1540,7 @@ public abstract class Command implements ICommand
 
     static Command notAccept(Status newStatus, Command copy, Ballot ballot)
     {
-        switch (newStatus)
-        {
-            default: throw illegalArgument("Invalid notAccept Status: " + newStatus);
-            case PreNotAccepted:
-            case NotAccepted:
-            case AcceptedInvalidate:
-                break;
-        }
+        Invariants.requireArgument(newStatus == Status.AcceptedInvalidate);
 
         SaveStatus saveStatus = SaveStatus.get(newStatus, copy.known());
 
@@ -1625,17 +1616,9 @@ public abstract class Command implements ICommand
             case PreAcceptedWithDeps:
             case PreAcceptedWithVote:
                 return validateCommandClass(status, PreAccepted.class, klass);
-            case PreNotAccepted:
-            case NotAccepted:
             case AcceptedInvalidate:
                 return validateCommandClass(status, NotAcceptedWithoutDefinition.class, klass);
             case AcceptedInvalidateWithDefinition:
-            case PreNotAcceptedWithDefinition:
-            case PreNotAcceptedWithDefAndDeps:
-            case PreNotAcceptedWithDefAndVote:
-            case NotAcceptedWithDefinition:
-            case NotAcceptedWithDefAndVote:
-            case NotAcceptedWithDefAndDeps:
             case AcceptedMedium:
             case AcceptedMediumWithDefinition:
             case AcceptedMediumWithDefAndVote:
@@ -1673,6 +1656,7 @@ public abstract class Command implements ICommand
 
     public static <T extends Command> T validate(T validate)
     {
+        Invariants.require(validate.txnId().hasOnlyIdentityFlags());
         Known known = validate.known();
         switch (known.route())
         {
@@ -1710,7 +1694,7 @@ public abstract class Command implements ICommand
                 case ExecuteAtProposed:
                     Invariants.require(executeAt != null);
                     int c =  executeAt.compareTo(validate.txnId());
-                    Invariants.require(c > 0 || (c == 0 && executeAt.getClass() == TxnId.class) || executeAt.hasDistinctHlcAndUniqueHlc());
+                    Invariants.require(c > 0 || (c == 0 && executeAt.getClass() != Timestamp.class));
                     break;
                 case NoExecuteAt:
                     Invariants.require(executeAt.equals(Timestamp.NONE));

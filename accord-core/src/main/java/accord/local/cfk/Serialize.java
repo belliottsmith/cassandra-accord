@@ -45,7 +45,7 @@ import accord.utils.VIntCoding;
 import static accord.local.cfk.CommandsForKey.NO_BOUNDS_INFO;
 import static accord.local.cfk.CommandsForKey.NO_PENDING_UNMANAGED;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.primitives.TxnId.MediumPath.MEDIUM_PATH_TRACK_STABLE;
+import static accord.primitives.TxnId.MediumPath.TRACK_STABLE;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.SyncPoint;
@@ -1069,7 +1069,7 @@ public class Serialize
         return (bootstrappedAt != null && bootstrappedAt.flags() != RX_FLAGS) || (redundantBefore.flags() != RX_FLAGS);
     }
 
-    private static final int RX_FLAGS = new TxnId(0, 0, MEDIUM_PATH_TRACK_STABLE.bits, ExclusiveSyncPoint, Domain.Range, Node.Id.NONE).flags();
+    private static final int RX_FLAGS = new TxnId(0, 0, TRACK_STABLE.bits, ExclusiveSyncPoint, Domain.Range, Node.Id.NONE).flags();
 
     private static int hlcBytesLookupToHlcFlagLookup(int bytesLookup)
     {

@@ -65,7 +65,8 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
     @Override
     public boolean containsKey(Object key)
     {
-        return list.contains((K) key);
+        int index = list.indexOf((K)key);
+        return index >= 0 && values[index] != null;
     }
 
     @Override

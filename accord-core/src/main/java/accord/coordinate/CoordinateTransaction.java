@@ -105,7 +105,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             // note: we merge all Deps regardless of witnessedAt. While we only need fast path votes,
             // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
-            // TODO (required): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
+            // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
             executeAdapter().execute(node, topologies, route, FAST, txnId, txn, txnId, deps, settingCallback());
             node.agent().metricsEventsListener().onFastPathTaken(txnId, deps);
         }

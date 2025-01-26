@@ -42,7 +42,6 @@ import javax.annotation.Nullable;
 
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
-import static accord.local.PreLoadContext.contextFor;
 import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.PreAccepted;
 import static accord.primitives.ProgressToken.INVALIDATED;
@@ -183,8 +182,6 @@ public class Invalidate implements Callback<InvalidateReply>
                     break;
 
                 case PreAccepted:
-                case PreNotAccepted:
-                case NotAccepted:
                     if (tracker.isSafeToInvalidate() || transitivelyInvokedByPriorInvalidation)
                         break;
 
@@ -304,7 +301,7 @@ public class Invalidate implements Callback<InvalidateReply>
     {
         // TODO (desired): merge with FetchData.InvalidateOnDone
         // TODO (desired): when sending to network, register a callback for when local application of commitInvalidate message ahs been performed, so no need to special-case
-        node.forEachLocal(contextFor(txnId), commitTo, lowEpoch, highEpoch, safeStore -> {
+        node.forEachLocal(txnId, commitTo, lowEpoch, highEpoch, safeStore -> {
             // TODO (expected): consid
             StoreParticipants participants = StoreParticipants.notAccept(safeStore, commitTo, txnId);
             Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), commitTo);

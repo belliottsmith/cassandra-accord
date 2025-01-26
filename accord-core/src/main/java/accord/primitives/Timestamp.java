@@ -277,6 +277,18 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return c;
     }
 
+    public boolean isAtLeastByEpochAndHlc(@Nonnull Timestamp that)
+    {
+        if (this == that) return true;
+        int cmpEpoch = Long.compare(this.epoch(), that.epoch());
+        int cmpHlc = Long.compare(this.hlc(), that.hlc());
+        if (cmpEpoch < 0 || cmpHlc < 0) return false;
+        if (cmpEpoch > 0 || cmpHlc > 0) return true;
+        int c = Long.compare(this.lsb & IDENTITY_FLAGS, that.lsb & IDENTITY_FLAGS);
+        if (c == 0) c = this.node.compareTo(that.node);
+        return c >= 0;
+    }
+
     public static int compareMsb(long msbA, long msbB)
     {
         return Long.compareUnsigned(msbA, msbB);
@@ -460,9 +472,14 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     {
         String[] split = string.replaceFirst("\\[", "").replaceFirst("\\]", "").split(",");
         assert split.length == 4;
-        return Timestamp.fromValues(Long.parseLong(split[0]),
-                                    Long.parseLong(split[1]),
-                                    Integer.parseInt(split[2], 2),
-                                    new Id(Integer.parseInt(split[3])));
+        int indexOfUniqueHlc = split[2].indexOf('+');
+        int flags = Integer.parseInt(indexOfUniqueHlc < 0 ? split[2] : split[2].substring(0, indexOfUniqueHlc));
+        Timestamp result = Timestamp.fromValues(Long.parseLong(split[0]),
+                                                Long.parseLong(split[1]),
+                                                flags,
+                                                new Id(Integer.parseInt(split[3])));
+        if (indexOfUniqueHlc < 0)
+            return result;
+        return new TimestampWithUniqueHlc(result, Integer.parseInt(split[2].substring(indexOfUniqueHlc + 1)));
     }
 }

@@ -52,6 +52,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId.FastPath;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies.Single;
+import accord.utils.IndexedBiFunction;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
@@ -1028,7 +1029,7 @@ public class TopologyManager
         }
     }
 
-    static class BestFastPath implements Collectors<FastPath, Routables<?>, FastPath>
+    static class BestFastPath implements Collectors<FastPath, Routables<?>, FastPath>, IndexedBiFunction<Shard, Boolean, Boolean>
     {
         final Id self;
 
@@ -1046,7 +1047,7 @@ public class TopologyManager
         @Override
         public FastPath one(EpochState epoch, Routables<?> routables, boolean permitMissing)
         {
-            if (!epoch.local.ranges.containsAll(routables))
+            if (!epoch.local.ranges.containsAll(routables) || !epoch.local.foldl(routables, this, true))
                 return UNOPTIMISED;
 
             return epoch.local.foldl(routables, (s, v, i) -> merge(v, s.bestFastPath()), null);
@@ -1071,9 +1072,15 @@ public class TopologyManager
             if (a == PRIVILEGED_COORDINATOR_WITH_DEPS || b == PRIVILEGED_COORDINATOR_WITH_DEPS) return PRIVILEGED_COORDINATOR_WITH_DEPS;
             return PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
         }
+
+        @Override
+        public Boolean apply(Shard shard, Boolean prev, int index)
+        {
+            return prev && shard.isInFastPath(self);
+        }
     }
 
-    static class SupportsPrivilegedFastPath implements Collectors<Boolean, Routables<?>, Boolean>
+    static class SupportsPrivilegedFastPath implements Collectors<Boolean, Routables<?>, Boolean>, IndexedBiFunction<Shard, Boolean, Boolean>
     {
         final Id self;
 
@@ -1091,7 +1098,7 @@ public class TopologyManager
         @Override
         public Boolean one(EpochState epoch, Routables<?> routables, boolean permitMissing)
         {
-            return epoch.local.ranges.containsAll(routables);
+            return epoch.local.ranges.containsAll(routables) && epoch.local.foldl(routables, this, true);
         }
 
         @Override
@@ -1104,6 +1111,12 @@ public class TopologyManager
         public Boolean allocate(int count)
         {
             return true;
+        }
+
+        @Override
+        public Boolean apply(Shard shard, Boolean prev, int index)
+        {
+            return prev && shard.isInFastPath(self);
         }
     }
 

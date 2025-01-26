@@ -27,7 +27,6 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
-import accord.primitives.Routable;
 import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -50,7 +49,6 @@ public interface CommandSummaries
     {
         NOT_DIRECTLY_WITNESSED,
         PREACCEPTED,
-        PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE,
         NOTACCEPTED,
         ACCEPTED,
         COMMITTED,
@@ -160,7 +158,6 @@ public interface CommandSummaries
                     case NOT_DIRECTLY_WITNESSED:
                     case INVALIDATED:
                         return false;
-                    case PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE:
                     case NOTACCEPTED:
                     case PREACCEPTED:
                         if (!txnId.is(TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS))
@@ -192,19 +189,15 @@ public interface CommandSummaries
                     return null;
 
                 // TODO (desired): generalise this better for key loading
-                Ranges keysOrRanges = touches.toRanges();
-                if (keysOrRanges.domain() != Routable.Domain.Range)
-                    throw new AssertionError(String.format("Txn keys are not range for %s", touches));
-                Ranges ranges = keysOrRanges;
-
-                ranges = ranges.intersecting(searchKeysOrRanges, Minimal);
+                Ranges ranges = touches.toRanges().intersecting(searchKeysOrRanges, Minimal);
                 if (ranges.isEmpty())
                     return null;
 
                 if (redundantBefore != null)
                 {
+                    // TODO (expected): consider whether this is necessary (and document it).
                     Ranges newRanges = redundantBefore.foldlWithBounds(ranges, (e, accum, start, end) -> {
-                        if (e.shardAppliedOrInvalidatedBefore.compareTo(txnId) < 0)
+                        if (e.gcBefore.compareTo(txnId) <= 0)
                             return accum;
                         return accum.without(Ranges.of(start.rangeFactory().newRange(start, end)));
                     }, ranges, ignore -> false);

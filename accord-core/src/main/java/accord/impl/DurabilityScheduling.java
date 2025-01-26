@@ -664,5 +664,6 @@ public class DurabilityScheduling implements ConfigurationService.Listener
     @Override
     public void onEpochRetired(Ranges ranges, long epoch)
     {
+
     }
 }

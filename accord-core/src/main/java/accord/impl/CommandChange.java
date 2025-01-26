@@ -399,8 +399,6 @@ public class CommandChange
                 case PreAccepted:
                     return preaccepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps);
                 case AcceptedInvalidate:
-                case PreNotAccepted:
-                case NotAccepted:
                     if (!saveStatus.known.isDefinitionKnown())
                         return notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps);
                 case AcceptedMedium:

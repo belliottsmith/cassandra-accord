@@ -341,10 +341,7 @@ public class Pruning
                     case TRANSITIVE_VISIBLE:
                     case PREACCEPTED_WITHOUT_DEPS:
                     case PREACCEPTED_WITH_DEPS:
-                    case PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE:
-                    case PRENOTACCEPTED_WITH_DEPS:
                     case NOTACCEPTED:
-                    case NOTACCEPTED_WITH_COORDINATOR_DEPS:
                     case ACCEPTED:
                         newByIdBuffer[pos - ++retainCount] = txn;
                         if (i == minUndecidedById)

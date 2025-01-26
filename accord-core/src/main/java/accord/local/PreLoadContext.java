@@ -232,11 +232,6 @@ public interface PreLoadContext
         return contextFor(txnId, keysOrRanges, NONE);
     }
 
-    static PreLoadContext contextFor(TxnId txnId)
-    {
-        return contextFor(txnId, RoutingKeys.EMPTY);
-    }
-
     static PreLoadContext contextFor(RoutingKey key, KeyHistory keyHistory)
     {
         return contextFor(null, null, RoutingKeys.of(key), keyHistory);

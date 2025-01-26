@@ -54,6 +54,7 @@ import org.agrona.collections.Object2ObjectHashMap;
 import org.agrona.collections.ObjectHashSet;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
+import static accord.api.ProgressLog.BlockedUntil.NotBlocked;
 import static accord.impl.progresslog.CoordinatePhase.AwaitReadyToExecute;
 import static accord.impl.progresslog.CoordinatePhase.ReadyToExecute;
 import static accord.impl.progresslog.CoordinatePhase.Undecided;
@@ -63,7 +64,6 @@ import static accord.impl.progresslog.Progress.Querying;
 import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
-import static accord.local.PreLoadContext.contextFor;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
@@ -301,23 +301,40 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     }
 
     @Override
-    public void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore)
+    public void clearBefore(SafeCommandStore safeStore, TxnId clearWaitingBefore, TxnId clearAllBefore)
     {
+        if (clearAllBefore.compareTo(clearWaitingBefore) >= 0)
+            clearWaitingBefore = clearAllBefore;
+
         int index = 0;
         while (index < BTree.size(stateMap))
         {
             TxnState state = BTree.findByIndex(stateMap, index);
-            if (state.txnId.compareTo(clearAnyBefore) < 0)
+            if (state.txnId.compareTo(clearWaitingBefore) >= 0)
+                return;
+
+            boolean notify = state.waiting().blockedUntil()  != NotBlocked
+                          && state.waiting().homeSatisfies() == NotBlocked;
+
+            if (notify)
+            {
+                // the command might be invalidated, which should be established on load, so simply load the command
+                TxnId txnId = state.txnId;
+                safeStore.commandStore().execute(txnId, safeStore0 -> {
+                    safeStore0.unsafeGet(txnId);
+                }).begin(node.agent());
+            }
+
+            if (state.txnId.compareTo(clearAllBefore) < 0)
             {
                 clear(state);
             }
-            else if (state.txnId.compareTo(clearWaitingBefore) < 0)
+            else
             {
                 state.setWaitingDone(this);
                 if (!state.maybeRemove(this))
                     ++index;
             }
-            else return;
         }
     }
 
@@ -549,7 +566,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
     void invoke(RunInvoker invoker)
     {
-        commandStore.execute(contextFor(invoker.run.txnId), invoker)
+        commandStore.execute(invoker.run.txnId, invoker)
                     .begin(commandStore.agent());
     }
 

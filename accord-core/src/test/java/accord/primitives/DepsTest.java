@@ -56,11 +56,11 @@ class DepsTest
 
     private static void validateContains(Deps deps)
     {
-        for (TxnId id : deps.keyDeps.txnIds())
+        for (TxnId id : deps.keyDeps.txnIdsWithFlags())
             assertThat(deps.contains(id)).isTrue();
-        for (TxnId id : deps.directKeyDeps.txnIds())
+        for (TxnId id : deps.directKeyDeps.txnIdsWithFlags())
             assertThat(deps.contains(id)).isTrue();
-        for (TxnId id : deps.rangeDeps.txnIds())
+        for (TxnId id : deps.rangeDeps.txnIdsWithFlags())
             assertThat(deps.contains(id)).isTrue();
     }
 
@@ -73,19 +73,19 @@ class DepsTest
     {
         int index = 0;
         List<TxnId> ids = new ArrayList<>(deps.keyDeps.txnIdCount() + deps.directKeyDeps.txnIdCount() + deps.rangeDeps.txnIdCount());
-        for (TxnId id : deps.keyDeps.txnIds())
+        for (TxnId id : deps.keyDeps.txnIdsWithFlags())
         {
             assertThat(deps.txnId(index)).describedAs("Expected key deps txn at index %d", index).isEqualTo(id);
             ids.add(id);
             index++;
         }
-        for (TxnId id : deps.directKeyDeps.txnIds())
+        for (TxnId id : deps.directKeyDeps.txnIdsWithFlags())
         {
             assertThat(deps.txnId(index)).describedAs("Expected direct key deps txn at index %d", index).isEqualTo(id);
             ids.add(id);
             index++;
         }
-        for (TxnId id : deps.rangeDeps.txnIds())
+        for (TxnId id : deps.rangeDeps.txnIdsWithFlags())
         {
             assertThat(deps.txnId(index)).describedAs("Expected range deps txn at index %d", index).isEqualTo(id);
             ids.add(id);

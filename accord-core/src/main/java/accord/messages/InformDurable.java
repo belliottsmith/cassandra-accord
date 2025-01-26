@@ -40,7 +40,6 @@ import accord.utils.async.Cancellable;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
 import static accord.api.ProtocolModifiers.Toggles.informOfDurability;
-import static accord.local.PreLoadContext.contextFor;
 import static accord.messages.SimpleReply.Ok;
 
 public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
@@ -110,7 +109,7 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     public Cancellable submit()
     {
         // TODO (expected, efficiency): do not load from disk to perform this update
-        return node.mapReduceConsumeLocal(contextFor(txnId), scope, minEpoch, maxEpoch, this);
+        return node.mapReduceConsumeLocal(txnId, scope, minEpoch, maxEpoch, this);
     }
 
     @Override

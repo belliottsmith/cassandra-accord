@@ -308,7 +308,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     public void updateCommandsForKey(Command prev, Command next)
     {
-        if (!CommandsForKey.needsUpdate(prev, next))
+        if (!CommandsForKey.needsUpdate(this, prev, next))
             return;
 
         TxnId txnId = next.txnId();

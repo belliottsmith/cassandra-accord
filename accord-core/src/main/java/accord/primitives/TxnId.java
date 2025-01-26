@@ -21,7 +21,10 @@ package accord.primitives;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import javax.annotation.Nullable;
+
 import accord.local.Node.Id;
+import accord.local.PreLoadContext;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Txn.Kind;
 import accord.primitives.Txn.Kind.Kinds;
@@ -32,7 +35,7 @@ import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalArgument;
 
-public class TxnId extends Timestamp
+public class TxnId extends Timestamp implements PreLoadContext
 {
     public enum FastPath
     {
@@ -83,8 +86,7 @@ public class TxnId extends Timestamp
     public enum MediumPath
     {
         NONE(0),
-        MEDIUM_PATH_WAIT_ON_RECOVERY(1),
-        MEDIUM_PATH_TRACK_STABLE(2);
+        TRACK_STABLE(1);
 
         private static final MediumPath[] VALUES = values();
 
@@ -319,6 +321,13 @@ public class TxnId extends Timestamp
         return merge(this, that, TxnId::fromBits);
     }
 
+    @Nullable
+    @Override
+    public TxnId primaryTxnId()
+    {
+        return this;
+    }
+
     @Override
     public String toString()
     {
@@ -369,7 +378,12 @@ public class TxnId extends Timestamp
 
     public static int mediumPathOrdinal(int flags)
     {
-        return (flags >>> 6) & 3;
+        return (flags >>> 6) & 1;
+    }
+
+    public boolean hasOnlyIdentityFlags()
+    {
+        return (flags() & ~IDENTITY_FLAGS) == 0;
     }
 
     private static int domainOrdinal(int flags)

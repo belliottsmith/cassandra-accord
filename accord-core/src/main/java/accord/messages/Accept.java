@@ -48,9 +48,7 @@ import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFr
 import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
-import static accord.local.KeyHistory.ASYNC;
 import static accord.local.KeyHistory.SYNC;
-import static accord.messages.Accept.Kind.MEDIUM;
 
 // TODO (low priority, efficiency): use different objects for send and receive, so can be more efficient
 //                                  (e.g. serialize without slicing, and without unnecessary fields)
@@ -107,9 +105,6 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
                 // if we're Retired, participants.owns() is empty, so we're just fetching deps
                 // TODO (desired): optimise deps calculation; for some keys we only need to return the last RX
             case Success:
-                if (kind == MEDIUM)
-                    return new AcceptReply(Deps.NONE);
-
                 Deps deps = calculateDeps(safeStore, participants);
                 if (deps == null)
                     return AcceptReply.redundant(ballot, participants, safeCommand.current());
@@ -153,7 +148,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     @Override
     public KeyHistory keyHistory()
     {
-        return kind == MEDIUM ? ASYNC : SYNC;
+        return SYNC;
     }
 
     @Override

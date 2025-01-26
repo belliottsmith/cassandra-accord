@@ -218,7 +218,8 @@ public class CommandsForKeyTest
             if (!waitingOn.removeWaitingOn(key))
                 return;
 
-            waitingOn.updateUniqueHlc(prev.executeAt(), uniqueHlc);
+            if (uniqueHlc > 0)
+                waitingOn.updateUniqueHlc(prev.executeAt(), uniqueHlc);
 
             if (!prev.txnId().kind().awaitsOnlyDeps())
             {
@@ -656,7 +657,7 @@ public class CommandsForKeyTest
                 if (CommandsForKey.manages(update.next.txnId()))
                 {
                     CommandsForKey prev = safeCfk.current();
-                    result = prev.update(update.next);
+                    result = prev.update(safeStore, update.next);
                     safeCfk.set(result.cfk());
                     if (rnd.decide(pruneChance))
                         safeCfk.set(safeCfk.current.maybePrune(pruneInterval, pruneHlcDelta));

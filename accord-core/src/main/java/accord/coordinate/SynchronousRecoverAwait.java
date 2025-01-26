@@ -21,34 +21,40 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.api.ProgressLog.BlockedUntil;
+import accord.coordinate.Recover.InferredFastPath;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.RecoverAwait;
-import accord.messages.SimpleReply;
+import accord.messages.RecoverAwait.RecoverAwaitOk;
 import accord.primitives.Participants;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import static accord.messages.SimpleReply.Nack;
+import static accord.coordinate.Recover.InferredFastPath.Accept;
+import static accord.coordinate.Recover.InferredFastPath.Reject;
+import static accord.coordinate.Recover.InferredFastPath.Unknown;
 
 /**
  * Synchronously await some set of replicas reaching a given wait condition.
  * This may or may not be a condition we expect to reach promptly, but we will wait only until the timeout passes
  * at which point we will report failure.
  */
-public class SynchronousRecoverAwait extends ReadCoordinator<SimpleReply>
+public class SynchronousRecoverAwait extends ReadCoordinator<RecoverAwaitOk>
 {
     final Participants<?> participants;
     final BlockedUntil blockedUntil;
     final boolean notifyProgressLog;
     final TxnId recoverId;
 
-    final BiConsumer<Boolean, Throwable> callback;
+    final BiConsumer<InferredFastPath, Throwable> callback;
 
-    private boolean rejects;
-    public SynchronousRecoverAwait(Node node, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, boolean notifyProgressLog, TxnId recoverId, BiConsumer<Boolean, Throwable> callback)
+    private InferredFastPath outcome = Unknown;
+    private Participants<?> waitingOn;
+    public SynchronousRecoverAwait(Node node, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, boolean notifyProgressLog, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
     {
         super(node, topologies, txnId);
         this.participants = participants;
@@ -56,38 +62,54 @@ public class SynchronousRecoverAwait extends ReadCoordinator<SimpleReply>
         this.notifyProgressLog = notifyProgressLog;
         this.recoverId = recoverId;
         this.callback = callback;
+        this.waitingOn = participants;
     }
 
-    public static SynchronousRecoverAwait awaitAny(Node node, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId, BiConsumer<Boolean, Throwable> callback)
+    public static SynchronousRecoverAwait awaitAny(Node node, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
     {
         SynchronousRecoverAwait result = new SynchronousRecoverAwait(node, topologies, txnId, participants, blockedUntil, notifyProgressLog, recoverId, callback);
         result.start();
         return result;
     }
 
-    public static AsyncResult<Boolean> awaitAny(Node node, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId)
+    public static AsyncResult<InferredFastPath> awaitAny(Node node, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId)
     {
-        AsyncResult.Settable<Boolean> result = AsyncResults.settable();
+        AsyncResult.Settable<InferredFastPath> result = AsyncResults.settable();
         awaitAny(node, topologies, txnId, blockedUntil, notifyProgressLog, participants, recoverId, result.settingCallback());
         return result;
     }
 
     @Override
-    protected Action process(Id from, SimpleReply reply)
+    protected Action process(Id from, RecoverAwaitOk reply)
     {
-        if (reply == Nack)
+        switch (reply)
         {
-            rejects = true;
-            onDone(null, null);
-            return Action.Aborted;
+            default: throw new UnhandledEnum(reply);
+            case Unknown:
+                return Action.TryAlternative;
+
+            case Reject:
+                outcome = Reject;
+                onDone(null, null);
+                return Action.Aborted;
+
+            case Accept:
+                waitingOn = waitingOn.without(topologies.computeRangesForNode(from));
+                if (waitingOn.isEmpty())
+                {
+                    outcome = Accept;
+                    onDone(null, null);
+                    return Action.Aborted;
+                }
+                return Action.Approve;
         }
-        return Action.Approve;
     }
 
     @Override
     protected void onDone(ReadCoordinator.Success success, Throwable failure)
     {
-        if (failure == null) callback.accept(rejects, null);
+        Invariants.require(outcome != null);
+        if (failure == null) callback.accept(outcome, null);
         else callback.accept(null, failure);
     }
 

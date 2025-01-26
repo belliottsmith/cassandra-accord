@@ -20,7 +20,6 @@ package accord.primitives;
 
 import accord.local.CommandSummaries.SummaryStatus;
 import accord.messages.BeginRecovery;
-import accord.utils.Invariants;
 
 import java.util.Collection;
 import java.util.function.Function;
@@ -35,7 +34,6 @@ import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
 import static accord.local.CommandSummaries.SummaryStatus.NOTACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
 import static accord.local.CommandSummaries.SummaryStatus.PREACCEPTED;
-import static accord.local.CommandSummaries.SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.primitives.Known.PrivilegedVote.NoVote;
 import static accord.primitives.Known.Definition.*;
@@ -53,16 +51,7 @@ public enum Status
     NotDefined        (None,      NOT_DIRECTLY_WITNESSED,                  Nothing),
     PreAccepted       (PreAccept, PREACCEPTED,                             DefinitionAndRoute),
 
-    /**
-     * A recovery coordinator found a quorum of preaccept, i.e. no Accept or later was witnessed.
-     * Once recorded to a quorum, any in-flight Accept from the original coordinator is defunct and will not be re-proposed.
-     */
-    PreNotAccepted    (Accept,    PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE,   MaybeRoute,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,      Unknown), // may or may not have witnessed
-    /**
-     * A recovery coordinator found a quorum of preaccept, and has recorded this knowledge to a quorum.
-     */
-    NotAccepted       (Accept,    NOTACCEPTED,                             MaybeRoute,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,       Unknown), // may or may not have witnessed
-    AcceptedInvalidate(Accept,    PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE,   MaybeRoute,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,       Unknown), // may or may not have witnessed
+    AcceptedInvalidate(Accept,    NOTACCEPTED,                             MaybeRoute,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,       Unknown), // may or may not have witnessed
 
     AcceptedMedium    (Accept,    ACCEPTED,                                CoveringRoute,          DefinitionUnknown, ExecuteAtProposed,     DepsProposedFixed, Unknown), // may or may not have witnessed
     AcceptedSlow      (Accept,    ACCEPTED,                                CoveringRoute,          DefinitionUnknown, ExecuteAtProposed,     DepsProposed,      Unknown), // may or may not have witnessed
@@ -103,16 +92,6 @@ public enum Status
     Truncated         (Cleanup,  null,  MaybeRoute, DefinitionErased,  ExecuteAtErased,  DepsErased,    Outcome.Erased),
     Invalidated       (Invalidate, INVALIDATED,  MaybeRoute, NoOp,              NoExecuteAt,      NoDeps,        Outcome.Abort),
     ;
-
-    static
-    {
-        // We require that Commands.notAccept can safely transition a reCoveringRoute transaction
-        // PreNotAccepted->NotAccepted->{AcceptedInvalidate,Accepted} using the same ballot,
-        // but must guard against message arrival order permitting us to go backwards
-        // (i.e. we need to reject equal ballot updates where the status would move us 'backwards')
-        // So we require that this order isn't changed
-        Invariants.requirePartiallyOrdered(PreNotAccepted, NotAccepted, AcceptedInvalidate, AcceptedMedium);
-    }
 
     /**
      * Represents the phase of a transaction from the perspective of coordination

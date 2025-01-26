@@ -46,6 +46,7 @@ import accord.utils.Invariants;
 import accord.utils.RelationMultiMap;
 import accord.utils.RelationMultiMap.MergeAdapter;
 import accord.utils.SearchableRangeList;
+import accord.utils.SimpleBitSet;
 import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SymmetricComparator;
@@ -57,6 +58,7 @@ import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.ObjectBuffers;
 import static accord.utils.ArrayBuffers.cachedInts;
+import static accord.utils.ArrayBuffers.cachedLongs;
 import static accord.utils.ArrayBuffers.cachedRanges;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
 import static accord.utils.RelationMultiMap.AbstractBuilder;
@@ -478,6 +480,37 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         return ranges(txnIdx);
     }
 
+    public Ranges participants(Predicate<TxnId> select)
+    {
+        ensureTxnIdToRange();
+        SimpleBitSet bitSet = new SimpleBitSet(ranges.length, cachedLongs());
+        for (int idIdx = 0 ; idIdx < txnIds.length ; ++idIdx)
+        {
+            if (!select.test(txnIds[idIdx]))
+                continue;
+
+            for (int rIdx = startOffset(txnIds, txnIdsToRanges, idIdx), endRIdx = endOffset(txnIdsToRanges, idIdx); rIdx < endRIdx ; rIdx++)
+                bitSet.set(txnIdsToRanges[rIdx]);
+        }
+
+        Range[] rangeBuffer = cachedRanges().get(bitSet.getSetBitCount());
+        int count = 0;
+        for (int i = bitSet.nextSetBit(0, Integer.MAX_VALUE) ; i < ranges.length ; )
+        {
+            int nexti = bitSet.nextSetBit(i + 1, Integer.MAX_VALUE);
+            int j = i;
+            while (nexti < ranges.length && ranges[nexti].compareIntersecting(ranges[j]) == 0)
+            {
+                j = nexti;
+                nexti = bitSet.nextSetBit(nexti + 1, Integer.MAX_VALUE);
+            }
+            rangeBuffer[count++] = i == j ? ranges[i] : ranges[i].newRange(ranges[i].start(), ranges[j].end());
+            i = nexti;
+        }
+        bitSet.discard(cachedLongs());
+        return Ranges.ofSortedAndDeoverlapped(cachedRanges().completeAndDiscard(rangeBuffer, count));
+    }
+
     public int indexOf(TxnId txnId)
     {
         return Arrays.binarySearch(txnIds, txnId);
@@ -712,18 +745,18 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         return Arrays.binarySearch(txnIds, txnId) >= 0;
     }
 
-    public SortedArrayList<TxnId> txnIds()
+    public SortedArrayList<TxnId> txnIdsWithFlags()
     {
         return new SortedArrayList<>(txnIds);
     }
 
-    public DepRelationList txnIdsForRangeIndex(int rangeIndex)
+    public DepRelationList txnIdsWithFlagsForRangeIndex(int rangeIndex)
     {
         Invariants.require(rangeIndex < ranges.length);
         int start = startOffset(ranges, rangesToTxnIds, rangeIndex);
         int end = endOffset(rangesToTxnIds, rangeIndex);
         Invariants.require(end >= start);
-        return txnIds(rangesToTxnIds, start, end);
+        return txnIdsWithFlags(rangesToTxnIds, start, end);
     }
 
     static class ListBuilder
@@ -746,21 +779,21 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
         }
     }
 
-    public DepArrayList computeTxnIds(RoutingKey key)
+    public DepArrayList computeTxnIdsWithFlags(RoutingKey key)
     {
         ListBuilder builder = new ListBuilder();
         forEachUniqueTxnId(key, builder::add);
         return new DepArrayList(builder.build());
     }
 
-    public List<TxnId> computeTxnIds(Range key)
+    public List<TxnId> computeTxnIdsWithFlags(Range key)
     {
         ListBuilder builder = new ListBuilder();
         forEachUniqueTxnId(key, builder::add);
         return builder.build();
     }
 
-    private DepRelationList txnIds(int[] ids, int start, int end)
+    private DepRelationList txnIdsWithFlags(int[] ids, int start, int end)
     {
         if (start == end)
             return DepRelationList.EMPTY;
@@ -769,6 +802,11 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
     }
 
     public TxnId txnId(int i)
+    {
+        return txnIds[i].withoutNonIdentityFlags();
+    }
+
+    public TxnId txnIdWithFlags(int i)
     {
         return txnIds[i];
     }

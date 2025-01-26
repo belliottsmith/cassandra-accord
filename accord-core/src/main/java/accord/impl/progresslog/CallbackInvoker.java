@@ -25,7 +25,6 @@ import accord.primitives.TxnId;
 
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
-import static accord.local.PreLoadContext.contextFor;
 
 class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>
 {
@@ -71,7 +70,7 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>
     @Override
     public void accept(V success, Throwable fail)
     {
-        owner.commandStore.execute(contextFor(txnId), safeStore -> {
+        owner.commandStore.execute(txnId, safeStore -> {
 
             // we load safeCommand first so that if it clears the progress log we abandon the callback
             SafeCommand safeCommand = safeStore.ifInitialised(txnId);

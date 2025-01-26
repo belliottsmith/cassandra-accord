@@ -327,9 +327,11 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
                 else // start within the current map bounds
                 {
                     // split the range we start in if our value is higher than the range's
-                    if (supersedes(map.entryAt(startIns - 1), value, valueResolver))
+                    Entry<RoutingKey, V> entry = map.entryAt(startIns - 1);
+                    V supersedes = ifSupersedes(entry, value, valueResolver);
+                    if (supersedes != null)
                     {
-                        acc.add(thisRange.start(), value);
+                        acc.add(thisRange.start(), supersedes);
                         isRangeOpen = true;
                     }
                 }
@@ -342,15 +344,15 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
                 while (iter.hasNext())
                 {
                     Entry<RoutingKey, V> entry = iter.next();
-                    boolean supersedes = supersedes(entry, value, valueResolver);
-                    if (supersedes)
+                    V supersedes = ifSupersedes(entry, value, valueResolver);
+                    if (supersedes != null)
                     {
                         if (isRangeOpen)
                             acc.remove(entry.start());
                         else
                             acc.add(entry.start(), value);
                     }
-                    isRangeOpen = supersedes;
+                    isRangeOpen = supersedes != null;
                 }
             }
 
@@ -467,11 +469,15 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
         }
     }
 
-    private static <V> boolean supersedes(Entry<RoutingKey, V> entry, V value, BiFunction<V, V, V> resolver)
+    private static <V> V ifSupersedes(Entry<RoutingKey, V> entry, V newValue, BiFunction<V, V, V> resolver)
     {
-        return !entry.hasValue()
-            || (entry.value() == null && value != null)
-            || (entry.value() != null && value != null && !resolver.apply(entry.value(), value).equals(entry.value()));
+        if (!entry.hasValue())
+            return newValue;
+        V prevValue = entry.value();
+        if (prevValue == null || newValue == null)
+            return prevValue != null ? prevValue : newValue;
+        V result = resolver.apply(prevValue, newValue);
+        return result == prevValue ? null : result;
     }
 
     static class Builder<V> extends AbstractBoundariesBuilder<RoutingKey, V, BTreeReducingRangeMap<V>>

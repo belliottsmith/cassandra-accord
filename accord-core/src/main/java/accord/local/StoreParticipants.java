@@ -433,13 +433,13 @@ public class StoreParticipants
     }
 
     // TODO (required): synchronise with latest standard logic
-    public static Route<?> touches(SafeCommandStore safeStore, EpochSupplier fromEpoch, TxnId txnId, EpochSupplier toEpoch, Route<?> route)
+    public static Route<?> touches(SafeCommandStore safeStore, long fromEpoch, TxnId txnId,long toEpoch, Route<?> route)
     {
         // TODO (required): remove pre-bootstrap?
         if (txnId.is(ExclusiveSyncPoint))
             return route.slice(safeStore.ranges().all(), Minimal);
 
-        return route.slice(safeStore.ranges().allBetween(fromEpoch.epoch(), toEpoch), Minimal);
+        return route.slice(safeStore.ranges().allBetween(fromEpoch, toEpoch), Minimal);
     }
 
     @Override

@@ -79,6 +79,7 @@ public interface Txn
          * This is most useful for ExclusiveSyncPoint.
          *
          * Invisible to other transactions.
+         * TODO (required): remove and use Write instead
          */
         SyncPoint('S', true, true, true, false),
 

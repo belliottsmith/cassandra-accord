@@ -131,10 +131,11 @@ public class Invariants
             throw illegalState();
     }
 
-    public static void expect(boolean condition)
+    public static boolean expect(boolean condition)
     {
         if (!condition)
             onUnexpected.accept(illegalState());
+        return condition;
     }
 
     public static void require(boolean condition)
@@ -449,5 +450,11 @@ public class Invariants
     {
         for (int i = 1 ; i < vs.length ; ++i)
             Invariants.requireArgument(vs[i - 1].compareTo(vs[i]) <= 0);
+    }
+
+    public static <T extends Comparable<? super T>> void requireOrdered(T... vs)
+    {
+        for (int i = 1 ; i < vs.length ; ++i)
+            Invariants.requireArgument(vs[i - 1].compareTo(vs[i]) < 0);
     }
 }

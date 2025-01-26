@@ -26,6 +26,7 @@ import accord.utils.IndexedConsumer;
 import accord.utils.IndexedFunction;
 import accord.utils.IndexedTriConsumer;
 import accord.utils.RelationMultiMap;
+import accord.utils.SimpleBitSet;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SymmetricComparator;
 import accord.utils.TriFunction;
@@ -353,16 +354,16 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         return keysToTxnIds.length == keys.size();
     }
 
-    public RoutingKeys participatingKeys(TxnId txnId)
+    public RoutingKeys participants(TxnId txnId)
     {
         int txnIdx = Arrays.binarySearch(txnIds, txnId);
         if (txnIdx < 0)
             return RoutingKeys.EMPTY;
 
-        return participatingKeys(txnIdx);
+        return participants(txnIdx);
     }
 
-    public RoutingKeys participatingKeys(int txnIdx)
+    public RoutingKeys participants(int txnIdx)
     {
         int[] txnIdsToKeys = txnIdsToKeys();
 
@@ -377,33 +378,35 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         return RoutingKeys.of(result);
     }
 
-    // TODO (desired): consider optionally not inverting before answering, as a single txnId may be answered more efficiently without inversion
-    public RoutingKeys participants(TxnId txnId)
+    public RoutingKeys participants(Predicate<TxnId> select)
     {
-        int txnIdIndex = Arrays.binarySearch(txnIds, txnId);
-        if (txnIdIndex < 0)
-            return RoutingKeys.EMPTY;
-
-        int[] txnIdsToKeys = txnIdsToKeys();
-
-        int start = txnIdIndex == 0 ? txnIds.length : txnIdsToKeys[txnIdIndex - 1];
-        int end = txnIdsToKeys[txnIdIndex];
-        if (start == end)
-            return RoutingKeys.EMPTY;
-
-        RoutingKey[] result = new RoutingKey[end - start];
-        result[0] = keys.get(txnIdsToKeys[start]).toUnseekable();
-        int resultCount = 1;
-        for (int i = start + 1 ; i < end ; ++i)
+        txnIdsToKeys();
+        SimpleBitSet bitSet = new SimpleBitSet(keys.size(), cachedLongs());
+        for (int idIdx = 0 ; idIdx < txnIds.length ; ++idIdx)
         {
-            RoutingKey next = keys.get(txnIdsToKeys[i]).toUnseekable();
-            if (!next.equals(result[resultCount - 1]))
-                result[resultCount++] = next;
+            if (!select.test(txnIds[idIdx]))
+                continue;
+
+            for (int keyIdx = RelationMultiMap.startOffset(txnIds, txnIdsToKeys, idIdx),
+                 endKeyIdx = RelationMultiMap.endOffset(txnIdsToKeys, idIdx); keyIdx < endKeyIdx ; keyIdx++)
+                bitSet.set(txnIdsToKeys[keyIdx]);
         }
 
-        if (resultCount < result.length)
-            result = Arrays.copyOf(result, resultCount);
-        return new RoutingKeys(result);
+        if (bitSet.getSetBitCount() == keys.size())
+        {
+            bitSet.discard(cachedLongs());
+            return keys;
+        }
+
+        RoutingKey[] keyBuffer = cachedRoutingKeys().get(bitSet.getSetBitCount());
+        int count = 0;
+        for (int i = bitSet.nextSetBit(0, Integer.MAX_VALUE) ; i < keys.size() ; )
+        {
+            keyBuffer[count++] = keys.get(i);
+            i = bitSet.nextSetBit(i + 1, Integer.MAX_VALUE);
+        }
+        bitSet.discard(cachedLongs());
+        return RoutingKeys.ofSortedUnique(cachedRoutingKeys().completeAndDiscard(keyBuffer, count));
     }
 
     int[] txnIdsToKeys()
@@ -571,6 +574,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
 
     public TxnId txnId(int i)
     {
+        return txnIds[i].withoutNonIdentityFlags();
+    }
+
+    public TxnId txnIdWithFlags(int i)
+    {
         return txnIds[i];
     }
 
@@ -579,12 +587,12 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         return Arrays.binarySearch(txnIds, txnId);
     }
 
-    public SortedArrayList<TxnId> txnIds()
+    public SortedArrayList<TxnId> txnIdsWithFlags()
     {
         return new SortedArrayList<>(txnIds);
     }
 
-    public DepRelationList txnIds(RoutingKey key)
+    public DepRelationList txnIdsWithFlags(RoutingKey key)
     {
         int keyIndex = keys.indexOf(key);
         if (keyIndex < 0)
@@ -598,11 +606,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         int[] keysToTxnIds = keysToTxnIds();
         int start = startOffset(keyIndex);
         int end = endOffset(keyIndex);
-        return txnIds(keysToTxnIds, start, end);
+        return txnIdsWithFlags(keysToTxnIds, start, end);
     }
 
     @SuppressWarnings("unchecked")
-    public DepRelationList txnIds(Range range)
+    public DepRelationList txnIdsWithFlags(Range range)
     {
         int startIndex = keys.indexOf(range.start());
         if (startIndex < 0) startIndex = -1 - startIndex;
@@ -651,11 +659,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         }
 
         int[] ids = cachedInts().completeAndDiscard(scratch, count);
-        return txnIds(ids, 0, count);
+        return txnIdsWithFlags(ids, 0, count);
     }
 
     @SuppressWarnings("unchecked")
-    private DepRelationList txnIds(int[] ids, int start, int end)
+    private DepRelationList txnIdsWithFlags(int[] ids, int start, int end)
     {
         if (start == end)
             return DepRelationList.EMPTY;

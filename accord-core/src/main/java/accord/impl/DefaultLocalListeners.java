@@ -490,7 +490,7 @@ public class DefaultLocalListeners implements LocalListeners
             if (entry.compareTo(clearBefore) >= 0)
                 return;
 
-            commandStore.execute(PreLoadContext.contextFor(entry), safeStore -> {
+            commandStore.execute(entry, safeStore -> {
                 SafeCommand safeCommand = safeStore.unsafeGet(entry);
                 SaveStatus saveStatus = safeCommand.current().saveStatus();
                 Invariants.require(saveStatus.compareTo(entry.await) >= 0);

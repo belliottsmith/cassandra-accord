@@ -40,7 +40,6 @@ import static accord.api.ProgressLog.BlockedUntil.Query.HOME;
 import static accord.api.ProgressLog.BlockedUntil.Query.SHARD;
 import static accord.primitives.Status.Durability.Majority;
 import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Status.NotAccepted;
 import static accord.utils.SortedArrays.Search.FAST;
 
 /**
@@ -54,7 +53,7 @@ import static accord.utils.SortedArrays.Search.FAST;
  *    home shard receives any Route. If this is not followed closely by {@link SaveStatus#Stable},
  *    {@link accord.coordinate.MaybeRecover} should be invoked to ensure the transaction is decided and executed.
  *
- * TODO (now): finish rewriting description and port to DefaultProgressLog
+ * TODO (expected): finish rewriting description and port to DefaultProgressLog
  *
  *  - Non-home shards that have not witnessed an Accept phase or later should inform the home shard of the transaction.
  *    This can be done at any time. The default implementation does this only when the transaction is blocking the
@@ -77,6 +76,8 @@ public interface ProgressLog
 
     enum BlockedUntil
     {
+        NotBlocked(HOME, HOME, SaveStatus.NotDefined, NotDurable),
+
         /**
          * Wait for the transaction to decide its executeAt (or else decide to be invalidated).
          *
@@ -85,14 +86,13 @@ public interface ProgressLog
         HasDecidedExecuteAt(HOME, HOME, SaveStatus.PreCommitted, NotDurable),
 
         /**
-         * Wait for the transaction to be no longer pre-accepted.
+         * Wait for the transaction to be Committed, or guaranteed not to fast-path commit.
+         * This essentially means that the coordinator can reply as soon as the promised ballot is non-zero,
+         * but any other replica must wait until Committed.
          *
-         * This is used for transactions that may have used the coordinator optimisation
-         *
-         * This BlockedUntil is useful for remote listeners performing recovery that are waiting for transactions in
-         * the Accept phase that need to reach Committed to advance the recovery machine.
+         * This is used for transactions that may have used the coordinator optimisation.
          */
-        CommittedOrNotAccepted(SHARD, SHARD, SaveStatus.Committed, NotDurable, s -> s.status == NotAccepted),
+        CommittedOrNotFastPathCommit(SHARD, SHARD, SaveStatus.Committed, NotDurable, null),
 
         /**
          * Wait for the transaction to be Committed.
@@ -220,7 +220,7 @@ public interface ProgressLog
      * We have finished locally processing all transactions with lower {@code TxnId} so ensure their waiting states are cleared.
      * If an owned transaction is undecided it should be cleaned up and any listeners notified.
      */
-    void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore);
+    void clearBefore(SafeCommandStore safeStore, TxnId clearWaitingBefore, TxnId clearAnyBefore);
 
     /**
      * Should be thread-safe
@@ -234,7 +234,7 @@ public interface ProgressLog
         @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants participants) {}
         @Override public void invalidIfUncommitted(TxnId txnId) {}
         @Override public void clear(TxnId txnId) {}
-        @Override public void clearBefore(TxnId clearWaitingBefore, TxnId clearAnyBefore) {}
+        @Override public void clearBefore(SafeCommandStore safeStore, TxnId clearWaitingBefore, TxnId clearAnyBefore) {}
         @Override public void clear() {}
     }
 }

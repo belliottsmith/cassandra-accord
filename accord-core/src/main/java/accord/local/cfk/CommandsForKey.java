@@ -281,19 +281,24 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public static boolean executes(RedundantBefore.Entry boundsInfo, TxnId txnId, Timestamp executeAt)
     {
+        return executesIgnoreBootstrap(boundsInfo, txnId, executeAt)
+               && boundsInfo.bootstrappedAt.compareTo(txnId) < 0;
+    }
+
+    public static boolean executesIgnoreBootstrap(RedundantBefore.Entry boundsInfo, TxnId txnId, Timestamp executeAt)
+    {
         return managesExecution(txnId)
-               && boundsInfo.bootstrappedAt.compareTo(txnId) < 0
                && boundsInfo.endOwnershipEpoch > executeAt.epoch()
                && boundsInfo.startOwnershipEpoch <= txnId.epoch(); // if we don't own from txnId.epoch() we will learn of this transaction via bootstrap
     }
 
-    public static boolean needsUpdate(Command prev, Command updated)
+    public static boolean needsUpdate(SafeCommandStore safeStore, Command prev, Command updated)
     {
-        InternalStatus newStatus = from(updated);
+        InternalStatus newStatus = from(safeStore, updated);
         if (newStatus == null)
             return updated.known().is(ApplyAtKnown) && updated.executeAt().hasDistinctHlcAndUniqueHlc();
 
-        InternalStatus prevStatus = from(prev);
+        InternalStatus prevStatus = from(safeStore, prev);
         if (prevStatus != newStatus)
             return true;
 
@@ -347,8 +352,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
         private TxnInfo(TxnId txnId, int encodedStatus, Timestamp executeAt)
         {
             super(txnId);
-            Invariants.require(executeAt == txnId || !executeAt.equals(txnId));
-            Invariants.requireArgument((flags() & ~IDENTITY_FLAGS) == 0);
+            Invariants.requireArgument(executeAt == txnId || !executeAt.equals(txnId));
+            Invariants.requireArgument(hasOnlyIdentityFlags());
             this.encodedStatus = encodedStatus;
             this.executeAt = executeAt == txnId ? this : executeAt;
         }
@@ -812,27 +817,25 @@ public class CommandsForKey extends CommandsForKeyUpdate
     public enum InternalStatus
     {
         // TODO (expected): use TRANSITIVE instead of TRANSITIVE_VISIBLE when we don't need to sync dependencies
-        TRANSITIVE                             (SummaryStatus.NOT_DIRECTLY_WITNESSED,                false, false, false, false),
-        TRANSITIVE_VISIBLE                     (SummaryStatus.NOT_DIRECTLY_WITNESSED,                false, false, false, false),
-        PREACCEPTED_WITHOUT_DEPS               (SummaryStatus.PREACCEPTED,                           false, false, true,  false),
-        PREACCEPTED_WITH_DEPS                  (SummaryStatus.PREACCEPTED,                           false, true,  true,  false),
-        PRENOTACCEPTED_WITH_DEPS               (SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE, false, true,  true,  false),
-        PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE  (SummaryStatus.PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE, false, false, true,  false),
-        NOTACCEPTED_WITH_COORDINATOR_DEPS      (SummaryStatus.NOTACCEPTED,                           false, true,  true,  false),
-        NOTACCEPTED                            (SummaryStatus.NOTACCEPTED,                           false, false, true,  false),
+        TRANSITIVE                             (SummaryStatus.NOT_DIRECTLY_WITNESSED, false, false, false, false),
+        TRANSITIVE_VISIBLE                     (SummaryStatus.NOT_DIRECTLY_WITNESSED, false, false, false, false),
+        PREACCEPTED_WITHOUT_DEPS               (SummaryStatus.PREACCEPTED,            false, false, true,  false),
+        PREACCEPTED_WITH_DEPS                  (SummaryStatus.PREACCEPTED,            false, true,  true,  false),
+        PREACCEPTED_COORD_NO_FAST_COMMIT       (SummaryStatus.PREACCEPTED,            false, false, true,  false),
+        NOTACCEPTED                            (SummaryStatus.NOTACCEPTED,            false, false, true,  false),
         // note that while ACCEPTED does not require executeAt for dependencies, it does require executeAt for computing the earlierWait collection for recovery
-        ACCEPTED                               (SummaryStatus.ACCEPTED,                              true,  true,  true,  false),
-        COMMITTED                              (SummaryStatus.COMMITTED,                             true,  true,  true,  true),
-        STABLE                                 (SummaryStatus.STABLE,                                true,  true,  false, true),
+        ACCEPTED                               (SummaryStatus.ACCEPTED,               true,  true,  true,  false),
+        COMMITTED                              (SummaryStatus.COMMITTED,              true,  true,  true,  true),
+        STABLE                                 (SummaryStatus.STABLE,                 true,  true,  false, true),
         // TODO (expected): do not encode missing collection for APPLIED transactions,
         //  as anything they should have witnessed can be treated as supersedingRejected
         //  NOTE: this only applies for transactions we execute. We need a new state for transactions
         //  that have been APPLIED but we don't execute as we want to retain the missing collection there.
-        APPLIED_NOT_DURABLE                    (APPLIED,                                             true, true, false, true),
-        APPLIED_DURABLE                        (APPLIED,                                             true, true, false, true),
-        APPLIED_NOT_EXECUTED /*(reserved)*/    (APPLIED,                                             true, true, false, true),
-        INVALIDATED                            (SummaryStatus.INVALIDATED,                           false,false,false, false),
-        PRUNED                                 (SummaryStatus.NONE,                                  false,false,false, false)
+        APPLIED_NOT_DURABLE                    (APPLIED,                              true, true, false, true),
+        APPLIED_DURABLE                        (APPLIED,                              true, true, false, true),
+        APPLIED_NOT_EXECUTED /*(reserved)*/    (APPLIED,                              true, true, false, true),
+        INVALIDATED                            (SummaryStatus.INVALIDATED,            false,false,false, false),
+        PRUNED                                 (SummaryStatus.NONE,                   false,false,false, false)
         ;
 
         static final EnumMap<SaveStatus, InternalStatus> FROM_SAVE_STATUS = new EnumMap<>(SaveStatus.class);
@@ -844,16 +847,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
             FROM_SAVE_STATUS.put(SaveStatus.PreAccepted, PREACCEPTED_WITHOUT_DEPS);
             FROM_SAVE_STATUS.put(SaveStatus.PreAcceptedWithVote, PREACCEPTED_WITHOUT_DEPS);
             FROM_SAVE_STATUS.put(SaveStatus.PreAcceptedWithDeps, PREACCEPTED_WITH_DEPS);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidate, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidateWithDefinition, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.PreNotAccepted, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithDefinition, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithDefAndVote, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.PreNotAcceptedWithDefAndDeps, PRENOTACCEPTED_WITH_DEPS);
-            FROM_SAVE_STATUS.put(SaveStatus.NotAccepted, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDefinition, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDefAndVote, PRENOTACCEPTED_OR_ACCEPTED_INVALIDATE);
-            FROM_SAVE_STATUS.put(SaveStatus.NotAcceptedWithDefAndDeps, PRENOTACCEPTED_WITH_DEPS);
+            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidate, NOTACCEPTED);
+            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidateWithDefinition, NOTACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.AcceptedMedium, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.AcceptedMediumWithDefinition, ACCEPTED);
             FROM_SAVE_STATUS.put(SaveStatus.AcceptedMediumWithDefAndVote, ACCEPTED);
@@ -967,11 +962,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
             return result;
         }
 
-        public static InternalStatus from(Command command)
+        public static InternalStatus from(SafeCommandStore safeStore, Command command)
         {
             InternalStatus status = from(command.saveStatus());
             if (status == APPLIED_NOT_DURABLE && command.durability().isDurable())
                 status = APPLIED_DURABLE;
+            if (status == PREACCEPTED_WITH_DEPS && command.txnId().node.equals(safeStore.node().id()) && !Ballot.ZERO.equals(command.promised()))
+                status = PREACCEPTED_COORD_NO_FAST_COMMIT;
             return status;
         }
 
@@ -1465,17 +1462,17 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
     }
 
-    public CommandsForKeyUpdate callback(Command update)
+    public CommandsForKeyUpdate callback(SafeCommandStore safeStore, Command update)
     {
         if (maybePruned(update))
-            return maybePrunedCallback(update);
-        return update(update);
+            return maybePrunedCallback(safeStore, update);
+        return update(safeStore, update);
     }
 
-    public CommandsForKeyUpdate update(Command update)
+    public CommandsForKeyUpdate update(SafeCommandStore safeStore, Command update)
     {
         Invariants.require(manages(update.txnId()));
-        InternalStatus newStatus = from(update);
+        InternalStatus newStatus = from(safeStore, update);
         if (newStatus == null)
         {
             // handle replay of TruncatedApply with uniqueHlc
@@ -1509,7 +1506,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return new CommandsForKey(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
     }
 
-    CommandsForKeyUpdate maybePrunedCallback(Command update)
+    CommandsForKeyUpdate maybePrunedCallback(SafeCommandStore safeStore, Command update)
     {
         TxnId txnId = update.txnId();
         InternalStatus ifPrunedStatus = prunedFrom(update.saveStatus());
@@ -1518,7 +1515,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         {
             TxnInfo cur = get(txnId);
             if (cur != null && !cur.is(PRUNED))
-                return update(update); // if we're not pruned, this should be treated as a regular callback
+                return update(safeStore, update); // if we're not pruned, this should be treated as a regular callback
 
             if (!manages(txnId))
                 ifPrunedStatus = PRUNED;

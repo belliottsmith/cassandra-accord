@@ -40,11 +40,13 @@ public class SimpleBitSet
     }
 
     final long[] bits;
+    final int length;
     int count;
 
     public SimpleBitSet(int size)
     {
         bits = new long[(size + 63)/64];
+        length = bits.length;
     }
 
     public SimpleBitSet(int size, boolean set)
@@ -67,14 +69,23 @@ public class SimpleBitSet
     public SimpleBitSet(SimpleBitSet copy, boolean share)
     {
         bits = share ? copy.bits : copy.bits.clone();
+        length = copy.length;
         count = copy.count;
     }
 
     SimpleBitSet(long[] bits)
     {
         this.bits = bits;
+        this.length = bits.length;
         for (long v : bits)
             count += Long.bitCount(v);
+    }
+
+    public SimpleBitSet(int size, ArrayBuffers.LongBuffers buffers)
+    {
+        length = (size + 63) / 64;
+        bits = buffers.getLongs(length);
+        Arrays.fill(bits, 0, length, 0L);
     }
 
     public boolean set(int i)
@@ -173,7 +184,7 @@ public class SimpleBitSet
 
     public final int size()
     {
-        return bits.length * 64;
+        return length * 64;
     }
 
     public final int getSetBitCount()
@@ -261,6 +272,11 @@ public class SimpleBitSet
         }
     }
 
+    public void discard(ArrayBuffers.LongBuffers buffers)
+    {
+        buffers.discard(bits, length);
+    }
+
     public final int firstSetBit()
     {
         return nextSetBit(0, -1);
@@ -278,7 +294,7 @@ public class SimpleBitSet
 
     public final int nextSetBit(int i, int ifNotFound)
     {
-        return nextSetBitInternal(i, bits.length, ifNotFound);
+        return nextSetBitInternal(i, length, ifNotFound);
     }
 
     public final int firstSetBitBefore(int exclBound)
@@ -311,7 +327,7 @@ public class SimpleBitSet
             return ifNotFound;
 
         int index = i >>> 6;
-        if (index == this.bits.length)
+        if (index == length)
             return ifNotFound;
 
         long bits = this.bits[index] & bitsEqualOrGreater(i);
@@ -345,7 +361,7 @@ public class SimpleBitSet
     // the bitset is permitted to mutate as we iterate
     public final <P1, P2, P3, P4> void forEach(P1 p1, P2 p2, P3 p3, P4 p4, IndexedQuadConsumer<P1, P2, P3, P4> forEach)
     {
-        for (int i = 0 ; i < bits.length && count > 0 ; ++i)
+        for (int i = 0 ; i < length && count > 0 ; ++i)
         {
             long mask = -1L;
             long register;
@@ -376,7 +392,7 @@ public class SimpleBitSet
     // the bitset is permitted to mutate as we iterate
     public final <P1, P2, P3, P4> void reverseForEach(P1 p1, P2 p2, P3 p3, P4 p4, IndexedQuadConsumer<P1, P2, P3, P4> forEach)
     {
-        for (int i = bits.length - 1; i >= 0 && count > 0 ; --i)
+        for (int i = length - 1; i >= 0 && count > 0 ; --i)
         {
             long mask = -1L;
             long register;
@@ -425,8 +441,8 @@ public class SimpleBitSet
     private int indexOf(int i)
     {
         int index = i >>> 6;
-        if (index >= bits.length)
-            throw new IndexOutOfBoundsException(String.format("%d >= %d", index, bits.length));
+        if (index >= length)
+            throw new IndexOutOfBoundsException(String.format("%d >= %d", index, length));
         return index;
     }
 
@@ -438,7 +454,7 @@ public class SimpleBitSet
     private int upperIndexLimitOf(int i)
     {
         int index = (i + 63) >>> 6;
-        return Math.min(index, bits.length);
+        return Math.min(index, length);
     }
 
     private static long bit(int i)

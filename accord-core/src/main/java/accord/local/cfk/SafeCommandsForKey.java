@@ -49,13 +49,13 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     void updatePruned(SafeCommandStore safeStore, Command nextCommand, NotifySink notifySink)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.maybePrunedCallback(nextCommand), notifySink);
+        update(safeStore, nextCommand, prevCfk, prevCfk.maybePrunedCallback(safeStore, nextCommand), notifySink);
     }
 
     public void update(SafeCommandStore safeStore, Command nextCommand)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.update(nextCommand));
+        update(safeStore, nextCommand, prevCfk, prevCfk.update(safeStore, nextCommand));
     }
 
     public void updateUniqueHlc(SafeCommandStore safeStore, long uniqueHlc)
@@ -68,7 +68,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     public void callback(SafeCommandStore safeStore, Command nextCommand)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.callback(nextCommand));
+        update(safeStore, nextCommand, prevCfk, prevCfk.callback(safeStore, nextCommand));
     }
 
     private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk)

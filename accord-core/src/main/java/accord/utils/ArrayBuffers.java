@@ -56,6 +56,7 @@ public class ArrayBuffers
 
     // TODO (low priority, efficiency): we should periodically clear the thread locals to ensure we aren't slowly accumulating unnecessarily large objects on every thread
     private static final ThreadLocal<IntBufferCache> INTS = ThreadLocal.withInitial(() -> new IntBufferCache(4, 1 << 14));
+    private static final ThreadLocal<LongBufferCache> LONGS = ThreadLocal.withInitial(() -> new LongBufferCache(4, 1 << 14));
     private static final ThreadLocal<ObjectBufferCache<Key>> KEYS = ThreadLocal.withInitial(() -> new ObjectBufferCache<>(3, 1 << 9, Key[]::new));
     private static final ThreadLocal<ObjectBufferCache<RoutingKey>> ROUTINGKEYS = ThreadLocal.withInitial(() -> new ObjectBufferCache<>(3, 1 << 9, RoutingKey[]::new));
     private static final ThreadLocal<ObjectBufferCache<Range>> KEYRANGES = ThreadLocal.withInitial(() -> new ObjectBufferCache<>(3, 1 << 7, Range[]::new));
@@ -65,6 +66,10 @@ public class ArrayBuffers
     public static IntBuffers cachedInts()
     {
         return INTS.get();
+    }
+    public static LongBuffers cachedLongs()
+    {
+        return LONGS.get();
     }
 
     public static ObjectBuffers<Key> cachedKeys()
@@ -167,6 +172,73 @@ public class ArrayBuffers
          * @return true if the buffer is discarded (and discard-able), false if it was retained
          */
         boolean forceDiscard(int[] buffer);
+    }
+
+    public interface LongBufferAllocator
+    {
+        /**
+         * Return a {@code long[]} of size at least {@code minSize}, possibly from a pool.
+         * This array may not be zero initialized, and its contents should be treated as random.
+         */
+        long[] getLongs(int minSize);
+    }
+
+    public interface LongBuffers extends LongBufferAllocator
+    {
+        /**
+         * Return an {@code long[]} of size at least {@code minSize}, possibly from a pool,
+         * and copy the contents of {@code copyAndDiscard} into it.
+         *
+         * The remainder of the array may not be zero-initialized, and should be assumed to contain random data.
+         *
+         * The parameter will be returned to the pool, if eligible.
+         */
+        default long[] resize(long[] copyAndDiscard, int usedSize, int minSize)
+        {
+            long[] newBuf = getLongs(minSize);
+            System.arraycopy(copyAndDiscard, 0, newBuf, 0, usedSize);
+            forceDiscard(copyAndDiscard);
+            return newBuf;
+        }
+
+        /**
+         * To be invoked on the result buffer with the number of elements contained;
+         * either the buffer will be returned and the size optionally captured, or else the result may be
+         * shrunk to the size of the contents, depending on implementation.
+         */
+        long[] complete(long[] buffer, int usedSize);
+
+        /**
+         * The buffer is no longer needed by the caller, which is discarding the array;
+         * if {@link #complete(long[], int)} returned the buffer as its result this buffer should NOT be
+         * returned to any pool.
+         *
+         * Note that this method assumes {@link #complete(long[], int)} was invoked on this buffer previously.
+         * However, it is guaranteed that a failure to do so does not leak memory or pool space, only produces some
+         * additional garbage.
+         *
+         * @return true if the buffer is discarded (and discard-able), false if it was retained or is believed to be in use
+         */
+        boolean discard(long[] buffer, int usedSize);
+
+        /**
+         * Equivalent to
+         *   long[] result = complete(buffer, usedSize);
+         *   discard(buffer, usedSize);
+         *   return result;
+         */
+        default long[] completeAndDiscard(long[] buffer, int usedSize)
+        {
+            long[] result = complete(buffer, usedSize);
+            discard(buffer, usedSize);
+            return result;
+        }
+
+        /**
+         * Indicate this buffer is definitely unused, and return it to a pool if possible
+         * @return true if the buffer is discarded (and discard-able), false if it was retained
+         */
+        boolean forceDiscard(long[] buffer);
     }
 
     public interface ObjectBuffers<T>
@@ -451,6 +523,41 @@ public class ArrayBuffers
 
         @Override
         public int[] getInts(int minSize)
+        {
+            return getInternal(minSize);
+        }
+    }
+
+    public static class LongBufferCache extends AbstractBufferCache<long[]> implements LongBuffers
+    {
+        LongBufferCache(int maxCount, int maxSize)
+        {
+            super(long[]::new, (array, size) -> {}, maxCount, maxSize);
+        }
+
+        @Override
+        public long[] complete(long[] buffer, int usedSize)
+        {
+            if (usedSize == buffer.length)
+                return buffer;
+
+            return Arrays.copyOf(buffer, usedSize);
+        }
+
+        @Override
+        public boolean discard(long[] buffer, int usedSize)
+        {
+            return discardInternal(buffer, buffer.length, usedSize, false);
+        }
+
+        @Override
+        public boolean forceDiscard(long[] buffer)
+        {
+            return discardInternal(buffer, buffer.length, -1, true);
+        }
+
+        @Override
+        public long[] getLongs(int minSize)
         {
             return getInternal(minSize);
         }

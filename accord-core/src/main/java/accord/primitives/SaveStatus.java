@@ -80,14 +80,6 @@ public enum SaveStatus
     // This means voters recovering an earlier transaction will not consider the record when excluding the possibility of another transaction's fast-path commit.
     // This is safe, because any Accept that may override the Pre/NotAccepted will construct new Deps that must now witness the recovering transaction.
 
-    PreNotAccepted                  (Status.PreNotAccepted),
-    PreNotAcceptedWithDefinition    (Status.PreNotAccepted,         FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),
-    PreNotAcceptedWithDefAndVote    (Status.PreNotAccepted,         FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown,        VotePreAccept),
-    PreNotAcceptedWithDefAndDeps    (Status.PreNotAccepted,         FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsFromCoordinator,Unknown,        VotePreAccept),
-    NotAccepted                     (Status.NotAccepted),
-    NotAcceptedWithDefinition       (Status.NotAccepted,            FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),
-    NotAcceptedWithDefAndVote       (Status.NotAccepted,            FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown,        VotePreAccept),
-    NotAcceptedWithDefAndDeps       (Status.NotAccepted,            FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsFromCoordinator,Unknown,        VotePreAccept),
     AcceptedInvalidate              (Status.AcceptedInvalidate),
     AcceptedInvalidateWithDefinition(Status.AcceptedInvalidate,     FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),
 
@@ -283,8 +275,6 @@ public enum SaveStatus
                 {
                     case NotDefined: return PreCommitted;
                     case PreAccepted: return PreCommittedWithDefinition;
-                    case PreNotAccepted:
-                    case NotAccepted:
                     case AcceptedMedium:
                     case AcceptedSlow:
                     case AcceptedInvalidate:
@@ -299,14 +289,6 @@ public enum SaveStatus
                     case NotDefined: return NotDefined;
                     case PreAccepted:
                         return known.is(NoVote) ? PreAccepted : known.is(DepsUnknown) ? PreAcceptedWithVote : PreAcceptedWithDeps;
-                    case PreNotAccepted:
-                        if (!known.isDefinitionKnown())
-                            return PreNotAccepted;
-                        return known.is(NoVote) ? PreNotAcceptedWithDefinition : known.is(DepsUnknown) ? PreNotAcceptedWithDefAndVote : PreNotAcceptedWithDefAndDeps;
-                    case NotAccepted:
-                        if (!known.isDefinitionKnown()) return NotAccepted;
-                        if (!known.hasPrivilegedVote()) return NotAcceptedWithDefinition;
-                        return known.is(DepsUnknown) ? NotAcceptedWithDefAndVote : NotAcceptedWithDefAndDeps;
                     case AcceptedMedium:
                         if (!known.isDefinitionKnown()) return AcceptedMedium;
                         if (!known.hasPrivilegedVote()) return AcceptedMediumWithDefinition;
@@ -325,8 +307,6 @@ public enum SaveStatus
         switch (status)
         {
             default: throw new AssertionError("Unexpected status: " + status);
-            case PreNotAccepted:
-            case NotAccepted:
             case AcceptedMedium:
             case AcceptedSlow:
             case AcceptedInvalidate:
@@ -373,8 +353,6 @@ public enum SaveStatus
             case NotDefined:
             case PreAccepted:
             case AcceptedInvalidate:
-            case PreNotAccepted:
-            case NotAccepted:
             case AcceptedMedium:
             case AcceptedSlow:
             case PreCommitted:

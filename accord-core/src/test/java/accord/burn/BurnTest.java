@@ -36,7 +36,6 @@ public class BurnTest extends BurnTestBase
         run(System.nanoTime());
     }
 
-    // TODO (required): higher NACK rate - since coordinator optimisation maybe? Investigate and make sure we're exploring enough states
     public static void main(String[] args)
     {
         int count = 1;
