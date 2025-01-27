@@ -82,7 +82,7 @@ public class BitUtils
 
     public static long flushBits(long buffer, int bufferCount, long add, int addCount, ByteBuffer out)
     {
-        Invariants.checkArgument(addCount == 64 || 0 == (add & (-1L << addCount)));
+        Invariants.requireArgument(addCount == 64 || 0 == (add & (-1L << addCount)));
         int total = bufferCount + addCount;
         if (total < 64)
         {

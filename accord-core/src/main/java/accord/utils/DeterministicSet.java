@@ -65,7 +65,7 @@ public class DeterministicSet<T> extends AbstractSet<T>
 
     DeterministicSet(Map<T, Entry<T>> lookup)
     {
-        Invariants.checkArgument(lookup.isEmpty());
+        Invariants.requireArgument(lookup.isEmpty());
         head.prev = head.next = head;
         this.lookup = lookup;
     }

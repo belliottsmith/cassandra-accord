@@ -22,8 +22,7 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.primitives.TxnId;
-
-import static accord.utils.Invariants.checkState;
+import accord.utils.Invariants;
 
 /**
  * Thrown when a coordinator is preempted by another recovery
@@ -44,7 +43,7 @@ public class Preempted extends CoordinationFailed
     @Override
     public Preempted wrap()
     {
-        checkState(this.getClass() == Preempted.class);
+        Invariants.require(this.getClass() == Preempted.class);
         return new Preempted(txnId(), homeKey(), this);
     }
 }

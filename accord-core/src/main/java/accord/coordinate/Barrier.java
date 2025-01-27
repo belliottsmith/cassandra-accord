@@ -57,8 +57,6 @@ import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
 import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.local.CommandSummaries.TestStartedAt.STARTED_AFTER;
 import static accord.primitives.Txn.Kind.AnyGloballyVisible;
-import static accord.utils.Invariants.checkArgument;
-import static accord.utils.Invariants.checkState;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -105,8 +103,8 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
     {
         this.syncPoint = syncPoint;
         this.keysOrRanges = keysOrRanges;
-        checkArgument(route.domain() == Domain.Key || barrierType.global, "Ranges are only supported with global barriers");
-        checkArgument(route.size() == 1 || barrierType.global, "Only a single key is supported with local barriers");
+        Invariants.requireArgument(route.domain() == Domain.Key || barrierType.global, "Ranges are only supported with global barriers");
+        Invariants.requireArgument(route.size() == 1 || barrierType.global, "Only a single key is supported with local barriers");
         this.node = node;
         this.minEpoch = minEpoch;
         this.route = route;
@@ -188,7 +186,7 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
         coordinateSyncPoint = async.async;
         if (barrierType.async)
         {
-            Invariants.checkState(barrierType.async);
+            Invariants.require(barrierType.async);
             TxnId txnId = async.txnId;
             long epoch = txnId.epoch();
             RoutingKey homeKey = route.homeKey();
@@ -233,7 +231,7 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
 
     private ExistingTransactionCheck checkForExistingTransaction()
     {
-        checkState(route.size() == 1 && route.domain() == Domain.Key);
+        Invariants.require(route.size() == 1 && route.domain() == Domain.Key);
         ExistingTransactionCheck check = new ExistingTransactionCheck();
         RoutingKey k = route.get(0).asRoutingKey();
         node.commandStores().mapReduceConsume(
@@ -305,7 +303,7 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
             if (status.compareTo(COMMITTED) < 0 || status == INVALIDATED)
                 return true;
 
-            Invariants.checkState(found == null);
+            Invariants.require(found == null);
             if (keyOrRange.domain() == Domain.Key)
                 found = new BarrierTxn(txnId, executeAt, keyOrRange.asRoutingKey());
             return found == null;

@@ -211,7 +211,7 @@ abstract class PostProcess
                     CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, UPDATE, addUnmanageds);
                     if (update != cfk)
                     {
-                        Invariants.checkState(update.cfk() == cfk);
+                        Invariants.require(update.cfk() == cfk);
                         nestedNotify.add(update.postProcess());
                     }
                 }

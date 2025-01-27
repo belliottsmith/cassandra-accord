@@ -107,7 +107,7 @@ public class Deps
 
         public AbstractBuilder<T> add(Unseekable keyOrRange, TxnId txnId)
         {
-            Invariants.checkArgument(keyOrRange.domain() == txnId.domain(), keyOrRange + " is not same domain as " + txnId);
+            Invariants.requireArgument(keyOrRange.domain() == txnId.domain(), keyOrRange + " is not same domain as " + txnId);
             switch (txnId.domain())
             {
                 default: throw new AssertionError();

@@ -120,8 +120,8 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
         this.accessor = accessor;
         this.isAccurate = strategy == Strategy.ACCURATE;
         this.withLinks = links == Links.LINKS;
-        Invariants.checkArgument(goalScanDistance <= MAX_SCAN_DISTANCE);
-        Invariants.checkArgument(goalScanDistance > 0);
+        Invariants.requireArgument(goalScanDistance <= MAX_SCAN_DISTANCE);
+        Invariants.requireArgument(goalScanDistance > 0);
         this.ranges = ranges;
         this.scan = new Scan<>(accessor);
         this.tenured = new TenuredSet<>(accessor);
@@ -204,7 +204,7 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
      */
     private void tenureOrScan(int index)
     {
-        Invariants.checkArgument(index >= 0);
+        Invariants.requireArgument(index >= 0);
 
         // then either migrate the index to pendingTenured, or ensure it will be scanned
         RoutingKey end = accessor.end(ranges, index);
@@ -609,7 +609,7 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
 
         int finalise(int lastIndex)
         {
-            Invariants.checkState(distanceToTenured(lastIndex) <= Math.max(watermark(), peakMax()));
+            Invariants.require(distanceToTenured(lastIndex) <= Math.max(watermark(), peakMax()));
 
             int scanDistance = watermark;
             // then, compute the minimum scan distance implied by any tenured ranges we did not immediately
@@ -870,8 +870,8 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
             int untenureIndex = accessor.binarySearch(ranges, untenureMinIndex, untenureLimit, tenure.end, (e, s) -> c.compare(e, accessor.start(s)), CEIL);
             if (untenureIndex < 0) untenureIndex = -1 - untenureIndex;
             tenure.lastIndex = untenureIndex - 1;
-            Invariants.checkState(c.compare(tenure.end, accessor.start(ranges, tenure.lastIndex)) > 0);
-            Invariants.checkState(tenure.lastIndex + 1 == accessor.size(ranges) || c.compare(tenure.end, accessor.start(ranges, tenure.lastIndex + 1)) <= 0);
+            Invariants.require(c.compare(tenure.end, accessor.start(ranges, tenure.lastIndex)) > 0);
+            Invariants.require(tenure.lastIndex + 1 == accessor.size(ranges) || c.compare(tenure.end, accessor.start(ranges, tenure.lastIndex + 1)) <= 0);
             ++directCount;
             return untenureIndex - 1;
         }
@@ -892,7 +892,7 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
 
         private Tenured<Ranges, Range, RoutingKey> addLinkEntry(RoutingKey end, int index, int lastIndex, int length)
         {
-            Invariants.checkArgument(index < 0);
+            Invariants.requireArgument(index < 0);
             Tenured<Ranges, Range, RoutingKey> result = newTenured(end, index);
             result.linkLength = length;
             result.lastIndex = lastIndex;
@@ -934,7 +934,7 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
                         next = next.next;
                         prev.next = null;
                     }
-                    Invariants.checkState(next.index < 0);
+                    Invariants.require(next.index < 0);
                     if (prev.end == next.end)
                     {
                         // if this is the last entry in the link, the link is expired and should be removed/reused
@@ -952,7 +952,7 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
                 }
 
                 // this was not a link reference; update our bookkeeping and save it for reuse
-                Invariants.checkState(removed.index >= 0);
+                Invariants.require(removed.index >= 0);
                 --directCount;
                 --minSpan;
                 if (pendingReuseTail == null)
@@ -1093,7 +1093,7 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
                         continue;
                     }
 
-                    Invariants.checkState(prev.next == null);
+                    Invariants.require(prev.next == null);
                     prev.next = prev;
                     prev = e;
                     --openDirectCount;
@@ -1105,7 +1105,7 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
                     if (next.index < 0)
                         continue;
 
-                    Invariants.checkState(prev.next == null);
+                    Invariants.require(prev.next == null);
                     prev.next = next;
                     prev = next;
                 }

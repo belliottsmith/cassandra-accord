@@ -96,7 +96,7 @@ public abstract class AbstractTracker<ST extends ShardTracker>
 
     public <P> AbstractTracker(Topologies topologies, IntFunction<ST[]> arrayFactory, ShardFactory<ST> trackerFactory)
     {
-        Invariants.checkArgument(topologies.totalShards() > 0);
+        Invariants.requireArgument(topologies.totalShards() > 0);
         int topologyCount = topologies.size();
         int maxShardsPerEpoch = topologies.get(0).size();
         int shardCount = maxShardsPerEpoch;
@@ -144,7 +144,7 @@ public abstract class AbstractTracker<ST extends ShardTracker>
     protected <T extends AbstractTracker<ST>, P>
     RequestStatus recordResponse(T self, Id node, BiFunction<? super ST, P, ? extends ShardOutcome<? super T>> function, P param, int topologyLimit)
     {
-        Invariants.checkState(self == this); // we just accept self as parameter for type safety
+        Invariants.require(self == this); // we just accept self as parameter for type safety
         ShardOutcomes status = NoChange;
         int maxShards = maxShardsPerEpoch();
         for (int i = 0; i < topologyLimit && !status.isTerminalState() ; ++i)

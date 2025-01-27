@@ -104,25 +104,25 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             {
                 RedundantBefore orig = prev.unsafeGetRedundantBefore();
                 RedundantBefore loaded = next.unsafeGetRedundantBefore();
-                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+                Invariants.require(orig.equals(loaded), "%s should equal %s", loaded, orig);
             }
 
             {
                 NavigableMap<TxnId, Ranges> orig = prev.unsafeGetBootstrapBeganAt();
                 NavigableMap<TxnId, Ranges> loaded = next.unsafeGetBootstrapBeganAt();
-                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+                Invariants.require(orig.equals(loaded), "%s should equal %s", loaded, orig);
             }
 
             {
                 NavigableMap<Timestamp, Ranges> orig = prev.unsafeGetSafeToRead();
                 NavigableMap<Timestamp, Ranges> loaded = next.unsafeGetSafeToRead();
-                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+                Invariants.require(orig.equals(loaded), "%s should equal %s", loaded, orig);
             }
 
             {
                 RangesForEpoch orig = prev.unsafeGetRangesForEpoch();
                 RangesForEpoch loaded = next.unsafeGetRangesForEpoch();
-                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+                Invariants.require(orig.equals(loaded), "%s should equal %s", loaded, orig);
             }
         }
 
@@ -189,7 +189,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         {
             if (redundantBefore == null)
             {
-                Invariants.checkState(unsafeGetRedundantBefore().size() == 0);
+                Invariants.require(unsafeGetRedundantBefore().size() == 0);
             }
             else
             {
@@ -215,7 +215,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         protected void loadRangesForEpoch(RangesForEpoch newRangesForEpoch)
         {
-            if (newRangesForEpoch == null) Invariants.checkState(super.rangesForEpoch == null);
+            if (newRangesForEpoch == null) Invariants.require(super.rangesForEpoch == null);
             else
             {
                 unsafeClearRangesForEpoch();

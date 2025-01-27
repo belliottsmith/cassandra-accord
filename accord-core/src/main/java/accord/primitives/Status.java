@@ -111,7 +111,7 @@ public enum Status
         // but must guard against message arrival order permitting us to go backwards
         // (i.e. we need to reject equal ballot updates where the status would move us 'backwards')
         // So we require that this order isn't changed
-        Invariants.partiallyOrdered(PreNotAccepted, NotAccepted, AcceptedInvalidate, AcceptedMedium);
+        Invariants.requirePartiallyOrdered(PreNotAccepted, NotAccepted, AcceptedInvalidate, AcceptedMedium);
     }
 
     /**

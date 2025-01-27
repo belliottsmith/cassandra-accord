@@ -418,7 +418,7 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
 
     public static Range slice(Range bound, Range toSlice)
     {
-        Invariants.checkArgument(bound.compareIntersecting(toSlice) == 0);
+        Invariants.requireArgument(bound.compareIntersecting(toSlice) == 0);
         if (bound.contains(toSlice))
             return toSlice;
 

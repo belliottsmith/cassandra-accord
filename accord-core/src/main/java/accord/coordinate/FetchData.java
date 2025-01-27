@@ -118,7 +118,7 @@ public class FetchData extends CheckShards<Route<?>>
             return;
         }
 
-        Invariants.checkArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
+        Invariants.requireArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
         Ranges ranges = request.localRanges(node);
         if (!Route.isFullRoute(route))
         {
@@ -190,7 +190,7 @@ public class FetchData extends CheckShards<Route<?>>
 
     private static void reportRouteNotFound(Node node, Known found, FetchRequest req)
     {
-        Invariants.checkState(req.executeAt == null);
+        Invariants.require(req.executeAt == null);
         TxnId txnId = req.txnId;
         switch (found.outcome())
         {
@@ -231,7 +231,7 @@ public class FetchData extends CheckShards<Route<?>>
     private static void fetchWithIncompleteRoute(Node node, Route<?> someRoute, FetchRequest request)
     {
         long srcEpoch = request.srcEpoch;
-        Invariants.checkArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
+        Invariants.requireArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
         FindRoute.findRoute(node, request.txnId, request.invalidIf, someRoute.withHomeKey(), (foundRoute, fail) -> {
             if (fail != null) request.callback.accept(null, fail);
             else if (foundRoute == null) fetchViaSomeRoute(node, someRoute, request);
@@ -250,7 +250,7 @@ public class FetchData extends CheckShards<Route<?>>
     private static Object fetchInternal(Node node, Ranges ranges, Route<?> route, FetchRequest request)
     {
         long srcEpoch = request.srcEpoch;
-        Invariants.checkArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
+        Invariants.requireArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
         Route<?> slicedRoute = route.slice(ranges);
         return fetchData(node, slicedRoute, route, request);
     }
@@ -280,7 +280,7 @@ public class FetchData extends CheckShards<Route<?>>
         this.propagateTo = propagateTo;
         this.lowEpoch = lowEpoch;
         this.maxRoute = maxRoute;
-        Invariants.checkArgument(routeWithHomeKey.contains(route.homeKey()), "route %s does not contain %s", routeWithHomeKey, route.homeKey());
+        Invariants.requireArgument(routeWithHomeKey.contains(route.homeKey()), "route %s does not contain %s", routeWithHomeKey, route.homeKey());
         this.target = target;
         this.highEpoch = highEpoch;
         this.callback = callback;
@@ -288,7 +288,7 @@ public class FetchData extends CheckShards<Route<?>>
 
     private static FetchData fetchData(Node node, Route<?> route, Route<?> maxRoute, FetchRequest req)
     {
-        Invariants.checkState(!req.fetchKeys.isEmpty());
+        Invariants.require(!req.fetchKeys.isEmpty());
         FetchData fetch = new FetchData(node, req.fetch, req.txnId, req.invalidIf, route, maxRoute, req.fetchKeys, req.srcEpoch, req.lowEpoch, req.highEpoch, req.callback);
         fetch.start();
         return fetch;
@@ -296,7 +296,7 @@ public class FetchData extends CheckShards<Route<?>>
 
     private static FetchData fetchData(Node node, Known fetch, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, Unseekables<?> localKeys, long sourceEpoch, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        Invariants.checkState(!localKeys.isEmpty());
+        Invariants.require(!localKeys.isEmpty());
         FetchData fetchData = new FetchData(node, fetch, txnId, invalidIf, route, maxRoute, localKeys, sourceEpoch, lowEpoch, highEpoch, callback);
         fetchData.start();
         return fetchData;
@@ -329,7 +329,7 @@ public class FetchData extends CheckShards<Route<?>>
     @Override
     protected void onDone(ReadCoordinator.Success success, Throwable failure)
     {
-        Invariants.checkState((success == null) != (failure == null));
+        Invariants.require((success == null) != (failure == null));
         if (failure != null)
         {
             callback.accept(null, failure);
@@ -337,7 +337,7 @@ public class FetchData extends CheckShards<Route<?>>
         else
         {
             if (success == ReadCoordinator.Success.Success)
-                Invariants.checkState(isSufficient(merged), "Status %s is not sufficient", merged);
+                Invariants.require(isSufficient(merged), "Status %s is not sufficient", merged);
 
             // TODO (expected): should we automatically trigger a new fetch if we find executeAt but did not request enough information? would be more rob ust
             Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, lowEpoch, highEpoch, success.withQuorum, query(), propagateTo, target, (CheckStatusOkFull) merged, callback);

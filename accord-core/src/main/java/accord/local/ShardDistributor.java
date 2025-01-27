@@ -83,8 +83,8 @@ public interface ShardDistributor
         @Override
         public Range splitRange(Range range, int from, int to, int numSplits)
         {
-            Invariants.checkArgument(from <= to);
-            Invariants.checkArgument(to <= numSplits);
+            Invariants.requireArgument(from <= to);
+            Invariants.requireArgument(to <= numSplits);
             Splitter<T> splitter = this.splitter.apply(Ranges.single(range));
             if (!splitter.splittable(range, numSplits))
                 return range;
@@ -150,7 +150,7 @@ public interface ShardDistributor
                         rOffset = splitter.add(rOffset, required);
                         if (splitter.compare(rOffset, rSize) >= 0 && ++ri < ranges.size())
                         {
-                            Invariants.checkState(splitter.compare(rOffset, rSize) == 0);
+                            Invariants.require(splitter.compare(rOffset, rSize) == 0);
                             rOffset = splitter.zero();
                             rSize = splitter.sizeOf(ranges.get(ri));
                         }

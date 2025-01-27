@@ -88,7 +88,7 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     @Override
     public final boolean intersectsAll(Unseekables<?> keysOrRanges)
     {
-        Invariants.checkArgument(keysOrRanges.domain() == Domain.Key);
+        Invariants.requireArgument(keysOrRanges.domain() == Domain.Key);
         AbstractUnseekableKeys that = (AbstractUnseekableKeys) keysOrRanges;
         return SortedArrays.isSubset((rk, k) -> -k.compareAsRoutingKey(rk), that.keys, 0, that.keys.length, this.keys, 0, this.keys.length);
     }

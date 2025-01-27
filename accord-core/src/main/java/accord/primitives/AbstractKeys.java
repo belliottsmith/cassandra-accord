@@ -351,7 +351,7 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
         int insertPos = Arrays.binarySearch(copy, withKey);
         if (insertPos >= 0)
         {
-            Invariants.checkState(copy[insertPos].equals(withKey));
+            Invariants.require(copy[insertPos].equals(withKey));
             return toRoutingKeysFactory.apply(copy, insertPos, true);
         }
 

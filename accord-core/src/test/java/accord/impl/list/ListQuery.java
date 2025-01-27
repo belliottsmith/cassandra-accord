@@ -64,8 +64,8 @@ public class ListQuery implements Query
             if (i >= 0)
             {
                 Timestamp timestamp = e.getValue().timestamp;
-                Invariants.checkState(isEphemeralRead || timestamp.compareTo(executeAt) < 0,
-                                      "Data timestamp %s >= execute at %s", timestamp, executeAt);
+                Invariants.require(isEphemeralRead || timestamp.compareTo(executeAt) < 0,
+                                   "Data timestamp %s >= execute at %s", timestamp, executeAt);
                 values[i] = e.getValue().data;
             }
         }

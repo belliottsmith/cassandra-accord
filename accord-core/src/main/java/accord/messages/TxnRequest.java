@@ -90,7 +90,7 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
     public TxnRequest(TxnId txnId, Route<?> scope, long waitForEpoch)
     {
         super(txnId);
-        Invariants.checkState(!scope.isEmpty());
+        Invariants.require(!scope.isEmpty());
         this.scope = scope;
         this.waitForEpoch = waitForEpoch;
     }

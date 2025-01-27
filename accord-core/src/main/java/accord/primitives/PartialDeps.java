@@ -79,7 +79,7 @@ public class PartialDeps extends Deps
     @Override
     public MergeCursor<TxnId, DepList> txnIds(RoutingKey key)
     {
-        Invariants.checkArgument(covers(key), "%s is not covered by %s", key, this);
+        Invariants.requireArgument(covers(key), "%s is not covered by %s", key, this);
         return super.txnIds(key);
     }
 

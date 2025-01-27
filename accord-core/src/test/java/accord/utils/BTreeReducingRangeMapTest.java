@@ -112,7 +112,7 @@ public class BTreeReducingRangeMapTest
 
     private static BTreeReducingRangeMap<Timestamp> h(Pair<RoutingKey, Timestamp>... points)
     {
-        Invariants.checkState(points[0].right == none());
+        Invariants.require(points[0].right == none());
         int length = points.length;
         RawBuilder<Timestamp, BTreeReducingRangeMap<Timestamp>> builder = new RawBuilder<>(true, length - 1);
         for (int i = 1 ; i < length ; ++i)

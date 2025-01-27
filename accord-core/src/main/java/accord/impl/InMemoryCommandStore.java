@@ -284,12 +284,12 @@ public abstract class InMemoryCommandStore extends CommandStore
         for (TxnId txnId : clearing)
         {
             GlobalCommand globalCommand = commands.get(txnId);
-;            Invariants.checkState(globalCommand != null && !globalCommand.isEmpty());
+;            Invariants.require(globalCommand != null && !globalCommand.isEmpty());
             Command command = globalCommand.value();
             Cleanup cleanup = Cleanup.shouldCleanup(FULL, agent, txnId, command.executeAt(), command.saveStatus(), command.durability(), command.participants(), unsafeGetRedundantBefore(), durableBefore());
-            Invariants.checkState(command.hasBeen(Applied)
-                                  || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
-                                  || (durableBefore().min(txnId) == NotDurable &&
+            Invariants.require(command.hasBeen(Applied)
+                               || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
+                               || (durableBefore().min(txnId) == NotDurable &&
                                       ((command.participants().stillExecutes() != null && command.participants().stillExecutes().isEmpty())
                                       || !Route.isFullRoute(command.route()))));
         }
@@ -1126,7 +1126,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     // they are brought up to latest values _before_ replay.
     public void clearForTesting()
     {
-        Invariants.checkState(current == null);
+        Invariants.require(current == null);
         progressLog.clear();
         commands.clear();
         commandsByExecuteAt.clear();

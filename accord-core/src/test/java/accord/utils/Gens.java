@@ -644,7 +644,7 @@ public class Gens {
 
         public Gen<Boolean> biasedRepeatingRuns(double ratio, int maxRuns)
         {
-            Invariants.checkArgument(ratio > 0 && ratio <= 1, "Expected %d to be larger than 0 and <= 1", ratio);
+            Invariants.requireArgument(ratio > 0 && ratio <= 1, "Expected %d to be larger than 0 and <= 1", ratio);
             double lower = ratio * .8;
             double upper = ratio * 1.2;
             return new Gen<Boolean>() {
@@ -723,7 +723,7 @@ public class Gens {
 
         public Gen.IntGen between(int min, int max)
         {
-            Invariants.checkArgument(max >= min, "max (%d) < min (%d)", max, min);
+            Invariants.requireArgument(max >= min, "max (%d) < min (%d)", max, min);
             if (min == max)
                 return of(min);
             // since bounds is exclusive, if max == max_value unable to do +1 to include... so will return a gen
@@ -755,7 +755,7 @@ public class Gens {
         }
 
         public Gen.LongGen between(long min, long max) {
-            Invariants.checkArgument(max >= min);
+            Invariants.requireArgument(max >= min);
             if (min == max)
                 return of(min);
             // since bounds is exclusive, if max == max_value unable to do +1 to include... so will return a gen

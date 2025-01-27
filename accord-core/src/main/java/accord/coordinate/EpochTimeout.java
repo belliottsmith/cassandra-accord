@@ -18,7 +18,7 @@
 
 package accord.coordinate;
 
-import static accord.utils.Invariants.checkState;
+import accord.utils.Invariants;
 
 public class EpochTimeout extends Timeout
 {
@@ -39,7 +39,7 @@ public class EpochTimeout extends Timeout
     @Override
     public EpochTimeout wrap()
     {
-        checkState(this.getClass() == EpochTimeout.class);
+        Invariants.require(this.getClass() == EpochTimeout.class);
         return new EpochTimeout(epoch, this);
     }
 }

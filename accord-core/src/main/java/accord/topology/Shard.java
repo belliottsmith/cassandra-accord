@@ -34,8 +34,6 @@ import accord.utils.UnhandledEnum;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.primitives.Shorts;
 
-import static accord.utils.Invariants.checkArgument;
-
 // TODO (expected, efficiency): concept of region/locality
 // TODO (expected): introduce recovery quorum size configuration
 public class Shard
@@ -68,9 +66,9 @@ public class Shard
     {
         this.range = range;
         this.nodes = nodes;
-        this.notInFastPath = checkArgument(notInFastPath, nodes.containsAll(notInFastPath));
-        this.joining = checkArgument(joining, nodes.containsAll(joining),
-                "joining nodes must also be present in nodes; joining=%s, nodes=%s", joining, nodes);
+        this.notInFastPath = Invariants.requireArgument(notInFastPath, nodes.containsAll(notInFastPath));
+        this.joining = Invariants.requireArgument(joining, nodes.containsAll(joining),
+                                                  "joining nodes must also be present in nodes; joining=%s, nodes=%s", joining, nodes);
         this.rf = Shorts.saturatedCast(nodes.size());
         this.maxFailures = Shorts.saturatedCast(maxToleratedFailures(rf));
         this.fastPathElectorateSize = Shorts.saturatedCast(nodes.size() - notInFastPath.size());
@@ -100,7 +98,7 @@ public class Shard
 
     public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, Set<Id> joining, boolean pendingRemoval)
     {
-        Invariants.checkArgument(nodes.containsAll(fastPathElectorate));
+        Invariants.requireArgument(nodes.containsAll(fastPathElectorate));
         return new Shard(range, nodes, nodes.without(fastPathElectorate::contains),
                          joining instanceof SortedArrayList<?> ? (SortedArrayList<Id>) joining : SortedArrayList.copyUnsorted(joining, Id[]::new),
                          pendingRemoval);
@@ -255,7 +253,7 @@ public class Shard
 
     static int fastQuorumSize(int rf, int electorate, int recoveryQuorum, int d)
     {
-        Invariants.checkArgument(electorate >= recoveryQuorum);
+        Invariants.requireArgument(electorate >= recoveryQuorum);
         return Math.max((d + electorate + rf - recoveryQuorum + 1)/2, (rf/2) + 1);
     }
 

@@ -265,7 +265,7 @@ public class AccordGens
 
     public static Gen<Key> keysInsideRanges(Ranges ranges)
     {
-        Invariants.checkArgument(!ranges.isEmpty(), "Ranges empty");
+        Invariants.requireArgument(!ranges.isEmpty(), "Ranges empty");
         RoutingKey sample = ranges.get(0).end();
         if (sample instanceof PrefixedIntHashKey)
             return prefixedIntHashKeyInsideRanges(ranges);

@@ -93,7 +93,7 @@ public class Utils
 
     public static SortedArrayList<Id> ids(int first, int last)
     {
-        Invariants.checkArgument(last >= first);
+        Invariants.requireArgument(last >= first);
         Id[] rlist = new Id[last - first + 1];
         for (int i=first; i<=last; i++)
             rlist[i - first] = id(i);

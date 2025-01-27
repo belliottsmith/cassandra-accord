@@ -212,7 +212,7 @@ public class AsyncResults
         private Result<V> getResult()
         {
             Object current = state;
-            Invariants.checkState(current instanceof Result);
+            Invariants.require(current instanceof Result);
             return (Result<V>) current;
         }
 

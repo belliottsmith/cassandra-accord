@@ -79,10 +79,10 @@ public interface CoordinationAdapter<R>
             {
                 case ExclusiveSyncPoint:
                     // callback types are different, and we pass through the recovery adapter for sync points so should not invoke Continue
-                    Invariants.checkState(kind == Recovery);
+                    Invariants.require(kind == Recovery);
                     return (CoordinationAdapter<R>) Adapters.recoverExclusiveSyncPoint();
                 case SyncPoint:
-                    Invariants.checkState(kind == Recovery);
+                    Invariants.require(kind == Recovery);
                     return (CoordinationAdapter<R>) Adapters.recoverInclusiveSyncPoint();
             }
             switch (kind)

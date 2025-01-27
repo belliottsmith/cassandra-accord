@@ -57,7 +57,7 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
      */
     protected void append(N node)
     {
-        Invariants.checkState(node.heapIndex < 0);
+        Invariants.require(node.heapIndex < 0);
         if (size == heap.length)
             heap = Arrays.copyOf(heap, Math.max(size * 2, 8));
 
@@ -71,7 +71,7 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
     protected void update(N node)
     {
         int index = node.heapIndex;
-        Invariants.checkState(heap[index] == node);
+        Invariants.require(heap[index] == node);
         if (index >= heapifiedSize)
             return;
 
@@ -91,7 +91,7 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
     protected void remove(N node)
     {
         int i = node.heapIndex;
-        Invariants.checkArgument(i >= 0 && i < heap.length && heap[i] == node);
+        Invariants.requireArgument(i >= 0 && i < heap.length && heap[i] == node);
         if (size > 1)
         {
             N tail = (N) heap[--size];
@@ -120,7 +120,7 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
         if (size == 0)
             return null;
 
-        Invariants.checkState(heapifiedSize == size);
+        Invariants.require(heapifiedSize == size);
         return (N) heap[0];
     }
 
@@ -129,7 +129,7 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
         if (size == 0)
             return null;
 
-        Invariants.checkState(isHeapified());
+        Invariants.require(isHeapified());
         N result = (N) heap[0];
         result.heapIndex = -1;
 
@@ -139,7 +139,7 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
 
     private void replace(N replacing, N with, int i)
     {
-        Invariants.checkArgument(replacing == heap[i]);
+        Invariants.requireArgument(replacing == heap[i]);
         if (compare(with, replacing) <= 0) siftUp(with, i);
         else siftDown(with, i);
     }

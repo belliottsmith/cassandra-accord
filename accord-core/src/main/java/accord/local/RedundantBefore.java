@@ -67,7 +67,7 @@ import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
-import static accord.utils.Invariants.partiallyOrdered;
+import static accord.utils.Invariants.requirePartiallyOrdered;
 
 public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 {
@@ -192,9 +192,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             this.staleUntilAtLeast = staleUntilAtLeast;
             checkNoneOrRX(locallyWitnessedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore, locallyDecidedAndAppliedOrInvalidatedBefore,
                           shardAppliedOrInvalidatedBefore, gcBefore);
-            partiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
-            partiallyOrdered(shardAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
-            partiallyOrdered(gcBefore, shardAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore);
+            requirePartiallyOrdered(locallyDecidedAndAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
+            requirePartiallyOrdered(shardAppliedOrInvalidatedBefore, locallyAppliedOrInvalidatedBefore);
+            requirePartiallyOrdered(gcBefore, shardAppliedOrInvalidatedBefore, shardOnlyAppliedOrInvalidatedBefore);
         }
 
         private static void checkNoneOrRX(TxnId ... txnIds)
@@ -204,7 +204,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         }
         private static void checkNoneOrRX(TxnId txnId)
         {
-            Invariants.checkArgument(txnId.equals(TxnId.NONE) || (txnId.domain().isRange() && txnId.is(ExclusiveSyncPoint)));
+            Invariants.requireArgument(txnId.equals(TxnId.NONE) || (txnId.domain().isRange() && txnId.is(ExclusiveSyncPoint)));
         }
 
         public static Entry reduce(Entry a, Entry b)
@@ -432,7 +432,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             if (entry == null)
                 return execute;
 
-            Invariants.checkState(executeAt == null ? !entry.outOfBounds(txnId) : !entry.outOfBounds(txnId, executeAt));
+            Invariants.require(executeAt == null ? !entry.outOfBounds(txnId) : !entry.outOfBounds(txnId, executeAt));
             if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
                 return without.apply(execute, Ranges.of(entry.range));
 
@@ -455,7 +455,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             if (entry == null)
                 return execute;
 
-            Invariants.checkState(executeAt == null ? !entry.outOfBounds(txnId) : !entry.outOfBounds(txnId, executeAt));
+            Invariants.require(executeAt == null ? !entry.outOfBounds(txnId) : !entry.outOfBounds(txnId, executeAt));
             if (txnId.compareTo(entry.shardOnlyAppliedOrInvalidatedBefore) < 0
                 && (txnId.compareTo(entry.bootstrappedAt) < 0
                     || entry.staleUntilAtLeast != null))
@@ -797,7 +797,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
 
     public boolean isAnyOnAnyEpochAtLeast(TxnId txnId, Unseekables<?> participants, RedundantStatus status)
     {
-        Invariants.checkArgument(status != GC_BEFORE || !txnId.is(Write), "Cannot compute GC_BEFORE for Write without applyAt");
+        Invariants.requireArgument(status != GC_BEFORE || !txnId.is(Write), "Cannot compute GC_BEFORE for Write without applyAt");
         return foldl(participants, Entry::isAnyOnAnyEpochAtLeast, false, txnId, status, isDone -> isDone);
     }
 
@@ -835,7 +835,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
      */
     public Ranges removeGcBefore(TxnId txnId, @Nonnull Timestamp executeAt, Ranges ranges)
     {
-        Invariants.checkArgument(executeAt != null, "executeAt must not be null");
+        Invariants.requireArgument(executeAt != null, "executeAt must not be null");
         if (txnId.compareTo(maxGcBefore) >= 0)
             return ranges;
         return foldl(ranges, Entry::withoutGarbage, ranges, txnId, executeAt, r -> false);
@@ -990,7 +990,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
             if (!a.equalsIgnoreRange(b))
                 return null;
 
-            Invariants.checkState(a.range.compareIntersecting(b.range) == 0 || a.range.end().equals(b.range.start()) || a.range.start().equals(b.range.end()));
+            Invariants.require(a.range.compareIntersecting(b.range) == 0 || a.range.end().equals(b.range.start()) || a.range.start().equals(b.range.end()));
             return new Entry(a.range.newRange(
                 a.range.start().compareTo(b.range.start()) <= 0 ? a.range.start() : b.range.start(),
                 a.range.end().compareTo(b.range.end()) >= 0 ? a.range.end() : b.range.end()
@@ -1021,8 +1021,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         {
             if (values[i] != null)
             {
-                Invariants.checkArgument(starts[i].equals(values[i].range.start()));
-                Invariants.checkArgument(starts[i + 1].equals(values[i].range.end()));
+                Invariants.requireArgument(starts[i].equals(values[i].range.start()));
+                Invariants.requireArgument(starts[i + 1].equals(values[i].range.end()));
             }
         }
     }
@@ -1049,9 +1049,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 RoutingKeys prev = partiallyBootstrapping.get(txnIdx);
                 RoutingKeys remaining = prev;
                 if (remaining == null) remaining = builder.directKeyDeps.participatingKeys(txnIdx);
-                else Invariants.checkState(!remaining.isEmpty());
+                else Invariants.require(!remaining.isEmpty());
                 remaining = remaining.without(range);
-                if (prev == null) Invariants.checkState(!remaining.isEmpty());
+                if (prev == null) Invariants.require(!remaining.isEmpty());
                 partiallyBootstrapping.put(txnIdx, remaining);
                 return remaining.isEmpty();
             }
@@ -1114,9 +1114,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 Ranges prev = partiallyBootstrapping.get(rangeTxnIdx);
                 Ranges remaining = prev;
                 if (remaining == null) remaining = builder.directRangeDeps.ranges(rangeTxnIdx);
-                else Invariants.checkState(!remaining.isEmpty());
+                else Invariants.require(!remaining.isEmpty());
                 remaining = remaining.without(Ranges.of(range));
-                if (prev == null) Invariants.checkState(!remaining.isEmpty());
+                if (prev == null) Invariants.require(!remaining.isEmpty());
                 partiallyBootstrapping.put(rangeTxnIdx, remaining);
                 return remaining.isEmpty();
             }

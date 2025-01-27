@@ -115,7 +115,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     public CheckStatus(TxnId txnId, Participants<?> query, long sourceEpoch, IncludeInfo includeInfo)
     {
         super(txnId);
-        Invariants.checkState(txnId.is(query.domain()));
+        Invariants.require(txnId.is(query.domain()));
         this.query = query;
         this.sourceEpoch = sourceEpoch;
         this.includeInfo = includeInfo;
@@ -181,14 +181,14 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         KnownMap result = KnownMap.EMPTY;
         if (known.deps().hasProposedOrDecidedDeps())
         {
-            Invariants.checkState(command.participants().touches().containsAll(command.partialDeps().covering));
+            Invariants.require(command.participants().touches().containsAll(command.partialDeps().covering));
             result = KnownMap.create(command.partialDeps().covering, Known.Nothing.with(saveStatus.known.deps()));
             known = known.with(DepsUnknown);
         }
         if (known.definition() == DefinitionKnown && !txnId.isSystemTxn())
         {
             Participants<?> participants = command.partialTxn().keys().toParticipants();
-            Invariants.checkState(command.participants().owns().containsAll(participants));
+            Invariants.require(command.participants().owns().containsAll(participants));
             result = KnownMap.merge(result, KnownMap.create(participants, Known.DefinitionOnly));
             known = known.with(DefinitionUnknown);
         }
@@ -390,9 +390,9 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         public Known knownFor(TxnId txnId, Unseekables<?> owns, Unseekables<?> touches)
         {
             Known known = map.knownFor(owns, touches);
-            Invariants.checkState(!known.hasFullRoute() || Route.isFullRoute(route));
-            Invariants.checkState(!known.outcome().isInvalidated() || (!maxKnowledgeSaveStatus.known.isDecidedToExecute() && !maxSaveStatus.known.isDecidedToExecute()));
-            Invariants.checkState(!(maxSaveStatus.known.outcome().isInvalidated() || maxKnowledgeSaveStatus.known.outcome().isInvalidated()) || !known.isDecidedToExecute());
+            Invariants.require(!known.hasFullRoute() || Route.isFullRoute(route));
+            Invariants.require(!known.outcome().isInvalidated() || (!maxKnowledgeSaveStatus.known.isDecidedToExecute() && !maxSaveStatus.known.isDecidedToExecute()));
+            Invariants.require(!(maxSaveStatus.known.outcome().isInvalidated() || maxKnowledgeSaveStatus.known.outcome().isInvalidated()) || !known.isDecidedToExecute());
             // TODO (desired): make sure these match identically, rather than only ensuring Route.isFullRoute (either by coercing it here or by ensuring it at callers)
             return known;
         }
@@ -432,7 +432,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         {
             if (!preferSelf(that))
             {
-                Invariants.checkState(that.preferSelf(this));
+                Invariants.require(that.preferSelf(this));
                 return that.merge(this);
             }
 
@@ -622,8 +622,8 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         public Known knownFor(TxnId txnId, Unseekables<?> owns, Unseekables<?> touches)
         {
             Known known = super.knownFor(txnId, owns, touches);
-            Invariants.checkState(!known.hasDefinition() || txnId.isSystemTxn() || (partialTxn != null && partialTxn.covers(owns)));
-            Invariants.checkState(!known.hasDecidedDeps() || (stableDeps != null && stableDeps.covers(touches)));
+            Invariants.require(!known.hasDefinition() || txnId.isSystemTxn() || (partialTxn != null && partialTxn.covers(owns)));
+            Invariants.require(!known.hasDecidedDeps() || (stableDeps != null && stableDeps.covers(touches)));
             return known;
         }
 

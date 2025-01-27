@@ -259,7 +259,7 @@ public interface RandomSource
 
     default int pickInt(int[] array, int offset, int length)
     {
-        Invariants.checkIndexInBounds(array.length, offset, length);
+        Invariants.requireIndexInBounds(array.length, offset, length);
         if (length == 1)
             return array[offset];
         return array[nextInt(offset, offset + length)];
@@ -283,7 +283,7 @@ public interface RandomSource
 
     default long pickLong(long[] array, int offset, int length)
     {
-        Invariants.checkIndexInBounds(array.length, offset, length);
+        Invariants.requireIndexInBounds(array.length, offset, length);
         if (length == 1)
             return array[offset];
         return array[nextInt(offset, offset + length)];
@@ -335,7 +335,7 @@ public interface RandomSource
 
     default <T> T pick(List<T> values, int offset, int length)
     {
-        Invariants.checkIndexInBounds(values.size(), offset, length);
+        Invariants.requireIndexInBounds(values.size(), offset, length);
         if (length == 1)
             return values.get(offset);
         return values.get(nextInt(offset, offset + length));

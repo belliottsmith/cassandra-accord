@@ -140,8 +140,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
         synchronized EpochState getOrCreate(long epoch)
         {
-            Invariants.checkArgument(epoch >= 0, "Epoch must be non-negative but given %d", epoch);
-            Invariants.checkArgument(epoch > 0 || (lastReceived == 0 && epochs.isEmpty()), "Received epoch 0 after initialization. Last received %d, epochsf; %s", lastReceived, epochs);
+            Invariants.requireArgument(epoch >= 0, "Epoch must be non-negative but given %d", epoch);
+            Invariants.requireArgument(epoch > 0 || (lastReceived == 0 && epochs.isEmpty()), "Received epoch 0 after initialization. Last received %d, epochsf; %s", lastReceived, epochs);
             if (epochs.isEmpty())
             {
                 EpochState state = createEpochState(epoch);
@@ -159,7 +159,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
                 next.addAll(epochs);
                 epochs = next;
                 minEpoch = minEpoch();
-                Invariants.checkState(minEpoch == epoch, "Epoch %d != %d", epoch, minEpoch);
+                Invariants.require(minEpoch == epoch, "Epoch %d != %d", epoch, minEpoch);
             }
             long maxEpoch = maxEpoch();
             int idx = Ints.checkedCast(epoch - minEpoch);
@@ -186,8 +186,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
                         EpochState expected = epochs.get(i);
                         if (epoch == expected.epoch)
                         {
-                            Invariants.checkState(topology.equals(expected.topology),
-                                                  "Expected existing topology to match upsert, but %s != %s", topology, expected.topology);
+                            Invariants.require(topology.equals(expected.topology),
+                                               "Expected existing topology to match upsert, but %s != %s", topology, expected.topology);
                             return;
                         }
                     }
@@ -222,10 +222,10 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             {
                 long epoch = ready.epoch;
                 logger.debug("Acknowledging epoch {}", epoch);
-                Invariants.checkState(lastAcknowledged == epoch - 1 || epoch == 0 || lastAcknowledged == 0,
-                                      "Epoch %d != %d + 1", epoch, lastAcknowledged);
+                Invariants.require(lastAcknowledged == epoch - 1 || epoch == 0 || lastAcknowledged == 0,
+                                   "Epoch %d != %d + 1", epoch, lastAcknowledged);
                 state = getOrCreate(epoch);
-                Invariants.checkState(state.reads == null, "Reads result was already set for epoch", epoch);
+                Invariants.require(state.reads == null, "Reads result was already set for epoch", epoch);
                 state.reads = ready.reads;
                 lastAcknowledged = epoch;
             }
@@ -240,7 +240,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
         synchronized void truncateUntil(long epoch)
         {
-            Invariants.checkArgument(epoch <= maxEpoch(), "epoch %d > %d", epoch, maxEpoch());
+            Invariants.requireArgument(epoch <= maxEpoch(), "epoch %d > %d", epoch, maxEpoch());
             long minEpoch = minEpoch();
             int toTrim = Ints.checkedCast(epoch - minEpoch);
             if (toTrim <= 0)

@@ -61,6 +61,7 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.utils.Invariants;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 
@@ -77,7 +78,6 @@ import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.utils.Invariants.checkState;
 import static accord.utils.async.AsyncChains.getUninterruptibly;
 import static com.google.common.base.Predicates.alwaysTrue;
 import static java.lang.Thread.sleep;
@@ -185,7 +185,7 @@ public class CoordinateTransactionTest
             // It's possible for the callback to run before the sync point is created in a different callback
             // because multiple callbacks can run concurrently. `addCallback` might see the finished result
             // and run immediately in this thread
-            spinUntilSuccess(() -> checkState(localInitiatingBarrier.coordinateSyncPoint != null));
+            spinUntilSuccess(() -> Invariants.require(localInitiatingBarrier.coordinateSyncPoint != null));
             // Should be able to find the txnid now and wait for local application
             TxnId initiatingBarrierSyncTxnId = AsyncChains.getBlocking(localInitiatingBarrier.coordinateSyncPoint).syncId;
             Semaphore barrierAppliedLocally = new Semaphore(0);

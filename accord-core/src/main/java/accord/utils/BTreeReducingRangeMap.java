@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
 
-import static accord.utils.Invariants.checkArgument;
 import static accord.utils.SortedArrays.Search.FAST;
 
 public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKey, V>
@@ -164,7 +163,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
 
     public static <V> BTreeReducingRangeMap<V> create(AbstractRanges ranges, V value)
     {
-        checkArgument(value != null, "value is null");
+        Invariants.requireArgument(value != null, "value is null");
 
         if (ranges.isEmpty())
             return new BTreeReducingRangeMap<>();
@@ -194,7 +193,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
 
     public static <V, M extends BTreeReducingRangeMap<V>> M create(AbstractRanges ranges, V value, BoundariesBuilderFactory<RoutingKey, V, M> factory)
     {
-        checkArgument(value != null, "value is null");
+        Invariants.requireArgument(value != null, "value is null");
 
         AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(ranges.get(0).endInclusive(), ranges.size() * 2);
         for (Range cur : ranges)
@@ -208,7 +207,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
 
     public static <V, M extends BTreeReducingRangeMap<V>> M create(AbstractUnseekableKeys keys, V value, BoundariesBuilderFactory<RoutingKey, V, M> factory)
     {
-        checkArgument(value != null, "value is null");
+        Invariants.requireArgument(value != null, "value is null");
 
         AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(keys.get(0).asRange().endInclusive(), keys.size() * 2);
         for (int i = 0 ; i < keys.size() ; ++i)
@@ -223,7 +222,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
 
     public static <V, M extends BTreeReducingRangeMap<V>> M create(Keys keys, V value, BoundariesBuilderFactory<RoutingKey, V, M> factory)
     {
-        checkArgument(value != null, "value is null");
+        Invariants.requireArgument(value != null, "value is null");
 
         RoutingKey prev = keys.get(0).toUnseekable();
         AbstractBoundariesBuilder<RoutingKey, V, M> builder;
@@ -518,7 +517,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
 
         public RawBuilder<V, M> append(Entry<RoutingKey, V> entry)
         {
-            Invariants.checkState(!lastStartAppended);
+            Invariants.require(!lastStartAppended);
             if (treeBuilder == null)
                 (treeBuilder = BTree.builder(Comparator.naturalOrder(), capacity + 1)).auto(false);
             treeBuilder.add(entry);
@@ -528,7 +527,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
 
         public final M build(BiFunction<Boolean, Object[], M> constructor)
         {
-            Invariants.checkState(lastStartAppended || treeBuilder == null);
+            Invariants.require(lastStartAppended || treeBuilder == null);
             return constructor.apply(inclusiveEnds, treeBuilder == null ? BTree.empty() : treeBuilder.build());
         }
     }

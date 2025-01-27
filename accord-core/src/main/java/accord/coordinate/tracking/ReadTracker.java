@@ -70,7 +70,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
 
         public ShardOutcome<? super ReadTracker> recordSlowResponse(boolean ignore)
         {
-            Invariants.checkState(!hasFailed());
+            Invariants.require(!hasFailed());
             ++slow;
 
             if (shouldRead() && canRead())
@@ -84,7 +84,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
          */
         public ShardOutcome<? super ReadTracker> recordReadSuccess(boolean isSlow)
         {
-            Invariants.checkState(inflight > 0);
+            Invariants.require(inflight > 0);
             boolean hadSucceeded = hasSucceeded();
             --inflight;
             if (isSlow) --slow;
@@ -109,7 +109,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
          */
         public ShardOutcome<? super ReadTracker> recordPartialReadSuccess(PartialReadSuccess partialSuccess)
         {
-            Invariants.checkState(inflight > 0);
+            Invariants.require(inflight > 0);
             boolean hadSucceeded = hasSucceeded();
             --inflight;
             if (partialSuccess.isSlow) --slow;
@@ -128,7 +128,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
 
         public ShardOutcome<? super ReadTracker> recordQuorumReadSuccess(boolean isSlow)
         {
-            Invariants.checkState(inflight > 0);
+            Invariants.require(inflight > 0);
             boolean hadSucceeded = hasSucceeded();
             --inflight;
             ++quorum;
@@ -145,7 +145,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
 
         public ShardOutcomes recordReadFailure(boolean isSlow)
         {
-            Invariants.checkState(inflight > 0);
+            Invariants.require(inflight > 0);
             --inflight;
             if (isSlow) --slow;
 
@@ -361,7 +361,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
             toRead = tmp;
         }
 
-        Invariants.checkState(toRead != null, "We were asked to read more, but found no shards in need of reading more");
+        Invariants.require(toRead != null, "We were asked to read more, but found no shards in need of reading more");
 
         // TODO (desired, consider): maybe for each additional candidate do one linear compare run to find better secondary match
         //       OR at least discount candidates that do not contribute additional knowledge beyond those additional

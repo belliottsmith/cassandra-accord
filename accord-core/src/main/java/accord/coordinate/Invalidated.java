@@ -22,8 +22,7 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.primitives.TxnId;
-
-import static accord.utils.Invariants.checkState;
+import accord.utils.Invariants;
 
 /**
  * Thrown when a transaction has been invalidated
@@ -43,7 +42,7 @@ public class Invalidated extends CoordinationFailed
     @Override
     public Invalidated wrap()
     {
-        checkState(this.getClass() == Invalidated.class);
+        Invariants.require(this.getClass() == Invalidated.class);
         return new Invalidated(txnId(), homeKey(), this);
     }
 }

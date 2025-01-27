@@ -70,7 +70,7 @@ public abstract class Persist implements Callback<ApplyReply>
         this.route = route;
         this.topologies = all;
         this.tracker = new QuorumTracker(all);
-        Invariants.checkState((writes != null) == txnId.is(Txn.Kind.Write), "%s: writes %s", txnId, writes);
+        Invariants.require((writes != null) == txnId.is(Txn.Kind.Write), "%s: writes %s", txnId, writes);
     }
 
     @Override

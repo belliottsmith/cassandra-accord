@@ -54,9 +54,9 @@ public class MaelstromKey implements RoutableKey
         @Override
         public accord.primitives.Range subRange(accord.primitives.Range range, Long start, Long end)
         {
-            Invariants.checkState(end - start <= Integer.MAX_VALUE);
+            Invariants.require(end - start <= Integer.MAX_VALUE);
             long startHash = hash(range.start());
-            Invariants.checkArgument(startHash + end <= hash(range.end()));
+            Invariants.requireArgument(startHash + end <= hash(range.end()));
             return range.newRange(
                     new Routing((int) (startHash + start)),
                     new Routing((int) (startHash + end))
@@ -136,7 +136,7 @@ public class MaelstromKey implements RoutableKey
         public Routing(Datum.Kind kind, Object hash)
         {
             super(kind, hash);
-            Invariants.checkArgument(kind == Datum.Kind.HASH);
+            Invariants.requireArgument(kind == Datum.Kind.HASH);
         }
 
         public Routing(int hash)

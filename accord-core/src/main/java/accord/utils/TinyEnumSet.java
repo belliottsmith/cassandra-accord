@@ -39,7 +39,7 @@ public class TinyEnumSet<E extends Enum<E>>
         int bitset = 0;
         for (Enum<E> v : values)
         {
-            Invariants.checkArgument(v.ordinal() < 32);
+            Invariants.requireArgument(v.ordinal() < 32);
             bitset |= 1 << v.ordinal();
         }
         return bitset;

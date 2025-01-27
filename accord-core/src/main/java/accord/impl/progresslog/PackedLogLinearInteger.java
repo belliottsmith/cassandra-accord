@@ -31,16 +31,16 @@ public class PackedLogLinearInteger
 {
     public static int validateLowBits(int numberOfLowBits, int numberOfBits)
     {
-        Invariants.checkArgument(numberOfBits <= 30, "%s bits can store the raw input without packing", numberOfBits);
+        Invariants.requireArgument(numberOfBits <= 30, "%s bits can store the raw input without packing", numberOfBits);
         int numberOfHighBits = numberOfBits - numberOfLowBits;
-        Invariants.checkArgument(numberOfHighBits <= 5, numberOfHighBits + " bits is too many to represent the maximum bit position");
-        Invariants.checkArgument(numberOfHighBits > 0, numberOfHighBits + " bits cannot be zero; this produces a simple linear integer");
+        Invariants.requireArgument(numberOfHighBits <= 5, numberOfHighBits + " bits is too many to represent the maximum bit position");
+        Invariants.requireArgument(numberOfHighBits > 0, numberOfHighBits + " bits cannot be zero; this produces a simple linear integer");
         return numberOfLowBits;
     }
 
     public static int encode(int value, int numberOfLowBits, int numberOfBits)
     {
-        Invariants.checkState(value >= 0);
+        Invariants.require(value >= 0);
         if (value < 1 << numberOfLowBits)
             return value;
 

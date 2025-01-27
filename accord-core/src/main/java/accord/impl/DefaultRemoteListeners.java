@@ -114,14 +114,14 @@ public class DefaultRemoteListeners implements RemoteListeners
         {
             this.waitingOn = newWaitingOn;
             this.waitingOnCount = this.waitingOnSize = newWaitingOnCount;
-            Invariants.checkArgumentSorted(newWaitingOn, 0, newWaitingOnCount);
+            Invariants.requireArgumentSorted(newWaitingOn, 0, newWaitingOnCount);
         }
         
         private void updateListeners(long[] newListeners, int newListenerCount)
         {
             this.listeners = newListeners;
             this.listenerCount = newListenerCount;
-            Invariants.checkArgumentSorted(newListeners, 0, newListenerCount);
+            Invariants.requireArgumentSorted(newListeners, 0, newListenerCount);
         }
 
         void mergeInts(int[] vis, int viSize, int[] vjs, int vjSize, IntMergeConsumer consumer)
@@ -188,8 +188,8 @@ public class DefaultRemoteListeners implements RemoteListeners
             {
                 long vi = vis[i], vj = vjs[j];
 
-                Invariants.checkState(vi >= 0);
-                Invariants.checkState(vj >= 0);
+                Invariants.require(vi >= 0);
+                Invariants.require(vj >= 0);
 
                 long c = vi - vj;
                 if (c <= 0)
@@ -249,7 +249,7 @@ public class DefaultRemoteListeners implements RemoteListeners
                         if (waitingOn[i] >= 0)
                             waitingOn[count++] = waitingOn[i];
                     }
-                    Invariants.checkState(count == waitingOnCount);
+                    Invariants.require(count == waitingOnCount);
                     waitingOnSize = waitingOnCount;
                 }
             }
@@ -363,7 +363,7 @@ public class DefaultRemoteListeners implements RemoteListeners
         @Override
         public synchronized void add(SafeCommandStore safeStore, SafeCommand safeCommand)
         {
-            Invariants.checkState(safeCommand.current().saveStatus().compareTo(awaitSaveStatus) < 0);
+            Invariants.require(safeCommand.current().saveStatus().compareTo(awaitSaveStatus) < 0);
             if (count == waitingOn.length)
             {
                 trim();
@@ -421,7 +421,7 @@ public class DefaultRemoteListeners implements RemoteListeners
     @Override
     public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId)
     {
-        Invariants.checkArgument(callbackId >= 0);
+        Invariants.requireArgument(callbackId >= 0);
         return new Register(txnId, awaitSaveStatus, awaitDurability, listener, callbackId);
     }
 
@@ -480,13 +480,13 @@ public class DefaultRemoteListeners implements RemoteListeners
     @VisibleForTesting
     public static long encodeListener(int nodeId, int callbackId)
     {
-        Invariants.checkArgument(callbackId >= 0);
+        Invariants.requireArgument(callbackId >= 0);
         return callbackId | ((long)nodeId << 31);
     }
 
     static
     {
-        Invariants.checkState(Durability.maxOrdinal() < 16);
+        Invariants.require(Durability.maxOrdinal() < 16);
     }
 
     private static SaveStatus awaitSaveStatus(int encodedAwait)

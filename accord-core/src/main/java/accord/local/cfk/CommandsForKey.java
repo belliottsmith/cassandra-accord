@@ -347,8 +347,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
         private TxnInfo(TxnId txnId, int encodedStatus, Timestamp executeAt)
         {
             super(txnId);
-            Invariants.checkState(executeAt == txnId || !executeAt.equals(txnId));
-            Invariants.checkArgument((flags() & ~IDENTITY_FLAGS) == 0);
+            Invariants.require(executeAt == txnId || !executeAt.equals(txnId));
+            Invariants.requireArgument((flags() & ~IDENTITY_FLAGS) == 0);
             this.encodedStatus = encodedStatus;
             this.executeAt = executeAt == txnId ? this : executeAt;
         }
@@ -381,14 +381,14 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
         public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean mayExecute, int statusOverrideXor, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
         {
-            Invariants.checkState(executeAt == txnId || !executeAt.equals(txnId));
-            Invariants.checkState(status.hasExecuteAt || executeAt == txnId);
-            Invariants.checkState(status.hasDeps || missing == NO_TXNIDS);
-            Invariants.checkState(status.hasBallot || ballot == Ballot.ZERO);
+            Invariants.require(executeAt == txnId || !executeAt.equals(txnId));
+            Invariants.require(status.hasExecuteAt || executeAt == txnId);
+            Invariants.require(status.hasDeps || missing == NO_TXNIDS);
+            Invariants.require(status.hasBallot || ballot == Ballot.ZERO);
             int encodedStatus = encode(txnId, status, mayExecute, statusOverrideXor);
             if (missing == NO_TXNIDS && (!status.hasBallot || ballot == Ballot.ZERO))
                 return new TxnInfo(txnId, encodedStatus, executeAt);
-            Invariants.checkState(missing.length > 0 || missing == NO_TXNIDS);
+            Invariants.require(missing.length > 0 || missing == NO_TXNIDS);
             return new TxnInfoExtra(txnId, encodedStatus, executeAt, missing, ballot);
         }
 
@@ -449,7 +449,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         public int statusOverrides()
         {
             int overrides = status().flags ^ statusFlags();
-            Invariants.checkState(overrides <= 1); // only currently permitted to override hasDeps
+            Invariants.require(overrides <= 1); // only currently permitted to override hasDeps
             return overrides;
         }
 
@@ -533,7 +533,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
         public TxnInfo withMissing(TxnId[] newMissing)
         {
-            Invariants.checkState(hasDeps());
+            Invariants.require(hasDeps());
             return newMissing == NO_TXNIDS
                    ? new TxnInfo(this, encodedStatus, executeAt)
                    : new TxnInfoExtra(this, encodedStatus, executeAt, newMissing, Ballot.ZERO);
@@ -647,7 +647,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         // statusOverrides is the bitmask we xor, not the new values of the flag (so providing zero has no effect, and providing the base value sets to zero)
         private static int encode(TxnId txnId, InternalStatus internalStatus, boolean mayExecute, int statusOverrideXor)
         {
-            Invariants.checkArgument(statusOverrideXor <= 1);
+            Invariants.requireArgument(statusOverrideXor <= 1);
             int encoded = internalStatus.txnInfoEncoded | (mayExecute ? MAY_EXECUTE : 0);
             if (txnId.is(Key)) encoded |= MANAGED;
             encoded ^= statusOverrideXor << INTERNAL_STATUS_FLAGS_SHIFT;
@@ -666,7 +666,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
         void setDurableInPlace()
         {
-            Invariants.checkState(is(APPLIED_NOT_DURABLE));
+            Invariants.require(is(APPLIED_NOT_DURABLE));
             encodedStatus &= ~((SUMMARY_STATUS_ORDINAL_MASK << SUMMARY_STATUS_ORDINAL_SHIFT) | (INTERNAL_STATUS_ORDINAL_MASK << INTERNAL_STATUS_ORDINAL_SHIFT));
             encodedStatus |= APPLIED_DURABLE.ordinal() << INTERNAL_STATUS_ORDINAL_SHIFT;
             encodedStatus |= APPLIED_DURABLE.summaryStatus.ordinal() << SUMMARY_STATUS_ORDINAL_SHIFT;
@@ -775,7 +775,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         {
             this.pending = pending;
             this.txnId = txnId;
-            this.waitingUntil = Invariants.checkArgument(waitingUntil, waitingUntil != null);
+            this.waitingUntil = Invariants.requireArgument(waitingUntil, waitingUntil != null);
         }
 
         @Override
@@ -881,7 +881,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             // TODO (expected): if we truncate (but don't invalidate) a command that had not been decided, we should probably erase it?
             FROM_SAVE_STATUS.put(SaveStatus.Invalidated, INVALIDATED);
             for (SaveStatus saveStatus : SaveStatus.values())
-                Invariants.checkState(FROM_SAVE_STATUS.get(saveStatus) != null || saveStatus.is(Status.Truncated) || saveStatus.is(Status.NotDefined));
+                Invariants.require(FROM_SAVE_STATUS.get(saveStatus) != null || saveStatus.is(Status.Truncated) || saveStatus.is(Status.NotDefined));
 
             SummaryStatus[] summaryStatuses = SummaryStatus.values();
             TO_SUMMARY_STATUS = Arrays.copyOf(summaryStatuses, summaryStatuses.length + 1);
@@ -1474,7 +1474,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public CommandsForKeyUpdate update(Command update)
     {
-        Invariants.checkState(manages(update.txnId()));
+        Invariants.require(manages(update.txnId()));
         InternalStatus newStatus = from(update);
         if (newStatus == null)
         {
@@ -1541,7 +1541,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     private CommandsForKeyUpdate update(InternalStatus newStatus, Command updated)
     {
         TxnId txnId = updated.txnId();
-        Invariants.checkArgument(updated.participants().hasTouched(key) || !manages(txnId));
+        Invariants.requireArgument(updated.participants().hasTouched(key) || !manages(txnId));
 
         if (txnId.compareTo(redundantBefore()) < 0)
             return this;
@@ -1633,7 +1633,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     private CommandsForKeyUpdate insertOrUpdateOutOfRange(int updatePos, TxnId plainTxnId, @Nullable TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command updated, boolean wasPruned, TxnId[] loadingAsPrunedFor)
     {
-        Invariants.checkArgument(!mayExecute);
+        Invariants.requireArgument(!mayExecute);
         int statusOverridesXor = newStatus.flags & 1;
         TxnInfo newInfo;
         if (curInfo == null) newInfo = TxnInfo.create(plainTxnId, newStatus, false, statusOverridesXor, plainTxnId, updated.acceptedOrCommitted());
@@ -1646,7 +1646,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     CommandsForKeyUpdate update(TxnInfo[] newById, int newMinUndecidedById, TxnInfo[] newCommittedByExecuteAt, int newMaxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] newLoadingPruned, int newPrunedBeforeById, @Nullable TxnInfo curInfo, @Nonnull TxnInfo newInfo)
     {
-        Invariants.checkState(prunedBeforeById < 0 || newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
+        Invariants.require(prunedBeforeById < 0 || newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
         return updateAndNotifyUnmanageds(key, boundsInfo, false,
                                          newById, newCommittedByExecuteAt,
                                          newMinUndecidedById, newMaxAppliedWriteByExecuteAt, maxUniqueHlc,
@@ -1656,7 +1656,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     static CommandsForKey reconstruct(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, TxnId prunedBefore, Unmanaged[] unmanageds)
     {
         int prunedBeforeById = Arrays.binarySearch(byId, prunedBefore);
-        Invariants.checkState(prunedBeforeById >= 0 || prunedBefore.equals(TxnId.NONE));
+        Invariants.require(prunedBeforeById >= 0 || prunedBefore.equals(TxnId.NONE));
         return reconstruct(key, boundsInfo, isNewBoundsInfo, byId, maxUniqueHlc, BTree.empty(), prunedBeforeById, unmanageds);
     }
 
@@ -1734,7 +1734,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     CommandsForKeyUpdate registerUnmanaged(SafeCommand safeCommand, UpdateUnmanagedMode mode)
     {
-        Invariants.checkState(mode != UPDATE);
+        Invariants.require(mode != UPDATE);
         return Updating.updateUnmanaged(this, safeCommand, mode, null);
     }
 
@@ -2145,70 +2145,70 @@ public class CommandsForKey extends CommandsForKeyUpdate
     {
         if (isParanoid())
         {
-            Invariants.checkState(byId.length == 0 || byId[0].compareTo(redundantBefore()) >= 0);
-            Invariants.checkState(prunedBeforeById == -1 || (prunedBefore().is(APPLIED) && prunedBefore().is(Write)));
-            Invariants.checkState(minUndecidedById < 0 || (byId[minUndecidedById].status().compareTo(InternalStatus.COMMITTED) < 0 && mayExecute(byId[minUndecidedById])));
-            Invariants.checkState(maxAppliedWrite() == null || maxUniqueHlc >= maxAppliedWrite().executeAt.hlc());
+            Invariants.require(byId.length == 0 || byId[0].compareTo(redundantBefore()) >= 0);
+            Invariants.require(prunedBeforeById == -1 || (prunedBefore().is(APPLIED) && prunedBefore().is(Write)));
+            Invariants.require(minUndecidedById < 0 || (byId[minUndecidedById].status().compareTo(InternalStatus.COMMITTED) < 0 && mayExecute(byId[minUndecidedById])));
+            Invariants.require(maxAppliedWrite() == null || maxUniqueHlc >= maxAppliedWrite().executeAt.hlc());
 
             if (maxAppliedWriteByExecuteAt >= 0)
             {
-                Invariants.checkState(committedByExecuteAt[maxAppliedWriteByExecuteAt].kind() == Write);
-                Invariants.checkState(committedByExecuteAt[maxAppliedWriteByExecuteAt].is(APPLIED));
+                Invariants.require(committedByExecuteAt[maxAppliedWriteByExecuteAt].kind() == Write);
+                Invariants.require(committedByExecuteAt[maxAppliedWriteByExecuteAt].is(APPLIED));
             }
 
             if (testParanoia(LINEAR, NONE, LOW))
             {
-                Invariants.checkArgument(SortedArrays.isSortedUnique(byId));
-                Invariants.checkArgument(SortedArrays.isSortedUnique(committedByExecuteAt, TxnInfo::compareExecuteAt));
+                Invariants.requireArgument(SortedArrays.isSortedUnique(byId));
+                Invariants.requireArgument(SortedArrays.isSortedUnique(committedByExecuteAt, TxnInfo::compareExecuteAt));
 
                 for (TxnInfo txn : byId)
                 {
-                    Invariants.checkState(mayExecute(txn) == txn.mayExecute());
-                    Invariants.checkState(txn.hasDeps() || txn.missing() == NO_TXNIDS);
+                    Invariants.require(mayExecute(txn) == txn.mayExecute());
+                    Invariants.require(txn.hasDeps() || txn.missing() == NO_TXNIDS);
                 }
-                for (TxnInfo txn : committedByExecuteAt) Invariants.checkState(txn.mayExecute());
+                for (TxnInfo txn : committedByExecuteAt) Invariants.require(txn.mayExecute());
 
-                if (minUndecidedById >= 0) for (int i = 0 ; i < minUndecidedById ; ++i) Invariants.checkState(byId[i].status().compareTo(InternalStatus.COMMITTED) >= 0 || !mayExecute(byId[i]) || isPreBootstrap(byId[i]));
-                else for (TxnInfo txn : byId) Invariants.checkState(txn.status().compareTo(InternalStatus.COMMITTED) >= 0 || !mayExecute(txn) || isPreBootstrap(txn));
+                if (minUndecidedById >= 0) for (int i = 0 ; i < minUndecidedById ; ++i) Invariants.require(byId[i].status().compareTo(InternalStatus.COMMITTED) >= 0 || !mayExecute(byId[i]) || isPreBootstrap(byId[i]));
+                else for (TxnInfo txn : byId) Invariants.require(txn.status().compareTo(InternalStatus.COMMITTED) >= 0 || !mayExecute(txn) || isPreBootstrap(txn));
 
                 if (maxAppliedWriteByExecuteAt >= 0)
                 {
                     for (int i = maxAppliedWriteByExecuteAt + 1; i < committedByExecuteAt.length ; ++i)
-                        Invariants.checkState(committedByExecuteAt[i].kind() != Kind.Write || committedByExecuteAt[i].status().compareTo(APPLIED) < 0);
+                        Invariants.require(committedByExecuteAt[i].kind() != Kind.Write || committedByExecuteAt[i].status().compareTo(APPLIED) < 0);
                 }
                 else
                 {
                     for (TxnInfo txn : committedByExecuteAt)
-                        Invariants.checkState(txn.kind() != Kind.Write || txn.status().compareTo(APPLIED) < 0 && mayExecute(txn));
+                        Invariants.require(txn.kind() != Kind.Write || txn.status().compareTo(APPLIED) < 0 && mayExecute(txn));
                 }
-                Invariants.checkState(BTree.size(loadingPruned) == 0 || redundantBefore().compareTo(BTree.findByIndex(loadingPruned, 0)) <= 0);
+                Invariants.require(BTree.size(loadingPruned) == 0 || redundantBefore().compareTo(BTree.findByIndex(loadingPruned, 0)) <= 0);
                 for (Unmanaged unmanaged : unmanageds)
-                    Invariants.checkState(unmanaged.waitingUntil.epoch() < boundsInfo.endOwnershipEpoch);
+                    Invariants.require(unmanaged.waitingUntil.epoch() < boundsInfo.endOwnershipEpoch);
             }
             if (testParanoia(SUPERLINEAR, NONE, LOW))
             {
                 for (TxnInfo txn : committedByExecuteAt)
                 {
-                    Invariants.checkState(txn == get(txn, byId));
+                    Invariants.require(txn == get(txn, byId));
                 }
                 for (TxnInfo txn : byId)
                 {
                     if (txn.isCommittedAndExecutes())
-                        Invariants.checkState(Arrays.binarySearch(committedByExecuteAt, txn, TxnInfo::compareExecuteAt) >= 0);
+                        Invariants.require(Arrays.binarySearch(committedByExecuteAt, txn, TxnInfo::compareExecuteAt) >= 0);
 
                     for (TxnId missingId : txn.missing())
                     {
-                        Invariants.checkState(txn.witnesses(missingId));
+                        Invariants.require(txn.witnesses(missingId));
                         TxnInfo missingInfo = get(missingId, byId);
-                        Invariants.checkState(missingInfo.status().compareTo(InternalStatus.COMMITTED) < 0);
-                        Invariants.checkState(txn.depsKnownBefore().compareTo(missingId) >= 0);
+                        Invariants.require(missingInfo.status().compareTo(InternalStatus.COMMITTED) < 0);
+                        Invariants.require(txn.depsKnownBefore().compareTo(missingId) >= 0);
                     }
                     if (txn.isCommittedAndExecutes())
-                        Invariants.checkState(txn == committedByExecuteAt[Arrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, txn, TxnInfo::compareExecuteAt)]);
+                        Invariants.require(txn == committedByExecuteAt[Arrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, txn, TxnInfo::compareExecuteAt)]);
                 }
                 for (LoadingPruned txn : BTree.<LoadingPruned>iterable(loadingPruned))
                 {
-                    Invariants.checkState(indexOf(txn) < 0);
+                    Invariants.require(indexOf(txn) < 0);
                 }
                 int decidedBefore = minUndecidedById < 0 ? byId.length : minUndecidedById;
                 if (!BTree.isEmpty(loadingPruned))
@@ -2241,13 +2241,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
                             int byIdIndex = Arrays.binarySearch(byId, unmanaged.waitingUntil);
                             if (byIdIndex < 0)
                                 byIdIndex = -1 - byIdIndex;
-                            Invariants.checkState(byIdIndex >= decidedBefore || isAnyPredecessorWaitingOnPruned(loadingPruned, unmanaged.txnId));
+                            Invariants.require(byIdIndex >= decidedBefore || isAnyPredecessorWaitingOnPruned(loadingPruned, unmanaged.txnId));
                             break;
                         }
                         case APPLY:
                         {
                             int byExecuteAtIndex = SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanaged.waitingUntil, (f, i) -> f.compareTo(i.executeAt), FAST);
-                            Invariants.checkState(byExecuteAtIndex >= 0 && byExecuteAtIndex >= appliedBefore);
+                            Invariants.require(byExecuteAtIndex >= 0 && byExecuteAtIndex >= appliedBefore);
                             break;
                         }
                     }

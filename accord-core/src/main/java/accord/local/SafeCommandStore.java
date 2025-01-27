@@ -339,7 +339,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             if (execute != null)
                 context = PreLoadContext.contextFor(next.txnId(), update.without(execute.keys()), INCR);
 
-            Invariants.checkState(!context.keys().isEmpty());
+            Invariants.require(!context.keys().isEmpty());
             safeStore = safeStore; // prevent accidental usage inside lambda
             safeStore.commandStore().execute(context, safeStore0 -> {
                 PreLoadContext ctx = safeStore0.context();
@@ -531,8 +531,8 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     public void registerListener(SafeCommand listeningTo, SaveStatus await, TxnId waiting)
     {
-        Invariants.checkState(listeningTo.current().saveStatus().compareTo(await) < 0);
-        Invariants.checkState(!CommandsForKey.managesExecution(listeningTo.txnId()));
+        Invariants.require(listeningTo.current().saveStatus().compareTo(await) < 0);
+        Invariants.require(!CommandsForKey.managesExecution(listeningTo.txnId()));
         commandStore().listeners.register(listeningTo.txnId(), await, waiting);
     }
 

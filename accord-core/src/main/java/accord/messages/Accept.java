@@ -114,7 +114,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
                 if (deps == null)
                     return AcceptReply.redundant(ballot, participants, safeCommand.current());
 
-                Invariants.checkState(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
+                Invariants.require(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
                 if (filterDuplicateDependenciesFromAcceptReply())
                     deps = deps.without(this.partialDeps);
                 return new AcceptReply(deps);

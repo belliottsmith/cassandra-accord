@@ -38,7 +38,6 @@ import javax.annotation.Nullable;
 
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.ArrayBuffers.uncached;
-import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.SortedArrays.Search.FAST;
 
@@ -55,7 +54,7 @@ public class SortedArrays
         public SortedArrayList(T[] array)
         {
             // implicitly checks entries are non-null
-            this.array = checkArgument(array, SortedArrays::isSortedUnique);
+            this.array = Invariants.requireArgument(array, SortedArrays::isSortedUnique);
         }
 
         public static <T extends Comparable<? super T>> SortedArrayList<T> ofSorted(T ... items)
@@ -148,7 +147,7 @@ public class SortedArrays
 
             public SortedArrayList<T> build()
             {
-                Invariants.checkState(count == array.length);
+                Invariants.require(count == array.length);
                 return new SortedArrayList<>(array);
             }
         }
@@ -518,7 +517,7 @@ public class SortedArrays
         }
         else
         {
-            checkArgument(rightBuffers != null);
+            Invariants.requireArgument(rightBuffers != null);
             boolean hasMatch = false;
             while (leftIdx < leftLength && rightIdx < rightLength)
             {
@@ -623,7 +622,7 @@ public class SortedArrays
         }
         else
         {
-            checkArgument(rightBuffers != null);
+            Invariants.requireArgument(rightBuffers != null);
             boolean hasMatch = false;
             while (leftIdx < leftLength && rightIdx < rightLength)
             {

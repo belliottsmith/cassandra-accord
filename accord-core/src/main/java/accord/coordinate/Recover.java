@@ -124,7 +124,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         this.committedExecuteAt = committedExecuteAt;
         this.reportLowEpoch = reportLowEpoch;
         this.reportHighEpoch = reportHighEpoch;
-        Invariants.checkState(txnId.isVisible());
+        Invariants.require(txnId.isVisible());
         this.adapter = node.coordinationAdapter(txnId, Recovery);
         this.node = node;
         this.ballot = ballot;
@@ -139,7 +139,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     @Override
     public void accept(Result result, Throwable failure)
     {
-        Invariants.checkState(!isDone);
+        Invariants.require(!isDone);
         isDone = true;
         if (failure == null)
         {
@@ -240,7 +240,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void recover()
     {
-        Invariants.checkState(!isBallotPromised);
+        Invariants.require(!isBallotPromised);
         isBallotPromised = true;
 
         SortedListMap<Id, RecoverOk> recoverOks = this.recoverOks;
@@ -256,7 +256,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             Timestamp executeAt = acceptOrCommitNotTruncated.executeAt;
             if (committedExecuteAt != null)
             {
-                Invariants.checkState(acceptOrCommitNotTruncated.status.compareTo(Status.PreCommitted) < 0 || executeAt.equals(committedExecuteAt));
+                Invariants.require(acceptOrCommitNotTruncated.status.compareTo(Status.PreCommitted) < 0 || executeAt.equals(committedExecuteAt));
                 // if we know from a prior Accept attempt that this is committed we can go straight to the commit phase
                 if (status == AcceptedMedium)
                     status = Status.Committed;
@@ -362,7 +362,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             return;
         }
 
-        Invariants.checkState(committedExecuteAt == null || committedExecuteAt.equals(txnId));
+        Invariants.require(committedExecuteAt == null || committedExecuteAt.equals(txnId));
         // should all be PreAccept
         Deps proposeDeps = LatestDeps.mergeProposal(recoverOkList, ok -> ok == null ? null : ok.deps);
         Deps earlierWait = Deps.merge(recoverOkList, recoverOkList.size(), List::get, ok -> ok.earlierWait);

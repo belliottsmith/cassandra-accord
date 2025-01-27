@@ -138,7 +138,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         Key key = new Key(to, ranges);
         inflight.put(key, starting(to, ranges));
         Ranges ownedRanges = ownedRangesForNode(to);
-        Invariants.checkArgument(ownedRanges.containsAll(ranges), "Got a reply from %s for ranges %s, but owned ranges %s does not contain all the ranges", to, ranges, ownedRanges);
+        Invariants.requireArgument(ownedRanges.containsAll(ranges), "Got a reply from %s for ranges %s, but owned ranges %s does not contain all the ranges", to, ranges, ownedRanges);
         PartialDeps partialDeps = syncPoint.waitFor.intersecting(ranges);
         node.send(to, newFetchRequest(syncPoint.syncId.epoch(), syncPoint.syncId, ranges, partialDeps, rangeReadTxn(ranges)), new Callback<ReadReply>()
         {
@@ -290,7 +290,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         protected ReadOk constructReadOk(Ranges unavailable, Data data, long uniqueHlc)
         {
             Timestamp safeToReadAfter = safeToReadAfter();
-            Invariants.checkState(data == null || safeToReadAfter != null);
+            Invariants.require(data == null || safeToReadAfter != null);
             return new FetchResponse(unavailable, data, safeToReadAfter);
         }
 

@@ -46,10 +46,10 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.utils.Invariants;
 import accord.utils.RandomSource;
 
 import static accord.local.Node.Id.NONE;
-import static accord.utils.Invariants.checkState;
 import static com.google.common.base.Functions.identity;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -88,7 +88,7 @@ public class ListAgent implements Agent
     {
         if (fail != null)
         {
-            checkState(success == null, "fail (%s) and success (%s) are both not null", fail, success);
+            Invariants.require(success == null, "fail (%s) and success (%s) are both not null", fail, success);
             // We don't really process errors for Recover here even though it is provided in the interface
         }
         if (success != null)

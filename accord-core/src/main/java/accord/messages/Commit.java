@@ -179,7 +179,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
 
     public static void commitMinimalNoRead(SortedArrayList<Id> contact, Node node, Topologies stabilise, Topologies all, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps unstableDeps, Callback<ReadReply> callback)
     {
-        Invariants.checkArgument(stabilise.size() == 1, "Invalid coordinate epochs: %s", stabilise);
+        Invariants.requireArgument(stabilise.size() == 1, "Invalid coordinate epochs: %s", stabilise);
         // we want to send to everyone, and we want to include all the relevant data, but we stabilise on the coordination epoch replica responses
         sendTo(contact, null, (i1, i2) -> false, (i1, i2) -> true, node, all, Kind.CommitSlowPath, ballot,
                txnId, txn, route, executeAt, unstableDeps, callback, false);
@@ -188,8 +188,8 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     // TODO (desired, efficiency): do not commit if we're already ready to execute (requires extra info in Accept responses)
     public static void stableAndRead(Node node, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps stableDeps, IntHashSet readSet, Callback<ReadReply> callback, boolean onlyContactOldAndReadSet)
     {
-        Invariants.checkState(all.oldestEpoch() == txnId.epoch());
-        Invariants.checkState(all.currentEpoch() == executeAt.epoch());
+        Invariants.require(all.oldestEpoch() == txnId.epoch());
+        Invariants.require(all.currentEpoch() == executeAt.epoch());
 
         SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
         sendTo(contact, readSet, (set, id) -> set.contains(id.id), (set, id) -> false, node, all, kind, Ballot.ZERO,
@@ -198,8 +198,8 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
 
     public static void stableAndRead(Id to, Node node, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps stableDeps, Callback<ReadReply> callback, boolean onlyContactOldAndReadSet)
     {
-        Invariants.checkState(all.oldestEpoch() == txnId.epoch());
-        Invariants.checkState(all.currentEpoch() == executeAt.epoch());
+        Invariants.require(all.oldestEpoch() == txnId.epoch());
+        Invariants.require(all.currentEpoch() == executeAt.epoch());
 
         sendTo(to, true, true, node, all, kind, Ballot.ZERO, txnId, txn, route, executeAt, stableDeps, callback, onlyContactOldAndReadSet);
     }
@@ -239,13 +239,13 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         {
             if (isRead)
             {
-                Invariants.checkState(kind.compareTo(StableFastPath) >= 0);
+                Invariants.require(kind.compareTo(StableFastPath) >= 0);
                 return new StableThenRead(kind, to, all, txnId, txn, route, executeAt, deps);
             }
             if (onlyContactOldAndCallbacks)
                 return null;
         }
-        Invariants.checkState(!isRead);
+        Invariants.require(!isRead);
         return new Commit(kind, to, all, txnId, txn, route, ballot, executeAt, deps);
     }
 
@@ -290,7 +290,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
             case Redundant:
                 return null;
             case Insufficient:
-                Invariants.checkState(kind != StableWithTxnAndDeps && kind != CommitWithTxn);
+                Invariants.require(kind != StableWithTxnAndDeps && kind != CommitWithTxn);
                 return CommitOrReadNack.Insufficient;
             case Rejected:
                 return CommitOrReadNack.Rejected;
@@ -354,8 +354,8 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, long untilEpoch)
         {
             // TODO (expected, safety): this kind of check needs to be inserted in all equivalent methods
-            Invariants.checkState(untilEpoch >= txnId.epoch());
-            Invariants.checkState(node.topology().hasEpoch(untilEpoch));
+            Invariants.require(untilEpoch >= txnId.epoch());
+            Invariants.require(node.topology().hasEpoch(untilEpoch));
             Topologies commitTo = node.topology().preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch);
             commitInvalidate(node, commitTo, txnId, inform);
         }

@@ -44,7 +44,7 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
         return AbstractRanges.union(MERGE_OVERLAPPING, this, that, this, that, (p1, p2, rs) -> {
             if (rs == p1.ranges)
                 return p1;
-            Invariants.checkState(p1.getClass() == PartialRangeRoute.class);
+            Invariants.require(p1.getClass() == PartialRangeRoute.class);
             if (rs == p2.ranges && p2 instanceof RangeRoute)
                 return (RangeRoute)p2;
             return new PartialRangeRoute(homeKey, rs);

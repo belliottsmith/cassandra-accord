@@ -76,7 +76,7 @@ public class Invalidate implements Callback<InvalidateReply>
         this.reportLowEpoch = reportLowEpoch;
         this.reportHighEpoch = reportHighEpoch;
         Topologies topologies = node.topology().forEpoch(invalidateWith, txnId.epoch());
-        Invariants.checkState(topologies.size() == 1);
+        Invariants.require(topologies.size() == 1);
         this.tracker = new InvalidationTracker(topologies, txnId);
         this.replies = new SortedListMap<>(topologies.nodes(), InvalidateReply[]::new);
     }
@@ -159,7 +159,7 @@ public class Invalidate implements Callback<InvalidateReply>
 
     private void invalidate()
     {
-        Invariants.checkState(!isPrepareDone);
+        Invariants.require(!isPrepareDone);
         isPrepareDone = true;
 
         FullRoute<?> fullRoute = InvalidateReply.findRoute(replies.unsafeValuesBackingArray());
@@ -193,12 +193,12 @@ public class Invalidate implements Callback<InvalidateReply>
                 case Stable:
                 case Committed:
                 case PreCommitted:
-                    Invariants.checkState(maxNotTruncated.maxKnowledgeStatus.status == PreAccepted || !invalidateWith.contains(someRoute.homeKey()) || fullRoute != null);
+                    Invariants.require(maxNotTruncated.maxKnowledgeStatus.status == PreAccepted || !invalidateWith.contains(someRoute.homeKey()) || fullRoute != null);
 
                 case AcceptedMedium:
                 case AcceptedSlow:
                     // TODO (desired, efficiency): if we see Committed or above, go straight to Execute if we have assembled enough information
-                    Invariants.checkState(fullRoute != null, "Received a reply from a node that must have known some route, but that did not include it"); // we now require the FullRoute on all replicas to preaccept, commit or apply
+                    Invariants.require(fullRoute != null, "Received a reply from a node that must have known some route, but that did not include it"); // we now require the FullRoute on all replicas to preaccept, commit or apply
                     // The data we see might have made it only to a minority in the event of PreAccept ONLY.
                     // We want to protect against infinite loops, so we inform the recovery of the state we have
                     // witnessed during our initial invalidation.
@@ -214,7 +214,7 @@ public class Invalidate implements Callback<InvalidateReply>
                     Status witnessedByInvalidation = maxNotTruncated.maxKnowledgeStatus.status;
                     if (!witnessedByInvalidation.hasBeen(AcceptedMedium))
                     {
-                        Invariants.checkState(tracker.all(InvalidationShardTracker::isPromised));
+                        Invariants.require(tracker.all(InvalidationShardTracker::isPromised));
                         if (!invalidateWith.containsAll(fullRoute))
                             witnessedByInvalidation = null;
                     }
@@ -231,7 +231,7 @@ public class Invalidate implements Callback<InvalidateReply>
 
         if (max != maxNotTruncated || max.maxStatus != max.maxKnowledgeStatus)
         {
-            Invariants.checkState(maxNotTruncated == null || !maxNotTruncated.maxKnowledgeStatus.hasBeen(Status.PreCommitted));
+            Invariants.require(maxNotTruncated == null || !maxNotTruncated.maxKnowledgeStatus.hasBeen(Status.PreCommitted));
             isDone = true;
             if (!tracker.isAnyNotTruncated()) // TODO (required): this check may be insufficient unless we do not permit shards to truncate when e.g. pre-bootstrap. If we require this, document it!
             {

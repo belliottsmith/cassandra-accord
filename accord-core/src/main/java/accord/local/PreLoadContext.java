@@ -63,7 +63,7 @@ public interface PreLoadContext
     {
         TxnId primaryTxnId = primaryTxnId();
         TxnId additionalTxnId = additionalTxnId();
-        Invariants.checkState(primaryTxnId != null || additionalTxnId == null);
+        Invariants.require(primaryTxnId != null || additionalTxnId == null);
         return new AbstractList<>()
         {
             @Override
@@ -106,7 +106,7 @@ public interface PreLoadContext
     default boolean isEmpty()
     {
         boolean isEmpty = primaryTxnId() == null && keys().isEmpty();
-        Invariants.checkState(additionalTxnId() == null);
+        Invariants.require(additionalTxnId() == null);
         return isEmpty;
     }
 
@@ -143,7 +143,7 @@ public interface PreLoadContext
         }
         else
         {
-            Invariants.checkState(primaryId != null);
+            Invariants.require(primaryId != null);
             TxnId supersetPrimaryId = superset.primaryTxnId();
             TxnId supersetAdditionalId = superset.additionalTxnId();
             return (primaryId.equals(supersetPrimaryId) || primaryId.equals(supersetAdditionalId)) && (additionalId.equals(supersetAdditionalId) || additionalId.equals(supersetPrimaryId));
@@ -152,7 +152,7 @@ public interface PreLoadContext
 
     static PreLoadContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, KeyHistory keyHistory)
     {
-        Invariants.checkState(primary == null ? additional == null : !primary.equals(additional));
+        Invariants.require(primary == null ? additional == null : !primary.equals(additional));
         return new Standard(primary, additional, keys, keyHistory);
     }
 
@@ -172,7 +172,7 @@ public interface PreLoadContext
 
         public Standard(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, KeyHistory keyHistory)
         {
-            Invariants.checkState(primary != null || additional == null);
+            Invariants.require(primary != null || additional == null);
             this.primary = primary;
             this.additional = additional;
             this.keys = keys;

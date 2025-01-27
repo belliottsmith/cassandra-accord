@@ -17,7 +17,6 @@
  */
 package accord.utils;
 
-import static accord.utils.Invariants.checkState;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -38,7 +37,7 @@ class TinyKVBuffer<K, V>
 
     void dropFirst()
     {
-        checkState(k0 != null);
+        Invariants.require(k0 != null);
         k0 = k1;   v0 = v1;
         k1 = k2;   v1 = v2;
         k2 = null; v2 = null;

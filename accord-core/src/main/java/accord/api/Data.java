@@ -20,8 +20,7 @@ package accord.api;
 
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-
-import static accord.utils.Invariants.checkState;
+import accord.utils.Invariants;
 
 /**
  * The result of some (potentially partial) {@link Read} from some {@link DataStore}
@@ -33,7 +32,7 @@ public interface Data
         @Override
         public Data merge(Data data)
         {
-            checkState(data == null || data == NOOP_DATA, "Can't mix no op Data with other implementations of Data");
+            Invariants.require(data == null || data == NOOP_DATA, "Can't mix no op Data with other implementations of Data");
             return NOOP_DATA;
         }
     };

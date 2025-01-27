@@ -85,8 +85,8 @@ abstract class Propose<R> implements Callback<AcceptReply>
         this.callback = callback;
         this.acceptOks = new SortedListMap<>(topologies.nodes(), AcceptReply[]::new);
         this.acceptTracker = new QuorumTracker(topologies);
-        Invariants.checkState(txnId.isSyncPoint() || deps.maxTxnId(txnId).compareTo(executeAt) <= 0,
-                              "Attempted to propose %s with an earlier executeAt than a conflicting transaction it witnessed: %s vs executeAt: %s", txnId, deps, executeAt);
+        Invariants.require(txnId.isSyncPoint() || deps.maxTxnId(txnId).compareTo(executeAt) <= 0,
+                           "Attempted to propose %s with an earlier executeAt than a conflicting transaction it witnessed: %s vs executeAt: %s", txnId, deps, executeAt);
     }
 
     void start()

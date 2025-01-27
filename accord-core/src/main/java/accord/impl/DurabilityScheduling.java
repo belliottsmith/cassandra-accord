@@ -213,7 +213,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
             if (defunct)
                 return;
 
-            Invariants.checkState(index < numberOfSplits);
+            Invariants.require(index < numberOfSplits);
             long nowMicros = node.elapsed(MICROSECONDS);
             long microsOffset = (index * shardCycleTimeMicros) / numberOfSplits;
             long scheduleAt = cycleStartedAtMicros + microsOffset;
@@ -252,7 +252,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
             Range range;
             int nextIndex;
             {
-                Invariants.checkState(index < numberOfSplits);
+                Invariants.require(index < numberOfSplits);
                 int i = index;
                 Range selectRange = null;
                 while (selectRange == null && ++i <= numberOfSplits)
@@ -434,7 +434,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
      */
     public synchronized void start()
     {
-        Invariants.checkState(!stop); // cannot currently restart safely
+        Invariants.require(!stop); // cannot currently restart safely
         started = true;
         updateTopology();
         long nowMicros = node.elapsed(MICROSECONDS);

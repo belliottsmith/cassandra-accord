@@ -21,7 +21,7 @@ package accord.utils.async;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiConsumer;
 
-import static accord.utils.Invariants.checkArgument;
+import accord.utils.Invariants;
 
 public class AsyncCallbacks
 {
@@ -29,7 +29,7 @@ public class AsyncCallbacks
     {
         // Checking for shutdown once here for the other `inExecutorService` as well as `AsyncChain.addCallback`
         // So we don't repeat the check
-        checkArgument(!es.isShutdown(), "ExecutorService is shutdown");
+        Invariants.requireArgument(!es.isShutdown(), "ExecutorService is shutdown");
         return (result, throwable) -> {
             try
             {

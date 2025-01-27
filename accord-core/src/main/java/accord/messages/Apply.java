@@ -73,7 +73,7 @@ public class Apply extends TxnRequest<ApplyReply>
     protected Apply(Kind kind, Id to, Topologies participates, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute)
     {
         super(to, participates, sendTo, txnId);
-        Invariants.checkState(txnId.kind() != Txn.Kind.Write || writes != null);
+        Invariants.require(txnId.kind() != Txn.Kind.Write || writes != null);
         // TODO (desired): it's wasteful to encode the full set of ranges owned by the recipient node;
         //     often it will be cheaper to include the FullRoute for Deps scope (or come up with some other safety-preserving encoding scheme)
         this.kind = kind;

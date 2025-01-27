@@ -187,7 +187,7 @@ public class CommandsForKeyTest
         private void readyToExecute(Command.Committed committed)
         {
             for (Command pred : committedByExecuteAt.headMap(committed.executeAt(), false).values())
-                Invariants.checkState((pred.hasBeen(Status.Applied)) || !committed.txnId().kind().witnesses(pred.txnId()));
+                Invariants.require((pred.hasBeen(Status.Applied)) || !committed.txnId().kind().witnesses(pred.txnId()));
             candidates.add(committed.txnId());
         }
 
@@ -223,13 +223,13 @@ public class CommandsForKeyTest
             if (!prev.txnId().kind().awaitsOnlyDeps())
             {
                 for (Command command : committedByExecuteAt.headMap(prev.executeAt(), false).values())
-                    Invariants.checkState(command.txnId().domain() == Domain.Range || !prev.txnId().kind().witnesses(command.txnId()) || command.saveStatus().compareTo(SaveStatus.Applied) >= 0);
+                    Invariants.require(command.txnId().domain() == Domain.Range || !prev.txnId().kind().witnesses(command.txnId()) || command.saveStatus().compareTo(SaveStatus.Applied) >= 0);
             }
 
             if (prev.txnId().domain() == Key)
             {
                 for (Command command : committedByExecuteAt.tailMap(prev.executeAt(), false).values())
-                    Invariants.checkState(command.txnId().kind().awaitsOnlyDeps() || !command.txnId().kind().witnesses(prev.txnId()) || command.saveStatus().compareTo(Stable) < 0 || command.asCommitted().waitingOn.isWaitingOnKey(0));
+                    Invariants.require(command.txnId().kind().awaitsOnlyDeps() || !command.txnId().kind().witnesses(prev.txnId()) || command.saveStatus().compareTo(Stable) < 0 || command.asCommitted().waitingOn.isWaitingOnKey(0));
             }
 
             Command.Committed next;
@@ -290,7 +290,7 @@ public class CommandsForKeyTest
             boolean generate = !closing && rnd.decide(1 / (1f + undecidedCount));
             if (!generate && candidates.isEmpty() && hasWaitingTasks)
                 return null;
-            Invariants.checkArgument (!candidates.isEmpty() || (unfinished.size() == unwitnessed.size()));
+            Invariants.requireArgument(!candidates.isEmpty() || (unfinished.size() == unwitnessed.size()));
             Command prev = generate || candidates.isEmpty() ? unwitnessed(generateId()) : selectOne(candidates);
             boolean invalidate = false;
             if (prev.txnId().kind() == Txn.Kind.ExclusiveSyncPoint && !prev.hasBeen(Status.Committed))
@@ -391,7 +391,7 @@ public class CommandsForKeyTest
             Timestamp max = Timestamp.fromValues(Math.min(100, min.epoch() * 2), min.hlc() + 100, min.node);
 
             Timestamp executeAt = generateTimestamp(min, max, true);
-            Invariants.checkState(executeAt.compareTo(txnId) >= 0);
+            Invariants.require(executeAt.compareTo(txnId) >= 0);
             executeAts.add(executeAt);
             return executeAt;
         }
@@ -470,8 +470,8 @@ public class CommandsForKeyTest
 
         Timestamp generateTimestamp(Timestamp min, Timestamp max)
         {
-            Invariants.checkArgument(min.flags() == 0);
-            Invariants.checkArgument(max.flags() == 0);
+            Invariants.requireArgument(min.flags() == 0);
+            Invariants.requireArgument(max.flags() == 0);
             long epoch = min.epoch() == max.epoch() ? min.epoch() : rnd.nextLong(min.epoch(), max.epoch());
             long hlc;
             Node.Id node;
@@ -483,7 +483,7 @@ public class CommandsForKeyTest
             else node = rnd.pick(nodeIds);
 
             Timestamp result = Timestamp.fromValues(epoch, hlc, node);
-            Invariants.checkState(result.compareTo(min) >= 0);
+            Invariants.require(result.compareTo(min) >= 0);
             return result;
         }
 
@@ -754,7 +754,7 @@ public class CommandsForKeyTest
         @Override
         protected SafeCommandsForKey getInternal(RoutingKey key)
         {
-            Invariants.checkArgument(key.equals(cfk.key()));
+            Invariants.requireArgument(key.equals(cfk.key()));
             return cfk;
         }
 
@@ -997,7 +997,7 @@ public class CommandsForKeyTest
         @Override
         public void shutdown()
         {
-            Invariants.checkState(queue.isEmpty());
+            Invariants.require(queue.isEmpty());
         }
 
         @Override

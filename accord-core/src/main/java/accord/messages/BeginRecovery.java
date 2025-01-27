@@ -92,7 +92,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         this.ballot = ballot;
         this.route = route;
         this.executeAtOrTxnIdEpoch = topologies.currentEpoch();
-        Invariants.checkState(executeAt == null || executeAt.epoch() == topologies.currentEpoch());
+        Invariants.require(executeAt == null || executeAt.epoch() == topologies.currentEpoch());
     }
 
     private BeginRecovery(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch)
@@ -297,7 +297,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                                 break;
 
                             case IS_NOT_COORD_DEP:
-                                Invariants.checkArgument(testTxnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
+                                Invariants.requireArgument(testTxnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
                                 // we don't know if we've been witnessed by the original coordinator that may yet take the fast (or medium) path
                                 ensureLaterWait().add(keyOrRange, testTxnId);
                         }

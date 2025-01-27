@@ -432,7 +432,7 @@ public enum RedundantStatus
         {
             for (RedundantStatus b : values())
             {
-                Invariants.checkState(a.merge(b) == b.merge(a), "non-symmetric merge of %s and %s", a, b);
+                Invariants.require(a.merge(b) == b.merge(a), "non-symmetric merge of %s and %s", a, b);
             }
         }
     }
@@ -440,7 +440,7 @@ public enum RedundantStatus
     public RedundantStatus merge(RedundantStatus that)
     {
         RedundantStatus result = merge.get(that);
-        Invariants.checkState(result != null, "Invalid RedundantStatus combination: " + this + " and " + that);
+        Invariants.require(result != null, "Invalid RedundantStatus combination: " + this + " and " + that);
         return result;
     }
 }

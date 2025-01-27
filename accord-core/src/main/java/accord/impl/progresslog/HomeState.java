@@ -60,7 +60,7 @@ abstract class HomeState extends WaitingState
 
     static
     {
-        Invariants.checkState(HOME_STATE_END_SHIFT <= BaseTxnState.BASE_STATE_START_SHIFT);
+        Invariants.require(HOME_STATE_END_SHIFT <= BaseTxnState.BASE_STATE_START_SHIFT);
     }
 
     HomeState(TxnId txnId)
@@ -134,7 +134,7 @@ abstract class HomeState extends WaitingState
 
     final void runHome(DefaultProgressLog instance, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        Invariants.checkState(!isHomeDoneOrUninitialised());
+        Invariants.require(!isHomeDoneOrUninitialised());
         Command command = safeCommand.current();
         if (command.hasBeen(Status.Truncated))
         {
@@ -142,12 +142,12 @@ abstract class HomeState extends WaitingState
             setHomeDone(instance);
             return;
         }
-        Invariants.checkState(!command.hasBeen(Status.Truncated), "Command %s is truncated", command);
+        Invariants.require(!command.hasBeen(Status.Truncated), "Command %s is truncated", command);
 
-        Invariants.checkState(command.durability() != null);
+        Invariants.require(command.durability() != null);
         // TODO (expected): when invalidated, safer to maintain HomeState until known to be globally invalidated
         // TODO (expected): validate that we clear HomeState when we receive a Durable reply, to replace the token check logic
-        Invariants.checkState(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog");
+        Invariants.require(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog");
 
         ProgressToken maxProgressToken = instance.savedProgressToken(txnId).merge(command);
 

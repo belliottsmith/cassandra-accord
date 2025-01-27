@@ -22,10 +22,10 @@ import java.util.Arrays;
 import java.util.Collection;
 
 import accord.api.RoutingKey;
+import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 
 import static accord.utils.ArrayBuffers.cachedRoutingKeys;
-import static accord.utils.Invariants.checkArgument;
 import static accord.utils.SortedArrays.isSortedUnique;
 import static accord.utils.SortedArrays.toUnique;
 
@@ -72,7 +72,7 @@ public class RoutingKeys extends AbstractUnseekableKeys implements Unseekables<R
     {
         if (keys.length == 0)
             return EMPTY;
-        checkArgument(isSortedUnique(keys));
+        Invariants.requireArgument(isSortedUnique(keys));
         return new RoutingKeys(keys);
     }
 

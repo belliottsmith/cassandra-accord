@@ -142,7 +142,7 @@ public class PartialKeyRoute extends KeyRoute implements PartialRoute<RoutingKey
 
     public PartialKeyRoute with(PartialKeyRoute that)
     {
-        Invariants.checkState(homeKey.equals(that.homeKey));
+        Invariants.require(homeKey.equals(that.homeKey));
         RoutingKey[] keys = SortedArrays.linearUnion(this.keys, that.keys, RoutingKey[]::new);
         if (keys == this.keys || keys == that.keys)
         {

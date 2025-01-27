@@ -71,7 +71,7 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
     @Override
     public V put(K key, V value)
     {
-        Invariants.checkArgument(value != null);
+        Invariants.requireArgument(value != null);
         int i = list.find(key);
         if (i < 0)
             throw new IllegalArgumentException(key + " is not in the SortedList of keys");

@@ -70,7 +70,7 @@ public class PackedKeyTracker
     {
         if (callbackId != roundIndex)
         {
-            Invariants.checkState(callbackId / roundSize < roundIndex);
+            Invariants.require(callbackId / roundSize < roundIndex);
             return 0; // stale callback for earlier round
         }
 
@@ -98,7 +98,7 @@ public class PackedKeyTracker
     static long setBitSet(long encodedState, int bitSet, int roundSize, int shift)
     {
         long mask = (1L << roundSize) - 1;
-        Invariants.checkArgument(Integer.highestOneBit(bitSet) <= mask);
+        Invariants.requireArgument(Integer.highestOneBit(bitSet) <= mask);
         encodedState &= ~(mask << shift);
         encodedState |= (long) bitSet << shift;
         return encodedState;
@@ -139,9 +139,9 @@ public class PackedKeyTracker
      */
     static long setRoundIndexAndClearBitSet(long encodedState, int newIndex, int roundSize, int shift, int bits, long mask)
     {
-        Invariants.checkArgument(roundSize > 0 && roundSize <= bits);
+        Invariants.requireArgument(roundSize > 0 && roundSize <= bits);
         int counterBits = bits - roundSize;
-        Invariants.checkState(newIndex < (1L << counterBits));
+        Invariants.require(newIndex < (1L << counterBits));
         int counterShift = shift + roundSize;
         encodedState &= ~(mask << shift);
         encodedState |= (long) newIndex << counterShift;
@@ -153,7 +153,7 @@ public class PackedKeyTracker
      */
     static long setMaxRoundIndexAndClearBitSet(long encodedState, int roundSize, int shift, int bits, long mask)
     {
-        Invariants.checkArgument(roundSize > 0 && roundSize <= bits);
+        Invariants.requireArgument(roundSize > 0 && roundSize <= bits);
         int counterBits = bits - roundSize;
         long maxIndex = (1L << counterBits) - 1;
         int counterShift = shift + roundSize;

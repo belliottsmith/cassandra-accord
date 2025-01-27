@@ -88,7 +88,7 @@ public class AwaitTracker extends AbstractTracker<AwaitTracker.AwaitShardTracker
     public AwaitTracker(Topologies topologies)
     {
         super(topologies, AwaitShardTracker[]::new, AwaitShardTracker::new);
-        Invariants.checkArgument(topologies.size() == 1, "AwaitTracker does not currently support multiple epochs; logic to compute ready keys assumes a single epoch");
+        Invariants.requireArgument(topologies.size() == 1, "AwaitTracker does not currently support multiple epochs; logic to compute ready keys assumes a single epoch");
     }
 
     public RequestStatus recordSuccess(Node.Id node, boolean isReady)

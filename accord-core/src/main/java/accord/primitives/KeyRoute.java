@@ -51,7 +51,7 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
         RoutingKey[] mergedKeys = SortedArrays.linearUnion(this.keys, that.keys, cachedRoutingKeys());
         if (mergedKeys == this.keys)
             return this;
-        Invariants.checkState(getClass() == PartialKeyRoute.class);
+        Invariants.require(getClass() == PartialKeyRoute.class);
         if (mergedKeys == that.keys && that instanceof KeyRoute)
             return (KeyRoute) that;
         return new PartialKeyRoute(homeKey, mergedKeys);

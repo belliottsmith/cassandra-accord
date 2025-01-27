@@ -70,7 +70,7 @@ public class TopologyUpdates
             return;
 
         Map<Node.Id, Ranges> pending = pendingSyncTopologies.get(epoch);
-        Invariants.checkState(pending != null && pending.remove(originator.id()) != null);
+        Invariants.require(pending != null && pending.remove(originator.id()) != null);
 
         if (pending.isEmpty())
             pendingSyncTopologies.remove(epoch);
@@ -87,7 +87,7 @@ public class TopologyUpdates
             return;
 
         Map<Node.Id, Ranges> pending = pendingBootstrap.get(epoch);
-        Invariants.checkState(pending != null && pending.remove(originator.id()) != null);
+        Invariants.require(pending != null && pending.remove(originator.id()) != null);
 
         if (pending.isEmpty())
             pendingBootstrap.remove(epoch);

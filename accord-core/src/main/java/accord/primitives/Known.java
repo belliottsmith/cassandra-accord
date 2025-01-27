@@ -118,7 +118,7 @@ public class Known
 
     public Known atLeast(Known that)
     {
-        Invariants.checkArgument(compatibleWith(that));
+        Invariants.requireArgument(compatibleWith(that));
         KnownRoute maxRoute = route().atLeast(that.route());
         Definition maxDefinition = definition().atLeast(that.definition());
         KnownExecuteAt maxExecuteAt = executeAt().atLeast(that.executeAt());
@@ -134,7 +134,7 @@ public class Known
     }
     public Known min(Known that)
     {
-        Invariants.checkArgument(compatibleWith(that));
+        Invariants.requireArgument(compatibleWith(that));
         KnownRoute minRoute = min(route(), that.route());
         Definition minDefinition = min(definition(), that.definition());
         KnownExecuteAt minExecuteAt = min(executeAt(), that.executeAt());
@@ -156,7 +156,7 @@ public class Known
 
     public Known reduce(Known that)
     {
-        Invariants.checkArgument(compatibleWith(that));
+        Invariants.requireArgument(compatibleWith(that));
         KnownRoute maxRoute = route().reduce(that.route());
         Definition minDefinition = definition().reduce(that.definition());
         KnownExecuteAt maxExecuteAt = executeAt().reduce(that.executeAt());
@@ -399,9 +399,9 @@ public class Known
 
     public void checkInvariants()
     {
-        if (outcome().isInvalidated()) Invariants.checkState(deps() != DepsKnown && executeAt() != ExecuteAtKnown);
-        else if (outcome().isOrWasApply()) Invariants.checkState(deps() != NoDeps && executeAt() != NoExecuteAt);
-        Invariants.checkState(!isDefinitionKnown() || hasFullRoute());
+        if (outcome().isInvalidated()) Invariants.require(deps() != DepsKnown && executeAt() != ExecuteAtKnown);
+        else if (outcome().isOrWasApply()) Invariants.require(deps() != NoDeps && executeAt() != NoExecuteAt);
+        Invariants.require(!isDefinitionKnown() || hasFullRoute());
     }
 
     public KnownRoute route()

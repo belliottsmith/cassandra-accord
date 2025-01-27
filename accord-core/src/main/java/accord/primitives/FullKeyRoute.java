@@ -47,7 +47,7 @@ public class FullKeyRoute extends KeyRoute implements FullRoute<RoutingKey>
     @Override
     public FullKeyRoute with(RoutingKey withKey)
     {
-        Invariants.checkArgument(contains(withKey));
+        Invariants.requireArgument(contains(withKey));
         return this;
     }
 

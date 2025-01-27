@@ -32,7 +32,7 @@ public interface Pending
 
         public static void setActiveOrigin(Pending newActive)
         {
-            Invariants.checkState(activeOrigin == null);
+            Invariants.require(activeOrigin == null);
             activeOrigin = newActive.origin();
         }
 

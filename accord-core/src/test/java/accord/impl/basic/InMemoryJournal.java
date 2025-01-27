@@ -141,7 +141,7 @@ public class InMemoryJournal implements Journal
                 return null;
         }
 
-        Invariants.checkState(builder.saveStatus() != null, "No saveSatus loaded, but next was called and cleanup was not: %s", builder);
+        Invariants.require(builder.saveStatus() != null, "No saveSatus loaded, but next was called and cleanup was not: %s", builder);
         return builder.asMinimal();
     }
 
@@ -324,7 +324,7 @@ public class InMemoryJournal implements Journal
                     case TRUNCATE:
                     case ERASE:
                         command = Commands.purgeUnsafe(store, command, cleanup);
-                        Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised);
+                        Invariants.require(command.saveStatus() != SaveStatus.Uninitialised);
                         Diff diff = toDiff(new CommandUpdate(null, command));
                         e2.setValue(cleanup == Cleanup.ERASE ? new ErasedList(diff) : new TruncatedList(diff));
                         break;
@@ -369,8 +369,8 @@ public class InMemoryJournal implements Journal
                 if (!commandStore.hasCommand(e.getKey()))
                 {
                     command = reconstruct(e.getValue(), ALL).construct(commandStore.unsafeGetRedundantBefore());
-                    Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
-                                          "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
+                    Invariants.require(command.saveStatus() != SaveStatus.Uninitialised,
+                                       "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
                     loader.load(command, sync);
                 }
                 else
@@ -389,7 +389,7 @@ public class InMemoryJournal implements Journal
 
         ErasedList(Diff erased)
         {
-            Invariants.checkArgument(erased.changes.get(SAVE_STATUS) == Erased);
+            Invariants.requireArgument(erased.changes.get(SAVE_STATUS) == Erased);
             this.erased = erased;
         }
 
@@ -488,7 +488,7 @@ public class InMemoryJournal implements Journal
                 Field field = nextSetField(iterable);
                 if (isNull(field, flags))
                 {
-                    Invariants.checkState(isChanged(field, flags));
+                    Invariants.require(isChanged(field, flags));
                     iterable = unsetIterable(field, iterable);
                     continue;
                 }
@@ -528,8 +528,8 @@ public class InMemoryJournal implements Journal
                     case WAITING_ON:
                         Command.WaitingOn waitingOn = after.waitingOn();
                         changes.put(WAITING_ON, (WaitingOnProvider) (txnId, deps, executeAtLeast, minUniqueHlc) -> {
-                            Invariants.checkState(waitingOn.executeAtLeast() == null || waitingOn.executeAtLeast().compareTo(executeAtLeast) <= 0);
-                            Invariants.checkState(waitingOn.minUniqueHlc() == 0 || waitingOn.minUniqueHlc() <= minUniqueHlc);
+                            Invariants.require(waitingOn.executeAtLeast() == null || waitingOn.executeAtLeast().compareTo(executeAtLeast) <= 0);
+                            Invariants.require(waitingOn.minUniqueHlc() == 0 || waitingOn.minUniqueHlc() <= minUniqueHlc);
                             if (executeAtLeast != waitingOn.executeAtLeast()) return new WaitingOnWithExecuteAt(waitingOn, executeAtLeast);
                             if (minUniqueHlc != waitingOn.minUniqueHlc()) return new WaitingOnWithMinUniqueHlc(waitingOn, minUniqueHlc);
                             return waitingOn;
@@ -558,8 +558,8 @@ public class InMemoryJournal implements Journal
 
         private void apply(Diff diff)
         {
-            Invariants.checkState(diff.txnId != null);
-            Invariants.checkState(diff.flags != 0);
+            Invariants.require(diff.txnId != null);
+            Invariants.require(diff.flags != 0);
             nextCalled = true;
             count++;
 

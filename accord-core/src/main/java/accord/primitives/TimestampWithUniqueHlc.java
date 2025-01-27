@@ -19,6 +19,7 @@
 package accord.primitives;
 
 import accord.local.Node.Id;
+import accord.utils.Invariants;
 
 public final class TimestampWithUniqueHlc extends Timestamp
 {
@@ -28,22 +29,18 @@ public final class TimestampWithUniqueHlc extends Timestamp
     {
         super(copy);
         this.uniqueHlc = uniqueHlc;
+        Invariants.require(uniqueHlc != hlc());
     }
 
     public TimestampWithUniqueHlc(long epoch, long hlc, long uniqueHlc, int flags, Id node)
     {
         super(epoch, hlc, flags, node);
         this.uniqueHlc = uniqueHlc;
+        Invariants.require(uniqueHlc != hlc);
     }
 
     public long uniqueHlc()
     {
         return uniqueHlc;
-    }
-
-    @Override
-    public boolean hasDistinctHlcAndUniqueHlc()
-    {
-        return true;
     }
 }

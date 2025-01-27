@@ -47,7 +47,7 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         {
             if (values.length == 0)
             {
-                Invariants.checkState(ends.length == 1 && ends[0] == null);
+                Invariants.require(ends.length == 1 && ends[0] == null);
                 return DurableBefore.EMPTY;
             }
             return new DurableBefore(inclusiveEnds, ends, values);
@@ -60,7 +60,7 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 
         public Entry(@Nonnull TxnId majority, @Nonnull TxnId universalBefore)
         {
-            Invariants.checkArgument(majority.compareTo(universalBefore) >= 0, "majority %s < universal %s", majority, universalBefore);
+            Invariants.requireArgument(majority.compareTo(universalBefore) >= 0, "majority %s < universal %s", majority, universalBefore);
             this.majorityBefore = majority;
             this.universalBefore = universalBefore;
         }

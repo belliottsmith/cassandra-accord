@@ -125,7 +125,7 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
     {
         encodedState &= ~(1L << SCHEDULED_TIMER_SHIFT);
         encodedState |= (long) kind.ordinal() << SCHEDULED_TIMER_SHIFT;
-        Invariants.checkState(wasScheduledTimer() == kind);
+        Invariants.require(wasScheduledTimer() == kind);
     }
 
     /**

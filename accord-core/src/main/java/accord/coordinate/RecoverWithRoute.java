@@ -71,9 +71,9 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         this.reportLowEpoch = reportLowEpoch;
         this.reportHighEpoch = reportHighEpoch;
         // if witnessedByInvalidation == AcceptedInvalidate then we cannot assume its definition was known, and our comparison with the status is invalid
-        Invariants.checkState(witnessedByInvalidation != Status.AcceptedInvalidate);
+        Invariants.require(witnessedByInvalidation != Status.AcceptedInvalidate);
         // if witnessedByInvalidation == Invalidated we should anyway not be recovering
-        Invariants.checkState(witnessedByInvalidation != Status.Invalidated);
+        Invariants.require(witnessedByInvalidation != Status.Invalidated);
         this.promisedBallot = promisedBallot;
         this.callback = callback;
         this.witnessedByInvalidation = witnessedByInvalidation;
@@ -137,7 +137,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         if (sufficientTo.outcome().isInvalidated())
             return true;
 
-        Invariants.checkState(full.partialTxn.covers(route));
+        Invariants.require(full.partialTxn.covers(route));
         return true;
     }
 
@@ -196,11 +196,11 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             else
                             {
                                 known = full.knownFor(txnId, trySendTo, trySendTo);
-                                Invariants.checkState(known.isExecuteAtKnown() && known.outcome() == Apply);
+                                Invariants.require(known.isExecuteAtKnown() && known.outcome() == Apply);
 
                                 if (!known.is(DepsKnown))
                                 {
-                                    Invariants.checkState(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
+                                    Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
                                     Participants<?> collect = full.map.knownFor(Known.Nothing.with(DepsKnown), route);
                                     // we don't simply calculate deps as we may have raced with
                                     CollectLatestDeps.withLatestDeps(node, txnId, route, collect, full.executeAt, (deps, fail) -> {
@@ -218,8 +218,8 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                                 }
                                 else
                                 {
-                                    Invariants.checkState(full.stableDeps.covers(trySendTo));
-                                    Invariants.checkState(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
+                                    Invariants.require(full.stableDeps.covers(trySendTo));
+                                    Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
                                     node.coordinationAdapter(txnId, Recovery).persist(node, null, route, trySendTo, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, null);
                                 }
                             }

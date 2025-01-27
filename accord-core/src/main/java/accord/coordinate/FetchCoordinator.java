@@ -32,7 +32,6 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 
 import static accord.primitives.Routables.Slice.Minimal;
-import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -80,7 +79,7 @@ public abstract class FetchCoordinator
 
         void contact(Ranges ranges)
         {
-            checkArgument(uncontacted.containsAll(ranges));
+            Invariants.requireArgument(uncontacted.containsAll(ranges));
             contacted = contacted.with(ranges);
             inflight = inflight.with(ranges);
             waitingOn = waitingOn.with(ranges);
@@ -89,13 +88,13 @@ public abstract class FetchCoordinator
 
         void slow(Ranges ranges)
         {
-            checkArgument(waitingOn.containsAll(ranges));
+            Invariants.requireArgument(waitingOn.containsAll(ranges));
             waitingOn = waitingOn.without(ranges);
         }
 
         void successful(Ranges ranges)
         {
-            checkArgument(inflight.containsAll(ranges));
+            Invariants.requireArgument(inflight.containsAll(ranges));
             successful = successful.with(ranges);
             inflight = inflight.without(ranges);
             waitingOn = waitingOn.without(ranges);
@@ -108,7 +107,7 @@ public abstract class FetchCoordinator
 
         void unsuccessful(Ranges ranges)
         {
-            checkArgument(inflight.containsAll(ranges));
+            Invariants.requireArgument(inflight.containsAll(ranges));
             unsuccessful = unsuccessful.with(ranges);
             inflight = inflight.without(ranges);
             waitingOn = waitingOn.without(ranges);
@@ -326,7 +325,7 @@ public abstract class FetchCoordinator
 
         if (!state.inflight.isEmpty())
             --inflight;
-        Invariants.checkState(!state.waitingOn.intersects(success));
+        Invariants.require(!state.waitingOn.intersects(success));
         needed = needed.with(state.waitingOn);
         // TODO (desired): we don't need to fail all requests to this node, just the one we have a failure response for
         state.fail();

@@ -72,7 +72,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         public ExecuteInclusive(Node node, SyncPoint<U> syncPoint, SimpleTracker<?> tracker, Timestamp executeAt)
         {
             super(node, syncPoint, tracker);
-            Invariants.checkArgument(!syncPoint.syncId.awaitsOnlyDeps());
+            Invariants.requireArgument(!syncPoint.syncId.awaitsOnlyDeps());
             this.executeAt = executeAt;
             this.durableTracker = new QuorumIdTracker(tracker.topologies());
         }
@@ -152,13 +152,13 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         public ExecuteExclusive(Node node, SyncPoint<Range> syncPoint, Function<Topologies, SimpleTracker<?>> trackerSupplier)
         {
             super(node, syncPoint, Adapters.exclusiveSyncPoint().forExecution(node, syncPoint.route(), syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor), trackerSupplier);
-            Invariants.checkArgument(syncPoint.syncId.kind() == ExclusiveSyncPoint);
+            Invariants.requireArgument(syncPoint.syncId.kind() == ExclusiveSyncPoint);
         }
 
         public ExecuteExclusive(Node node, SyncPoint<Range> syncPoint, Function<Topologies, SimpleTracker<?>> trackerSupplier, SimpleTracker<?> tracker)
         {
             super(node, syncPoint, trackerSupplier, tracker);
-            Invariants.checkArgument(syncPoint.syncId.kind() == ExclusiveSyncPoint);
+            Invariants.requireArgument(syncPoint.syncId.kind() == ExclusiveSyncPoint);
         }
 
         @Override

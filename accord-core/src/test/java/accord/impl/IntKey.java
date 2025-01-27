@@ -47,7 +47,7 @@ public class IntKey implements RoutableKey
         @Override
         public accord.primitives.Range subRange(accord.primitives.Range range, Long start, Long end)
         {
-            Invariants.checkArgument(((IntKey)range.start()).key + end.intValue() <= ((IntKey)range.end()).key);
+            Invariants.requireArgument(((IntKey)range.start()).key + end.intValue() <= ((IntKey)range.end()).key);
             return range.newRange(
                     routing(((IntKey)range.start()).key + start.intValue()),
                     routing(((IntKey)range.start()).key + end.intValue())

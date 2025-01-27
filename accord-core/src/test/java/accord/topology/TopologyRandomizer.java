@@ -382,7 +382,7 @@ public class TopologyRandomizer
 
     private static SortedArrayList<Id> select(Id[] nodes, int rf, RandomSource random)
     {
-        Invariants.checkArgument(nodes.length >= rf, "Given %d nodes, which is < rf of %d", nodes.length, rf);
+        Invariants.requireArgument(nodes.length >= rf, "Given %d nodes, which is < rf of %d", nodes.length, rf);
         List<Id> result = new ArrayList<>(rf);
         while (result.size() < rf)
         {
@@ -514,7 +514,7 @@ public class TopologyRandomizer
     public void onStale(Id id, Timestamp sinceAtLeast, Ranges ranges)
     {
         int epoch = (int) sinceAtLeast.epoch();
-        Invariants.checkState(epochs.get(epoch).nodeLookup.get(id.id).ranges.containsAll(ranges));
+        Invariants.require(epochs.get(epoch).nodeLookup.get(id.id).ranges.containsAll(ranges));
         while (++epoch < epochs.size())
         {
             ranges = ranges.slice(epochs.get(epoch).nodeLookup.get(id.id).ranges, Routables.Slice.Minimal);

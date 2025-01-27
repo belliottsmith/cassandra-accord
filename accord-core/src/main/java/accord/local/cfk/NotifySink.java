@@ -88,17 +88,17 @@ interface NotifySink
                 if (!safeStore.ranges().allSince(command.txnId().epoch()).contains(key))
                 {
                     // we raced with new topology information letting us know we don't own the epoch
-                    Invariants.checkState(safeStore.ranges().allBefore(command.txnId().epoch()).contains(key));
+                    Invariants.require(safeStore.ranges().allBefore(command.txnId().epoch()).contains(key));
                     return;
                 }
 
-                Invariants.checkState(txnId.is(Routable.Domain.Key));
+                Invariants.require(txnId.is(Routable.Domain.Key));
                 // make sure we will notify the CommandsForKey that's waiting
                 safeCommand.updateParticipants(safeStore, command.participants().supplementHasTouched(RoutingKeys.of(key)));
             }
             if (command.saveStatus().compareTo(waitingOnStatus) >= 0)
             {
-                Invariants.checkState(command.saveStatus().hasBeen(Truncated) || command.participants().touches(key));
+                Invariants.require(command.saveStatus().hasBeen(Truncated) || command.participants().touches(key));
                 // if we're committed but not invalidated, that means EITHER we have raced with a commit+
                 // OR we adopted as a dependency a <...?>
                 if (notifyCfk)

@@ -117,7 +117,7 @@ class Bootstrap
             }
 
             globalSyncId = node.nextTxnId(ExclusiveSyncPoint, Routable.Domain.Range);
-            Invariants.checkArgument(epoch <= globalSyncId.epoch(), "Attempting to use local epoch %d which is larger than global epoch %d", epoch, globalSyncId.epoch());
+            Invariants.requireArgument(epoch <= globalSyncId.epoch(), "Attempting to use local epoch %d which is larger than global epoch %d", epoch, globalSyncId.epoch());
 
             if (!node.topology().hasEpoch(globalSyncId.epoch()))
             {
@@ -212,7 +212,7 @@ class Bootstrap
 
         private void started(UnsafeToRead state, @Nonnull Timestamp maxAppliedLessOrEqualTo)
         {
-            Invariants.checkState(maxAppliedLessOrEqualTo != null);
+            Invariants.require(maxAppliedLessOrEqualTo != null);
             synchronized (this)
             {
                 if (!unsafeToReads.remove(state))
@@ -272,7 +272,7 @@ class Bootstrap
             store.agent().onFailedBootstrap("PartialFetch", newFailures, () -> {
                 store.execute(empty(), safeStore -> restart(safeStore, newFailures.slice(allValid))).begin(store.agent());
             }, failure);
-            Invariants.checkState(!newFailures.intersects(fetchedAndSafeToRead));
+            Invariants.require(!newFailures.intersects(fetchedAndSafeToRead));
         }
 
         /**
@@ -382,7 +382,7 @@ class Bootstrap
             return;
 
         for (Attempt attempt : inProgress)
-            Invariants.checkArgument(!ranges.intersects(attempt.valid));
+            Invariants.requireArgument(!ranges.intersects(attempt.valid));
 
         Attempt attempt = new Attempt(ranges);
         inProgress.add(attempt);
@@ -391,8 +391,8 @@ class Bootstrap
 
     synchronized void complete(Attempt attempt)
     {
-        Invariants.checkArgument(inProgress.contains(attempt));
-        Invariants.checkArgument(attempt.fetched.equals(attempt.fetchedAndSafeToRead));
+        Invariants.requireArgument(inProgress.contains(attempt));
+        Invariants.requireArgument(attempt.fetched.equals(attempt.fetchedAndSafeToRead));
         inProgress.remove(attempt);
         remaining = remaining.without(attempt.fetched);
         if (inProgress.isEmpty() && remaining.isEmpty())

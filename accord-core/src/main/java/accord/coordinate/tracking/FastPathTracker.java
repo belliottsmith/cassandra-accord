@@ -70,7 +70,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
         public abstract ShardOutcome<? super FastPathTracker> onQuorumSuccess(Node.Id node);
         final ShardOutcome<? super FastPathTracker> complete(ShardOutcome<? super FastPathTracker> result)
         {
-            Invariants.checkState(!complete);
+            Invariants.require(!complete);
             complete = true;
             return result;
         }

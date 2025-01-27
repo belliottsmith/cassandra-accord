@@ -594,7 +594,7 @@ public class Cluster
                     List<ReflectionUtils.Difference<?>> diff = ReflectionUtils.recursiveEquals(command, reconstructed);
                     if (!diff.isEmpty() && command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
                         diff.removeIf(v -> v.path.equals(".participants."));
-                    Invariants.checkState(diff.isEmpty(), "Commands did not match: expected %s, given %s on s, diff %s", command, reconstructed, commandStore, new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
+                    Invariants.require(diff.isEmpty(), "Commands did not match: expected %s, given %s on s, diff %s", command, reconstructed, commandStore, new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
                 }
 
                 @Override
@@ -610,7 +610,7 @@ public class Cluster
                     cfk = cfk.maximalPrune();
                     ByteBuffer encoded = Serialize.toBytesWithoutKey(cfk);
                     CommandsForKey decoded = Serialize.fromBytes(cfk.key(), encoded);
-                    Invariants.checkState(cfk.equalContents(decoded));
+                    Invariants.require(cfk.equalContents(decoded));
                 }
             };
         }
@@ -726,7 +726,7 @@ public class Cluster
             Pending.Global.clearActiveOrigin();
 
             while (sinks.processPending());
-            Invariants.checkArgument(startup.isDone());
+            Invariants.requireArgument(startup.isDone());
 
             ClusterScheduler clusterScheduler = sinks.new ClusterScheduler(-1);
             List<Id> nodesList = new ArrayList<>(Arrays.asList(nodes));
@@ -871,8 +871,8 @@ public class Cluster
             for (Map.Entry<TxnId, GlobalCommand> e : store.unsafeCommands().entrySet())
             {
                 Command command = e.getValue().value();
-                Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
-                                      "Found uninitialized command in the log: %s", command);
+                Invariants.require(command.saveStatus() != SaveStatus.Uninitialised,
+                                   "Found uninitialized command in the log: %s", command);
                 commands.put(e.getKey(), command);
             }
 
@@ -909,27 +909,27 @@ public class Cluster
                 Command afterCommand = e.getValue().value();
                 if (beforeCommand == null)
                 {
-                    Invariants.checkArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus() == SaveStatus.Vestigial);
+                    Invariants.requireArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus() == SaveStatus.Vestigial);
                     continue;
                 }
                 if (afterCommand.hasBeen(Status.Truncated))
                 {
                     if (afterCommand.is(Status.Invalidated))
-                        Invariants.checkState(beforeCommand.hasBeen(Status.Truncated) || !beforeCommand.hasBeen(Status.PreCommitted)
-                                              && store.unsafeGetRedundantBefore().max(beforeCommand.participants().touches(), RedundantBefore.Entry::shardRedundantBefore).compareTo(beforeCommand.txnId()) >= 0);
+                        Invariants.require(beforeCommand.hasBeen(Status.Truncated) || !beforeCommand.hasBeen(Status.PreCommitted)
+                                                                                      && store.unsafeGetRedundantBefore().max(beforeCommand.participants().touches(), RedundantBefore.Entry::shardRedundantBefore).compareTo(beforeCommand.txnId()) >= 0);
                     continue;
                 }
                 if (beforeCommand.hasBeen(Status.Truncated))
                 {
-                    Invariants.checkState(!beforeCommand.is(Status.Invalidated) || afterCommand.is(Status.Invalidated));
-                    Invariants.checkState(beforeCommand.is(Status.Invalidated) || afterCommand.is(Status.Truncated) || afterCommand.is(Status.Applied));
+                    Invariants.require(!beforeCommand.is(Status.Invalidated) || afterCommand.is(Status.Invalidated));
+                    Invariants.require(beforeCommand.is(Status.Invalidated) || afterCommand.is(Status.Truncated) || afterCommand.is(Status.Applied));
                     continue;
                 }
-                Invariants.checkState(isConsistent(beforeCommand.saveStatus(), afterCommand.saveStatus())
-                    && beforeCommand.executeAtOrTxnId().equals(afterCommand.executeAtOrTxnId())
-                    && beforeCommand.acceptedOrCommitted().equals(afterCommand.acceptedOrCommitted())
-                    && beforeCommand.promised().equals(afterCommand.promised())
-                    && beforeCommand.durability().equals(afterCommand.durability()));
+                Invariants.require(isConsistent(beforeCommand.saveStatus(), afterCommand.saveStatus())
+                                   && beforeCommand.executeAtOrTxnId().equals(afterCommand.executeAtOrTxnId())
+                                   && beforeCommand.acceptedOrCommitted().equals(afterCommand.acceptedOrCommitted())
+                                   && beforeCommand.promised().equals(afterCommand.promised())
+                                   && beforeCommand.durability().equals(afterCommand.durability()));
             }
 
             if (before.size() > store.unsafeCommands().size())
@@ -952,7 +952,7 @@ public class Cluster
                         if (!beforeCommand.saveStatus().hasBeen(Status.PreCommitted) && store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Entry::locallyRedundantBefore).compareTo(txnId) > 0)
                             continue;
 
-                        Invariants.checkState(false, "Found a command in an unexpected state: %s", beforeCommand);
+                        Invariants.require(false, "Found a command in an unexpected state: %s", beforeCommand);
                     }
                 }
             }
@@ -1019,7 +1019,7 @@ public class Cluster
         @Override
         public void start()
         {
-            Invariants.checkState(scheduled == null, "Start already called...");
+            Invariants.require(scheduled == null, "Start already called...");
             this.scheduled = node.scheduler().recurring(this, 1, SECONDS);
         }
 
@@ -1269,7 +1269,7 @@ public class Cluster
             this.commandStore = commandStore;
             this.blockedOn = blockedOn;
             this.blockedVia = blockedVia;
-            Invariants.checkArgument(blockedOn == null || !txnId.equals(blockedOn.txnId()));
+            Invariants.requireArgument(blockedOn == null || !txnId.equals(blockedOn.txnId()));
         }
 
         @Override
@@ -1438,7 +1438,7 @@ public class Cluster
             if (blockedOnKey == null)
             {
                 blockedOnId = waitingOn.nextWaitingOn();
-                Invariants.checkState(!command.txnId().equals(blockedOnId));
+                Invariants.require(!command.txnId().equals(blockedOnId));
                 if (blockedOnId != null)
                     blockedVia = command.partialDeps().participants(blockedOnId);
             }
@@ -1448,7 +1448,7 @@ public class Cluster
                 blockedOnId = cfk.blockedOnTxnId(command.txnId(), command.executeAt());
                 if (blockedOnId != null)
                     blockedVia = cfk;
-                Invariants.checkState(!command.txnId().equals(blockedOnId));
+                Invariants.require(!command.txnId().equals(blockedOnId));
             }
         }
         Command blockedOn = null;

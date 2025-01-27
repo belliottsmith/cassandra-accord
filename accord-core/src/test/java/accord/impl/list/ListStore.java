@@ -237,7 +237,7 @@ public class ListStore implements DataStore
 
     private void scheduleRunSnapshot()
     {
-        Invariants.checkState(!pendingSnapshots.isEmpty());
+        Invariants.require(!pendingSnapshots.isEmpty());
         // schedule as recurring so that we don't run them
         Runnable run = () -> {
             scheduled = null;
@@ -539,11 +539,11 @@ public class ListStore implements DataStore
                 {
                     if (!commandStore.unsafeGetRangesForEpoch().allSince(av.timestamp.epoch()).contains(k))
                         continue;
-                    Invariants.checkState(!commandStore.unsafeGetSafeToRead().lastEntry().getValue().contains(k));
+                    Invariants.require(!commandStore.unsafeGetSafeToRead().lastEntry().getValue().contains(k));
                 }
                 return;
             }
-            Invariants.checkState(bv.timestamp.equals(av.timestamp) ? Arrays.equals(av.data, bv.data) : ListStore.isStrictPrefix(av.data, bv.data));
+            Invariants.require(bv.timestamp.equals(av.timestamp) ? Arrays.equals(av.data, bv.data) : ListStore.isStrictPrefix(av.data, bv.data));
         }
     }
 

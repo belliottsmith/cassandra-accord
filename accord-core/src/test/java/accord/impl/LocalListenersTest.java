@@ -185,8 +185,8 @@ public class LocalListenersTest
             Assertions.assertEquals(state.testTxns, state.canonTxns);
             if (state.canonTxns.isEmpty() && state.canonObjs.isEmpty())
             {
-                Invariants.checkState(state.testObjs.isEmpty());
-                Invariants.checkState(state.testTxns.isEmpty());
+                Invariants.require(state.testObjs.isEmpty());
+                Invariants.require(state.testTxns.isEmpty());
                 this.state.remove(txnId);
             }
             canonicalSink.clear();
@@ -372,7 +372,7 @@ public class LocalListenersTest
         @Override
         public boolean notify(SafeCommandStore safeStore, SafeCommand safeCommand)
         {
-            Invariants.checkState(count > 0);
+            Invariants.require(count > 0);
             owner.onNotify(this);
             if (--count > 0)
                 return true;

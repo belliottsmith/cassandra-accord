@@ -100,7 +100,7 @@ public class PartialRangeRoute extends RangeRoute implements PartialRoute<Range>
 
     public PartialRangeRoute union(PartialRangeRoute that)
     {
-        Invariants.checkState(homeKey.equals(that.homeKey));
+        Invariants.require(homeKey.equals(that.homeKey));
         return union(MERGE_OVERLAPPING, this, that, this, that, (in1, in2, ranges) -> {
             if (in1.ranges == ranges) return in1;
             if (in2.ranges == ranges) return in2;

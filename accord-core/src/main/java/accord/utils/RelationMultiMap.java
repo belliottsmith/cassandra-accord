@@ -364,9 +364,9 @@ public class RelationMultiMap
             }
             else
             {
-                Invariants.checkState(keys == bufKeys && keysLength == bufKeysLength);
-                Invariants.checkState(txnIds == bufValues && txnIdsLength == bufValuesLength);
-                Invariants.checkState(outLength == bufLength);
+                Invariants.require(keys == bufKeys && keysLength == bufKeysLength);
+                Invariants.require(txnIds == bufValues && txnIdsLength == bufValuesLength);
+                Invariants.require(outLength == bufLength);
             }
             return null;
         }
@@ -394,9 +394,9 @@ public class RelationMultiMap
             );
             if (buf == keysToValues)
             {
-                Invariants.checkState(keys == bufKeys && keys.length == bufKeysLength);
-                Invariants.checkState(values == bufValues && values.length == bufValuesLength);
-                Invariants.checkState(keysToValues.length == bufLength);
+                Invariants.require(keys == bufKeys && keys.length == bufKeysLength);
+                Invariants.require(values == bufValues && values.length == bufValuesLength);
+                Invariants.require(keysToValues.length == bufLength);
                 from = merge;
             }
         }

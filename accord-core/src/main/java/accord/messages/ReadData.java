@@ -342,7 +342,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     {
         if (this.executeAt == null) this.executeAt = executeAt;
         else if (txnId.awaitsOnlyDeps()) this.executeAt = Timestamp.max(this.executeAt, executeAt);
-        else Invariants.checkState(executeAt.equals(this.executeAt));
+        else Invariants.require(executeAt.equals(this.executeAt));
         return txn.read(safeStore, executeAt, unavailable);
     }
 
@@ -417,7 +417,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         if (storeId >= 0)
         {
             boolean removed = waitingOn.remove(storeId);
-            Invariants.checkState(removed, "Txn %s's reading not contain store %d; waitingOn=%s", txnId, storeId, waitingOn);
+            Invariants.require(removed, "Txn %s's reading not contain store %d; waitingOn=%s", txnId, storeId, waitingOn);
         }
 
         if (newUnavailable != null && !newUnavailable.isEmpty())
@@ -468,7 +468,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     @Nullable Cancellable clearUnsafe()
     {
-        Invariants.checkState(state != State.PENDING);
+        Invariants.require(state != State.PENDING);
         RegisteredTimeout cancelTimeout = timeout;
         Int2ObjectHashMap<LocalListeners.Registered> cancelListeners = listeners;
         timeout = null;

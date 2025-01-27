@@ -385,9 +385,9 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
 
         public MockCluster build()
         {
-            Invariants.checkArgument(initialNodes > 0);
-            Invariants.checkArgument(replication > 0);
-            Invariants.checkArgument(maxKey >= 0);
+            Invariants.requireArgument(initialNodes > 0);
+            Invariants.requireArgument(replication > 0);
+            Invariants.requireArgument(maxKey >= 0);
             return new MockCluster(this);
         }
     }

@@ -68,7 +68,6 @@ import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.utils.Invariants.checkState;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
 
@@ -253,7 +252,7 @@ public abstract class CommandStore implements AgentExecutor
 
     protected void loadRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
-        Invariants.checkState(this.rangesForEpoch == null);
+        Invariants.require(this.rangesForEpoch == null);
         unsafeSetRangesForEpoch(newRangesForEpoch);
     }
 
@@ -289,8 +288,8 @@ public abstract class CommandStore implements AgentExecutor
 
     protected void loadRedundantBefore(RedundantBefore newRedundantBefore)
     {
-        Invariants.checkState(redundantBefore == null || redundantBefore.equals(RedundantBefore.EMPTY));
-        Invariants.checkState(newRedundantBefore != null);
+        Invariants.require(redundantBefore == null || redundantBefore.equals(RedundantBefore.EMPTY));
+        Invariants.require(newRedundantBefore != null);
         unsafeSetRedundantBefore(newRedundantBefore);
     }
 
@@ -314,8 +313,8 @@ public abstract class CommandStore implements AgentExecutor
 
     protected void loadSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
     {
-        Invariants.checkState(safeToRead == null || safeToRead.equals(emptySafeToRead()));
-        Invariants.checkState(newSafeToRead != null);
+        Invariants.require(safeToRead == null || safeToRead.equals(emptySafeToRead()));
+        Invariants.require(newSafeToRead != null);
         unsafeSetSafeToRead(newSafeToRead);
         updateMaxConflicts(newSafeToRead);
     }
@@ -332,8 +331,8 @@ public abstract class CommandStore implements AgentExecutor
 
     protected synchronized void loadBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)
     {
-        Invariants.checkState(bootstrapBeganAt == null || bootstrapBeganAt.equals(emptyBootstrapBeganAt()));
-        Invariants.checkState(newBootstrapBeganAt != null);
+        Invariants.require(bootstrapBeganAt == null || bootstrapBeganAt.equals(emptyBootstrapBeganAt()));
+        Invariants.require(newBootstrapBeganAt != null);
         unsafeSetBootstrapBeganAt(newBootstrapBeganAt);
         updateMaxConflicts(newBootstrapBeganAt);
     }
@@ -418,7 +417,7 @@ public abstract class CommandStore implements AgentExecutor
     public final void markExclusiveSyncPoint(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
     {
         // TODO (desired): narrow ranges to those that are owned
-        Invariants.checkArgument(txnId.is(ExclusiveSyncPoint));
+        Invariants.requireArgument(txnId.is(ExclusiveSyncPoint));
         RejectBefore newRejectBefore = rejectBefore != null ? rejectBefore : new RejectBefore();
         newRejectBefore = RejectBefore.add(newRejectBefore, ranges, txnId);
         unsafeSetRejectBefore(newRejectBefore);
@@ -427,7 +426,7 @@ public abstract class CommandStore implements AgentExecutor
     public final void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
     {
         // TODO (desired): narrow ranges to those that are owned
-        Invariants.checkArgument(txnId.is(ExclusiveSyncPoint));
+        Invariants.requireArgument(txnId.is(ExclusiveSyncPoint));
         RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, txnId, txnId, TxnId.NONE, TxnId.NONE, TxnId.NONE));
         safeStore.upsertRedundantBefore(newRedundantBefore);
         unsafeSetRedundantBefore(newRedundantBefore);
@@ -800,11 +799,11 @@ public abstract class CommandStore implements AgentExecutor
 
     public static ImmutableSortedMap<TxnId, Ranges> bootstrap(TxnId at, Ranges ranges, NavigableMap<TxnId, Ranges> bootstrappedAt)
     {
-        Invariants.checkArgument(bootstrappedAt.lastKey().compareTo(at) < 0 || at == TxnId.NONE);
+        Invariants.requireArgument(bootstrappedAt.lastKey().compareTo(at) < 0 || at == TxnId.NONE);
         if (at == TxnId.NONE)
             for (Ranges rs : bootstrappedAt.values())
-                checkState(!ranges.intersects(rs));
-        Invariants.checkArgument(!ranges.isEmpty());
+                Invariants.require(!ranges.intersects(rs));
+        Invariants.requireArgument(!ranges.isEmpty());
         // if we're bootstrapping these ranges, then any period we previously owned the ranges for is effectively invalidated
         return purgeAndInsert(bootstrappedAt, at, ranges);
     }

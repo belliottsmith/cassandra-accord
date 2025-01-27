@@ -313,13 +313,13 @@ public class CommandChange
 
         public Builder expungePartial(Cleanup cleanup, SaveStatus saveStatus, boolean includeOutcome)
         {
-            Invariants.checkState(txnId != null);
+            Invariants.require(txnId != null);
             Builder builder = new Builder(txnId, ALL);
 
             builder.count++;
             builder.nextCalled = true;
 
-            Invariants.checkState(saveStatus != null);
+            Invariants.require(saveStatus != null);
             builder.flags = setChanged(SAVE_STATUS, builder.flags);
             builder.saveStatus = saveStatus;
             builder.flags = setChanged(CLEANUP, builder.flags);
@@ -350,7 +350,7 @@ public class CommandChange
 
         public Builder saveStatusOnly()
         {
-            Invariants.checkState(txnId != null);
+            Invariants.require(txnId != null);
             Builder builder = new Builder(txnId, ALL);
 
             builder.count++;
@@ -380,7 +380,7 @@ public class CommandChange
             if (!nextCalled)
                 return null;
 
-            Invariants.checkState(txnId != null);
+            Invariants.require(txnId != null);
             if (participants == null) participants = StoreParticipants.empty(txnId);
             else participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.isExecuteAtKnown() ? executeAt : null);
 
@@ -552,7 +552,7 @@ public class CommandChange
         if (l == r) return flags; // no change
         if (r == null) return setFieldIsNullAndChanged(field, flags);
         if (l == null) return setChanged(field, flags);
-        Invariants.checkState(allowClassMismatch || l.getClass() == r.getClass(), "%s != %s", l.getClass(), r.getClass());
+        Invariants.require(allowClassMismatch || l.getClass() == r.getClass(), "%s != %s", l.getClass(), r.getClass());
         if (equals.test(l, r)) return flags; // no change
         return setChanged(field, flags);
     }
@@ -575,7 +575,7 @@ public class CommandChange
 
     public static int validateFlags(int flags)
     {
-        Invariants.checkState(0 == (~(flags >>> 16) & (flags & 0xffff)));
+        Invariants.require(0 == (~(flags >>> 16) & (flags & 0xffff)));
         return flags;
     }
 

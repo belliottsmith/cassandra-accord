@@ -32,7 +32,7 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>, 
 
         public Candidate(@Nonnull L list)
         {
-            Invariants.checkState(!list.isEmpty());
+            Invariants.require(!list.isEmpty());
             this.list = list;
             this.item = list.get(0);
         }
@@ -147,7 +147,7 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>, 
             int result = head.find(find);
             if (0 != (result & Candidate.FOUND))
             {
-                Invariants.checkState(found == null, "%s and %s both contained %s", head, found, find);
+                Invariants.require(found == null, "%s and %s both contained %s", head, found, find);
                 found = head;
             }
 
@@ -156,7 +156,7 @@ public class MergeFewDisjointSortedListsCursor<T extends Comparable<? super T>, 
 
             if (head.item == null)
             {
-                Invariants.checkState(head != found);
+                Invariants.require(head != found);
                 replaceHead();
                 if (size == 0)
                     return false;

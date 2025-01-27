@@ -50,7 +50,7 @@ public class ListData extends TreeMap<Key, Timestamped<int[]>> implements Data
             return;
 
         for (Timestamped<int[]> v : values())
-            Invariants.checkState(v.timestamp.compareTo(executeAt) < 0);
+            Invariants.require(v.timestamp.compareTo(executeAt) < 0);
     }
 
     @Override

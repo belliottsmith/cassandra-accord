@@ -53,7 +53,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     protected CheckShards(Node node, TxnId txnId, U route, IncludeInfo includeInfo, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
         this(node, txnId, route, txnId.epoch(), includeInfo, previouslyKnownToBeInvalidIf);
-        Invariants.checkState(txnId.isVisible());
+        Invariants.require(txnId.isVisible());
     }
 
     protected CheckShards(Node node, TxnId txnId, U route, long srcEpoch, IncludeInfo includeInfo, Infer.InvalidIf previouslyKnownToBeInvalidIf)

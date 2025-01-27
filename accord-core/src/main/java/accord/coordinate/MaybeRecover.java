@@ -84,7 +84,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
         }
         else
         {
-            Invariants.checkState(merged != null);
+            Invariants.require(merged != null);
             CheckStatusOk full = merged.finish(this.route, this.route, this.route, success.withQuorum, previouslyKnownToBeInvalidIf);
             Known known = full.maxKnown();
             Route<?> someRoute = full.route;
@@ -121,7 +121,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     }
                     else
                     {
-                        Invariants.checkState(Route.isFullRoute(someRoute), "Require a full route but given %s", full.route);
+                        Invariants.require(Route.isFullRoute(someRoute), "Require a full route but given %s", full.route);
                         node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportLowEpoch, reportHighEpoch).addCallback(callback);
                     }
                     break;

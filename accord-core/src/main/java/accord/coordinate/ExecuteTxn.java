@@ -103,8 +103,8 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         this.executeAt = executeAt;
         this.stableDeps = stableDeps;
         this.callback = callback;
-        Invariants.checkState(!txnId.awaitsOnlyDeps());
-        Invariants.checkState(!txnId.awaitsPreviouslyOwned());
+        Invariants.require(!txnId.awaitsOnlyDeps());
+        Invariants.require(!txnId.awaitsPreviouslyOwned());
     }
 
     @Override
@@ -183,7 +183,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
 
             if (txnId.is(Txn.Kind.Write) && ok.uniqueHlc > 0)
             {
-                Invariants.checkState(ok.uniqueHlc > executeAt.hlc());
+                Invariants.require(ok.uniqueHlc > executeAt.hlc());
                 uniqueHlc = Math.max(uniqueHlc, ok.uniqueHlc);
             }
             return ok.unavailable == null ? Approve : ApprovePartial;
@@ -213,7 +213,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             Timestamp executeAt = this.executeAt;
             if (txnId.is(Txn.Kind.Write) && uniqueHlc != 0)
             {
-                Invariants.checkState(uniqueHlc > executeAt.hlc());
+                Invariants.require(uniqueHlc > executeAt.hlc());
                 executeAt = new TimestampWithUniqueHlc(executeAt, uniqueHlc);
             }
 

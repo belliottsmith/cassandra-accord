@@ -71,7 +71,6 @@ import org.agrona.collections.Int2ObjectHashMap;
 import static accord.api.ConfigurationService.EpochReady.done;
 import static accord.local.PreLoadContext.empty;
 import static accord.primitives.Routables.Slice.Minimal;
-import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.illegalState;
 import static java.util.stream.Collectors.toList;
 
@@ -174,7 +173,7 @@ public abstract class CommandStores
 
         public RangesForEpoch(long[] epochs, Ranges[] ranges)
         {
-            Invariants.checkState(epochs.length == ranges.length);
+            Invariants.require(epochs.length == ranges.length);
             this.epochs = epochs;
             this.ranges = ranges;
         }
@@ -207,13 +206,13 @@ public abstract class CommandStores
 
         public RangesForEpoch withRanges(long epoch, Ranges latestRanges)
         {
-            Invariants.checkArgument(epochs.length == 0 || epochs[epochs.length - 1] <= epoch);
+            Invariants.requireArgument(epochs.length == 0 || epochs[epochs.length - 1] <= epoch);
             int newLength = epochs.length == 0 || epochs[epochs.length - 1] < epoch ? epochs.length + 1 : epochs.length;
             long[] newEpochs = Arrays.copyOf(epochs, newLength);
             Ranges[] newRanges = Arrays.copyOf(ranges, newLength);
             newEpochs[newLength - 1] = epoch;
             newRanges[newLength - 1] = latestRanges;
-            Invariants.checkState(newEpochs[newLength - 1] == 0 || newEpochs[newLength - 1] == epoch, "Attempted to override historic epoch %d with %d", newEpochs[newLength - 1], epoch);
+            Invariants.require(newEpochs[newLength - 1] == 0 || newEpochs[newLength - 1] == epoch, "Attempted to override historic epoch %d with %d", newEpochs[newLength - 1], epoch);
             return new RangesForEpoch(newEpochs, newRanges);
         }
 
@@ -479,7 +478,7 @@ public abstract class CommandStores
 
     private synchronized TopologyUpdate updateTopology(Node node, Snapshot prev, Topology newTopology, boolean startSync)
     {
-        checkArgument(!newTopology.isSubset(), "Use full topology for CommandStores.updateTopology");
+        Invariants.requireArgument(!newTopology.isSubset(), "Use full topology for CommandStores.updateTopology");
 
         long epoch = newTopology.epoch();
         if (epoch <= prev.global.epoch())

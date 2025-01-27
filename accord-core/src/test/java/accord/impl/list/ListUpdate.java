@@ -60,7 +60,7 @@ public class ListUpdate extends TreeMap<Key, Integer> implements Update
         for (Map.Entry<Key, Integer> e : entrySet())
         {
             Timestamped<int[]> prev = data.get(e.getKey());
-            Invariants.checkState(prev.timestamp.compareTo(executeAt) < 0);
+            Invariants.require(prev.timestamp.compareTo(executeAt) < 0);
             write.put(e.getKey(), append(prev.data, e.getValue()));
         }
         return write;

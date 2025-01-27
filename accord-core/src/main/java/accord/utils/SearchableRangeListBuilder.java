@@ -107,7 +107,7 @@ public class SearchableRangeListBuilder extends CheckpointIntervalArrayBuilder<R
     public SearchableRangeListBuilder(Range[] ranges, int goalScanDistance, Strategy strategy, Links links)
     {
         super(RANGE_ACCESSOR, ranges, goalScanDistance, strategy, links);
-        Invariants.checkArgument(goalScanDistance <= MAX_SCAN_DISTANCE);
+        Invariants.requireArgument(goalScanDistance <= MAX_SCAN_DISTANCE);
     }
 
     @Override

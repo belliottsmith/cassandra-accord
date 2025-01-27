@@ -23,8 +23,7 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-
-import static accord.utils.Invariants.checkState;
+import accord.utils.Invariants;
 
 /**
  * Thrown when a coordinator encounters a phase that is ahead of the one it is attempting to progress.
@@ -47,7 +46,7 @@ public class Redundant extends Preempted
     @Override
     public Redundant wrap()
     {
-        checkState(this.getClass() == Redundant.class);
+        Invariants.require(this.getClass() == Redundant.class);
         return new Redundant(txnId(), homeKey(), this, committedExecuteAt);
     }
 }

@@ -125,7 +125,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
         @Override
         public void onSuccess(Node.Id from, Reply reply)
         {
-            Invariants.checkArgument(reply == SUCCESS || reply == FAILURE);
+            Invariants.requireArgument(reply == SUCCESS || reply == FAILURE);
             if (reply == FAILURE)
             {
                 originator.send(from, request, executor, this);
@@ -157,7 +157,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
                         List<Node.Id> recipients,
                         AgentExecutor executor, String desc, NodeProcess process)
     {
-        Invariants.checkArgument(!recipients.isEmpty());
+        Invariants.requireArgument(!recipients.isEmpty());
         this.originator = originator;
         this.recipients = ImmutableList.copyOf(recipients);
         this.desc = desc;

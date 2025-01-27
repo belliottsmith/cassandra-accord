@@ -96,7 +96,7 @@ public class PersistentField<Input, Saved>
         Saved startingValue = latestPending;
         if (startingValue == null)
         {
-            Invariants.checkState(pending.isEmpty());
+            Invariants.require(pending.isEmpty());
             startingValue = currentValue.get();
         }
         Saved newValue = merge.apply(inputValue, startingValue);

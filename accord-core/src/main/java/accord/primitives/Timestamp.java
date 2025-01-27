@@ -23,7 +23,6 @@ import accord.utils.Invariants;
 import javax.annotation.Nonnull;
 
 import static accord.primitives.Timestamp.Flag.REJECTED;
-import static accord.utils.Invariants.checkArgument;
 
 /**
  * TxnId flag bits:
@@ -118,9 +117,9 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     Timestamp(long epoch, long hlc, int flags, Id node)
     {
-        Invariants.checkArgument(hlc >= 0, "hlc must be positive or zero; given %d", hlc);
-        Invariants.checkArgument(epoch <= MAX_EPOCH, "epoch %d > MAX_EPOCH %d", epoch, MAX_EPOCH);
-        Invariants.checkArgument(flags <= MAX_FLAGS, "flags %d > MAX_FLAGS %d", flags, MAX_FLAGS);
+        Invariants.requireArgument(hlc >= 0, "hlc must be positive or zero; given %d", hlc);
+        Invariants.requireArgument(epoch <= MAX_EPOCH, "epoch %d > MAX_EPOCH %d", epoch, MAX_EPOCH);
+        Invariants.requireArgument(flags <= MAX_FLAGS, "flags %d > MAX_FLAGS %d", flags, MAX_FLAGS);
         this.msb = epochMsb(epoch) | hlcMsb(hlc);
         this.lsb = hlcLsb(hlc) | flags;
         this.node = node;
@@ -149,7 +148,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     Timestamp(Timestamp copy, int flags)
     {
-        checkArgument(flags <= MAX_FLAGS);
+        Invariants.requireArgument(flags <= MAX_FLAGS);
         this.msb = copy.msb;
         this.lsb = notFlags(copy.lsb) | flags;
         this.node = copy.node;
@@ -171,9 +170,9 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public long uniqueHlc() { return hlc(); }
 
-    public boolean hasDistinctHlcAndUniqueHlc()
+    public final boolean hasDistinctHlcAndUniqueHlc()
     {
-        return false;
+        return getClass() == TimestampWithUniqueHlc.class;
     }
 
     public final int flags()
@@ -199,7 +198,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public Timestamp withNextHlc(long hlcAtLeast)
     {
-        Invariants.checkArgument(hlcAtLeast >= 0);
+        Invariants.requireArgument(hlcAtLeast >= 0);
         return new Timestamp(epoch(), Math.max(hlcAtLeast, hlc() + 1), flags(), node);
     }
 
@@ -220,7 +219,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public Timestamp addFlags(int flags)
     {
-        checkArgument(flags <= MAX_FLAGS);
+        Invariants.requireArgument(flags <= MAX_FLAGS);
         return addFlags(this, flags, Timestamp::new);
     }
 
@@ -438,9 +437,9 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     static <T extends Timestamp> T merge(Timestamp a, Timestamp b, Constructor<T> constructor)
     {
-        checkArgument(a.msb == b.msb);
-        checkArgument(lowHlc(a.lsb) == lowHlc(b.lsb));
-        checkArgument(a.node.equals(b.node));
+        Invariants.requireArgument(a.msb == b.msb);
+        Invariants.requireArgument(lowHlc(a.lsb) == lowHlc(b.lsb));
+        Invariants.requireArgument(a.node.equals(b.node));
         return constructor.construct(a.msb, a.lsb | b.lsb, a.node);
     }
 

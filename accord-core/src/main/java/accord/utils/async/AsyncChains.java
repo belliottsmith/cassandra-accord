@@ -159,14 +159,14 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         @Override
         public final @Nullable Cancellable begin(BiConsumer<? super V, Throwable> callback)
         {
-            Invariants.checkArgument(next != null);
+            Invariants.requireArgument(next != null);
             next = null;
             return start(callback);
         }
 
         Cancellable begin()
         {
-            Invariants.checkArgument(next != null);
+            Invariants.requireArgument(next != null);
             BiConsumer<? super V, Throwable> next = this.next;
             this.next = null;
             return start(next);
@@ -190,7 +190,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         @Override
         public Cancellable begin(BiConsumer<? super O, Throwable> callback)
         {
-            Invariants.checkArgument(!(callback instanceof AsyncChains.Head));
+            Invariants.requireArgument(!(callback instanceof AsyncChains.Head));
             checkNextIsHead();
             Head<?> head = (Head<?>) next;
             next = callback;
@@ -481,8 +481,8 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
     protected void checkNextIsHead()
     {
-        Invariants.checkState(next != null, "Begin was called multiple times");
-        Invariants.checkState(next instanceof Head<?>, "Next is not an instance of AsyncChains.Head (it is %s); was map/flatMap called on the same object multiple times?", next.getClass());
+        Invariants.require(next != null, "Begin was called multiple times");
+        Invariants.require(next instanceof Head<?>, "Next is not an instance of AsyncChains.Head (it is %s); was map/flatMap called on the same object multiple times?", next.getClass());
     }
 
     public static AsyncChain<?> detectLeak(Consumer<Throwable> onLeak, Runnable onCall)

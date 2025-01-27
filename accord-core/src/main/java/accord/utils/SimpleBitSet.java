@@ -90,7 +90,7 @@ public class SimpleBitSet
 
     public void setRange(int from, int to)
     {
-        Invariants.checkArgument(from <= to, "from > to (%s > %s)", from, to);
+        Invariants.requireArgument(from <= to, "from > to (%s > %s)", from, to);
         if (from == to)
             return;
 
@@ -123,7 +123,7 @@ public class SimpleBitSet
 
     public int getSetBitCount(int from, int to)
     {
-        Invariants.checkArgument(from <= to, "from > to (%s > %s)", from, to);
+        Invariants.requireArgument(from <= to, "from > to (%s > %s)", from, to);
         if (from == to || this.count == 0)
             return 0;
 
@@ -229,8 +229,8 @@ public class SimpleBitSet
 
     private int prevSetBitInternal(int i, int inclIndexBound, int ifNotFound)
     {
-        Invariants.checkArgument(i >= 0);
-        Invariants.checkArgument(i <= size());
+        Invariants.requireArgument(i >= 0);
+        Invariants.requireArgument(i <= size());
         if (count == 0 || i == 0)
             return ifNotFound;
 
@@ -304,8 +304,8 @@ public class SimpleBitSet
 
     private int nextSetBitInternal(int i, int exclIndexBound, int ifNotFound)
     {
-        Invariants.checkArgument(i >= 0);
-        Invariants.checkArgument(i <= size());
+        Invariants.requireArgument(i >= 0);
+        Invariants.requireArgument(i <= size());
 
         if (count == 0)
             return ifNotFound;

@@ -664,7 +664,7 @@ public class ArrayBuffers
         public T[] complete(T[] buffer, int usedSize)
         {
             updateSize(usedSize);
-            Invariants.checkArgument(buffer == cur);
+            Invariants.requireArgument(buffer == cur);
             return buffer;
         }
 

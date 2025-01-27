@@ -116,7 +116,7 @@ public class ReducingRangeMapTest
 
     private static ReducingRangeMap<Timestamp> h(Pair<RoutingKey, Timestamp>... points)
     {
-        Invariants.checkState(points[0].right == none());
+        Invariants.require(points[0].right == none());
         int length = points.length;
         RoutingKey[] routingKeys = new RoutingKey[length];
         Timestamp[] timestamps = new Timestamp[length - 1];

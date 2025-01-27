@@ -90,7 +90,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
 
     public V get(K key)
     {
-        checkArgument(null != key);
+        requireArgument(null != key);
         int idx = BTree.findIndex(tree, EntryComparator.instance(), key);
 
         if (idx < 0) idx = -2 - idx;
@@ -104,7 +104,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
     public V foldl(BiFunction<V, V, V> reduce)
     {
         // TODO (expected): use BTree fold methods
-        checkState(!isEmpty());
+        require(!isEmpty());
         Iterator<V> iter = valuesIterator(false);
         V result = iter.next();
         while (iter.hasNext())
@@ -306,7 +306,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
             start = second.start();
             if (first.hasCurrent() && first.start().compareTo(start) < 0 && first.value() != null)
                 builder.append(first.start(), start, builder.slice(first.start(), start, first.value()));
-            checkState(start.compareTo(second.start()) <= 0);
+            require(start.compareTo(second.start()) <= 0);
         }
 
         // loop over any range covered by both
@@ -387,7 +387,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
                 builder.append(first.start(), first.value(), reduce);
             else
                 builder.append(end, null, reduce);
-            checkState(start.compareTo(second.start()) <= 0);
+            require(start.compareTo(second.start()) <= 0);
         }
 
         // loop over any range covered by both
@@ -500,7 +500,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
             K prevStart = buffer.lastKey();
             V prevValue = buffer.lastValue();
 
-            checkArgument(start.compareTo(prevStart) >= 0);
+            requireArgument(start.compareTo(prevStart) >= 0);
 
             boolean samePrevStart = start.equals(prevStart);
             boolean samePrevValue = Objects.equals(value, prevValue);
@@ -539,7 +539,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
 
             if (!buffer.isEmpty())
             {
-                checkState(buffer.lastValue() == null);
+                require(buffer.lastValue() == null);
                 treeBuilder.add(Entry.make(buffer.firstKey()));
                 buffer.dropFirst();
             }
@@ -581,7 +581,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
             if (prevEnd != null)
             {
                 int c = prevEnd.compareTo(start);
-                checkArgument(c <= 0);
+                requireArgument(c <= 0);
                 if (c < 0)
                 {
                     if (buffer.isFull())
@@ -741,7 +741,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
                     if (iterator.hasNext())
                     {
                         curr = iterator.next();
-                        checkState(iterator.hasNext()); // must contain at least two entries
+                        require(iterator.hasNext()); // must contain at least two entries
                         next = iterator.next();
                         state = IteratorState.ADVANCED;
                     }
@@ -753,14 +753,14 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
                 case ADVANCED:
                     if (next.hasValue())
                     {
-                        checkState(iterator.hasNext()); // must be at least one entry after next if it has a value
+                        require(iterator.hasNext()); // must be at least one entry after next if it has a value
                         curr = next;
                         next = iterator.next();
                         state = IteratorState.ADVANCED;
                     }
                     else
                     {
-                        checkState(!iterator.hasNext()); // should have no more entries if next has no value
+                        require(!iterator.hasNext()); // should have no more entries if next has no value
                         curr = next = null;
                         state = IteratorState.END;
                     }

@@ -50,7 +50,7 @@ public class PrefixedIntHashKey implements RoutableKey
         public accord.primitives.Range subRange(accord.primitives.Range range, Long start, Long end)
         {
             PrefixedIntHashKey currentStart = (PrefixedIntHashKey) range.start();
-            Invariants.checkArgument(currentStart.hash + end.intValue() <= ((PrefixedIntHashKey) range.end()).hash);
+            Invariants.requireArgument(currentStart.hash + end.intValue() <= ((PrefixedIntHashKey) range.end()).hash);
             return range.newRange(new Hash(currentStart.prefix, currentStart.hash + start.intValue()),
                                   new Hash(currentStart.prefix, currentStart.hash + end.intValue()));
         }
@@ -135,7 +135,7 @@ public class PrefixedIntHashKey implements RoutableKey
                 {
                     PrefixedIntRoutingKey start = (PrefixedIntRoutingKey) s;
                     PrefixedIntRoutingKey end = (PrefixedIntRoutingKey) e;
-                    Invariants.checkState(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
+                    Invariants.require(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
                     return new Range(start, end);
                 }
 
@@ -206,7 +206,7 @@ public class PrefixedIntHashKey implements RoutableKey
         {
             PrefixedIntRoutingKey start = (PrefixedIntRoutingKey) s;
             PrefixedIntRoutingKey end = (PrefixedIntRoutingKey) e;
-            Invariants.checkState(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
+            Invariants.require(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
             return new Range(start, end);
         }
 
@@ -286,7 +286,7 @@ public class PrefixedIntHashKey implements RoutableKey
 
     public static Range range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
     {
-        Invariants.checkState(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
+        Invariants.require(start.prefix == end.prefix, "Unable to create range from different prefixes; %s has a different prefix than %s", start, end);
         return new Range(start, end);
     }
 

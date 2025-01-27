@@ -130,7 +130,7 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
 
     final void onPreAcceptedOrNewEpoch()
     {
-        Invariants.checkState(!isDone);
+        Invariants.require(!isDone);
         isDone = true;
         long latestEpoch = executeAtEpoch();
         if (latestEpoch > topologies.currentEpoch()) node.withEpoch(latestEpoch, this, () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));

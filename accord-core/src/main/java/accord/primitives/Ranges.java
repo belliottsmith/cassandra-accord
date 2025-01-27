@@ -77,7 +77,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         if (indexes.length == size())
         {
             for (int i = 0 ; i < indexes.length ; ++i)
-                Invariants.checkState(i == indexes[i]);
+                Invariants.require(i == indexes[i]);
             return this;
         }
         Range[] selection = new Range[indexes.length];

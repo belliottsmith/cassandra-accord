@@ -257,7 +257,7 @@ public class DefaultLocalListeners implements LocalListeners
             if (index < 0)
                 return this; // already removed
 
-            Invariants.checkState(listeners[index] == remove);
+            Invariants.require(listeners[index] == remove);
             listeners[index] = null;
             remove.index = -1;
             // we don't decrement length even if count==length so as to simplify reentry
@@ -291,14 +291,14 @@ public class DefaultLocalListeners implements LocalListeners
                     for (int i = 0 ; i < length ; ++i)
                     {
                         if (oldListeners[i] == null) continue;
-                        Invariants.checkState(oldListeners[i].index == i);
+                        Invariants.require(oldListeners[i].index == i);
                         listeners[c] = oldListeners[i];
                         listeners[c].index = c;
                         c++;
                     }
                     if (listeners == oldListeners)
                         Arrays.fill(listeners, c, length, null);
-                    Invariants.checkState(c == count);
+                    Invariants.require(c == count);
                     length = count;
                 }
             }
@@ -325,7 +325,7 @@ public class DefaultLocalListeners implements LocalListeners
             {
                 RegisteredComplexListener next = listeners[i];
                 if (next == null) continue;
-                Invariants.checkState(next.index == i);
+                Invariants.require(next.index == i);
                 if (!notifySink.notify(safeStore, safeCommand, listeners[i].listener))
                 {
                     if (next.index >= 0)
@@ -334,7 +334,7 @@ public class DefaultLocalListeners implements LocalListeners
                 }
                 else if (next.index >= 0) // can be cancelled by notify, without notify return false
                 {
-                    Invariants.checkArgument(next.index == i);
+                    Invariants.requireArgument(next.index == i);
                     if (i != count)
                     {
                         listeners[count] = next;
@@ -342,7 +342,7 @@ public class DefaultLocalListeners implements LocalListeners
                     }
                     ++count;
                 }
-                else Invariants.checkState(listeners[i] == null);
+                else Invariants.require(listeners[i] == null);
             }
             notifying = false;
 
@@ -356,12 +356,12 @@ public class DefaultLocalListeners implements LocalListeners
                     if (next == null)
                         continue;
 
-                    Invariants.checkState(next.index == i);
+                    Invariants.require(next.index == i);
                     listeners[count] = next;
                     next.index = count;
                     count++;
                 }
-                Invariants.checkState(this.count <= count); // we could have already removed some items from the compacted section
+                Invariants.require(this.count <= count); // we could have already removed some items from the compacted section
                 length = this.length;
             }
 
@@ -377,9 +377,9 @@ public class DefaultLocalListeners implements LocalListeners
             int c = 0;
             for (int i = 0 ; i < length ; ++i)
                 c += listeners[i] != null ? 1 : 0;
-            Invariants.checkState(c == count);
+            Invariants.require(c == count);
             for (int i = length ; i < listeners.length ; ++i)
-                Invariants.checkState(listeners[i] == null);
+                Invariants.require(listeners[i] == null);
         }
     }
 
@@ -448,7 +448,7 @@ public class DefaultLocalListeners implements LocalListeners
         while (start < end)
         {
             TxnListeners notify = BTree.findByIndex(txnListeners, start);
-            Invariants.checkState(txnId.equals(notify));
+            Invariants.require(txnId.equals(notify));
             notify.notify(notifySink, safeStore, safeCommand);
             if (this.txnListeners != txnListeners)
             {
@@ -493,7 +493,7 @@ public class DefaultLocalListeners implements LocalListeners
             commandStore.execute(PreLoadContext.contextFor(entry), safeStore -> {
                 SafeCommand safeCommand = safeStore.unsafeGet(entry);
                 SaveStatus saveStatus = safeCommand.current().saveStatus();
-                Invariants.checkState(saveStatus.compareTo(entry.await) >= 0);
+                Invariants.require(saveStatus.compareTo(entry.await) >= 0);
                 entry.notify(notifySink, safeStore, safeCommand);
             }).begin(commandStore.agent());
             txnListeners = BTreeRemoval.remove(txnListeners, TxnListeners::compareListeners, entry);

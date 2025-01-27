@@ -47,7 +47,7 @@ public abstract class IntHashKey implements RoutableKey
         @Override
         public accord.primitives.Range subRange(accord.primitives.Range range, Long start, Long end)
         {
-            Invariants.checkArgument(((IntHashKey)range.start()).hash + end.intValue() <= ((IntHashKey)range.end()).hash);
+            Invariants.requireArgument(((IntHashKey)range.start()).hash + end.intValue() <= ((IntHashKey)range.end()).hash);
             return range.newRange(
                     new Hash(((IntHashKey)range.start()).hash + start.intValue()),
                     new Hash(((IntHashKey)range.start()).hash + end.intValue())

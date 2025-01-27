@@ -148,7 +148,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             return;
         }
 
-        Invariants.checkState(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.maxSaveStatus == SaveStatus.Erased || full.maxSaveStatus == SaveStatus.Vestigial);
+        Invariants.require(sourceEpoch == txnId.epoch() || (full.executeAt != null && sourceEpoch == full.executeAt.epoch()) || full.maxSaveStatus == SaveStatus.Erased || full.maxSaveStatus == SaveStatus.Vestigial);
 
         // TODO (required): consider and document whether it is safe to infer that we are stale if we have not received responses from all shards we know of
         //  (in principle, we should at least require responses from our own shard, and the home shard if we know it); if we only hear from a remote shard it may have fully Erased
@@ -234,7 +234,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 Participants<?> depsNeeds = participants.stillTouches();
                 if (found.hasDecidedDeps() && stableDeps == null && this.stableDeps != null)
                 {
-                    Invariants.checkState(executeAtIfKnown != null);
+                    Invariants.require(executeAtIfKnown != null);
                     // we don't subtract existing partialDeps, as they cannot be committed deps; we only permit committing deps covering all participating ranges
                     stableDeps = this.stableDeps.intersecting(depsNeeds).reconstitutePartial(depsNeeds);
                 }
@@ -274,7 +274,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
             case Applied:
             case PreApplied:
-                Invariants.checkState(committedExecuteAt != null);
+                Invariants.require(committedExecuteAt != null);
                 // we must use the remote executeAt, as it might have a uniqueHlc we aren't aware of at commit
                 confirm(Commands.apply(safeStore, safeCommand, participants, txnId, route, committedExecuteAt, stableDeps, partialTxn, writes, result));
                 break;
@@ -348,7 +348,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     {
         // if our peers have truncated this command, then either:
         // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
-        Invariants.checkState(!maxKnowledgeSaveStatus.is(Status.Invalidated));
+        Invariants.require(!maxKnowledgeSaveStatus.is(Status.Invalidated));
 
         Participants<?> stillTouches = participants.stillTouches();
         if (stillTouches.isEmpty())
@@ -373,8 +373,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         Participants<?> staleOwnsOrMayExecutes = stillOwnsOrMayExecute.without(notStaleOwnsOrMayExecutes);
         if (staleOwnsOrMayExecutes.isEmpty() && staleTouches.isEmpty())
         {
-            Invariants.checkState(notStaleTouches.containsAll(stillTouches));
-            Invariants.checkState(notStaleOwnsOrMayExecutes.containsAll(stillOwnsOrMayExecute));
+            Invariants.require(notStaleTouches.containsAll(stillTouches));
+            Invariants.require(notStaleOwnsOrMayExecutes.containsAll(stillOwnsOrMayExecute));
             return required;
         }
 

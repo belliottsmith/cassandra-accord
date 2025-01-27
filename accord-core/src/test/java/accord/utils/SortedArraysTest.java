@@ -352,7 +352,7 @@ class SortedArraysTest
         // remapper requires data to be sorted and unique, so make sure this is true
         Arrays.sort(target);
         for (int i = 1; i < target.length; i++)
-            Invariants.checkArgument(!target[i - 1].equals(target[i]));
+            Invariants.requireArgument(!target[i - 1].equals(target[i]));
         return target;
     }
 

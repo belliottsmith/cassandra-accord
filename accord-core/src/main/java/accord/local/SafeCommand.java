@@ -165,7 +165,7 @@ public abstract class SafeCommand
 
     public Command.NotDefined uninitialised()
     {
-        Invariants.checkArgument(current() == null);
+        Invariants.requireArgument(current() == null);
         return incidentalUpdate(Command.NotDefined.uninitialised(txnId));
     }
 

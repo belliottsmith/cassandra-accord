@@ -73,7 +73,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     @VisibleForTesting
     ReducingIntervalMap(boolean inclusiveEnds, K[] starts, V[] values)
     {
-        Invariants.checkArgument(starts.length == values.length + 1 || (starts.length + values.length) == 0);
+        Invariants.requireArgument(starts.length == values.length + 1 || (starts.length + values.length) == 0);
         this.inclusiveEnds = inclusiveEnds;
         this.starts = starts;
         this.values = values;
@@ -230,7 +230,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             start = second.start();
             if (first.hasCurrent() && first.start().compareTo(start) < 0 && first.value() != null)
                 builder.append(first.start(), start, builder.slice(first.start(), start, first.value()));
-            Invariants.checkState(start.compareTo(second.start()) <= 0);
+            Invariants.require(start.compareTo(second.start()) <= 0);
         }
 
         // loop over any range covered by both
@@ -304,7 +304,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             start = second.start();
             if (first.hasCurrent()) builder.append(first.start(), first.value(), reduce);
             else builder.append(end, null, reduce);
-            Invariants.checkState(start.compareTo(second.start()) <= 0);
+            Invariants.require(start.compareTo(second.start()) <= 0);
         }
 
         // loop over any range covered by both
@@ -457,7 +457,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         {
             int tailIdx = starts.size() - 1;
 
-            Invariants.checkState(starts.size() == values.size());
+            Invariants.require(starts.size() == values.size());
 
             int compareToTailKey;
             V tailValue;
@@ -469,7 +469,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             else
             {
                 compareToTailKey = start.compareTo(starts.get(tailIdx));
-                Invariants.checkState( compareToTailKey >= 0 || safeToAdd == null || start.compareTo(safeToAdd) >= 0);
+                Invariants.require(compareToTailKey >= 0 || safeToAdd == null || start.compareTo(safeToAdd) >= 0);
                 tailValue = values.get(tailIdx);
                 if (Objects.equals(value, tailValue))
                     return;
@@ -504,7 +504,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             }
             if (value != null)
             {
-                Invariants.checkState(safeToAdd == null || safeToAdd.compareTo(start) <= 0);
+                Invariants.require(safeToAdd == null || safeToAdd.compareTo(start) <= 0);
                 safeToAdd = start;
             }
         }
@@ -515,10 +515,10 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         {
             if (!values.isEmpty())
             {
-                Invariants.checkState(values.get(values.size() - 1) == null);
+                Invariants.require(values.get(values.size() - 1) == null);
                 values.remove(values.size() - 1);
-                Invariants.checkState(values.get(0) != null);
-                Invariants.checkState(starts.size() == values.size() + 1);
+                Invariants.require(values.get(0) != null);
+                Invariants.require(starts.size() == values.size() + 1);
             }
             return buildInternal();
         }
@@ -560,7 +560,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             if (prevEnd != null)
             {
                 int c = prevEnd.compareTo(start);
-                Invariants.checkState(c <= 0);
+                Invariants.require(c <= 0);
                 if (c < 0)
                 {
                     starts.add(prevEnd);

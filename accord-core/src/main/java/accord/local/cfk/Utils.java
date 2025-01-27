@@ -54,11 +54,11 @@ class Utils
             {
                 if (!txn.witnesses(additions[i])) continue;
                 j = SortedArrays.exponentialSearch(missing, j, missing.length, additions[i]);
-                if (shouldNotHaveMissing != NO_TXNIDS && Arrays.binarySearch(shouldNotHaveMissing, txn) >= 0) Invariants.checkState(j < 0);
-                else Invariants.checkState(j >= 0);
+                if (shouldNotHaveMissing != NO_TXNIDS && Arrays.binarySearch(shouldNotHaveMissing, txn) >= 0) Invariants.require(j < 0);
+                else Invariants.require(j >= 0);
             }
             if (curInfo == null && newInfo.compareTo(COMMITTED) < 0 && txn.witnesses(newInfo) && txn.depsKnownBefore().compareTo(newInfo) > 0 && (shouldNotHaveMissing == NO_TXNIDS || Arrays.binarySearch(shouldNotHaveMissing, txn) < 0))
-                Invariants.checkState(Arrays.binarySearch(missing, newInfo) >= 0);
+                Invariants.require(Arrays.binarySearch(missing, newInfo) >= 0);
         }
     }
 
@@ -241,7 +241,7 @@ class Utils
         {
             j = Arrays.binarySearch(byId, prevTxn);
         }
-        Invariants.checkState(byId[j] == prevTxn);
+        Invariants.require(byId[j] == prevTxn);
         byId[j] = committedByExecuteAt[i] = newTxn;
         return minSearchIndex;
     }
@@ -408,13 +408,13 @@ class Utils
         {
             buffer[count++] = current[j++];
         }
-        Invariants.checkState(count == additionCount + current.length);
+        Invariants.require(count == additionCount + current.length);
         return cachedTxnIds().completeAndDiscard(buffer, count);
     }
 
     static TxnId[] selectUnmanaged(CommandsForKey.Unmanaged[] unmanageds, int start, int end)
     {
-        Invariants.checkArgument(end >= start);
+        Invariants.requireArgument(end >= start);
         TxnId[] notifyNotWaiting = new TxnId[end - start];
         for (int i = start ; i < end ; ++i)
         {

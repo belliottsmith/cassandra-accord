@@ -45,7 +45,7 @@ public class Timestamped<T>
     {
         int c = a.timestamp.compareTo(b.timestamp);
         int c2 = Long.compare(a.timestamp.uniqueHlc(), b.timestamp.uniqueHlc());
-        Invariants.checkState(normaliseCmp(c) == normaliseCmp(c2));
+        Invariants.require(normaliseCmp(c) == normaliseCmp(c2));
         validateCmp(c, a, b, testPrefix, testEquality, true);
         validateCmp(c2, a, b, testPrefix, testEquality, true);
         return c >= 0 ? a : b;
@@ -66,16 +66,16 @@ public class Timestamped<T>
 
     private static <T> void validateCmp(int cmp, Timestamped<T> a, Timestamped<T> b, BiPredicate<T, T> testPrefix, BiPredicate<T, T> testEquality, boolean permitBackwards)
     {
-        if (cmp == 0) Invariants.checkArgument(testEquality.test(a.data, b.data), "%s != %s", a, b);
-        else if (cmp < 0) Invariants.checkArgument(testPrefix.test(a.data, b.data), "%s >= %s", a, b);
-        else if (permitBackwards) Invariants.checkArgument(testPrefix.test(b.data, a.data), "%s <= %s", a, b);
+        if (cmp == 0) Invariants.requireArgument(testEquality.test(a.data, b.data), "%s != %s", a, b);
+        else if (cmp < 0) Invariants.requireArgument(testPrefix.test(a.data, b.data), "%s >= %s", a, b);
+        else if (permitBackwards) Invariants.requireArgument(testPrefix.test(b.data, a.data), "%s <= %s", a, b);
         else Invariants.illegalState("Trying to write old data %s < %s", b, a);
     }
 
     public static <T> Timestamped<T> mergeEqual(Timestamped<T> a, Timestamped<T> b, BiPredicate<T, T> testEquality)
     {
         int c = a.timestamp.compareTo(b.timestamp);
-        Invariants.checkState(c == 0 && testEquality.test(a.data, b.data), "%s != %s", a, b);
+        Invariants.require(c == 0 && testEquality.test(a.data, b.data), "%s != %s", a, b);
         return a;
     }
 

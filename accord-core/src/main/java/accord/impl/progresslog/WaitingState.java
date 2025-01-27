@@ -194,13 +194,13 @@ abstract class WaitingState extends BaseTxnState
 
     private void updateAwaitRound(int newRoundIndex, int roundSize)
     {
-        Invariants.checkArgument(roundSize <= AWAIT_BITS);
+        Invariants.requireArgument(roundSize <= AWAIT_BITS);
         encodedState = setRoundIndexAndClearBitSet(encodedState, newRoundIndex, roundSize, AWAIT_SHIFT, AWAIT_BITS, AWAIT_MASK);
     }
 
     private void setAwaitDone(int roundSize)
     {
-        Invariants.checkArgument(roundSize <= AWAIT_BITS);
+        Invariants.requireArgument(roundSize <= AWAIT_BITS);
         encodedState = setMaxRoundIndexAndClearBitSet(encodedState, roundSize, AWAIT_SHIFT, AWAIT_BITS, AWAIT_MASK);
     }
 
@@ -341,9 +341,9 @@ abstract class WaitingState extends BaseTxnState
     {
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
-        Invariants.checkState(!owner.hasActive(Waiting, txnId));
-        Invariants.checkState(command.saveStatus().compareTo(blockedUntil.unblockedFrom) < 0,
-                              "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.unblockedFrom, command);
+        Invariants.require(!owner.hasActive(Waiting, txnId));
+        Invariants.require(command.saveStatus().compareTo(blockedUntil.unblockedFrom) < 0,
+                           "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.unblockedFrom, command);
 
         set(safeStore, owner, blockedUntil, Querying);
         TxnId txnId = safeCommand.txnId();
@@ -369,7 +369,7 @@ abstract class WaitingState extends BaseTxnState
 
         // TODO (expected): split into txn and deps sources
         Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, lowEpoch, highEpoch);
-        Invariants.checkState(!slicedRoute.isEmpty());
+        Invariants.require(!slicedRoute.isEmpty());
         if (!command.hasBeen(Status.PreCommitted))
         {
             // we know it has been decided one way or the other by the home shard at least, so we attempt a fetch
@@ -412,10 +412,10 @@ abstract class WaitingState extends BaseTxnState
     static void awaitOrFetchCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, Unseekables<?> ready, @Nullable Unseekables<?> notReady, @Nullable BlockedUntil upgrade, Throwable fail)
     {
         WaitingState state = owner.get(txnId);
-        Invariants.checkState(state != null, "State has been cleared but callback was not cancelled");
+        Invariants.require(state != null, "State has been cleared but callback was not cancelled");
 
-        Invariants.checkState(state.waitingProgress() == Querying);
-        Invariants.checkState(state.blockedUntil() == blockedUntil);
+        Invariants.require(state.waitingProgress() == Querying);
+        Invariants.require(state.blockedUntil() == blockedUntil);
 
         Command command = safeCommand.current();
         Route<?> route = command.route();
@@ -424,7 +424,7 @@ abstract class WaitingState extends BaseTxnState
         {
             if (route == null)
             {
-                Invariants.checkState(kind == FetchRoute);
+                Invariants.require(kind == FetchRoute);
                 state.retry(safeStore, safeCommand, owner, blockedUntil);
                 return;
             }
@@ -439,8 +439,9 @@ abstract class WaitingState extends BaseTxnState
                 state.setHomeSatisfies(newHomeSatisfies);
             }
 
+            EpochSupplier fromLocalEpoch = lowEpoch(safeStore, txnId, command);
             EpochSupplier toLocalEpoch = highEpoch(safeStore, txnId, blockedUntil, command, command.executeAtOrTxnId());
-            Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, txnId, toLocalEpoch); // the actual local keys we care about
+            Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, fromLocalEpoch, toLocalEpoch); // the actual local keys we care about
             Route<?> awaitRoute = awaitRoute(slicedRoute, blockedUntil); // either slicedRoute or just the home key
 
             int roundSize = awaitRoundSize(awaitRoute);
@@ -456,8 +457,8 @@ abstract class WaitingState extends BaseTxnState
                     {
                         // the home shard was found to already have the necessary state, with no distributed await;
                         // we can immediately progress the state machine
-                        Invariants.checkState(0 == state.awaitRoundIndex(roundSize));
-                        Invariants.checkState(0 == state.awaitBitSet(roundSize));
+                        Invariants.require(0 == state.awaitRoundIndex(roundSize));
+                        Invariants.require(0 == state.awaitBitSet(roundSize));
                         state.runInternal(safeStore, safeCommand, owner);
                     }
                     else
@@ -468,23 +469,35 @@ abstract class WaitingState extends BaseTxnState
                     break;
 
                 case AwaitSlice:
-                    Invariants.checkState(awaitRoute == slicedRoute);
-                    if (notReady == null)
+                    Invariants.require(awaitRoute == slicedRoute);
+                    if (roundStart < roundSize)
                     {
-                        Invariants.checkState((int) awaitRoute.findNextIntersection(roundStart, (Routables) ready, 0) / roundSize == roundIndex);
-                        // TODO (desired): in this case perhaps upgrade to fetch for next round?
-                        state.updateAwaitRound(roundIndex + 1, roundSize);
-                        state.runInternal(safeStore, safeCommand, owner);
+                        if (notReady == null)
+                        {
+                            Invariants.expect((int) awaitRoute.findNextIntersection(roundStart, (Routables) ready, 0) / roundSize == roundIndex);
+                            // TODO (desired): in this case perhaps upgrade to fetch for next round?
+                            state.updateAwaitRound(roundIndex + 1, roundSize);
+                            state.runInternal(safeStore, safeCommand, owner);
+                        }
+                        else
+                        {
+                            Invariants.expect((int) awaitRoute.findNextIntersection(roundStart, (Routables) notReady, 0) / roundSize == roundIndex);
+                            // TODO (desired): would be nice to validate this is 0 in cases where we are starting a fresh round
+                            //  but have to be careful as cannot zero when we restart as we may have an async callback arrive while we're waiting that then advances state machine
+                            state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
+                            state.set(safeStore, owner, blockedUntil, Awaiting);
+                        }
+                        break;
                     }
                     else
                     {
-                        Invariants.checkState((int) awaitRoute.findNextIntersection(roundStart, (Routables) notReady, 0) / roundSize == roundIndex);
-                        // TODO (desired): would be nice to validate this is 0 in cases where we are starting a fresh round
-                        //  but have to be careful as cannot zero when we restart as we may have an async callback arrive while we're waiting that then advances state machine
-                        state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
-                        state.set(safeStore, owner, blockedUntil, Awaiting);
+                        // In a production system it is safe for the roundIndex to get corrupted as we will just start polling a bit early,
+                        // but for testing we would like to know it has happened.
+                        // This might happen if we derived the Route differently for some reason, e.g. due to topology information changing in an unexpected way.
+                        // But, it could also be indicative of a benign bug.
+                        // We could wire the route through recursively each callback to avoid this, but it seems simpler to just be robust to problems here.
+                        Invariants.expect(false);
                     }
-                    break;
 
                 case FetchRoute:
                     if (state.homeSatisfies().compareTo(blockedUntil) < 0)
@@ -497,14 +510,14 @@ abstract class WaitingState extends BaseTxnState
 
                 case Fetch:
                 {
-                    Invariants.checkState(notReady != null, "Fetch was successful for all keys, but the WaitingState has not been cleared");
-                    Invariants.checkState(notReady.intersects(slicedRoute), "Fetch was successful for all keys, but the WaitingState has not been cleared");
+                    Invariants.require(notReady != null, "Fetch was successful for all keys, but the WaitingState has not been cleared");
+                    Invariants.require(notReady.intersects(slicedRoute), "Fetch was successful for all keys, but the WaitingState has not been cleared");
                     int nextIndex;
                     if (roundStart >= awaitRoute.size()) nextIndex = -1;
                     else if (slicedRoute == awaitRoute) nextIndex = (int) awaitRoute.findNextIntersection(roundStart, (Routables) notReady, 0);
                     else
                     {
-                        Invariants.checkState(roundIndex == 0);
+                        Invariants.require(roundIndex == 0);
                         nextIndex = 0;
                     }
 
@@ -516,7 +529,7 @@ abstract class WaitingState extends BaseTxnState
                     }
                     else
                     {
-                        Invariants.checkState(nextIndex >= roundStart);
+                        Invariants.require(nextIndex >= roundStart);
                         roundIndex = nextIndex / roundSize;
                         state.updateAwaitRound(roundIndex, roundSize);
                         state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
@@ -544,7 +557,7 @@ abstract class WaitingState extends BaseTxnState
 
     static void fetchCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, FetchData.FetchResult fetchResult, Throwable fail)
     {
-        Invariants.checkState(fetchResult != null || fail != null);
+        Invariants.require(fetchResult != null || fail != null);
         Unseekables<?> ready = fetchResult == null ? null : fetchResult.achievedTarget;
         Unseekables<?> notReady = fetchResult == null ? null : fetchResult.didNotAchieveTarget;
         BlockedUntil upgrade = fetchResult == null ? null : BlockedUntil.forSaveStatus(fetchResult.achieved.propagatesSaveStatus());
@@ -643,7 +656,7 @@ abstract class WaitingState extends BaseTxnState
 
     static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, EpochSupplier lowEpoch, EpochSupplier highEpoch, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
     {
-        Invariants.checkState(!slicedRoute.isEmpty());
+        Invariants.require(!slicedRoute.isEmpty());
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
         FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, fetchRoute, maxRoute, slicedRoute, lowEpoch, highEpoch, executeAt, invoker);
@@ -657,7 +670,7 @@ abstract class WaitingState extends BaseTxnState
 
     void awaitSlice(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route, int callbackId)
     {
-        Invariants.checkState(blockedUntil.waitsOn == SHARD);
+        Invariants.require(blockedUntil.waitsOn == SHARD);
         // TODO (expected): special-case when this shard is home key to avoid remote messages
         await(owner, blockedUntil, txnId, executeAt, route, callbackId, WaitingState::synchronousAwaitSliceCallback);
     }

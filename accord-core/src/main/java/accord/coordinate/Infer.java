@@ -69,7 +69,7 @@ public class Infer
         {
             if (this == that)
                 return this;
-            Invariants.checkState(this.compareTo(IsNotInvalid) < 0 || that.compareTo(IsNotInvalid) < 0);
+            Invariants.require(this.compareTo(IsNotInvalid) < 0 || that.compareTo(IsNotInvalid) < 0);
             return this.compareTo(that) >= 0 ? this : that;
         }
 
@@ -175,7 +175,7 @@ public class Infer
             // we're applying an invalidation, so the record will not be cleaned up until the whole range is truncated
             Command command = safeCommand.current();
             // TODO (required, consider): consider the !command.hasBeen(PreCommitted) condition
-            Invariants.checkState(!command.hasBeen(PreCommitted) || command.hasBeen(Status.Truncated), "Unexpected status for %s", command);
+            Invariants.require(!command.hasBeen(PreCommitted) || command.hasBeen(Status.Truncated), "Unexpected status for %s", command);
             Commands.commitInvalidate(safeStore, safeCommand, participants);
             return null;
         }

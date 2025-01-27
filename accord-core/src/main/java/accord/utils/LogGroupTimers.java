@@ -111,14 +111,14 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         @Override
         protected void append(T timer)
         {
-            Invariants.checkState(epoch + span > timer.deadline());
+            Invariants.require(epoch + span > timer.deadline());
             super.append(timer);
         }
 
         @Override
         protected void update(T timer)
         {
-            Invariants.checkState(epoch + span > timer.deadline());
+            Invariants.require(epoch + span > timer.deadline());
             super.update(timer);
         }
 
@@ -176,7 +176,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
     public LogGroupTimers(TimeUnit units, int bucketShift, int bucketSplitSize)
     {
         this.units = units;
-        this.bucketShift = Invariants.checkArgument(bucketShift, bucketShift < 31);
+        this.bucketShift = Invariants.requireArgument(bucketShift, bucketShift < 31);
         this.minBucketSpan = 1L << bucketShift;
         this.bucketSplitSize = bucketSplitSize;
     }
@@ -265,21 +265,21 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
                     }
 
                     --timerCount;
-                    Invariants.checkState(timer == head.pollNode());
-                    Invariants.checkState(!timer.isInHeap());
+                    Invariants.require(timer == head.pollNode());
+                    Invariants.require(!timer.isInHeap());
                     expiredTimers.accept(param, timer);
                 }
                 wakeAt = head.end();
             }
 
-            Invariants.checkState(head.isEmpty());
-            Invariants.checkState(head == buckets[bucketsStart]);
+            Invariants.require(head.isEmpty());
+            Invariants.require(head == buckets[bucketsStart]);
             buckets[bucketsStart++] = null;
             if (head == addFinger)
                 addFinger = null;
         }
         wakeAt = Long.MAX_VALUE;
-        Invariants.checkState(addFinger == null || addFinger == findBucket(addFinger.epoch));
+        Invariants.require(addFinger == null || addFinger == findBucket(addFinger.epoch));
     }
 
     public void add(long deadline, T timer)
@@ -293,7 +293,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
     {
         Timer t = timer; // cast to access private field
         Bucket<T> bucket = findBucket(t.deadline);
-        Invariants.checkState(bucket != null);
+        Invariants.require(bucket != null);
         long prevDeadline = t.deadline;
         if (bucket.contains(deadline))
         {
@@ -327,7 +327,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         Timer t = timer; // cast to access private field
         long prevDeadline = t.deadline;
         Bucket<T> bucket = findBucket(t.deadline);
-        Invariants.checkState(bucket != null);
+        Invariants.require(bucket != null);
         bucket.remove(timer);
         --timerCount;
         refreshWakeAt(prevDeadline, Long.MAX_VALUE);
@@ -428,7 +428,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         if (bucketSpan < 0)
         {
             bucketSpan = Long.MAX_VALUE;
-            Invariants.checkState(deadline - epoch >= 0);
+            Invariants.require(deadline - epoch >= 0);
         }
         bucketSpan = Math.max(minBucketSpan, bucketSpan);
         return bucketSpan;
@@ -449,7 +449,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
             if (bucket.contains(deadline))
                 return bucket;
             ++index;
-            Invariants.checkState(index == bucketsEnd);
+            Invariants.require(index == bucketsEnd);
         }
 
         if (index < bucketsStart || bucketsStart == bucketsEnd)
@@ -524,7 +524,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
     private void split(Bucket<T> bucket, long idealSpan)
     {
         int index = findBucketIndex(buckets, bucketsStart, bucketsEnd, bucket.epoch);
-        Invariants.checkState(buckets[index] == bucket);
+        Invariants.require(buckets[index] == bucket);
         int splitCount = 1;
         {
             long nextSpan = idealSpan * 2;
@@ -590,7 +590,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
     private void checkContiguous()
     {
         for (int i = bucketsStart + 1 ; i < bucketsEnd ; ++i)
-            Invariants.checkState(buckets[i - 1].end() == buckets[i].epoch);
+            Invariants.require(buckets[i - 1].end() == buckets[i].epoch);
     }
 
     public void clear()

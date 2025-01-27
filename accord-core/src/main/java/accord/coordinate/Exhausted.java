@@ -23,8 +23,7 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.primitives.Ranges;
 import accord.primitives.TxnId;
-
-import static accord.utils.Invariants.checkState;
+import accord.utils.Invariants;
 
 /**
  * Thrown when a transaction exceeds its specified timeout for obtaining a result for a client
@@ -56,7 +55,7 @@ public class Exhausted extends CoordinationFailed
     @Override
     public Exhausted wrap()
     {
-        checkState(this.getClass() == Exhausted.class);
+        Invariants.require(this.getClass() == Exhausted.class);
         return new Exhausted(txnId(), homeKey(), unavailable, this);
     }
 }

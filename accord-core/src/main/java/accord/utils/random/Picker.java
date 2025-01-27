@@ -105,13 +105,13 @@ public class Picker
 
         public static <T> WeightedObjectPicker<T> randomWeighted(RandomSource random, T[] values, float[] bias)
         {
-            Invariants.checkArgument(values.length == bias.length);
+            Invariants.requireArgument(values.length == bias.length);
             return new WeightedObjectPicker<>(random, values, randomWeights(random, bias));
         }
 
         public static <T> WeightedObjectPicker<T> weighted(RandomSource random, T[] values, float[] proportionalWeights)
         {
-            Invariants.checkArgument(values.length == proportionalWeights.length);
+            Invariants.requireArgument(values.length == proportionalWeights.length);
             return new WeightedObjectPicker<>(random, values, normaliseWeights(proportionalWeights));
         }
     }

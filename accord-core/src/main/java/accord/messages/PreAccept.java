@@ -151,7 +151,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 // all preceding transactions. In which case we may be able to adopt a future dependency but won't propose it.
                 // We do however prohibit later epochs as dependencies as we cannot handle those effectively
                 // when back-filling for execution of the transaction.
-                Invariants.checkState(deps.maxTxnId(txnId).epoch() <= txnId.epoch());
+                Invariants.require(deps.maxTxnId(txnId).epoch() <= txnId.epoch());
                 return new PreAcceptOk(txnId, command.executeAtOrTxnId(), deps);
 
             case Truncated:
@@ -277,7 +277,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 TxnId maxRedundantBefore = redundant.maxTxnId(null);
                 if (maxRedundantBefore != null && maxRedundantBefore.compareTo(executeAt) >= 0)
                 {
-                    Invariants.checkState(maxRedundantBefore.is(ExclusiveSyncPoint));
+                    Invariants.require(maxRedundantBefore.is(ExclusiveSyncPoint));
                     return null;
                 }
             }
@@ -291,7 +291,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
             // TODO (required): make sure any sync point is in the past
             Deps result = builder.build();
             result = new Deps(result.keyDeps, result.rangeDeps.with(redundant), result.directKeyDeps);
-            Invariants.checkState(!result.contains(txnId));
+            Invariants.require(!result.contains(txnId));
             return result;
         }
     }

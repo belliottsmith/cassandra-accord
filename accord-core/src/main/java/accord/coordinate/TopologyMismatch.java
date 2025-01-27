@@ -25,8 +25,7 @@ import accord.api.RoutingKey;
 import accord.primitives.Routables;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
-
-import static accord.utils.Invariants.checkState;
+import accord.utils.Invariants;
 
 public class TopologyMismatch extends CoordinationFailed
 {
@@ -55,7 +54,7 @@ public class TopologyMismatch extends CoordinationFailed
     @Override
     public TopologyMismatch wrap()
     {
-        checkState(this.getClass() == TopologyMismatch.class);
+        Invariants.require(this.getClass() == TopologyMismatch.class);
         return new TopologyMismatch(reasons, txnId(), homeKey(), this);
     }
 

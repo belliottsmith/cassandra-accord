@@ -75,7 +75,7 @@ public class CoordinateShardDurable extends ExecuteExclusive implements Callback
         for (Node.Id id :staleNodes)
         {
             RequestStatus newStatus = tracker.recordSuccess(id);
-            Invariants.checkState(newStatus != RequestStatus.Success);
+            Invariants.require(newStatus != RequestStatus.Success);
         }
         if (contact == null) tryFailure(new Exhausted(syncPoint.syncId, syncPoint.route.homeKey(), null));
         else node.send(contact, to -> new WaitUntilApplied(to, tracker.topologies(), syncPoint.syncId, syncPoint.route, syncPoint.syncId.epoch()), this);

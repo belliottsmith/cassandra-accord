@@ -215,7 +215,7 @@ public interface CommandSummaries
                     ranges = newRanges;
                 }
 
-                Invariants.checkState(partialDeps != null || findAsDep == null || !saveStatus.known.deps().hasProposedOrDecidedDeps());
+                Invariants.require(partialDeps != null || findAsDep == null || !saveStatus.known.deps().hasProposedOrDecidedDeps());
                 IsDep isDep = null;
                 if (findAsDep != null)
                 {

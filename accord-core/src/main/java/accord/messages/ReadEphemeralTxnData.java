@@ -75,8 +75,8 @@ public class ReadEphemeralTxnData extends ReadData
     private ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, Route<?> scope, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route)
     {
         super(txnId, readScope.intersecting(scope), executeAtEpoch);
-        Invariants.checkState(executeAtEpoch == txnId.epoch(),
-                              "Epoch for transaction %s (%d) did not match expected %d", txn, txnId.epoch(), executeAtEpoch);
+        Invariants.require(executeAtEpoch == txnId.epoch(),
+                           "Epoch for transaction %s (%d) did not match expected %d", txn, txnId.epoch(), executeAtEpoch);
         this.route = route;
         this.partialTxn = txn.intersecting(scope, false);
         this.partialDeps = deps.intersecting(scope);
@@ -85,7 +85,7 @@ public class ReadEphemeralTxnData extends ReadData
     public ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, long executeAtEpoch, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps, @Nonnull FullRoute<?> route)
     {
         super(txnId, readScope, executeAtEpoch);
-        Invariants.checkState(executeAtEpoch == txnId.epoch());
+        Invariants.require(executeAtEpoch == txnId.epoch());
         this.partialTxn = partialTxn;
         this.partialDeps = partialDeps;
         this.route = route;

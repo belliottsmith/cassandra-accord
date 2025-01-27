@@ -289,8 +289,8 @@ public class Pruning
      */
     static CommandsForKey pruneBefore(CommandsForKey cfk, TxnInfo newPrunedBefore, int pos)
     {
-        Invariants.checkArgument(newPrunedBefore.compareTo(cfk.prunedBefore()) >= 0, "Expect new prunedBefore to be ahead of existing one");
-        Invariants.checkArgument(newPrunedBefore.mayExecute());
+        Invariants.requireArgument(newPrunedBefore.compareTo(cfk.prunedBefore()) >= 0, "Expect new prunedBefore to be ahead of existing one");
+        Invariants.requireArgument(newPrunedBefore.mayExecute());
 
         TxnInfo[] byId = cfk.byId;
         TxnInfo[] committedByExecuteAt = cfk.committedByExecuteAt;
@@ -458,7 +458,7 @@ public class Pruning
 
         cachedAny().forceDiscard(removedExecuteAts, removedExecuteAtCount);
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
-        Invariants.checkState(newById[retainCount] == newPrunedBefore);
+        Invariants.require(newById[retainCount] == newPrunedBefore);
         return new CommandsForKey(cfk.key, cfk.boundsInfo, newById, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds);
     }
 
@@ -492,7 +492,7 @@ public class Pruning
             }
 
             Object prev = epochPrunedBefores.putIfAbsent(test.epoch(), test);
-            Invariants.checkState(prev == null);
+            Invariants.require(prev == null);
 
             i = SortedArrays.exponentialSearch(committedByExecuteAt, i + 1, committedByExecuteAt.length, test, TxnInfo::compareExecuteAtEpoch, FLOOR);
             if (i < 0) i = -1 - i;
@@ -507,8 +507,8 @@ public class Pruning
         TxnId newBootstrappedAt = bootstrappedAt(newBoundsInfo);
         TxnId prevRedundantBefore = redundantBefore(prevBoundsInfo);
         TxnId prevBootstrappedAt = bootstrappedAt(prevBoundsInfo);
-        Invariants.checkArgument(newRedundantBefore.compareTo(prevRedundantBefore) >= 0, "Expect new RedundantBefore.Entry locallyAppliedOrInvalidatedBefore to be ahead of existing one");
-        Invariants.checkArgument(prevBootstrappedAt == null || newRedundantBefore.compareTo(prevBootstrappedAt) >= 0 || (newBootstrappedAt != null && newBootstrappedAt.compareTo(prevBootstrappedAt) >= 0), "Expect new RedundantBefore.Entry bootstrappedAt to be ahead of existing one");
+        Invariants.requireArgument(newRedundantBefore.compareTo(prevRedundantBefore) >= 0, "Expect new RedundantBefore.Entry locallyAppliedOrInvalidatedBefore to be ahead of existing one");
+        Invariants.requireArgument(prevBootstrappedAt == null || newRedundantBefore.compareTo(prevBootstrappedAt) >= 0 || (newBootstrappedAt != null && newBootstrappedAt.compareTo(prevBootstrappedAt) >= 0), "Expect new RedundantBefore.Entry bootstrappedAt to be ahead of existing one");
 
         TxnInfo[] newById = byId;
         int pos = insertPos(byId, newRedundantBefore);
@@ -518,7 +518,7 @@ public class Pruning
             {
                 int startPos = prevBootstrappedAt == null ? 0 : insertPos(byId, prevBootstrappedAt);
                 for (int i = startPos ; i < pos ; ++i)
-                    Invariants.checkState(byId[i].isNot(COMMITTED), "%s expected to be applied or undecided, as marked redundant", byId[i]);
+                    Invariants.require(byId[i].isNot(COMMITTED), "%s expected to be applied or undecided, as marked redundant", byId[i]);
             }
 
             newById = Arrays.copyOfRange(byId, pos, byId.length);
@@ -553,7 +553,7 @@ public class Pruning
             return -1;
 
         int i = Arrays.binarySearch(byId, prunedBefore);
-        Invariants.checkState(i >= 0);
+        Invariants.require(i >= 0);
         return i;
     }
 

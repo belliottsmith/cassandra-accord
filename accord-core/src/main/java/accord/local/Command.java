@@ -147,7 +147,7 @@ public abstract class Command implements ICommand
 
     protected Command(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, @Nullable PartialTxn partialTxn, @Nullable PartialDeps partialDeps, Ballot acceptedOrCommitted, boolean unsafeInitialisation)
     {
-        Invariants.checkState(unsafeInitialisation);
+        Invariants.require(unsafeInitialisation);
         this.txnId = txnId;
         this.saveStatus = saveStatus;
         this.durability = durability;
@@ -436,7 +436,7 @@ public abstract class Command implements ICommand
 
         public static Truncated truncatedApply(Command command, @Nonnull StoreParticipants participants)
         {
-            Invariants.checkArgument(command.known().isExecuteAtKnown());
+            Invariants.requireArgument(command.known().isExecuteAtKnown());
             Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
             if (command.txnId().awaitsOnlyDeps())
             {
@@ -461,7 +461,7 @@ public abstract class Command implements ICommand
 
         public static Truncated truncatedApply(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, Writes writes, Result result)
         {
-            Invariants.checkArgument(!txnId.awaitsOnlyDeps());
+            Invariants.requireArgument(!txnId.awaitsOnlyDeps());
             durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
             return validate(new Truncated(txnId, saveStatus, durability, participants, executeAt, writes, result));
         }
@@ -475,7 +475,7 @@ public abstract class Command implements ICommand
         {
             if (!txnId.awaitsOnlyDeps())
             {
-                Invariants.checkState(dependencyExecutesAt == null);
+                Invariants.require(dependencyExecutesAt == null);
                 return truncatedApply(txnId, saveStatus, durability, participants, executeAt, writes, result);
             }
             durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
@@ -484,14 +484,14 @@ public abstract class Command implements ICommand
 
         private static Durability checkTruncatedApplyInvariants(Durability durability, SaveStatus saveStatus, Timestamp executeAt)
         {
-            Invariants.checkArgument(executeAt != null);
-            Invariants.checkArgument(saveStatus == SaveStatus.TruncatedApply || saveStatus == SaveStatus.TruncatedApplyWithDeps || saveStatus == SaveStatus.TruncatedApplyWithOutcome);
+            Invariants.requireArgument(executeAt != null);
+            Invariants.requireArgument(saveStatus == SaveStatus.TruncatedApply || saveStatus == SaveStatus.TruncatedApplyWithDeps || saveStatus == SaveStatus.TruncatedApplyWithOutcome);
             return Durability.mergeAtLeast(durability, ShardUniversal);
         }
 
         public static Truncated invalidated(Command command)
         {
-            Invariants.checkState(!command.hasBeen(Status.PreCommitted));
+            Invariants.require(!command.hasBeen(Status.PreCommitted));
             return invalidated(command.txnId(), command.participants());
         }
 
@@ -688,9 +688,9 @@ public abstract class Command implements ICommand
         {
             if (Invariants.isParanoid() && Invariants.testParanoia(LINEAR, NONE, LOW))
             {
-                Invariants.checkState(partialDeps == null
-                    || (participants.touches() == participants.stillTouches() && participants.touches().equals(partialDeps.covering))
-                    || (partialDeps.covers(participants.stillTouches()) && participants.touches().containsAll(partialDeps.covering))
+                Invariants.require(partialDeps == null
+                                   || (participants.touches() == participants.stillTouches() && participants.touches().equals(partialDeps.covering))
+                                   || (partialDeps.covers(participants.stillTouches()) && participants.touches().containsAll(partialDeps.covering))
                 );
             }
         }
@@ -716,7 +716,7 @@ public abstract class Command implements ICommand
 
         public static Committed committed(ICommand copy, SaveStatus status, WaitingOn overrideWaitingOn)
         {
-            Invariants.checkState(status == (overrideWaitingOn.isWaiting() ? SaveStatus.Stable : ReadyToExecute));
+            Invariants.require(status == (overrideWaitingOn.isWaiting() ? SaveStatus.Stable : ReadyToExecute));
             return validate(new Committed(copy, status, overrideWaitingOn));
         }
 
@@ -732,7 +732,7 @@ public abstract class Command implements ICommand
             super(copy, status);
             this.waitingOn = overrideWaitingOn;
             Invariants.nonNull(copy.participants());
-            Invariants.checkState(Route.isFullRoute(copy.participants().route()), "Expected a full route but given %s", copy.participants().route());
+            Invariants.require(Route.isFullRoute(copy.participants().route()), "Expected a full route but given %s", copy.participants().route());
         }
 
         Committed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn)
@@ -744,7 +744,7 @@ public abstract class Command implements ICommand
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            Invariants.checkState(partialDeps().covers(participants.stillTouches()));
+            Invariants.require(partialDeps().covers(participants.stillTouches()));
             return validate(new Committed(txnId(), saveStatus(), durability, participants, promised, executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted(), waitingOn));
         }
 
@@ -799,13 +799,13 @@ public abstract class Command implements ICommand
             super(copy, status, overrideWaitingOn);
             this.writes = copy.writes();
             this.result = copy.result();
-            Invariants.checkState(txnId().kind() != Write || writes != null);
+            Invariants.require(txnId().kind() != Write || writes != null);
         }
 
         private Executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, Result result)
         {
             super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
-            Invariants.checkState(txnId().kind() != Write || writes != null);
+            Invariants.require(txnId().kind() != Write || writes != null);
             this.writes = writes;
             this.result = result;
         }
@@ -813,7 +813,7 @@ public abstract class Command implements ICommand
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            Invariants.checkState(partialDeps().covers(participants.stillTouches()));
+            Invariants.require(partialDeps().covers(participants.stillTouches()));
             return validate(new Executed(txnId(), saveStatus(), durability, participants, promised, executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted(), waitingOn, writes, result));
         }
 
@@ -941,7 +941,7 @@ public abstract class Command implements ICommand
 
         public boolean isWaitingOnKey(int keyIndex)
         {
-            Invariants.checkIndex(keyIndex, keys.size());
+            Invariants.requireIndex(keyIndex, keys.size());
             return waitingOn.get(txnIdCount() + keyIndex);
         }
 
@@ -1264,21 +1264,21 @@ public abstract class Command implements ICommand
 
             public boolean isWaitingOnDirectRangeTxnIdx(int idx)
             {
-                Invariants.checkIndex(idx, directRangeDeps.txnIdCount());
+                Invariants.requireIndex(idx, directRangeDeps.txnIdCount());
                 return waitingOn.get(idx);
             }
 
             public boolean isWaitingOnDirectKeyTxnIdx(int idx)
             {
-                Invariants.checkIndex(idx, directKeyDeps.txnIdCount());
+                Invariants.requireIndex(idx, directKeyDeps.txnIdCount());
                 return waitingOn.get(idx + directRangeDeps.txnIdCount());
             }
 
             public void updateExecuteAtLeast(TxnId txnId, Timestamp executeAtLeast)
             {
-                Invariants.checkState(txnId.awaitsOnlyDeps());
-                Invariants.checkState(uniqueHlc == 0);
-                Invariants.checkState(executeAtLeast.compareTo(txnId) > 0);
+                Invariants.require(txnId.awaitsOnlyDeps());
+                Invariants.require(uniqueHlc == 0);
+                Invariants.require(executeAtLeast.compareTo(txnId) > 0);
                 if (this.executeAtLeast == null || this.executeAtLeast.compareTo(executeAtLeast) < 0)
                 {
                     this.executeAtLeast = executeAtLeast;
@@ -1288,7 +1288,7 @@ public abstract class Command implements ICommand
 
             public void updateUniqueHlc(Timestamp executeAt, long uniqueHlc)
             {
-                Invariants.checkState(executeAtLeast == null);
+                Invariants.require(executeAtLeast == null);
                 if (uniqueHlc > executeAt.hlc() && uniqueHlc > this.uniqueHlc)
                 {
                     this.uniqueHlc = uniqueHlc;
@@ -1298,19 +1298,19 @@ public abstract class Command implements ICommand
 
             boolean removeWaitingOnDirectRangeTxnId(int i)
             {
-                Invariants.checkIndex(i, directRangeDeps.txnIdCount());
+                Invariants.requireIndex(i, directRangeDeps.txnIdCount());
                 return removeWaitingOn(i);
             }
 
             boolean removeWaitingOnDirectKeyTxnId(int i)
             {
-                Invariants.checkIndex(i, directKeyDeps.txnIdCount());
+                Invariants.requireIndex(i, directKeyDeps.txnIdCount());
                 return removeWaitingOn(i + directRangeDeps.txnIdCount());
             }
 
             boolean removeWaitingOnKey(int i)
             {
-                Invariants.checkIndex(i, keys.size());
+                Invariants.requireIndex(i, keys.size());
                 return removeWaitingOn(txnIdCount() + i);
             }
 
@@ -1343,13 +1343,13 @@ public abstract class Command implements ICommand
 
             private boolean setAppliedOrInvalidatedDirectRangeTxn(int i)
             {
-                Invariants.checkIndex(i, directRangeDeps.txnIdCount());
+                Invariants.requireIndex(i, directRangeDeps.txnIdCount());
                 return setAppliedOrInvalidated(i);
             }
 
             private boolean setAppliedOrInvalidatedDirectKeyTxn(int i)
             {
-                Invariants.checkIndex(i, directKeyDeps.txnIdCount());
+                Invariants.requireIndex(i, directKeyDeps.txnIdCount());
                 return setAppliedOrInvalidated(i + directRangeDeps.txnIdCount());
             }
 
@@ -1515,20 +1515,20 @@ public abstract class Command implements ICommand
         else if (command.executeAt() == null && command.status().phase == Phase.Accept)
         {
             SaveStatus prevSaveStatus = command.saveStatus();
-            Invariants.checkState(prevSaveStatus == AcceptedInvalidate || prevSaveStatus == PreNotAccepted || prevSaveStatus == NotAccepted);
+            Invariants.require(prevSaveStatus == AcceptedInvalidate || prevSaveStatus == PreNotAccepted || prevSaveStatus == NotAccepted);
             // TODO (desired): reconsider this special-casing
             return Command.Accepted.accepted(command.txnId(), SaveStatus.enrich(prevSaveStatus, SaveStatus.PreAccepted.known), command.durability(), participants, promised, executeAt, partialTxn, partialDeps, command.acceptedOrCommitted());
         }
         else
         {
-            Invariants.checkState(command.status() == Status.AcceptedMedium);
+            Invariants.require(command.status() == Status.AcceptedMedium);
             return (Command.PreAccepted) command.updatePromised(promised);
         }
     }
 
     static Command.Accepted markDefined(Command command, StoreParticipants newParticipants, Ballot promised, PartialTxn partialTxn)
     {
-        Invariants.checkState(!(command instanceof Committed));
+        Invariants.require(!(command instanceof Committed));
         return Command.Accepted.accepted(command.txnId(), SaveStatus.withDefinition(command.saveStatus()), command.durability(),
                                          newParticipants, promised, command.executeAt(), partialTxn, command.partialDeps(),
                                          command.acceptedOrCommitted());
@@ -1536,7 +1536,7 @@ public abstract class Command implements ICommand
 
     static Command.Accepted accept(Command current, SaveStatus saveStatus, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialDeps partialDeps, Ballot acceptedOrCommitted)
     {
-        Invariants.checkState(saveStatus.status == Status.AcceptedSlow || saveStatus.status == Status.AcceptedMedium);
+        Invariants.require(saveStatus.status == Status.AcceptedSlow || saveStatus.status == Status.AcceptedMedium);
         return validate(new Command.Accepted(current.txnId(), saveStatus, current.durability(), participants, promised, executeAt, current.partialTxn(), partialDeps, acceptedOrCommitted));
     }
 
@@ -1678,8 +1678,8 @@ public abstract class Command implements ICommand
         {
             default: throw new UnhandledEnum(known.route());
             case MaybeRoute: break;
-            case FullRoute: Invariants.checkState(Route.isFullRoute(validate.route())); break;
-            case CoveringRoute: Invariants.checkState(Route.isRoute(validate.route())); break;
+            case FullRoute: Invariants.require(Route.isFullRoute(validate.route())); break;
+            case CoveringRoute: Invariants.require(Route.isRoute(validate.route())); break;
         }
         {
             PartialTxn partialTxn = validate.partialTxn();
@@ -1689,10 +1689,10 @@ public abstract class Command implements ICommand
                 case DefinitionErased:
                 case DefinitionUnknown:
                 case NoOp:
-                    Invariants.checkState(partialTxn == null, "partialTxn is defined %s", validate);
+                    Invariants.require(partialTxn == null, "partialTxn is defined %s", validate);
                     break;
                 case DefinitionKnown:
-                    Invariants.checkState(partialTxn != null || validate.participants().owns().isEmpty(), "partialTxn is null");
+                    Invariants.require(partialTxn != null || validate.participants().owns().isEmpty(), "partialTxn is null");
                     break;
             }
         }
@@ -1703,17 +1703,17 @@ public abstract class Command implements ICommand
                 default: throw new UnhandledEnum(known.executeAt());
                 case ExecuteAtErased:
                 case ExecuteAtUnknown:
-                    Invariants.checkState(executeAt == null || executeAt.compareTo(validate.txnId()) >= 0);
+                    Invariants.require(executeAt == null || executeAt.compareTo(validate.txnId()) >= 0);
                     break;
                 case ExecuteAtKnown:
                 case ApplyAtKnown:
                 case ExecuteAtProposed:
-                    Invariants.checkState(executeAt != null);
+                    Invariants.require(executeAt != null);
                     int c =  executeAt.compareTo(validate.txnId());
-                    Invariants.checkState(c > 0 || (c == 0 && executeAt.getClass() == TxnId.class));
+                    Invariants.require(c > 0 || (c == 0 && executeAt.getClass() == TxnId.class) || executeAt.hasDistinctHlcAndUniqueHlc());
                     break;
                 case NoExecuteAt:
-                    Invariants.checkState(executeAt.equals(Timestamp.NONE));
+                    Invariants.require(executeAt.equals(Timestamp.NONE));
                     break;
             }
         }
@@ -1725,14 +1725,14 @@ public abstract class Command implements ICommand
                 case DepsUnknown:
                 case DepsErased:
                 case NoDeps:
-                    Invariants.checkState(deps == null);
+                    Invariants.require(deps == null);
                     break;
                 case DepsFromCoordinator:
                 case DepsProposedFixed:
                 case DepsProposed:
                 case DepsCommitted:
                 case DepsKnown:
-                    Invariants.checkState(deps != null);
+                    Invariants.require(deps != null);
                     break;
             }
         }
@@ -1743,18 +1743,18 @@ public abstract class Command implements ICommand
             {
                 default: throw new UnhandledEnum(known.outcome());
                 case Apply:
-                    if (validate.txnId().is(Write)) Invariants.checkState(writes != null, "Writes is null %s", validate);
-                    else Invariants.checkState(writes == null, "Writes is not-null %s", validate);
-                    Invariants.checkState(result != null, "Result is null %s", validate);
+                    if (validate.txnId().is(Write)) Invariants.require(writes != null, "Writes is null %s", validate);
+                    else Invariants.require(writes == null, "Writes is not-null %s", validate);
+                    Invariants.require(result != null, "Result is null %s", validate);
                     break;
                 case Abort:
-                    Invariants.checkState(validate.durability().isMaybeInvalidated(), "%s is not invalidated", validate.durability());
+                    Invariants.require(validate.durability().isMaybeInvalidated(), "%s is not invalidated", validate.durability());
                 case Unknown:
-                    Invariants.checkState(validate.durability() != Local);
+                    Invariants.require(validate.durability() != Local);
                 case Erased:
                 case WasApply:
-                    Invariants.checkState(writes == null, "Writes exist for %s", validate);
-                    Invariants.checkState(result == null, "Results exist %s", validate);
+                    Invariants.require(writes == null, "Writes exist for %s", validate);
+                    Invariants.require(result == null, "Results exist %s", validate);
                     break;
             }
         }
@@ -1764,15 +1764,15 @@ public abstract class Command implements ICommand
             case CleaningUp:
                 break;
             case ReadyToExclude:
-                Invariants.checkState(validate.saveStatus() != SaveStatus.Committed || validate.asCommitted().waitingOn == null);
+                Invariants.require(validate.saveStatus() != SaveStatus.Committed || validate.asCommitted().waitingOn == null);
                 break;
             case WaitingToExecute:
             case ReadyToExecute:
             case Applied:
             case Applying:
             case WaitingToApply:
-                Invariants.checkState(validate.participants().executes() != null);
-                Invariants.checkState(validate.asCommitted().waitingOn != null);
+                Invariants.require(validate.participants().executes() != null);
+                Invariants.require(validate.asCommitted().waitingOn != null);
                 break;
         }
         return validate;

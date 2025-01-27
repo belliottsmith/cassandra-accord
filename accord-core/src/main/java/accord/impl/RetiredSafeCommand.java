@@ -42,7 +42,7 @@ public class RetiredSafeCommand extends SafeCommand
 
     public static Command erased(TxnId txnId, SaveStatus saveStatus)
     {
-        Invariants.checkArgument(saveStatus.compareTo(Vestigial) >= 0);
+        Invariants.requireArgument(saveStatus.compareTo(Vestigial) >= 0);
         return new Command.Truncated(txnId, saveStatus, saveStatus == Erased ? UniversalOrInvalidated : NotDurable, StoreParticipants.empty(txnId), null, null, null);
     }
 

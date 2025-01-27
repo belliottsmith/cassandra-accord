@@ -90,7 +90,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
                     return this;
                 }
 
-                Invariants.checkState(callbacks.containsKey(callbackId));
+                Invariants.require(callbacks.containsKey(callbackId));
                 timeouts.add(reportFailAt, this);
                 return new Expiring()
                 {
@@ -178,7 +178,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             {
                 RegisteredCallback<T> registered = new RegisteredCallback<>(executor, callbackId, callback, to, now, reportSlowAt, reportFailAt);
                 Object existing = callbacks.putIfAbsent(callbackId, registered);
-                Invariants.checkState(existing == null);
+                Invariants.require(existing == null);
                 timeouts.add(Math.min(reportSlowAt, reportFailAt), registered);
                 return registered;
             }
@@ -213,7 +213,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
 
                     if (remove)
                         registered.cancelUnsafe();
-                    Invariants.checkState(registered.to.equals(from));
+                    Invariants.require(registered.to.equals(from));
                 }
                 finally
                 {

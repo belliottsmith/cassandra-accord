@@ -121,8 +121,8 @@ public class Commands
 
     public static AcceptOutcome preaccept(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Txn partialTxn, @Nullable Deps partialDeps, boolean hasCoordinatorVote, FullRoute<?> route)
     {
-        Invariants.checkState(partialDeps == null || txnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
-        Invariants.checkState(!hasCoordinatorVote || txnId.hasPrivilegedCoordinator());
+        Invariants.require(partialDeps == null || txnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
+        Invariants.require(!hasCoordinatorVote || txnId.hasPrivilegedCoordinator());
         SaveStatus newSaveStatus;
         if (partialDeps != null) newSaveStatus = PreAcceptedWithDeps;
         else if (hasCoordinatorVote) newSaveStatus = PreAcceptedWithVote;
@@ -156,7 +156,7 @@ public class Commands
 
         if (command.known().definition().isKnown())
         {
-            Invariants.checkState(command.status() == Invalidated || command.executeAt() != null);
+            Invariants.require(command.status() == Invalidated || command.executeAt() != null);
             logger.trace("{}: skipping preaccept - already known ({})", txnId, command.status());
             // in case of Ballot.ZERO, we must either have a competing recovery coordinator or have late delivery of the
             // preaccept; in the former case we should abandon coordination, and in the latter we have already completed
@@ -168,7 +168,7 @@ public class Commands
         else participants = participants.filter(UPDATE, safeStore, txnId, null);
 
         Validated validated = validate(ballot, newSaveStatus, command, participants, route, txn, deps);
-        Invariants.checkState(validated != INSUFFICIENT);
+        Invariants.require(validated != INSUFFICIENT);
 
         if (command.executeAt() == null)
         {
@@ -242,7 +242,7 @@ public class Commands
         SaveStatus newSaveStatus = SaveStatus.get(kind == Accept.Kind.MEDIUM ? Status.AcceptedMedium : Status.AcceptedSlow, command.known());
         participants = participants.filter(UPDATE, safeStore, txnId, null);
         Validated validated = validate(ballot, newSaveStatus, command, participants, route, null, deps);
-        Invariants.checkState(validated != INSUFFICIENT);
+        Invariants.require(validated != INSUFFICIENT);
 
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
@@ -293,7 +293,7 @@ public class Commands
         final Command command = safeCommand.current();
         SaveStatus curStatus = command.saveStatus();
 
-        Invariants.checkArgument(newSaveStatus == SaveStatus.Committed || newSaveStatus == SaveStatus.Stable);
+        Invariants.requireArgument(newSaveStatus == SaveStatus.Committed || newSaveStatus == SaveStatus.Stable);
         if (newSaveStatus == SaveStatus.Committed && ballot.compareTo(command.promised()) < 0)
             return curStatus.is(Truncated) || participants.owns().isEmpty()
                    ? CommitOutcome.Redundant : CommitOutcome.Rejected;
@@ -317,7 +317,7 @@ public class Commands
                 if (ballot.equals(command.acceptedOrCommitted()))
                     return CommitOutcome.Redundant;
 
-                Invariants.checkState(ballot.compareTo(command.acceptedOrCommitted()) > 0);
+                Invariants.require(ballot.compareTo(command.acceptedOrCommitted()) > 0);
             }
         }
 
@@ -346,7 +346,7 @@ public class Commands
         }
         else
         {
-            Invariants.checkArgument(command.acceptedOrCommitted().compareTo(ballot) <= 0);
+            Invariants.requireArgument(command.acceptedOrCommitted().compareTo(ballot) <= 0);
             committed = safeCommand.commit(safeStore, participants, ballot, executeAt, partialTxn, partialDeps);
             safeStore.notifyListeners(safeCommand, committed);
             safeStore.agent().metricsEventsListener().onCommitted(committed);
@@ -358,7 +358,7 @@ public class Commands
     // relies on mutual exclusion for each key
     public static CommitOutcome precommit(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Timestamp executeAt)
     {
-        Invariants.checkState(Route.isFullRoute(participants.route()));
+        Invariants.require(Route.isFullRoute(participants.route()));
         final Command command = safeCommand.current();
         if (command.hasBeen(PreCommitted))
         {
@@ -398,7 +398,7 @@ public class Commands
         participants = participants.supplement(route);
         participants = participants.filter(UPDATE, safeStore, txnId, null);
         Validated validated = validate(null, SaveStatus.Stable, command, participants, route, txn, deps);
-        Invariants.checkState(validated != INSUFFICIENT);
+        Invariants.require(validated != INSUFFICIENT);
 
         PartialTxn partialTxn = prepareTxn(SaveStatus.Stable, participants, command, txn);
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
@@ -497,7 +497,7 @@ public class Commands
         if (listener.is(NotDefined) || listener.is(Truncated))
         {
             // This listener must be a stale vestige
-            Invariants.checkState(listener.saveStatus().hasBeen(Truncated), "Listener status expected to be Truncated, but was %s", listener.saveStatus());
+            Invariants.require(listener.saveStatus().hasBeen(Truncated), "Listener status expected to be Truncated, but was %s", listener.saveStatus());
             return;
         }
 
@@ -690,7 +690,7 @@ public class Commands
     {
         TxnId waitingId = waiting.txnId();
         Command dependency = dependencySafeCommand.current();
-        Invariants.checkState(dependency.hasBeen(PreCommitted));
+        Invariants.require(dependency.hasBeen(PreCommitted));
         TxnId dependencyId = dependency.txnId();
         if (waitingId.awaitsOnlyDeps() && dependency.known().isExecuteAtKnown() && dependency.executeAt().compareTo(waitingId) > 0)
             waitingOn.updateExecuteAtLeast(waitingId, dependency.executeAt());
@@ -703,7 +703,7 @@ public class Commands
                 case TruncatedApply:
                 case TruncatedApplyWithOutcome:
                 case TruncatedApplyWithDeps:
-                    Invariants.checkState(dependency.executeAt().compareTo(waitingExecuteAt) < 0 || waitingId.awaitsOnlyDeps() || !dependency.txnId().witnesses(waitingId));
+                    Invariants.require(dependency.executeAt().compareTo(waitingExecuteAt) < 0 || waitingId.awaitsOnlyDeps() || !dependency.txnId().witnesses(waitingId));
                 case Vestigial:
                 case Erased:
                     logger.trace("{}: {} is truncated. Stop listening and removing from waiting on commit set.", waitingId, dependencyId);
@@ -759,7 +759,7 @@ public class Commands
             // don't bother invoking maybeExecute if we weren't already blocked on the updated command
             if (waitingOn.hasUpdatedDirectDependency(command.waitingOn()))
                 maybeExecute(safeStore, safeCommand, false, notifyWaitingOn);
-            else Invariants.checkState(waitingOn.isWaiting());
+            else Invariants.require(waitingOn.isWaiting());
         }
         else
         {
@@ -781,7 +781,7 @@ public class Commands
 
         if (current.saveStatus().compareTo(SaveStatus.Committed) < 0)
         {   // ephemeral reads can be erased without warning
-            Invariants.checkState(current.txnId().is(EphemeralRead));
+            Invariants.require(current.txnId().is(EphemeralRead));
             return;
         }
 
@@ -890,12 +890,12 @@ public class Commands
         // TODO (desired): consider if there are better invariants we can impose for undecided transactions, to verify they aren't later committed (should be detected already, but more is better)
         // note that our invariant here is imperfectly applied to keep the code cleaner: we don't verify that the caller was safe to invoke if we don't already have a route in the command and we're only PreCommitted
 
-        Invariants.checkState(command.hasBeen(Applied)
-                              || !command.hasBeen(PreCommitted)
-                              || participants.route() == null   // TODO (expected): tighten this e.g. with && participants.owns.isEmpty()
-                              || validateSafeToCleanup(store.redundantBefore(), command, participants)
-                              || store.redundantBefore().preBootstrapOrStale(command.txnId(), participants.owns()) == FULLY
-                              || (force && participants.executes() != null && participants.stillExecutes().isEmpty())
+        Invariants.require(command.hasBeen(Applied)
+                           || !command.hasBeen(PreCommitted)
+                           || participants.route() == null   // TODO (expected): tighten this e.g. with && participants.owns.isEmpty()
+                           || validateSafeToCleanup(store.redundantBefore(), command, participants)
+                           || store.redundantBefore().preBootstrapOrStale(command.txnId(), participants.owns()) == FULLY
+                           || (force && participants.executes() != null && participants.stillExecutes().isEmpty())
         , "Command %s could not be purged", command);
 
         return purge(command, participants, cleanup);
@@ -908,31 +908,31 @@ public class Commands
         {
             default: throw new AssertionError("Unexpected cleanup: " + cleanup);
             case INVALIDATE:
-                Invariants.checkArgument(!command.hasBeen(PreCommitted));
+                Invariants.requireArgument(!command.hasBeen(PreCommitted));
                 result = invalidated(command);
                 break;
 
             case TRUNCATE_WITH_OUTCOME:
-                Invariants.checkArgument(!command.hasBeen(Truncated), "%s", command);
-                Invariants.checkArgument(command.known().is(Apply));
-                Invariants.checkArgument(command.known().is(ApplyAtKnown));
+                Invariants.requireArgument(!command.hasBeen(Truncated), "%s", command);
+                Invariants.requireArgument(command.known().is(Apply));
+                Invariants.requireArgument(command.known().is(ApplyAtKnown));
                 result = truncatedApplyWithOutcome(command.asExecuted());
                 break;
 
             case TRUNCATE:
-                Invariants.checkState(command.saveStatus().compareTo(TruncatedApply) < 0);
-                Invariants.checkArgument(command.known().is(ApplyAtKnown));
+                Invariants.require(command.saveStatus().compareTo(TruncatedApply) < 0);
+                Invariants.requireArgument(command.known().is(ApplyAtKnown));
                 result = truncatedApply(command, newParticipants);
                 break;
 
             case VESTIGIAL:
-                Invariants.checkState(command.saveStatus().compareTo(Erased) < 0);
+                Invariants.require(command.saveStatus().compareTo(Erased) < 0);
                 result = vestigial(command);
                 break;
 
             case ERASE:
             case EXPUNGE:
-                Invariants.checkState(command.saveStatus().compareTo(Erased) < 0);
+                Invariants.require(command.saveStatus().compareTo(Erased) < 0);
                 result = erased(command);
                 break;
         }
@@ -981,7 +981,7 @@ public class Commands
             return true;
         }
 
-        Invariants.checkState(command.saveStatus().compareTo(cleanup.appliesIfNot) < 0);
+        Invariants.require(command.saveStatus().compareTo(cleanup.appliesIfNot) < 0);
         purge(safeStore, safeCommand, command, cleanupParticipants, cleanup, true);
         return true;
     }
@@ -1018,7 +1018,7 @@ public class Commands
                     if (execute != null)
                         context = contextFor(context.keys().without(execute.keys()), INCR);
 
-                    Invariants.checkState(!context.keys().isEmpty());
+                    Invariants.require(!context.keys().isEmpty());
                     safeStore = safeStore; // prevent accidental usage inside lambda
                     safeStore.commandStore().execute(context, safeStore0 -> setDurable(safeStore0, safeStore0.context(), txnId))
                              .begin(safeStore.commandStore().agent);
@@ -1047,7 +1047,7 @@ public class Commands
 
         public NotifyWaitingOn(SafeCommand root)
         {
-            Invariants.checkArgument(root.current().hasBeen(Stable));
+            Invariants.requireArgument(root.current().hasBeen(Stable));
             this.waitingId = root.txnId();
         }
 
@@ -1130,7 +1130,7 @@ public class Commands
                             case Stable:
                             case PreApplied:
                                 boolean executed = maybeExecute(safeStore, waitingSafe, true, false);
-                                Invariants.checkState(executed);
+                                Invariants.require(executed);
                                 return;
                         }
                     }
@@ -1184,7 +1184,7 @@ public class Commands
                             case SHARD_REDUNDANT:
                             case TRUNCATE_BEFORE:
                             case GC_BEFORE:
-                                Invariants.checkState(dep.hasBeen(Applied) || !dep.hasBeen(PreCommitted));
+                                Invariants.require(dep.hasBeen(Applied) || !dep.hasBeen(PreCommitted));
                             case PRE_BOOTSTRAP_OR_STALE:
                             case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
                                 // we've been applied, invalidated, or are no longer relevant
@@ -1240,7 +1240,7 @@ public class Commands
                         case CleaningUp:
                             updateDependencyAndMaybeExecute(safeStore, waitingSafe, depSafe, false);
                             waiting = waitingSafe.current();
-                            Invariants.checkState(waiting.saveStatus().compareTo(Applying) >= 0 || !waiting.asCommitted().waitingOn().isWaitingOn(dep.txnId()));
+                            Invariants.require(waiting.saveStatus().compareTo(Applying) >= 0 || !waiting.asCommitted().waitingOn().isWaitingOn(dep.txnId()));
                             depSafe = null;
                     }
                 }
@@ -1375,7 +1375,7 @@ public class Commands
     {
         Known expectKnown = newStatus.known;
 
-        Invariants.checkState(addRoute == participants.route());
+        Invariants.require(addRoute == participants.route());
         if (expectKnown.has(FullRoute) && !isFullRoute(cur.route()) && !isFullRoute(addRoute))
             return INSUFFICIENT;
 

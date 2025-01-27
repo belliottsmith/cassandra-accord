@@ -178,8 +178,8 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
 
     private RangeDeps(Range[] ranges, TxnId[] txnIds, int[] rangesToTxnIds, int[] txnIdsToRanges)
     {
-        Invariants.checkArgument(rangesToTxnIds.length >= ranges.length);
-        Invariants.checkArgument(ranges.length > 0 || rangesToTxnIds.length == 0);
+        Invariants.requireArgument(rangesToTxnIds.length >= ranges.length);
+        Invariants.requireArgument(ranges.length > 0 || rangesToTxnIds.length == 0);
         Invariants.paranoid(SortedArrays.isSorted(ranges, Range::compare));
         this.ranges = ranges;
         this.txnIds = txnIds;
@@ -719,10 +719,10 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
 
     public DepRelationList txnIdsForRangeIndex(int rangeIndex)
     {
-        Invariants.checkState(rangeIndex < ranges.length);
+        Invariants.require(rangeIndex < ranges.length);
         int start = startOffset(ranges, rangesToTxnIds, rangeIndex);
         int end = endOffset(rangesToTxnIds, rangeIndex);
-        Invariants.checkState(end >= start);
+        Invariants.require(end >= start);
         return txnIds(rangesToTxnIds, start, end);
     }
 
@@ -898,7 +898,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
 
         Range[] getRanges()
         {
-            Invariants.checkState(oooCount == 0);
+            Invariants.require(oooCount == 0);
             Range[] result = cachedRanges().completeAndDiscard(rangesOut, rangesCount);
             rangesOut = null;
             return result;
@@ -1062,7 +1062,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
                 if (range.compareIntersecting(last) == 0)
                 {
                     RoutingKey rstart = range.start(), lstart = last.start();
-                    Invariants.checkState(rstart.compareTo(lstart) >= 0);
+                    Invariants.require(rstart.compareTo(lstart) >= 0);
                     RoutingKey rend = range.end(), lend = last.end();
                     if (rend.compareTo(lend) > 0)
                         updateLast(last.newRange(lstart, rend));

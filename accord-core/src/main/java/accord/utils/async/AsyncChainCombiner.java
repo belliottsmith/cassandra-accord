@@ -33,21 +33,21 @@ public class AsyncChainCombiner<I> extends AsyncChains.Head<I[]>
 
     public AsyncChainCombiner(List<? extends AsyncChain<? extends I>> inputs)
     {
-        Invariants.checkArgument(!inputs.isEmpty(), "No inputs defined");
+        Invariants.requireArgument(!inputs.isEmpty(), "No inputs defined");
         this.state = inputs;
     }
 
     List<AsyncChain<? extends I>> inputs()
     {
         Object current = state;
-        Invariants.checkState(current instanceof List, "Expected state to be List but was %s", (current == null ? null : current.getClass()));
+        Invariants.require(current instanceof List, "Expected state to be List but was %s", (current == null ? null : current.getClass()));
         return (List<AsyncChain<? extends I>>) current;
     }
 
     private I[] results()
     {
         Object current = state;
-        Invariants.checkState(current instanceof Object[], "Expected state to be Object[] but was %s", (current == null ? null : current.getClass()));
+        Invariants.require(current instanceof Object[], "Expected state to be Object[] but was %s", (current == null ? null : current.getClass()));
         return (I[]) current;
     }
 

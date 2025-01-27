@@ -111,7 +111,7 @@ class Updating
 
     static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command command)
     {
-        Invariants.checkArgument(loadingPrunedFor(cfk.loadingPruned, plainTxnId, null) == null);
+        Invariants.requireArgument(loadingPrunedFor(cfk.loadingPruned, plainTxnId, null) == null);
         // TODO (expected): do not calculate any deps or additions if we're transitioning from Stable to Applied; wasted effort and might trigger LoadPruned
         Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, mayExecute, command);
         if (newInfoObj.getClass() != InfoWithAdditions.class)
@@ -201,7 +201,7 @@ class Updating
 
     static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, InternalStatus newStatus, boolean mayExecute, Command command)
     {
-        Invariants.checkState(newStatus.hasDeps);
+        Invariants.require(newStatus.hasDeps);
         Timestamp executeAt = command.executeAt();
         if (!newStatus.hasExecuteAt || executeAt.equals(txnId)) executeAt = txnId;
         Ballot ballot = Ballot.ZERO;
@@ -280,7 +280,7 @@ class Updating
                     // we can take dependencies on ExclusiveSyncPoints to represent a GC point in the log
                     // if we don't ordinarily witness a transaction it is meaningless to include it as a dependency
                     // as we will not logically be able to work with it (the missing collection will not correctly represent it anyway)
-                    Invariants.checkState(d.is(ExclusiveSyncPoint));
+                    Invariants.require(d.is(ExclusiveSyncPoint));
                 }
                 deps.advance();
             }
@@ -405,7 +405,7 @@ class Updating
     static void insertOrUpdateWithAdditions(TxnInfo[] byId, int sourceInsertPos, int sourceUpdatePos, TxnId plainTxnId, TxnInfo newInfo, TxnId[] additions, int additionCount, TxnInfo[] newById, TxnInfo[] newCommittedByExecuteAt, @Nonnull TxnId[] witnessedBy, RedundantBefore.Entry boundsInfo)
     {
         int additionInsertPos = Arrays.binarySearch(additions, 0, additionCount, plainTxnId);
-        additionInsertPos = Invariants.checkArgument(-1 - additionInsertPos, additionInsertPos < 0);
+        additionInsertPos = Invariants.requireArgument(-1 - additionInsertPos, additionInsertPos < 0);
         int targetInsertPos = sourceInsertPos + additionInsertPos;
 
         // we may need to insert or remove ourselves, depending on the new and prior status
@@ -480,7 +480,7 @@ class Updating
                                 {
                                     ci = Arrays.binarySearch(newCommittedByExecuteAt, minByExecuteAtSearchIndex, newCommittedByExecuteAt.length, txn, TxnInfo::compareExecuteAt);
                                 }
-                                Invariants.checkState(newCommittedByExecuteAt[ci] == txn);
+                                Invariants.require(newCommittedByExecuteAt[ci] == txn);
                                 newCommittedByExecuteAt[ci] = newTxn;
                             }
 
@@ -571,7 +571,7 @@ class Updating
                                 {
                                     ci = Arrays.binarySearch(newCommittedByExecuteAt, minByExecuteAtSearchIndex, newCommittedByExecuteAt.length, txn, TxnInfo::compareExecuteAt);
                                 }
-                                Invariants.checkState(newCommittedByExecuteAt[ci] == txn);
+                                Invariants.require(newCommittedByExecuteAt[ci] == txn);
                                 newCommittedByExecuteAt[ci] = newTxn;
                             }
                             txn = newTxn;
@@ -784,7 +784,7 @@ class Updating
     static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand, UpdateUnmanagedMode mode, @Nullable List<CommandsForKey.Unmanaged> update)
     {
         boolean register = mode != UPDATE;
-        Invariants.checkArgument(mode == UPDATE || update == null);
+        Invariants.requireArgument(mode == UPDATE || update == null);
         if (safeCommand.current().hasBeen(Status.Truncated))
             return cfk;
 
@@ -905,7 +905,7 @@ class Updating
                 }
                 else
                 {
-                    Invariants.checkState(txnIds.get(i++).compareTo(cfk.prunedBefore()) < 0);
+                    Invariants.require(txnIds.get(i++).compareTo(cfk.prunedBefore()) < 0);
                 }
             }
 
@@ -931,7 +931,7 @@ class Updating
                         || txn.isAtLeast(APPLIED))
                         continue;
 
-                    Invariants.checkState(txn.compareTo(COMMITTED) >= 0);
+                    Invariants.require(txn.compareTo(COMMITTED) >= 0);
                     if (txn.executeAt.compareTo(compareExecuteAt) >= 0)
                         continue;
 
@@ -1000,7 +1000,7 @@ class Updating
                 else
                 {
                     int prunedBeforeById = cfk.prunedBeforeById;
-                    Invariants.checkState(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
+                    Invariants.require(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
                     newCfk = new CommandsForKey(cfk.key(), cfk.boundsInfo, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, newLoadingPruned, prunedBeforeById, newUnmanaged);
                 }
 
@@ -1058,6 +1058,6 @@ class Updating
             return;
 
         effectiveExecutesAt = Timestamp.nonNullOrMax(effectiveExecutesAt, waitingToExecuteAt);
-        Invariants.checkState(Objects.equals(effectiveExecutesAt, maxExecutesAt));
+        Invariants.require(Objects.equals(effectiveExecutesAt, maxExecutesAt));
     }
 }

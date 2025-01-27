@@ -151,7 +151,7 @@ public class CheckpointIntervalArray<Ranges, Range, Key>
         if (scanDistance == MAX_SCAN_DISTANCE)
         {
             scanDistance = -checkpointLists[checkpointStart++];
-            Invariants.checkState(scanDistance >= MAX_SCAN_DISTANCE);
+            Invariants.require(scanDistance >= MAX_SCAN_DISTANCE);
         }
 
         // NOTE: we visit in approximately ascending order, and this is a requirement for correctness of RangeDeps builders

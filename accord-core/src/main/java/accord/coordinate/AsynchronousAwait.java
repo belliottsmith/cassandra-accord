@@ -99,7 +99,7 @@ public class AsynchronousAwait implements Callback<AwaitOk>
      */
     public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, boolean notifyProgressLog, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
     {
-        Invariants.checkArgument(topologies.size() == 1);
+        Invariants.requireArgument(topologies.size() == 1);
         AwaitTracker tracker = new AwaitTracker(topologies);
         AsynchronousAwait result = new AsynchronousAwait(txnId, contact, tracker, notifyProgressLog, asynchronousCallbackId, synchronousCallback);
         result.start(node, topologies, contact, awaiting);

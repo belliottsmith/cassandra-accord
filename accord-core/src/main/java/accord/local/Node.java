@@ -279,7 +279,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             DurableBefore newDurableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
             // TODO (required): it is possible for this invariant to be breached if topologies are received out of order.
             //  We should not update min past the max known epoch.
-            Invariants.checkState(newDurableBefore.min.majorityBefore.compareTo(durableBefore.min.majorityBefore) >= 0);
+            Invariants.require(newDurableBefore.min.majorityBefore.compareTo(durableBefore.min.majorityBefore) >= 0);
             minDurableBefore = DurableBefore.merge(minDurableBefore, addDurableBefore);
             durableBefore = newDurableBefore;
         }
@@ -690,9 +690,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
      */
     public TxnId nextTxnId(Txn.Kind rw, Domain domain, int flags)
     {
-        Invariants.checkState(domain == Domain.Key || rw != Txn.Kind.Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
+        Invariants.require(domain == Domain.Key || rw != Txn.Kind.Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
         TxnId txnId = new TxnId(uniqueNow(), flags, rw, domain);
-        Invariants.checkState((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
+        Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
 
@@ -707,7 +707,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         Timestamp now = uniqueNow();
         int flags = computeBestDefaultTxnIdFlags(keys, now.epoch());
         TxnId txnId = new TxnId(now, flags, kind, domain);
-        Invariants.checkState((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
+        Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
 
@@ -779,7 +779,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges)
     {
-        Invariants.checkArgument(!keysOrRanges.isEmpty(), "Attempted to compute a route from empty keys or ranges");
+        Invariants.requireArgument(!keysOrRanges.isEmpty(), "Attempted to compute a route from empty keys or ranges");
         RoutingKey homeKey = selectHomeKey(epoch, keysOrRanges);
         return keysOrRanges.toRoute(homeKey);
     }

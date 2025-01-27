@@ -208,7 +208,7 @@ public interface Topologies extends TopologySorter
         @Override
         public Topologies selectSince(Participants<?> participants, long sinceEpoch)
         {
-            Invariants.checkState(sinceEpoch <= currentEpoch());
+            Invariants.require(sinceEpoch <= currentEpoch());
             Topology subset = topology.select(participants);
             return subset == topology ? this : new Single(sorter, subset);
         }
@@ -216,7 +216,7 @@ public interface Topologies extends TopologySorter
         @Override
         public Topologies selectEpoch(Participants<?> participants, long epoch)
         {
-            Invariants.checkState(epoch == currentEpoch());
+            Invariants.require(epoch == currentEpoch());
             Topology subset = topology.select(participants);
             return subset == topology ? this : new Single(sorter, subset);
         }
@@ -298,7 +298,7 @@ public interface Topologies extends TopologySorter
 
         public Multi(TopologySorter.Supplier sorter, Topology... topologies)
         {
-            this.topologies = Invariants.checkArgument(topologies, isSortedUnique(topologies, (a, b) -> Long.compare(b.epoch, a.epoch)));
+            this.topologies = Invariants.requireArgument(topologies, isSortedUnique(topologies, (a, b) -> Long.compare(b.epoch, a.epoch)));
             int maxShardsPerEpoch = 0;
             for (Topology topology : topologies)
                 maxShardsPerEpoch = Math.max(maxShardsPerEpoch, topology.size());

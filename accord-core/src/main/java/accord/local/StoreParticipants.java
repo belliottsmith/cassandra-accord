@@ -61,12 +61,12 @@ public class StoreParticipants
             this.executes = executes;
             this.touches = touches;
             this.hasTouched = hasTouched;
-            Invariants.checkArgument(route != null || (!Route.isRoute(owns) && !Route.isRoute(executes) && !Route.isRoute(touches) && !Route.isRoute(hasTouched)));
+            Invariants.requireArgument(route != null || (!Route.isRoute(owns) && !Route.isRoute(executes) && !Route.isRoute(touches) && !Route.isRoute(hasTouched)));
             Routable.Domain domain = owns.domain();
-            Invariants.checkArgument(touches.containsAll(owns));
-            Invariants.checkArgument(route == null || domain == route.domain());
-            Invariants.checkArgument(domain == touches.domain());
-            Invariants.checkArgument(domain == hasTouched.domain());
+            Invariants.requireArgument(touches.containsAll(owns));
+            Invariants.requireArgument(route == null || domain == route.domain());
+            Invariants.requireArgument(domain == touches.domain());
+            Invariants.requireArgument(domain == hasTouched.domain());
         }
 
         @Nullable public Participants<?> executes()
@@ -153,9 +153,9 @@ public class StoreParticipants
         this.route = route;
         this.owns = owns;
         this.executesIsNull = executesIsNull;
-        Invariants.checkArgument(route != null || !Route.isRoute(owns));
+        Invariants.requireArgument(route != null || !Route.isRoute(owns));
         Routable.Domain domain = owns.domain();
-        Invariants.checkArgument(route == null || domain == route.domain());
+        Invariants.requireArgument(route == null || domain == route.domain());
     }
 
     public static StoreParticipants create(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, Participants<?> touches, Participants<?> hasTouched)

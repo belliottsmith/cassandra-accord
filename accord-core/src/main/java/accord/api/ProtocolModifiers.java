@@ -73,7 +73,7 @@ public class ProtocolModifiers
             Spec(ChaseAndInclude preaccept, Include accept, Include commit, Include stable, Include recover)
             {
                 this.preaccept = preaccept;
-                Invariants.checkState(preaccept.chase == DoNotChase, "PreAccept chasing epoch is not implemented as not needed for current formulation and it complicated some aspects. An implementation can be found in git history.");
+                Invariants.require(preaccept.chase == DoNotChase, "PreAccept chasing epoch is not implemented as not needed for current formulation and it complicated some aspects. An implementation can be found in git history.");
                 this.accept = accept;
                 this.commit = commit;
                 this.stable = stable;
@@ -109,18 +109,18 @@ public class ProtocolModifiers
                     {
                         default: throw new AssertionError("Unexpected phase: " + m.group(1));
                         case "preaccept": preaccept = new ChaseAndInclude(cfp, include); break;
-                        case "accept": accept = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for accept"); break;
-                        case "commit": commit = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for commit"); break;
-                        case "stable": stable = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
-                        case "recover": recover = include; Invariants.checkState(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
+                        case "accept": accept = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for accept"); break;
+                        case "commit": commit = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for commit"); break;
+                        case "stable": stable = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
+                        case "recover": recover = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
                     }
                 }
 
-                Invariants.checkState(preaccept != null, "preaccept not specified for quorum epoch intersections: " + description);
-                Invariants.checkState(accept != null, "accept not specified for quorum epoch intersections: " + description);
-                Invariants.checkState(commit != null, "commit not specified for quorum epoch intersections: " + description);
-                Invariants.checkState(stable != null, "stable not specified for quorum epoch intersections: " + description);
-                Invariants.checkState(recover != null, "recover not specified for quorum epoch intersections: " + description);
+                Invariants.require(preaccept != null, "preaccept not specified for quorum epoch intersections: " + description);
+                Invariants.require(accept != null, "accept not specified for quorum epoch intersections: " + description);
+                Invariants.require(commit != null, "commit not specified for quorum epoch intersections: " + description);
+                Invariants.require(stable != null, "stable not specified for quorum epoch intersections: " + description);
+                Invariants.require(recover != null, "recover not specified for quorum epoch intersections: " + description);
                 return new Spec(preaccept, accept, commit, stable, recover);
             }
         }

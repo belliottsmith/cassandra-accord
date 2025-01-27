@@ -132,13 +132,13 @@ public class Serialize
     // TODO (desired): determine timestamp resolution as a factor of 10
     public static ByteBuffer toBytesWithoutKey(CommandsForKey cfk)
     {
-        Invariants.checkArgument(!cfk.isLoadingPruned());
+        Invariants.requireArgument(!cfk.isLoadingPruned());
         return unsafeToBytesWithoutKey(cfk);
     }
 
     private static ByteBuffer unsafeToBytesWithoutKey(CommandsForKey cfk)
     {
-        Invariants.checkState(!cfk.isLoadingPruned());
+        Invariants.require(!cfk.isLoadingPruned());
 
         int commandCount = cfk.size();
         if (commandCount == 0)
@@ -150,7 +150,7 @@ public class Serialize
             ByteBuffer result = ByteBuffer.allocate(size);
             VIntCoding.writeUnsignedVInt32(1, result);
             VIntCoding.writeUnsignedVInt(cfk.maxUniqueHlc, result);
-            Invariants.checkState(!result.hasRemaining());
+            Invariants.require(!result.hasRemaining());
             result.flip();
             return result;
         }
@@ -182,14 +182,14 @@ public class Serialize
                     }
 
                     TxnInfo txn = cfk.get(i);
-                    Invariants.checkState(!txn.is(InternalStatus.PRUNED));
+                    Invariants.require(!txn.is(InternalStatus.PRUNED));
                     overrideCount += txn.statusOverrides();
                     hasExtendedFlags |= hasExtendedFlags(txn);
                     nodeIds[nodeIdCount++] = txn.node.id;
 
                     if (txn.executeAt != txn)
                     {
-                        Invariants.checkState(txn.hasExecuteAt());
+                        Invariants.require(txn.hasExecuteAt());
                         nodeIds[nodeIdCount++] = txn.executeAt.node.id;
                         bitsPerExecuteAtEpoch = Math.max(bitsPerExecuteAtEpoch, numberOfBitsToRepresent(txn.executeAt.epoch() - txn.epoch()));
                         bitsPerExecuteAtHlc = Math.max(bitsPerExecuteAtHlc, numberOfBitsToRepresent(txn.executeAt.hlc() - txn.hlc()));
@@ -201,10 +201,10 @@ public class Serialize
                     {
                         TxnInfoExtra extra = (TxnInfoExtra) txn;
                         missingIdCount += extra.missing.length;
-                        Invariants.checkState(extra.missing.length == 0 || txn.hasDeps());
+                        Invariants.require(extra.missing.length == 0 || txn.hasDeps());
                         if (extra.ballot != Ballot.ZERO)
                         {
-                            Invariants.checkState(txn.hasBallot());
+                            Invariants.require(txn.hasBallot());
                             nodeIds[nodeIdCount++] = extra.ballot.node.id;
                             ballotCount += 1;
                         }
@@ -225,7 +225,7 @@ public class Serialize
                 }
 
                 nodeIdCount = compact(nodeIds, nodeIdCount);
-                Invariants.checkState(nodeIdCount > 0);
+                Invariants.require(nodeIdCount > 0);
             }
 
             // We can now use this information to calculate the fixed header size, compute the amount
@@ -253,7 +253,7 @@ public class Serialize
                 TxnInfo txn = cfk.get(i);
                 {
                     long epoch = txn.epoch();
-                    Invariants.checkState(epoch >= prevEpoch);
+                    Invariants.require(epoch >= prevEpoch);
                     long epochDelta = epoch - prevEpoch;
                     long hlc = txn.hlc();
                     long hlcDelta = hlc - prevHlc;
@@ -268,7 +268,7 @@ public class Serialize
                         {
                             if (epochDelta <= 0xf) headerBits += 4;
                             else if (epochDelta <= 0xff) totalBytes += 1;
-                            else { totalBytes += 4; Invariants.checkState(epochDelta <= 0xffffffffL); }
+                            else { totalBytes += 4; Invariants.require(epochDelta <= 0xffffffffL); }
                         }
                     }
 
@@ -312,7 +312,7 @@ public class Serialize
             ;
 
             int headerBytes = (maxHeaderBits+7)/8;
-            globalFlags |= Invariants.checkArgument(headerBytes - 1, headerBytes <= 4) << 14;
+            globalFlags |= Invariants.requireArgument(headerBytes - 1, headerBytes <= 4) << 14;
 
             int hlcBytesLookup;
             {   // 2bits per size, first value may be zero and remainder may be increments of 1-4;
@@ -487,7 +487,7 @@ public class Serialize
                 bitIndex += 1 & (flagsPlus >>> HAS_STATUS_OVERRIDES_HEADER_BIT_SHIFT);
 
                 long hasExecuteAt = txn.executeAt != txn ? 1 : 0;
-                Invariants.checkState(hasExecuteAt <= statusHasExecuteAt);
+                Invariants.require(hasExecuteAt <= statusHasExecuteAt);
                 bits |= hasExecuteAt << bitIndex;
                 bitIndex += statusHasExecuteAt & (flagsPlus >>> HAS_EXECUTE_AT_HEADER_BIT_SHIFT);
 
@@ -573,7 +573,7 @@ public class Serialize
                 for (int i = 0 ; i < cfk.unmanagedCount() ; ++i)
                 {
                     Unmanaged unmanaged = cfk.getUnmanaged(i);
-                    Invariants.checkState(unmanaged.pending == pending);
+                    Invariants.require(unmanaged.pending == pending);
 
                     writeTxnId(unmanaged.txnId, out, nodeIds, nodeIdCount, bytesPerNodeId);
                     writeTimestamp(unmanaged.waitingUntil, out, nodeIds, nodeIdCount, bytesPerNodeId);
@@ -587,9 +587,9 @@ public class Serialize
                 int bitsPerMissingId = 1 + bitsPerCommandId;
                 int bitsPerExecuteAt = bitsPerExecuteAtEpoch + bitsPerExecuteAtHlc + bitsPerExecuteAtFlags + bitsPerNodeId;
                 int bitsPerBallot = bitsPerBallotEpoch + bitsPerBallotHlc + bitsPerBallotFlags + bitsPerNodeId;
-                Invariants.checkState(bitsPerExecuteAtEpoch < 64);
-                Invariants.checkState(bitsPerExecuteAtHlc <= 64);
-                Invariants.checkState(bitsPerExecuteAtFlags <= 16);
+                Invariants.require(bitsPerExecuteAtEpoch < 64);
+                Invariants.require(bitsPerExecuteAtHlc <= 64);
+                Invariants.require(bitsPerExecuteAtFlags <= 16);
                 if (0 != (globalFlags & HAS_EXECUTE_AT_HEADER_BIT)) // we encode both 15 and 16 bits for flag length as 15 to fit in a short
                     out.putShort((short) ((bitsPerExecuteAtEpoch << 10) | ((bitsPerExecuteAtHlc-1) << 4) | (Math.min(15, bitsPerExecuteAtFlags))));
                 if (0 != (globalFlags & HAS_BALLOT_HEADER_BIT)) // we encode both 15 and 16 bits for flag length as 15 to fit in a short
@@ -607,7 +607,7 @@ public class Serialize
                         int nodeIdx = Arrays.binarySearch(nodeIds, 0, nodeIdCount, executeAt.node.id);
                         if (bitsPerExecuteAt <= 64)
                         {
-                            Invariants.checkState(executeAt.epoch() >= txn.epoch());
+                            Invariants.require(executeAt.epoch() >= txn.epoch());
                             long executeAtBits = executeAt.epoch() - txn.epoch();
                             int offset = bitsPerExecuteAtEpoch;
                             executeAtBits |= (executeAt.hlc() - txn.hlc()) << offset ;
@@ -693,7 +693,7 @@ public class Serialize
                 writeMostSignificantBytes(buffer, (bufferCount + 7)/8, out);
             }
 
-            Invariants.checkState(!out.hasRemaining());
+            Invariants.require(!out.hasRemaining());
             out.flip();
             return out;
         }
@@ -957,7 +957,7 @@ public class Serialize
                             missingIdBuffer = cachedTxnIds().resize(missingIdBuffer, missingIdCount, missingIdCount * 2);
 
                         int next = (int) reader.read(bitsPerMissingId, in);
-                        Invariants.checkState(next > prev);
+                        Invariants.require(next > prev);
                         missingIdBuffer[missingIdCount++] = txnIds[next & txnIdMask];
                         if (next >= commandCount)
                             break; // finished this array
@@ -1185,7 +1185,7 @@ public class Serialize
         out.putLong(timestamp.msb);
         out.putLong(timestamp.lsb);
         int i = Arrays.binarySearch(ids, 0, idCount, timestamp.node.id);
-        Invariants.checkState(i >= 0 && i < idCount);
+        Invariants.require(i >= 0 && i < idCount);
         writeLeastSignificantBytes(i, idBytes, out);
     }
 

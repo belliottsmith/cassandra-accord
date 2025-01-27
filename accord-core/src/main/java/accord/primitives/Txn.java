@@ -144,19 +144,19 @@ public interface Txn
 
         static
         {
-            Invariants.checkState(AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET + VALUES.length <= 64);
+            Invariants.require(AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET + VALUES.length <= 64);
             long encodedOrdinalInfo = 0;
             Map<Character, Kind> shortNames = new HashMap<>();
             for (Kind kind : VALUES)
             {
-                Invariants.checkState(null == shortNames.putIfAbsent(kind.shortName, kind), "Short name conflict between: " + kind + " and " + shortNames.get(kind.shortName));
+                Invariants.require(null == shortNames.putIfAbsent(kind.shortName, kind), "Short name conflict between: " + kind + " and " + shortNames.get(kind.shortName));
                 if (kind.isVisible()) encodedOrdinalInfo   |= 1L << (IS_VISIBLE_ORDINAL_INFO_OFFSET + kind.ordinal());
                 if (kind.isSyncPoint()) encodedOrdinalInfo |= 1L << (IS_SYNCPOINT_ORDINAL_INFO_OFFSET + kind.ordinal());
                 if (kind.isSystemTxn()) encodedOrdinalInfo |= 1L << (IS_SYSTEM_ORDINAL_INFO_OFFSET + kind.ordinal());
                 if (kind.awaitsOnlyDeps()) encodedOrdinalInfo |= 1L << (AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET + kind.ordinal());
             }
             ENCODED_ORDINAL_INFO = encodedOrdinalInfo;
-            Invariants.checkState(COUNT * COUNT <= 64);
+            Invariants.require(COUNT * COUNT <= 64);
             int offset = 0;
             long encodedWitnessesInfo = 0L;
             for (Kind witness : VALUES)

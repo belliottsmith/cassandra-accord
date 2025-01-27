@@ -133,7 +133,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
                 break;
 
             case TryAlternative:
-                Invariants.checkState(!reply.isFinal());
+                Invariants.require(!reply.isFinal());
                 onSlowResponse(from);
                 break;
 
@@ -190,7 +190,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
 
     protected void finishOnFailure(Throwable failure, boolean overrideExistingFailure)
     {
-        Invariants.checkState(!isDone);
+        Invariants.require(!isDone);
         if (overrideExistingFailure)
         {
             if (this.failure != null)
@@ -207,15 +207,15 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
 
     protected void finishOnFailure()
     {
-        Invariants.checkState(!isDone);
-        Invariants.checkState(failure != null);
+        Invariants.require(!isDone);
+        Invariants.require(failure != null);
         isDone = true;
         onDone(null, failure);
     }
 
     protected void finishOnExhaustion()
     {
-        Invariants.checkState(!isDone);
+        Invariants.require(!isDone);
         if (failure == null)
         {
             Ranges unavailable = Ranges.EMPTY;
@@ -245,7 +245,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
             case NoChange:
                 break;
             case Success:
-                Invariants.checkState(!isDone);
+                Invariants.require(!isDone);
                 onDone(waitingOnData == 0 ? Success.Success : Success.Quorum, null);
                 // isDone = true needs to be last or exceptions thrown by onDone are ignored and this never finishes
                 isDone = true;

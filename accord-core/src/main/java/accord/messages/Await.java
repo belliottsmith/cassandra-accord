@@ -101,7 +101,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this.blockedUntil = blockedUntil;
         this.maxAwaitEpoch = topologies.currentEpoch();
         this.minAwaitEpoch = topologies.oldestEpoch();
-        Invariants.checkState(minAwaitEpoch >= txnId.epoch());
+        Invariants.require(minAwaitEpoch >= txnId.epoch());
     }
 
     public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, boolean notifyProgressLog)
@@ -118,7 +118,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this.maxAwaitEpoch = maxAwaitEpoch;
         this.callbackId = callbackId;
         this.notifyProgressLog = notifyProgressLog;
-        Invariants.checkState(minAwaitEpoch >= txnId.epoch());
+        Invariants.require(minAwaitEpoch >= txnId.epoch());
     }
 
     @Override
@@ -136,7 +136,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minAwaitEpoch, txnId, maxAwaitEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
-        Invariants.checkState(minAwaitEpoch >= txnId.epoch());
+        Invariants.require(minAwaitEpoch >= txnId.epoch());
         if (command.saveStatus().compareTo(blockedUntil.unblockedFrom) >= 0)
         {
             onNotWaiting(safeStore, safeCommand);
@@ -308,7 +308,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         public AsyncAwaitComplete(TxnId txnId, Route<?> route, SaveStatus newStatus, int callbackId)
         {
             this.txnId = txnId;
-            this.route = Invariants.checkArgument(route, route != null);
+            this.route = Invariants.requireArgument(route, route != null);
             this.newStatus = newStatus;
             this.callbackId = callbackId;
         }

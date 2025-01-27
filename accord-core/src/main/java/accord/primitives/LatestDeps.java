@@ -265,7 +265,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
     public static <T> MergedCommitResult mergeCommit(KnownDeps atLeast, Timestamp executeAt, List<T> list, Timestamp localDepsComputedUntil, Function<T, LatestDeps> getter)
     {
-        Invariants.checkState(atLeast.compareTo(DepsCommitted) >= 0 || executeAt.compareTo(localDepsComputedUntil) <= 0);
+        Invariants.require(atLeast.compareTo(DepsCommitted) >= 0 || executeAt.compareTo(localDepsComputedUntil) <= 0);
         // merge merge merge
         Merge merge = merge(list, getter);
         return merge.mergeForCommitOrStable(atLeast == DepsProposedFixed ? test -> test.compareTo(DepsKnown) >= 0 || test == DepsProposedFixed
@@ -412,11 +412,11 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                         case DepsFromCoordinator:
                         case DepsProposed:
                         case DepsCommitted:
-                            Invariants.checkState(hasMedium <= 0, "Highest ballot for %s had %s, but another range had DepsProposedFixed", range, known);
+                            Invariants.require(hasMedium <= 0, "Highest ballot for %s had %s, but another range had DepsProposedFixed", range, known);
                             hasMedium = -1;
                             break;
                         case DepsProposedFixed:
-                            Invariants.checkState(hasMedium >= 0, "Highest ballot for %s had DepsProposedFixed, but another range had a slow path or no proposal", range);
+                            Invariants.require(hasMedium >= 0, "Highest ballot for %s had DepsProposedFixed, but another range had a slow path or no proposal", range);
                             hasMedium = 1;
                             break;
                         case DepsKnown:

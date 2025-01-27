@@ -58,19 +58,19 @@ final class TxnState extends HomeState
                     case Home:
                         newDelay = instance.commandStore.agent().attemptCoordinationDelay(instance.node, safeStore, txnId, MICROSECONDS, homeRetryCounter());
                 }
-                Invariants.checkState(newDelay > 0);
+                Invariants.require(newDelay > 0);
                 break;
             case Awaiting:
                 int retries = updated == TxnStateKind.Home ? homeRetryCounter() : waitingRetryCounter();
                 newDelay = instance.commandStore.agent().retryAwaitTimeout(instance.node, safeStore, txnId, retries, blockedUntil, MICROSECONDS);
-                Invariants.checkState(newDelay > 0);
+                Invariants.require(newDelay > 0);
                 break;
         }
 
         TxnStateKind scheduled = scheduledTimer();
         if (scheduled == null)
         {
-            Invariants.checkState(pendingTimer() == null);
+            Invariants.require(pendingTimer() == null);
         }
 
         // previousDeadline is the previous deadline of <updated>;
@@ -88,7 +88,7 @@ final class TxnState extends HomeState
         }
         else
         {
-            Invariants.checkState(pendingTimer() == null);
+            Invariants.require(pendingTimer() == null);
             otherDeadline = previousDeadline = 0;
         }
 
@@ -106,7 +106,7 @@ final class TxnState extends HomeState
             }
             else
             {
-                Invariants.checkState(!isScheduled());
+                Invariants.require(!isScheduled());
             }
         }
         else

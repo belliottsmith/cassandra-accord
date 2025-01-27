@@ -134,17 +134,17 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
     @Nullable TxnState get(TxnId txnId)
     {
-        Invariants.checkState(txnId.isVisible());
+        Invariants.require(txnId.isVisible());
         return BTree.<TxnId, TxnState>find(stateMap, (id, state) -> id.compareTo(state.txnId), txnId);
     }
 
     TxnState ensure(TxnId txnId)
     {
-        Invariants.checkState(txnId.isVisible());
+        Invariants.require(txnId.isVisible());
         TxnState result = BTree.<TxnId, TxnState>find(stateMap, (id, state) -> id.compareTo(state.txnId), txnId);
         if (result == null)
         {
-            Invariants.checkState(debugDeleted == null || !debugDeleted.containsKey(txnId));
+            Invariants.require(debugDeleted == null || !debugDeleted.containsKey(txnId));
             node.agent().metricsEventsListener().onProgressLogSizeChange(txnId, 1);
             stateMap = BTree.update(stateMap, BTree.singleton(result = new TxnState(txnId)), TxnState::compareTo);
         }
@@ -153,7 +153,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
     private TxnState insert(TxnId txnId)
     {
-        Invariants.checkState(debugDeleted == null || !debugDeleted.containsKey(txnId));
+        Invariants.require(debugDeleted == null || !debugDeleted.containsKey(txnId));
         node.agent().metricsEventsListener().onProgressLogSizeChange(txnId, 1);
         TxnState result = new TxnState(txnId);
         stateMap = BTree.update(stateMap, BTree.singleton(result), TxnState::compareTo);
@@ -341,7 +341,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     {
         state.setHomeDone(this);
         state.setWaitingDone(this);
-        Invariants.checkState(!state.isScheduled());
+        Invariants.require(!state.isScheduled());
         remove(state.txnId);
     }
 
@@ -372,7 +372,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         blockedBy.initialise();
         Command command = blockedBy.current();
         SaveStatus saveStatus = command.saveStatus();
-        Invariants.checkState(saveStatus.compareTo(blockedUntil.unblockedFrom) < 0);
+        Invariants.require(saveStatus.compareTo(blockedUntil.unblockedFrom) < 0);
 
         StoreParticipants blockedOnStoreParticipants2 = null;
         if (blockedOnParticipants != null || blockedOnRoute != null)
@@ -406,8 +406,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             command = blockedBy.incidentalUpdate(update);
 
         // TODO (required): tighten up ExclusiveSyncPoint range bounds
-        Invariants.checkState((command.txnId().is(ExclusiveSyncPoint) ? safeStore.ranges().all()
-                                                                      : safeStore.ranges().allSince(command.txnId().epoch())
+        Invariants.require((command.txnId().is(ExclusiveSyncPoint) ? safeStore.ranges().all()
+                                                                   : safeStore.ranges().allSince(command.txnId().epoch())
                               ).intersects(command.participants().hasTouched()));
 
         // TODO (desired):  consider triggering a preemption of existing coordinator (if any) in some circumstances;
@@ -472,7 +472,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         long minEpoch = Long.MAX_VALUE;
         for (int i = 0 ; i < awaitingEpochBufferCount ; ++i)
             minEpoch = Math.min(awaitingEpochBuffer[i].run.txnId.epoch(), minEpoch);
-        Invariants.checkArgument(minEpoch != Long.MAX_VALUE);
+        Invariants.requireArgument(minEpoch != Long.MAX_VALUE);
         isAwaitingEpoch = true;
         node.withEpoch(minEpoch, (success, fail) -> commandStore.execute(() -> {
             isAwaitingEpoch = false;
@@ -487,7 +487,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         for (int i = 0; i < runBufferCount; ++i)
         {
             TxnState run = (TxnState) runBuffer[i];
-            Invariants.checkState(!run.isScheduled());
+            Invariants.require(!run.isScheduled());
             TxnStateKind runKind = run.wasScheduledTimer();
             validatePreRunState(run, runKind);
             long pendingTimerDeadline = run.pendingTimerDeadline();
@@ -544,7 +544,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     private void validatePreRunState(TxnState run, TxnStateKind kind)
     {
         Progress progress = kind == Waiting ? run.waiting().waitingProgress() : run.home().homeProgress();
-        Invariants.checkState(progress != NoneExpected && progress != Querying);
+        Invariants.require(progress != NoneExpected && progress != Querying);
     }
 
     void invoke(RunInvoker invoker)
@@ -588,9 +588,9 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             if (run.isDone(runKind))
                 return;
 
-            Invariants.checkState(get(run.txnId) == run, "Transaction state for %s does not match expected one %s", run.txnId, run);
-            Invariants.checkState(run.scheduledTimer() != runKind, "We are actively executing %s, but we are also scheduled to run this same TxnState later. This should not happen.", runKind);
-            Invariants.checkState(run.pendingTimer() != runKind, "We are actively executing %s, but we also have a pending scheduled task to run this same TxnState later. This should not happen.", runKind);
+            Invariants.require(get(run.txnId) == run, "Transaction state for %s does not match expected one %s", run.txnId, run);
+            Invariants.require(run.scheduledTimer() != runKind, "We are actively executing %s, but we are also scheduled to run this same TxnState later. This should not happen.", runKind);
+            Invariants.require(run.pendingTimer() != runKind, "We are actively executing %s, but we also have a pending scheduled task to run this same TxnState later. This should not happen.", runKind);
 
             validatePreRunState(run, runKind);
             if (runKind == Home)
@@ -637,7 +637,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     void registerActive(TxnStateKind kind, TxnId txnId, Object object)
     {
         ObjectHashSet<Object> active = active(kind);
-        Invariants.checkState(!active.contains(txnId));
+        Invariants.require(!active.contains(txnId));
         active.add(object);
     }
 

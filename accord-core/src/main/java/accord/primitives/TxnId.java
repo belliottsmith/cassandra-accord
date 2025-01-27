@@ -30,7 +30,6 @@ import accord.utils.TinyEnumSet;
 
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.utils.Invariants.checkArgument;
 import static accord.utils.Invariants.illegalArgument;
 
 public class TxnId extends Timestamp
@@ -295,7 +294,7 @@ public class TxnId extends Timestamp
 
     public TxnId addFlags(int flags)
     {
-        checkArgument(flags <= MAX_FLAGS);
+        Invariants.requireArgument(flags <= MAX_FLAGS);
         return addFlags(this, flags, TxnId::new);
     }
 
@@ -329,7 +328,7 @@ public class TxnId extends Timestamp
     private static int flags(int flags, Kind rw, Domain domain)
     {
         int domainAndKindFlags = flags(rw) | flags(domain);
-        Invariants.checkState((flags & domainAndKindFlags) == 0);
+        Invariants.require((flags & domainAndKindFlags) == 0);
         return domainAndKindFlags | flags;
     }
 

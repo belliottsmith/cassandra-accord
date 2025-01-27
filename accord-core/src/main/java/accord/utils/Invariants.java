@@ -18,10 +18,14 @@
 
 package accord.utils;
 
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import net.nicoulaj.compilecommand.annotations.Inline;
 
@@ -39,6 +43,7 @@ public class Invariants
         LOW, HIGH
     }
 
+    private static final Logger logger = LoggerFactory.getLogger(Invariants.class);
     public static final String KEY_PARANOIA_CPU = "accord.paranoia.cpu";
     public static final String KEY_PARANOIA_MEMORY = "accord.paranoia.memory";
     public static final String KEY_PARANOIA_COSTFACTOR = "accord.paranoia.costfactor";
@@ -46,6 +51,9 @@ public class Invariants
     private static final int PARANOIA_MEMORY = Paranoia.valueOf(System.getProperty(KEY_PARANOIA_MEMORY, "NONE").toUpperCase()).ordinal();
     private static final int PARANOIA_FACTOR = ParanoiaCostFactor.valueOf(System.getProperty(KEY_PARANOIA_COSTFACTOR, "LOW").toUpperCase()).ordinal();
     private static boolean IS_PARANOID = PARANOIA_COMPUTE > 0 || PARANOIA_MEMORY > 0;
+    private static Consumer<RuntimeException> onUnexpected = System.getProperty("accord.testing", "false").equals("true")
+                                                             ? fail -> { throw fail; }
+                                                             : fail -> logger.warn("Invariant failed", fail);
     private static final boolean DEBUG = System.getProperty("accord.debug", "false").equals("true");
 
     public static boolean isParanoid()
@@ -98,19 +106,19 @@ public class Invariants
         throw illegalArgument(null);
     }
 
-    public static <T1, T2 extends T1> T2 checkType(T1 cast)
+    public static <T1, T2 extends T1> T2 requireType(T1 cast)
     {
         return (T2)cast;
     }
 
-    public static <T1, T2 extends T1> T2 checkType(Class<T2> to, T1 cast)
+    public static <T1, T2 extends T1> T2 requireType(Class<T2> to, T1 cast)
     {
         if (cast != null && !to.isInstance(cast))
             illegalState();
         return (T2)cast;
     }
 
-    public static <T1, T2 extends T1> T2 checkType(Class<T2> to, T1 cast, String msg)
+    public static <T1, T2 extends T1> T2 requireType(Class<T2> to, T1 cast, String msg)
     {
         if (cast != null && !to.isInstance(cast))
             illegalState(msg);
@@ -123,86 +131,92 @@ public class Invariants
             throw illegalState();
     }
 
-    public static void checkState(boolean condition)
+    public static void expect(boolean condition)
+    {
+        if (!condition)
+            onUnexpected.accept(illegalState());
+    }
+
+    public static void require(boolean condition)
     {
         if (!condition)
             throw illegalState();
     }
 
-    public static void checkState(boolean condition, Supplier<String> msg)
+    public static void require(boolean condition, Supplier<String> msg)
     {
         if (!condition)
             throw illegalState(msg.get());
     }
 
-    public static void checkState(boolean condition, String msg)
+    public static void require(boolean condition, String msg)
     {
         if (!condition)
             throw illegalState(msg);
     }
 
-    public static void checkState(boolean condition, String fmt, int p1)
+    public static void require(boolean condition, String fmt, int p1)
     {
         if (!condition)
             throw illegalState(format(fmt, p1));
     }
 
-    public static void checkState(boolean condition, String fmt, int p1, int p2)
+    public static void require(boolean condition, String fmt, int p1, int p2)
     {
         if (!condition)
             throw illegalState(format(fmt, p1, p2));
     }
 
-    public static void checkState(boolean condition, String fmt, long p1)
+    public static void require(boolean condition, String fmt, long p1)
     {
         if (!condition)
             throw illegalState(format(fmt, p1));
     }
 
-    public static void checkState(boolean condition, String fmt, long p1, long p2)
+    public static void require(boolean condition, String fmt, long p1, long p2)
     {
         if (!condition)
             throw illegalState(format(fmt, p1, p2));
     }
 
-    public static void checkState(boolean condition, String fmt, @Nullable Object p1)
+    public static void require(boolean condition, String fmt, @Nullable Object p1)
     {
         if (!condition)
             throw illegalState(format(fmt, p1));
     }
 
-    public static <P> void checkState(boolean condition, String fmt, @Nullable P p1, Function<? super P, ?> transformP)
+    public static <P> void require(boolean condition, String fmt, @Nullable P p1, Function<? super P, ?> transformP)
     {
         if (!condition)
             throw illegalState(format(fmt, transformP.apply(p1)));
     }
 
-    public static void checkState(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
+    public static void require(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
     {
         if (!condition)
             throw illegalState(format(fmt, p1, p2));
     }
 
-    public static <P> void checkState(boolean condition, String fmt, @Nullable Object p1, @Nullable P p2, Function<? super P, ?> transformP2)
+    public static <P> void require(boolean condition, String fmt, @Nullable Object p1, @Nullable P p2, Function<? super P, ?> transformP2)
     {
         if (!condition)
             throw illegalState(format(fmt, p1, transformP2.apply(p2)));
     }
 
 
-    public static void checkState(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable Object p3)
+    public static void require(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable Object p3)
     {
         if (!condition)
             throw illegalState(format(fmt, p1, p2, p3));
     }
 
-    public static <P> void checkState(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable P p3, Function<? super P, Object> transformP3)
+    public static <P> void require(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable P p3, Function<? super P, Object> transformP3)
     {
         if (!condition)
             throw illegalState(format(fmt, p1, p2, transformP3.apply(p3)));
     }
 
-    public static void checkState(boolean condition, String fmt, Object... args)
+    public static void require(boolean condition, String fmt, Object... args)
     {
         if (!condition)
             throw illegalState(format(fmt, args));
@@ -243,117 +257,117 @@ public class Invariants
         return input;
     }
 
-    public static void checkArgument(boolean condition)
+    public static void requireArgument(boolean condition)
     {
         if (!condition)
             throw illegalArgument();
     }
 
-    public static void checkArgument(boolean condition, String msg)
+    public static void requireArgument(boolean condition, String msg)
     {
         if (!condition)
             throw illegalArgument(msg);
     }
 
-    public static void checkArgument(boolean condition, String fmt, int p1)
+    public static void requireArgument(boolean condition, String fmt, int p1)
     {
         if (!condition)
             illegalArgument(format(fmt, p1));
     }
 
-    public static void checkArgument(boolean condition, String fmt, int p1, int p2)
+    public static void requireArgument(boolean condition, String fmt, int p1, int p2)
     {
         if (!condition)
             illegalArgument(format(fmt, p1, p2));
     }
 
-    public static void checkArgument(boolean condition, String fmt, long p1)
+    public static void requireArgument(boolean condition, String fmt, long p1)
     {
         if (!condition)
             illegalArgument(format(fmt, p1));
     }
 
-    public static void checkArgument(boolean condition, String fmt, long p1, long p2)
+    public static void requireArgument(boolean condition, String fmt, long p1, long p2)
     {
         if (!condition)
             illegalArgument(format(fmt, p1, p2));
     }
 
-    public static void checkArgument(boolean condition, String fmt, @Nullable Object p1)
+    public static void requireArgument(boolean condition, String fmt, @Nullable Object p1)
     {
         if (!condition)
             illegalArgument(format(fmt, p1));
     }
 
-    public static void checkArgument(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
+    public static void requireArgument(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
     {
         if (!condition)
             illegalArgument(format(fmt, p1, p2));
     }
 
-    public static void checkArgument(boolean condition, String fmt, Object... args)
+    public static void requireArgument(boolean condition, String fmt, Object... args)
     {
         if (!condition)
             illegalArgument(format(fmt, args));
     }
 
-    public static <T> T checkArgument(T param, boolean condition)
+    public static <T> T requireArgument(T param, boolean condition)
     {
         if (!condition)
             illegalArgument();
         return param;
     }
 
-    public static <T> T checkArgument(T param, boolean condition, String msg)
+    public static <T> T requireArgument(T param, boolean condition, String msg)
     {
         if (!condition)
             illegalArgument(msg);
         return param;
     }
 
-    public static <T> T checkArgument(T param, boolean condition, String fmt, int p1)
+    public static <T> T requireArgument(T param, boolean condition, String fmt, int p1)
     {
         if (!condition)
             illegalArgument(format(fmt, p1));
         return param;
     }
 
-    public static <T> T checkArgument(T param, boolean condition, String fmt, int p1, int p2)
+    public static <T> T requireArgument(T param, boolean condition, String fmt, int p1, int p2)
     {
         if (!condition)
             illegalArgument(format(fmt, p1, p2));
         return param;
     }
 
-    public static <T> T checkArgument(T param, boolean condition, String fmt, long p1)
+    public static <T> T requireArgument(T param, boolean condition, String fmt, long p1)
     {
         if (!condition)
             illegalArgument(format(fmt, p1));
         return param;
     }
 
-    public static <T> T checkArgument(T param, boolean condition, String fmt, long p1, long p2)
+    public static <T> T requireArgument(T param, boolean condition, String fmt, long p1, long p2)
     {
         if (!condition)
             illegalArgument(format(fmt, p1, p2));
         return param;
     }
 
-    public static <T> T checkArgument(T param, boolean condition, String fmt, @Nullable Object p1)
+    public static <T> T requireArgument(T param, boolean condition, String fmt, @Nullable Object p1)
     {
         if (!condition)
             illegalArgument(format(fmt, p1));
         return param;
     }
 
-    public static <T> T checkArgument(T param, boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
+    public static <T> T requireArgument(T param, boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
     {
         if (!condition)
             illegalArgument(format(fmt, p1, p2));
         return param;
     }
 
-    public static <T> T checkArgument(T param, boolean condition, String fmt, Object... args)
+    public static <T> T requireArgument(T param, boolean condition, String fmt, Object... args)
     {
         if (!condition)
             illegalArgument(format(fmt, args));
@@ -361,7 +375,7 @@ public class Invariants
     }
 
     @Inline
-    public static <T> T checkArgument(T param, Predicate<T> condition)
+    public static <T> T requireArgument(T param, Predicate<T> condition)
     {
         if (!condition.test(param))
             illegalArgument();
@@ -369,7 +383,7 @@ public class Invariants
     }
 
     @Inline
-    public static <T> T checkArgument(T param, Predicate<T> condition, String msg)
+    public static <T> T requireArgument(T param, Predicate<T> condition, String msg)
     {
         if (!condition.test(param))
             illegalArgument(msg);
@@ -377,21 +391,21 @@ public class Invariants
     }
 
     @Inline
-    public static int checkNonNegative(int index)
+    public static int requireNonNegative(int index)
     {
         if (index < 0)
             throw illegalState("Index %d expected to be non-negative", index);
         return index;
     }
 
-    public static void checkArgumentSorted(int[] array, int start, int end)
+    public static void requireArgumentSorted(int[] array, int start, int end)
     {
-        Invariants.checkArgument(SortedArrays.isSorted(array, start, end));
+        Invariants.requireArgument(SortedArrays.isSorted(array, start, end));
     }
 
-    public static void checkArgumentSorted(long[] array, int start, int end)
+    public static void requireArgumentSorted(long[] array, int start, int end)
     {
-        Invariants.checkArgument(SortedArrays.isSorted(array, start, end));
+        Invariants.requireArgument(SortedArrays.isSorted(array, start, end));
     }
 
     public static <O> O cast(Object o, Class<O> klass)
@@ -406,7 +420,7 @@ public class Invariants
         }
     }
 
-    public static void checkIndex(int index, int length)
+    public static void requireIndex(int index, int length)
     {
         if (!(index >= 0 && index < length))
         {
@@ -418,7 +432,7 @@ public class Invariants
         }
     }
 
-    public static void checkIndexInBounds(int realLength, int offset, int length)
+    public static void requireIndexInBounds(int realLength, int offset, int length)
     {
         if (realLength == 0 || length == 0)
             throw new IndexOutOfBoundsException("Unable to access offset " + offset + "; empty");
@@ -431,9 +445,9 @@ public class Invariants
             throw new IndexOutOfBoundsException(String.format("Offset %d, length = %d; real length was %d", offset, length, realLength));
     }
 
-    public static <T extends Comparable<? super T>> void partiallyOrdered(T... vs)
+    public static <T extends Comparable<? super T>> void requirePartiallyOrdered(T... vs)
     {
         for (int i = 1 ; i < vs.length ; ++i)
-            Invariants.checkArgument(vs[i - 1].compareTo(vs[i]) <= 0);
+            Invariants.requireArgument(vs[i - 1].compareTo(vs[i]) <= 0);
     }
 }
