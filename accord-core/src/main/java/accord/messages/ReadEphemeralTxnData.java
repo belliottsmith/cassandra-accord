@@ -177,8 +177,9 @@ public class ReadEphemeralTxnData extends ReadData
             while (iter.hasNext())
             {
                 node.commandStores().forId(iter.nextValue())
-                    .execute(PreLoadContext.empty(), safeStore -> eraseEphemeralRead(safeStore, txnId))
-                    .begin(node.agent());
+                    .execute(PreLoadContext.empty(), safeStore -> {
+                        eraseEphemeralRead(safeStore, txnId);
+                    }, node.agent());
             }
         }
         super.timeout();

@@ -39,7 +39,7 @@ import accord.utils.Invariants;
 import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
 
-// TODO (expected): evict to disk
+// TODO (desired): evict to disk
 public class DefaultLocalListeners implements LocalListeners
 {
     public static class Factory implements LocalListeners.Factory
@@ -92,9 +92,7 @@ public class DefaultLocalListeners implements LocalListeners
                 safeStore = safeStore; // prevent use in lambda
                 TxnId updatedId = safeCommand.txnId();
                 PreLoadContext context = PreLoadContext.contextFor(listenerId, updatedId);
-                safeStore.commandStore()
-                         .execute(context, safeStore0 -> notify(safeStore0, listenerId, updatedId))
-                         .begin(safeStore.agent());
+                safeStore.commandStore().execute(context, safeStore0 -> notify(safeStore0, listenerId, updatedId), safeStore.agent());
             }
         }
 
@@ -473,7 +471,6 @@ public class DefaultLocalListeners implements LocalListeners
 
     private void notifyComplexListeners(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        // TODO (expected): potential for lock inversion on notify calls; consider buffering notifies as we do elsewhere
         complexListeners.compute(safeCommand.txnId(), (id, cur) -> {
             if (cur == null)
                 return null;
@@ -495,7 +492,7 @@ public class DefaultLocalListeners implements LocalListeners
                 SaveStatus saveStatus = safeCommand.current().saveStatus();
                 Invariants.require(saveStatus.compareTo(entry.await) >= 0);
                 entry.notify(notifySink, safeStore, safeCommand);
-            }).begin(commandStore.agent());
+            }, commandStore.agent());
             txnListeners = BTreeRemoval.remove(txnListeners, TxnListeners::compareListeners, entry);
         }
     }

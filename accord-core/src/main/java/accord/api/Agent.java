@@ -20,11 +20,14 @@ package accord.api;
 
 import java.util.concurrent.TimeUnit;
 
+import javax.annotation.Nullable;
+
 import accord.api.ProgressLog.BlockedUntil;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.messages.ReplyContext;
+import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
 import accord.primitives.Status.Phase;
@@ -153,5 +156,5 @@ public interface Agent extends UncaughtExceptionListener
     long localExpiresAt(TxnId txnId, Phase phase, TimeUnit unit);
     long expiresAt(ReplyContext replyContext, TimeUnit unit);
 
-    default void onViolation(String message) { throw illegalState(message); }
+    default void onViolation(String message, Participants<?> participants, @Nullable TxnId notWitnessed, @Nullable Timestamp notWitnessedExecuteAt, @Nullable TxnId by, @Nullable Timestamp byEexecuteAt) { throw illegalState(message); }
 }

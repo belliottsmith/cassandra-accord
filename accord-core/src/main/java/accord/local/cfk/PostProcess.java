@@ -101,7 +101,7 @@ abstract class PostProcess
                 else
                     safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, RoutingKeys.of(key), SYNC), safeStore0 -> {
                         load(safeStore0, safeStore0.unsafeGet(txnId), safeStore0.get(key), notifySink);
-                    }).begin(safeStore.agent());
+                    }, safeStore.agent());
             }
         }
 

@@ -57,8 +57,8 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE_VISIBLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
-import static accord.local.cfk.CommandsForKey.executesIgnoreBootstrap;
-import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
+import static accord.local.cfk.CommandsForKey.executesIgnoringBootstrap;
+import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolation;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
@@ -652,8 +652,8 @@ class Updating
                     {
                         for (int i = pos; i <= maxAppliedWriteByExecuteAt; ++i)
                         {
-                            if (committedByExecuteAt[pos].witnesses(newInfo) && reportLinearizabilityViolations())
-                                logger.error("Linearizability violation on key {}: {} is committed to execute (at {}) before {} that should witness it but has already applied (at {})", cfk.key, newInfo.plainTxnId(), newInfo.plainExecuteAt(), committedByExecuteAt[i].plainTxnId(), committedByExecuteAt[i].plainExecuteAt());
+                            if (committedByExecuteAt[pos].witnesses(newInfo))
+                                reportLinearizabilityViolation(cfk.key, newInfo.plainTxnId(), newInfo.plainExecuteAt(), committedByExecuteAt[i].plainTxnId(), committedByExecuteAt[i].plainExecuteAt());
                         }
                     }
                 }
@@ -710,10 +710,8 @@ class Updating
             TxnInfo[] committedByExecuteAt = cfk.committedByExecuteAt;
             for (int i = cfk.maxAppliedWriteByExecuteAt + 1; i < appliedPos ; ++i)
             {
-                if (committedByExecuteAt[i].isNot(APPLIED)
-                    && appliedKind.witnesses(committedByExecuteAt[i])
-                    && reportLinearizabilityViolations())
-                        logger.error("Linearizability violation on key {}: {} is committed to execute (at {}) before {} that should witness it but has already applied (at {})", cfk.key, committedByExecuteAt[i].plainTxnId(), committedByExecuteAt[i].plainExecuteAt(), applied.plainTxnId(), applied.plainExecuteAt());
+                if (committedByExecuteAt[i].isNot(APPLIED) && appliedKind.witnesses(committedByExecuteAt[i]))
+                    reportLinearizabilityViolation(cfk.key, committedByExecuteAt[i].plainTxnId(), committedByExecuteAt[i].plainExecuteAt(), applied.plainTxnId(), applied.plainExecuteAt());
             }
         }
 
@@ -737,7 +735,7 @@ class Updating
     private static long updateMaxUniqueHlc(CommandsForKey cfk, TxnInfo newInfo, Command update)
     {
         long maxUniqueHlc = cfk.maxUniqueHlc;
-        if (newInfo.is(APPLIED) && newInfo.is(Write) && (newInfo.mayExecute() || executesIgnoreBootstrap(cfk.boundsInfo, newInfo, newInfo.executeAt)))
+        if (newInfo.is(APPLIED) && newInfo.is(Write) && (newInfo.mayExecute() || executesIgnoringBootstrap(cfk.boundsInfo, newInfo, newInfo.executeAt)))
         {
             long newUniqueHlc = update.executeAt().uniqueHlc();
             if (maxUniqueHlc < newUniqueHlc)
@@ -762,7 +760,7 @@ class Updating
                 if (postProcess != null)
                     postProcess.postProcess(safeStore, key, notifySink);
             }
-        }).begin(commandStore.agent());
+        }, commandStore.agent());
     }
 
     static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand)

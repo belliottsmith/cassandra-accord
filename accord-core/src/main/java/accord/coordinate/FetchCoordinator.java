@@ -142,7 +142,6 @@ public abstract class FetchCoordinator
     private Ranges needed;
     private int inflight;
 
-    // TODO (required): use ExecuteExclusiveSyncPoint logic
     protected FetchCoordinator(Node node, Ranges ranges, SyncPoint syncPoint, FetchRanges fetchRanges)
     {
         this.node = node;
@@ -151,8 +150,6 @@ public abstract class FetchCoordinator
         this.fetchRanges = fetchRanges;
         // TODO (expected): prioritise nodes that were members in the "prior" epoch also
         //  (by prior, we mean the prior epoch affecting ownership of this shard, not the prior numerical epoch)
-        // TODO (required): the sourceEpoch may be wrong, as a transaction may execute in a future epoch
-        //   is this a problem on bootstrap? probably
         Topology topology = node.topology().forEpoch(ranges, syncPoint.syncId.epoch()).get(0);
         for (Node.Id id : topology.nodes())
         {

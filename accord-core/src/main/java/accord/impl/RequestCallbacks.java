@@ -33,7 +33,6 @@ import org.agrona.collections.Long2ObjectHashMap;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-// TODO (expected): tie shards to an AccordExecutor
 public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.CallbackStripe>
 {
     private static final Logger logger = LoggerFactory.getLogger(RequestCallbacks.class);

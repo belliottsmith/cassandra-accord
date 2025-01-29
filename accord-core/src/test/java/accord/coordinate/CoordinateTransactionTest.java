@@ -234,7 +234,7 @@ public class CoordinateTransactionTest
             Txn blockingTxn = new Txn.InMemory(keys, MockStore.read(keys), MockStore.QUERY, null);
             PreLoadContext blockingTxnContext = PreLoadContext.contextFor(blockingTxnId, route);
             for (Node n : cluster)
-                assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(blockingTxnContext, safeStore -> {
+                assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).build(blockingTxnContext, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, blockingTxnId.epoch(), blockingTxnId, blockingTxnId.epoch());
                     return Commands.preaccept(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId), true), null, false, route);
                 })));
@@ -243,7 +243,7 @@ public class CoordinateTransactionTest
             Txn txn = new Txn.InMemory(keys, MockStore.read(keys), MockStore.QUERY, null);
             PreLoadContext context = PreLoadContext.contextFor(txnId, route);
             for (Node n : cluster)
-                assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(context, safeStore -> {
+                assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).build(context, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
                     return Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txn.slice(safeStore.ranges().allAt(txnId.epoch()), true), null, false, route);
                 })));
@@ -270,7 +270,7 @@ public class CoordinateTransactionTest
 
             // Move to preapplied in order to test that Barrier will find the transaction and add a listener
             for (Node n : cluster)
-                getUninterruptibly(n.unsafeForKey(key).execute(context, safeStore ->  {
+                getUninterruptibly(n.unsafeForKey(key).build(context, safeStore ->  {
                     StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
                     SafeCommand safeCommand = safeStore.get(txnId, participants);
                     Command command = safeCommand.current();
@@ -291,7 +291,7 @@ public class CoordinateTransactionTest
 
             // Apply the blockingTxn to unblock the rest
             for (Node n : cluster)
-                assertEquals(ApplyOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(blockingTxnContext, safeStore -> {
+                assertEquals(ApplyOutcome.Success, getUninterruptibly(n.unsafeForKey(key).build(blockingTxnContext, safeStore -> {
                     StoreParticipants participants = StoreParticipants.execute(safeStore, route, blockingTxnId.epoch(), blockingTxnId, blockingTxnId.epoch());
                     return Commands.apply(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, route, blockingTxnId, PartialDeps.builder(route, true).build(), blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId.epoch()), true), null, blockingTxn.query().compute(blockingTxnId, blockingTxnId, keys, null, null, null));
                 })));

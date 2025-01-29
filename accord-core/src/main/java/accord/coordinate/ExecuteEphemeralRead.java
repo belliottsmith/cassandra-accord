@@ -59,7 +59,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
     final BiConsumer<? super Result, Throwable> callback;
     private Data data;
 
-    ExecuteEphemeralRead(Node node, Topologies topologies, FullRoute<?> route, TxnId txnId, Txn txn, long executionEpoch, Deps deps, BiConsumer<? super Result, Throwable> callback)
+    ExecuteEphemeralRead(Node node, Topologies topologies, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, BiConsumer<? super Result, Throwable> callback)
     {
         // we need to send Stable to the origin epoch as well as the execution epoch
         // TODO (desired): permit slicing Topologies by key (though unnecessary if we eliminate the concept of non-participating home keys)
@@ -100,7 +100,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
             {
                 // TODO (expected): only submit new requests for the keys that execute in a later epoch
                 node.withEpoch(ok.futureEpoch, callback, t -> WrappableException.wrap(t), () -> {
-                    new ExecuteEphemeralRead(node, node.topology().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch), route, txnId.withEpoch(ok.futureEpoch), txn, ok.futureEpoch, deps, callback).start();
+                    new ExecuteEphemeralRead(node, node.topology().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch), route, txnId.withEpoch(ok.futureEpoch), txn, deps, callback).start();
                 });
                 return Aborted;
             }

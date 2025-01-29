@@ -47,16 +47,18 @@ import accord.primitives.Keys;
 import accord.primitives.Range;
 import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
-import accord.primitives.Routable;
+import accord.primitives.Routable.Domain;
 import accord.primitives.RoutableKey;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.TxnId.Cardinality;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.utils.SortedArrays.SortedArrayList;
 import org.agrona.collections.IntHashSet;
 
+import static accord.primitives.TxnId.Cardinality.Any;
 import static accord.utils.Utils.toArray;
 
 public class AccordGens
@@ -121,9 +123,14 @@ public class AccordGens
         return txnIds(epochs(), hlcs(), nodeIdValues(), kinds);
     }
 
-    public static Gen<TxnId> txnIds(Gen<Txn.Kind> kinds, Gen<Routable.Domain> domains)
+    public static Gen<TxnId> txnIds(Gen<Txn.Kind> kinds, Gen<Domain> domains)
     {
-        return txnIds(epochs(), hlcs(), nodeIdValues(), kinds, domains);
+        return txnIds(epochs(), hlcs(), nodeIdValues(), kinds, domains, ignore -> Any);
+    }
+
+    public static Gen<TxnId> txnIds(Gen<Txn.Kind> kinds, Gen<Domain> domains, Gen<Cardinality> cardinalities)
+    {
+        return txnIds(epochs(), hlcs(), nodeIdValues(), kinds, domains, cardinalities);
     }
 
     public static Gen<TxnId> txnIds(Gen.LongGen epochs, Gen.LongGen hlcs, Gen.IntGen nodes)
@@ -133,12 +140,21 @@ public class AccordGens
 
     public static Gen<TxnId> txnIds(Gen.LongGen epochs, Gen.LongGen hlcs, Gen.IntGen nodes, Gen<Txn.Kind> kinds)
     {
-        return txnIds(epochs, hlcs, nodes, kinds, Gens.enums().all(Routable.Domain.class));
+        return txnIds(epochs, hlcs, nodes, kinds, Gens.enums().all(Domain.class), ignore -> Any);
     }
 
-    public static Gen<TxnId> txnIds(Gen.LongGen epochs, Gen.LongGen hlcs, Gen.IntGen nodes, Gen<Txn.Kind> kinds, Gen<Routable.Domain> domains)
+    public static Gen<TxnId> txnIds(Gen.LongGen epochs, Gen.LongGen hlcs, Gen.IntGen nodes, Gen<Txn.Kind> kinds, Gen<Domain> domains)
     {
-        return rs -> new TxnId(epochs.nextLong(rs), hlcs.nextLong(rs), 0, kinds.next(rs), domains.next(rs), new Node.Id(nodes.nextInt(rs)));
+        return txnIds(epochs, hlcs, nodes, kinds, domains, ignore -> Any);
+    }
+
+    public static Gen<TxnId> txnIds(Gen.LongGen epochs, Gen.LongGen hlcs, Gen.IntGen nodes, Gen<Txn.Kind> kinds, Gen<Domain> domains, Gen<Cardinality> cardinalities)
+    {
+        return rs -> {
+            Domain domain = domains.next(rs);
+            Cardinality cardinality = domain == Domain.Range ? Any : cardinalities.next(rs);
+            return new TxnId(epochs.nextLong(rs), hlcs.nextLong(rs), 0, kinds.next(rs), domain, cardinality, new Node.Id(nodes.nextInt(rs)));
+        };
     }
 
     public static Gen<Ballot> ballot()
@@ -277,13 +293,13 @@ public class AccordGens
     public static Gen<KeyDeps> keyDeps(Gen<? extends RoutingKey> keyGen)
     {
         Gen<Txn.Kind> kinds = Gens.pick(Txn.Kind.Write, Txn.Kind.Read);
-        return keyDeps(keyGen, txnIds(kinds, ignore -> Routable.Domain.Key));
+        return keyDeps(keyGen, txnIds(kinds, ignore -> Domain.Key));
     }
 
     public static Gen<KeyDeps> directKeyDeps(Gen<? extends RoutingKey> keyGen)
     {
         Gen<Txn.Kind> kinds = Gens.pick(Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint);
-        return keyDeps(keyGen, txnIds(kinds, ignore -> Routable.Domain.Key));
+        return keyDeps(keyGen, txnIds(kinds, ignore -> Domain.Key));
     }
 
     public static Gen<KeyDeps> keyDeps(Gen<? extends RoutingKey> keyGen, Gen<TxnId> idGen)
@@ -527,7 +543,7 @@ public class AccordGens
     public static Gen<RangeDeps> rangeDeps(Gen<? extends Range> rangeGen)
     {
         Gen<Txn.Kind> kinds = Gens.pick(Txn.Kind.Write, Txn.Kind.Read, Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint);
-        return rangeDeps(rangeGen, txnIds(kinds, ignore -> Routable.Domain.Range));
+        return rangeDeps(rangeGen, txnIds(kinds, ignore -> Domain.Range));
     }
 
     public static Gen<RangeDeps> rangeDeps(Gen<? extends Range> rangeGen, Gen<TxnId> idGen)
@@ -578,7 +594,7 @@ public class AccordGens
                                                                           Gens.longs().between(0, txnId.hlc()),
                                                                           nodeIdValues(),
                                                                           Gens.pick(Txn.Kind.Write, Txn.Kind.Read),
-                                                                          ignore -> Routable.Domain.Key));
+                                                                          ignore -> Domain.Key));
                 rangeDepsGen = i -> RangeDeps.NONE;
                 directKeyDepsGen = i -> KeyDeps.NONE;
             }
@@ -602,7 +618,7 @@ public class AccordGens
     {
         return rs -> {
             Deps deps = depsGen.next(rs);
-            if (deps.isEmpty()) return Command.WaitingOn.empty(Routable.Domain.Key);
+            if (deps.isEmpty()) return Command.WaitingOn.empty(Domain.Key);
             int size = deps.rangeDeps.txnIdCount() + deps.directKeyDeps.txnIdCount() + deps.keyDeps.keys().size();
             SimpleBitSet set = new SimpleBitSet(size);
             int directKeyOffset = deps.rangeDeps.txnIdCount();

@@ -62,9 +62,9 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owne
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
-import static accord.primitives.TxnId.FastPath.UNOPTIMISED;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
+import static accord.primitives.TxnId.FastPath.Unoptimised;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
 
@@ -562,7 +562,7 @@ public class TopologyManager
         epochs.syncComplete(node, epoch);
     }
 
-    // TODO (now, correctness): it seems to be wrong to count removed nodes towards sync quorums.
+    // TODO (nrequired): this is incorrect, we should not mark removed node as complete in the quorum as they may not be unresponsive
     public synchronized void onRemoveNode(long removedIn, Id removed)
     {
         for (long epoch = removedIn, min = minEpoch(); epoch >= min; epoch--)
@@ -684,10 +684,9 @@ public class TopologyManager
         }
         else
         {
-            // TODO (expected): when we revisit epoch handling, see if we can avoid recalculating when minEpoch advances
             if (prevIncluded == Unsynced && prev != null && prev.currentEpoch() == maxEpoch && prev.oldestEpoch() == minEpoch)
                 return prev;
-            else
+            else // TODO (desired): can we avoid recalculating when only minEpoch advances?
                 return withUnsyncedEpochs(select, minEpoch, maxEpoch);
         }
 
@@ -1048,7 +1047,7 @@ public class TopologyManager
         public FastPath one(EpochState epoch, Routables<?> routables, boolean permitMissing)
         {
             if (!epoch.local.ranges.containsAll(routables) || !epoch.local.foldl(routables, this, true))
-                return UNOPTIMISED;
+                return Unoptimised;
 
             return epoch.local.foldl(routables, (s, v, i) -> merge(v, s.bestFastPath()), null);
         }
@@ -1068,9 +1067,9 @@ public class TopologyManager
         private static FastPath merge(FastPath a, FastPath b)
         {
             if (a == null) return b;
-            if (a == UNOPTIMISED || b == UNOPTIMISED) return UNOPTIMISED;
-            if (a == PRIVILEGED_COORDINATOR_WITH_DEPS || b == PRIVILEGED_COORDINATOR_WITH_DEPS) return PRIVILEGED_COORDINATOR_WITH_DEPS;
-            return PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
+            if (a == Unoptimised || b == Unoptimised) return Unoptimised;
+            if (a == PrivilegedCoordinatorWithDeps || b == PrivilegedCoordinatorWithDeps) return PrivilegedCoordinatorWithDeps;
+            return PrivilegedCoordinatorWithoutDeps;
         }
 
         @Override

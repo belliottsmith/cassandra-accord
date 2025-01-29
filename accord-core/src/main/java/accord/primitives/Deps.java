@@ -85,7 +85,7 @@ public class Deps
         return new Builder(buildRangeByTxnId);
     }
 
-    // TODO (expected, efficiency): cache this object per thread
+    // TODO (desired): cache this object per thread
     public static abstract class AbstractBuilder<T extends Deps> implements AutoCloseable
     {
         final KeyDeps.Builder keyBuilder;

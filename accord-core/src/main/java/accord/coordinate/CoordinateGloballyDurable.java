@@ -31,12 +31,12 @@ import accord.utils.SortedArrays;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults.SettableResult;
 
-// TODO (expected): this does not need to query every shard; can disseminate globally any sub-range of the ring
-//  (indeed, we could slice both the query and dissemination only so that they always overlap)
+// TODO (expected): this does not need to query every shard OR more than one replica per shard;
+//  can disseminate globally any sub-range of the ring.
+//  Infact, we could simply autonomously disseminate our latest information to some subset of replicas
 public class CoordinateGloballyDurable extends SettableResult<Void> implements Callback<DurableBeforeReply>
 {
     final Node node;
-    // TODO (expected): this can be a ReadTracker, we only need one response from each shard
     final QuorumTracker tracker;
     private DurableBefore durableBefore = DurableBefore.EMPTY;
 

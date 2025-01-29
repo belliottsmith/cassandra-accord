@@ -98,14 +98,16 @@ import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.primitives.TxnId.Cardinality.Any;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 
-// TODO (expected): test setting redundant before
-// TODO (expected): test ballot updates
-// TODO (expected): test transition to Erased
-// TODO (expected): ensure execution is not too early
-// TODO (expected): validate mapReduce
-// TODO (expected): insert linearizability violations and detect them
-// TODO (required): make sure we test execution is triggered promptly (precisely when it should be), esp. for unmanaged txns
+// TODO (testing): test setting redundant before
+// TODO (testing): test ballot updates
+// TODO (testing): test transition to Erased
+// TODO (testing): ensure execution is not too early
+// TODO (testing): validate mapReduce
+// TODO (testing): insert linearizability violations and detect them
+// TODO (testing): make sure we test execution is triggered promptly (precisely when it should be), esp. for unmanaged txns
 public class CommandsForKeyTest
 {
     private static final Logger logger = LoggerFactory.getLogger(CommandsForKeyTest.class);
@@ -129,12 +131,12 @@ public class CommandsForKeyTest
         }
     }
 
-    // TODO (expected): randomise ballots
+    // TODO (testing): randomise ballots
     static class Canon implements NotifySink
     {
-        private static final TxnId MIN = new TxnId(1, 1, 0, Txn.Kind.Read, Key, new Node.Id(1));
+        private static final TxnId MIN = new TxnId(1, 1, 0, Txn.Kind.Read, Key, SingleKey, new Node.Id(1));
 
-        // TODO (expected): randomise ratios
+        // TODO (testing): randomise ratios
         static final Txn.Kind[] KINDS = new Txn.Kind[] { Txn.Kind.Read, Write, Txn.Kind.EphemeralRead, Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint };
         final RandomSource rnd;
         final Node.Id[] nodeIds;
@@ -319,9 +321,9 @@ public class CommandsForKeyTest
             {
                 default:
                 case NotDefined:
-                case TruncatedApply:
-                case TruncatedApplyWithDeps:
                 case TruncatedApplyWithOutcome:
+                case TruncatedApply:
+                case TruncatedUnapplied:
                 case PreApplied:
                 case PreCommitted:
                     throw new AssertionError();
@@ -412,7 +414,7 @@ public class CommandsForKeyTest
         {
             TxnId min = MIN;
             TxnId max;
-            if (byId.isEmpty()) max = new TxnId(1, 100, 0, Txn.Kind.Read, Key, nodeIds[0]);
+            if (byId.isEmpty()) max = new TxnId(1, 100, 0, Txn.Kind.Read, Key, SingleKey, nodeIds[0]);
             else
             {
                 max = byId.lastEntry().getValue().txnId();
@@ -422,7 +424,7 @@ public class CommandsForKeyTest
                     case 2:
                         min = max;
                     case 1:
-                        max = new TxnId(Math.min(100, max.epoch() * 2), max.hlc() + 100, 0, max.kind(), max.domain(), max.node);
+                        max = new TxnId(Math.min(100, max.epoch() * 2), max.hlc() + 100, 0, max.kind(), max.domain(), max.cardinality(), max.node);
                     case 0:
 
                 }
@@ -458,7 +460,9 @@ public class CommandsForKeyTest
             else if (hlc == max.hlc() && max.domain() == Key) domain = Key;
             else domain = rnd.nextBoolean() ? Key : Domain.Range;
 
-            return new TxnId(epoch, hlc, 0, kind, domain, node);
+            TxnId.Cardinality cardinality = domain == Domain.Range || rnd.nextBoolean() ? Any : SingleKey;
+
+            return new TxnId(epoch, hlc, 0, kind, domain, cardinality, node);
         }
 
         Timestamp generateTimestamp(Timestamp min, Timestamp max, boolean unique)
@@ -982,7 +986,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public AsyncChain<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
             Task task = new Task(consumer);
             queue.add(task);
@@ -990,7 +994,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply)
+        public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply)
         {
             throw new UnsupportedOperationException();
         }

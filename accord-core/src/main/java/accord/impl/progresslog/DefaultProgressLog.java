@@ -45,6 +45,7 @@ import accord.primitives.ProgressToken;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
+import accord.utils.ArrayBuffers.BufferList;
 import accord.utils.Invariants;
 import accord.utils.LogGroupTimers;
 import accord.utils.btree.BTree;
@@ -64,6 +65,8 @@ import static accord.impl.progresslog.Progress.Querying;
 import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
+import static accord.local.Command.NotDefined.uninitialised;
+import static accord.local.PreLoadContext.empty;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
@@ -72,8 +75,8 @@ import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-// TODO (required): for transactions that span multiple progress logs (notably: sync points) we need to coordinate *fetching* to avoid redundant work
-public class DefaultProgressLog implements ProgressLog, Runnable
+// TODO (expected): for transactions that span multiple progress logs (notably: sync points) we need to coordinate *fetching* to avoid redundant work
+public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStore>
 {
     private static final Logger logger = LoggerFactory.getLogger(DefaultProgressLog.class);
 
@@ -322,7 +325,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
                 TxnId txnId = state.txnId;
                 safeStore.commandStore().execute(txnId, safeStore0 -> {
                     safeStore0.unsafeGet(txnId);
-                }).begin(node.agent());
+                }, node.agent());
             }
 
             if (state.txnId.compareTo(clearAllBefore) < 0)
@@ -386,8 +389,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         if (!blockedBy.txnId().isVisible())
             return;
 
-        blockedBy.initialise();
         Command command = blockedBy.current();
+        if (command == null) command = uninitialised(blockedBy.txnId());
         SaveStatus saveStatus = command.saveStatus();
         Invariants.require(saveStatus.compareTo(blockedUntil.unblockedFrom) < 0);
 
@@ -447,7 +450,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     }
 
     @Override
-    public void run()
+    public void accept(@Nullable SafeCommandStore safeStore)
     {
         long nowMicros = node.elapsed(TimeUnit.MICROSECONDS);
         try
@@ -458,13 +461,17 @@ public class DefaultProgressLog implements ProgressLog, Runnable
                 return;
             }
 
-            processAwaitingEpoch();
-            // drain to a buffer to avoid reentrancy in timers
-            runBuffer = EMPTY_RUN_BUFFER;
-            runBufferCount = 0;
-            timers.advance(nowMicros, this, DefaultProgressLog::addToRunBuffer);
-            processRunBuffer(nowMicros);
-            cachedAny().forceDiscard(runBuffer, runBufferCount);
+            try (BufferList<RunInvoker> readyToRun = safeStore == null ? null : new BufferList<>())
+            {
+                processAwaitingEpoch(safeStore, readyToRun);
+                // drain to a buffer to avoid reentrancy in timers
+                runBuffer = EMPTY_RUN_BUFFER;
+                runBufferCount = 0;
+                timers.advance(nowMicros, this, DefaultProgressLog::addToRunBuffer);
+                processRunBuffer(safeStore, nowMicros, readyToRun);
+                cachedAny().forceDiscard(runBuffer, runBufferCount);
+                processReadyToRun(safeStore, readyToRun);
+            }
             if (awaitingEpochBufferCount > 0)
                 rerunWithPendingEpoch();
         }
@@ -491,16 +498,16 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             minEpoch = Math.min(awaitingEpochBuffer[i].run.txnId.epoch(), minEpoch);
         Invariants.requireArgument(minEpoch != Long.MAX_VALUE);
         isAwaitingEpoch = true;
-        node.withEpoch(minEpoch, (success, fail) -> commandStore.execute(() -> {
+        node.withEpoch(minEpoch, (success, fail) -> commandStore.execute(empty(), ss -> {
             isAwaitingEpoch = false;
-            run();
-        }));
+            accept(ss);
+        }, node.agent()));
     }
 
-    // TODO (expected): invoke immediately if the command is already loaded
-    private void processRunBuffer(long nowMicros)
+    private void processRunBuffer(@Nullable SafeCommandStore safeStore, long nowMicros, List<RunInvoker> readyToRun)
     {
         long hasEpoch = node.topology().epoch();
+
         for (int i = 0; i < runBufferCount; ++i)
         {
             TxnState run = (TxnState) runBuffer[i];
@@ -526,8 +533,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             long epoch = run.txnId.epoch();
             if (epoch <= hasEpoch)
             {
-                invoke(invoker(run, runKind));
-                if (invokeBoth) invoke(invoker(run, runKind.other()));
+                addIfReadyElseSubmit(safeStore, invoker(run, runKind), readyToRun);
+                if (invokeBoth) addIfReadyElseSubmit(safeStore, invoker(run, runKind.other()), readyToRun);
             }
             else
             {
@@ -543,19 +550,42 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         runBufferCount = 0;
     }
 
-    private void processAwaitingEpoch()
+    private void processAwaitingEpoch(@Nullable SafeCommandStore safeStore, List<RunInvoker> readyToRun)
     {
+        if (awaitingEpochBufferCount == 0)
+            return;
+
         long hasEpoch = node.topology().epoch();
         int retainCount = 0;
         for (int i = 0 ; i < awaitingEpochBufferCount ; ++i)
         {
             RunInvoker awaiting = awaitingEpochBuffer[i];
-            if (awaiting.run.txnId.epoch() <= hasEpoch) invoke(awaiting);
+            if (awaiting.run.txnId.epoch() <= hasEpoch) addIfReadyElseSubmit(safeStore, awaiting, readyToRun);
             else awaitingEpochBuffer[retainCount++] = awaiting;
         }
         awaitingEpochBufferCount = retainCount;
         if (retainCount == 0) awaitingEpochBuffer = EMPTY_AWAITING_EPOCH_BUFFER;
         else if (retainCount < awaitingEpochBuffer.length / 2) awaitingEpochBuffer = Arrays.copyOf(awaitingEpochBuffer, retainCount);
+    }
+
+    private void processReadyToRun(SafeCommandStore safeStore, List<RunInvoker> readyToRun)
+    {
+        if (safeStore == null || readyToRun.isEmpty())
+            return;
+
+        int i = 0;
+        try
+        {
+            while (i < readyToRun.size())
+                readyToRun.get(i++).accept(safeStore);
+        }
+        finally
+        {
+            while (i < readyToRun.size())
+            {
+                commandStore.execute(empty(), readyToRun.get(i++), node.agent());
+            }
+        }
     }
 
     private void validatePreRunState(TxnState run, TxnStateKind kind)
@@ -564,10 +594,17 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         Invariants.require(progress != NoneExpected && progress != Querying);
     }
 
-    void invoke(RunInvoker invoker)
+    void addIfReadyElseSubmit(@Nullable SafeCommandStore safeStore, RunInvoker invoker, List<RunInvoker> ifReady)
     {
-        commandStore.execute(invoker.run.txnId, invoker)
-                    .begin(commandStore.agent());
+        if (safeStore != null && safeStore.canExecuteWith(invoker.run.txnId))
+        {
+            ifReady.add(invoker);
+        }
+        else
+        {
+            // TODO (required): if we fail execution, do we need to reschedule the state?
+            commandStore.execute(invoker.run.txnId, invoker, commandStore.agent());
+        }
     }
 
     RunInvoker invoker(TxnState run, TxnStateKind runKind)
@@ -706,13 +743,13 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     {
         if (commandStore.inStore())
         {
-            run();
+            accept(null);
         }
         else
         {
             long now = node.elapsed(MICROSECONDS);
             if (timers.shouldWake(now))
-                commandStore.execute(this);
+                commandStore.execute(empty(), this, node.agent());
         }
     }
 

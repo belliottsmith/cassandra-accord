@@ -82,10 +82,10 @@ import static accord.utils.SortedArrays.Search.FAST;
  * <p>The relationship between Range and TxnId is maintained via {@code int[]} utilising {@link RelationMultiMap}
  * functionality.
  *
- * TODO (expected): de-overlap ranges per txnId if possible cheaply, or else reduce use of partial ranges where possible
  * TODO (expected): keep only the latest exclusive sync point for a given range
- * TODO (expected): permit building out-of-order
- * TODO (expected): currently permitting duplicates
+ * TODO (expected): permit building out-of-order to facilitate incremental PreLoadContext
+ * TODO (desired): currently permitting duplicates
+ * TODO (testing): confirm we are de-overlapping ranges per txnId
  * TODO (testing): randomised testing of all iteration methods
  */
 public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>

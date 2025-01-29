@@ -165,7 +165,6 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 }
                 else if (!known.definition().isOrWasKnown())
                 {
-                    // TODO (required): this logic should be put in Infer, alongside any similar inferences in Recover
                     if (witnessedByInvalidation != null && witnessedByInvalidation.compareTo(Status.PreAccepted) > 0)
                         throw illegalState("We previously invalidated, finding a status that should be recoverable");
                     Invalidate.invalidate(node, txnId, route, witnessedByInvalidation != null, reportLowEpoch, reportHighEpoch, callback);
@@ -227,7 +226,6 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         }
                         else
                         {
-                            // TODO (expected): tighten up / centralise this implication, perhaps in Infer
                             propagate = full.merge(Majority);
                         }
                     }

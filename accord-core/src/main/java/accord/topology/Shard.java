@@ -34,7 +34,6 @@ import accord.utils.UnhandledEnum;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.primitives.Shorts;
 
-// TODO (expected, efficiency): concept of region/locality
 // TODO (expected): introduce recovery quorum size configuration
 public class Shard
 {
@@ -134,9 +133,9 @@ public class Shard
         switch (fastPath)
         {
             default: throw new UnhandledEnum(fastPath);
-            case UNOPTIMISED: return simpleFastQuorumSize;
-            case PRIVILEGED_COORDINATOR_WITHOUT_DEPS: return privilegedWithoutDepsFastQuorumSize;
-            case PRIVILEGED_COORDINATOR_WITH_DEPS: return privilegedWithDepsFastQuorumSize;
+            case Unoptimised: return simpleFastQuorumSize;
+            case PrivilegedCoordinatorWithoutDeps: return privilegedWithoutDepsFastQuorumSize;
+            case PrivilegedCoordinatorWithDeps: return privilegedWithDepsFastQuorumSize;
         }
     }
 
@@ -266,7 +265,7 @@ public class Shard
     public FastPath bestFastPath()
     {
         return privilegedWithDepsFastQuorumSize == privilegedWithoutDepsFastQuorumSize
-               ? FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS
-               : FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
+               ? FastPath.PrivilegedCoordinatorWithoutDeps
+               : FastPath.PrivilegedCoordinatorWithDeps;
     }
 }

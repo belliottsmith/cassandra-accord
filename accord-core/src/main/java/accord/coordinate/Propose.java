@@ -52,7 +52,7 @@ import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 import static accord.primitives.Status.AcceptedInvalidate;
-import static accord.primitives.TxnId.MediumPath.TRACK_STABLE;
+import static accord.primitives.TxnId.MediumPath.TrackStable;
 import static accord.utils.Invariants.debug;
 
 abstract class Propose<R> implements Callback<AcceptReply>
@@ -86,6 +86,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
         this.acceptTracker = new QuorumTracker(topologies);
         Invariants.require(txnId.isSyncPoint() || deps.maxTxnId(txnId).compareTo(executeAt) <= 0,
                            "Attempted to propose %s with an earlier executeAt than a conflicting transaction it witnessed: %s vs executeAt: %s", txnId, deps, executeAt);
+        Invariants.require(topologies.currentEpoch() == executeAt.epoch());
     }
 
     void start()
@@ -145,7 +146,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
         if (isDone)
             return;
 
-        // TODO (expected): we aren't tracking the specific failure here to report
+        // TODO (required): we aren't tracking the specific failure here to report
         if (acceptTracker.recordFailure(from) == Failed)
         {
             isDone = true;
@@ -166,15 +167,14 @@ abstract class Propose<R> implements Callback<AcceptReply>
 
     void onAccepted()
     {
-        // TODO (desired): can we avoid merging on original preaccept? Would be nice to be able to reduce range txn dep calculation cost.
+        // TODO (desired): can we avoid merging on original accept? Would be nice to be able to reduce range txn dep calculation cost (by not including PreLoadContext).
         //  I think probably not possible, as we could have a recovery coordinator for some id' < id contact us before our original coordinator does.
         //  In this case either id' needs to wait (which requires potentially more states like the alternative medium path)
         //  Or we must pick it up as an Unstable dependency here.
         Deps deps = mergeDeps();
-        if (kind == Kind.MEDIUM)
-            adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, txnId, txn, executeAt, deps, callback);
-        else
-            adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, deps, callback);
+        if (kind == Kind.MEDIUM) adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, txnId, txn, executeAt, deps, callback);
+        else adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, deps, callback);
+        if (!Invariants.debug()) acceptOks.clear();
     }
 
     Deps mergeDeps()
@@ -183,7 +183,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
         if (Faults.discardPreAcceptDeps(txnId))
             return deps;
 
-        if (txnId.is(TRACK_STABLE))
+        if (txnId.is(TrackStable))
         {
             // we must not propose as stable any dep < txnId that we did not witness in our original preaccept
             if (!filterDuplicateDependenciesFromAcceptReply())

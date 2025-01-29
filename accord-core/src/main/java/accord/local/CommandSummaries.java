@@ -160,7 +160,7 @@ public interface CommandSummaries
                         return false;
                     case NOTACCEPTED:
                     case PREACCEPTED:
-                        if (!txnId.is(TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS))
+                        if (!txnId.is(TxnId.FastPath.PrivilegedCoordinatorWithDeps))
                             return false;
                     case ACCEPTED:
                         return txnId.compareTo(findAsDep) > 0;

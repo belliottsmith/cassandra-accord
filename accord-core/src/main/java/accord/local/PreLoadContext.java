@@ -52,10 +52,7 @@ public interface PreLoadContext
      * This should ONLY be non-null if primaryTxnId() is non-null
      *
      * TODO (expected): this is used for Apply, NotifyWaitingOn and listenerContexts; others only use a single txnId
-     *  firstly, it would be nice to simply have that txnId as a single value.
-     *  In the case of Apply, we can likely avoid loading all dependent transactions, if we can track which ranges
-     *  out of memory have un-applied transactions (and try not to evict those that are not applied).
-     *  Either way, the information we need in memory is super minimal for secondary transactions.
+     *  The information we need in memory is super minimal for secondary transactions (mostly just SaveStatus?).
      */
     default @Nullable TxnId additionalTxnId() { return null; }
 
@@ -93,12 +90,7 @@ public interface PreLoadContext
 
     /**
      * @return keys of the {@link CommandsForKey} objects that need to be loaded into memory before this operation is run
-     *
-     * TODO (expected, efficiency): this used for only two things: calculateDeps and CommandStore.register.
-     *  Both can be done without. For range transactions calculateDeps needs to be asynchronous anyway to support
-     *  potentially large scans, and for register we do not need to load into memory, we can perform a blind write.
      */
-    // TODO (required): specify epochs for which we should load, so we can narrow to owned keys
     default Unseekables<?> keys() { return RoutingKeys.EMPTY; }
 
     default KeyHistory keyHistory() { return NONE; }

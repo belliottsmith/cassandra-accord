@@ -225,14 +225,14 @@ public interface CoordinationAdapter<R>
                 this.preacceptTrackerFactory = preacceptTrackerFactory;
             }
 
-            abstract Topologies forDecision(Node node, FullRoute<?> route, TxnId txnId);
+            abstract Topologies forDecision(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt);
             abstract Topologies forExecution(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Deps deps);
             abstract void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super R, Throwable> callback);
 
             @Override
             public void propose(Node node, Topologies any, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
-                Topologies all = forDecision(node, route, txnId);
+                Topologies all = forDecision(node, route, txnId, executeAt);
                 new ProposeSyncPoint<>(this, node, all, route, kind, ballot, txnId, txn, executeAt, deps, callback).start();
             }
 
@@ -269,7 +269,7 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            Topologies forDecision(Node node, FullRoute<?> route, TxnId txnId)
+            Topologies forDecision(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt)
             {
                 return node.topology().withOpenEpochs(route, null, txnId);
             }
@@ -316,14 +316,13 @@ public interface CoordinationAdapter<R>
         {
             protected AbstractInclusiveSyncPointAdapter()
             {
-                // TODO (required): this is only safe if SyncPoint is visible to other transactions
                 super(FastPathTracker::new);
             }
 
             @Override
-            Topologies forDecision(Node node, FullRoute<?> route, TxnId txnId)
+            Topologies forDecision(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt)
             {
-                return node.topology().withUnsyncedEpochs(route, txnId, txnId);
+                return node.topology().withUnsyncedEpochs(route, txnId, executeAt);
             }
 
             @Override

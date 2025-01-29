@@ -57,7 +57,6 @@ import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
-import accord.primitives.Routable;
 import accord.primitives.Route;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
@@ -75,6 +74,7 @@ import org.mockito.stubbing.Answer;
 
 import static accord.Utils.createNode;
 import static accord.Utils.id;
+import static accord.primitives.Routable.Domain.Key;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Utils.listOf;
 import static accord.utils.async.AsyncChains.getUninterruptibly;
@@ -96,7 +96,7 @@ class ReadDataTest
         MessageSink sink = Mockito.mock(MessageSink.class);
         Node node = createNode(ID1, TOPOLOGY, sink, new MockCluster.Clock(100));
 
-        TxnId txnId = node.nextTxnId(Txn.Kind.Write, Routable.Domain.Key);
+        TxnId txnId = node.nextTxnId(Txn.Kind.Write, Key);
         Keys keys = Keys.of(IntKey.key(1), IntKey.key(43));
 
         AsyncResults.SettableResult<Data> readResult = new AsyncResults.SettableResult<>();
@@ -146,7 +146,7 @@ class ReadDataTest
     {
         // status=Commit, will listen waiting for ReadyToExecute; obsolete marked by status listener
         test(state -> {
-            state.forEach(store -> check(store.execute(PreLoadContext.contextFor(state.txnId, state.route), safe -> {
+            state.forEach(store -> check(store.build(PreLoadContext.contextFor(state.txnId, state.route), safe -> {
                 CheckedCommands.preaccept(safe, state.txnId, state.partialTxn, state.route);
                 CheckedCommands.accept(safe, state.txnId, Ballot.ZERO, state.partialRoute, state.executeAt, state.deps);
 
@@ -183,7 +183,7 @@ class ReadDataTest
             state.readyToExecute(store);
 
             store = stores.get(1);
-            check(store.execute(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
+            check(store.build(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
                 StoreParticipants participants = StoreParticipants.notAccept(safeStore, state.route, state.txnId);
                 SafeCommand safeCommand = safeStore.get(state.txnId, participants);
                 Command prev = safeCommand.current();
@@ -201,7 +201,7 @@ class ReadDataTest
     {
         test(state -> {
             List<CommandStore> stores = stores(state);
-            stores.forEach(store -> check(store.execute(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
+            stores.forEach(store -> check(store.build(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
                 StoreParticipants participants = StoreParticipants.notAccept(safeStore, state.route, state.txnId);
                 SafeCommand command = safeStore.get(state.txnId, participants);
                 command.commitInvalidated(safeStore);
@@ -270,7 +270,7 @@ class ReadDataTest
 
         void readyToExecute(CommandStore store)
         {
-            check(store.execute(PreLoadContext.contextFor(txnId, route), safe -> {
+            check(store.build(PreLoadContext.contextFor(txnId, route), safe -> {
                 CheckedCommands.preaccept(safe, txnId, partialTxn, route);
                 CheckedCommands.accept(safe, txnId, Ballot.ZERO, partialRoute, executeAt, deps);
                 CheckedCommands.commit(safe, SaveStatus.Stable, Ballot.ZERO, txnId, route, partialTxn, executeAt, deps);
@@ -294,7 +294,7 @@ class ReadDataTest
             Mockito.when(write.apply(any(), any(), any(), any(), any(), any())).thenReturn(writeResult);
             Writes writes = new Writes(txnId, executeAt, keys, write);
 
-            forEach(store -> check(store.execute(PreLoadContext.contextFor(txnId, route), safe -> {
+            forEach(store -> check(store.build(PreLoadContext.contextFor(txnId, route), safe -> {
                 CheckedCommands.apply(safe, txnId, route, executeAt, deps, partialTxn, writes, Mockito.mock(Result.class));
             })));
             return writeResult;

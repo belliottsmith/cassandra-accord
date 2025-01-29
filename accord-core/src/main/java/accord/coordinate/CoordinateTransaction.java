@@ -64,7 +64,7 @@ import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.local.Commands.AcceptOutcome.Success;
 import static accord.primitives.Timestamp.Flag.REJECTED;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 /**
@@ -148,7 +148,6 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         return Adapters.standard();
     }
 
-    // TODO (expected): override in C* rather than default to configurability here
     protected CoordinationAdapter<Result> executeAdapter()
     {
         return node.coordinationAdapter(txnId, Standard);
@@ -201,7 +200,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                     // TODO (desired): we can probably still process and record fast path votes from peers, just with different quorum requirements
                     boolean hasCoordinatorVote = txnId.equals(ok.witnessedAt);
                     if (!hasCoordinatorVote) fastPathEnabled = false;
-                    Deps deps = hasCoordinatorVote && txnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS) ? ok.deps : null;
+                    Deps deps = hasCoordinatorVote && txnId.is(PrivilegedCoordinatorWithDeps) ? ok.deps : null;
                     onSuccess(node.id(), ok);
                     for (Node.Id id : topologies.nodes())
                     {
@@ -225,7 +224,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             SafeCommand safeCommand = safeStore.get(txnId, participants);
 
             Deps deps;
-            if (txnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS))
+            if (txnId.is(PrivilegedCoordinatorWithDeps))
             {
                 deps = PreAccept.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, true);
                 if (deps == null)

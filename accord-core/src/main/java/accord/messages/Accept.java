@@ -173,7 +173,6 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
         public final AcceptOutcome outcome;
         public final Ballot supersededBy;
-        // TODO (expected): only send back deps that weren't in those we received
         public final @Nullable Deps deps;
         public final @Nullable Timestamp committedExecuteAt;
 

@@ -45,6 +45,11 @@ public class TinyEnumSet<E extends Enum<E>>
         return bitset;
     }
 
+    public static <E extends Enum<E>> int encode(Enum<E> value)
+    {
+        return 1 << value.ordinal();
+    }
+
     public static <E extends Enum<E>> boolean contains(int bitset, E value)
     {
         return contains(bitset, value.ordinal());
@@ -64,7 +69,6 @@ public class TinyEnumSet<E extends Enum<E>>
     {
         return contains(bitset, ordinal);
     }
-
 
     public TinyEnumSet<E> or(TinyEnumSet<E> or)
     {

@@ -389,6 +389,7 @@ public class Pruning
 
                     case INVALIDATED:
                     case PRUNED:
+                    case ERASED:
                         break;
                 }
             }

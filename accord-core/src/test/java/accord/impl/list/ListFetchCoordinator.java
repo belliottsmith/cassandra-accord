@@ -25,7 +25,6 @@ import java.util.function.Function;
 import accord.api.Data;
 import accord.api.DataStore;
 import accord.impl.AbstractFetchCoordinator;
-import accord.impl.InMemoryCommandStore;
 import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.PreLoadContext;
@@ -64,7 +63,7 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
             return;
 
         ListData listData = (ListData) data;
-        persisting.add(commandStore.execute(PreLoadContext.empty(), safeStore -> {
+        persisting.add(commandStore.build(PreLoadContext.empty(), safeStore -> {
             listData.forEach((key, value) -> listStore.writeUnsafe(key, value));
         }).flatMap(ignore -> listStore.snapshot(true, received, syncPoint.syncId)).addCallback((success, fail) -> {
             if (fail == null) success(from, received);
@@ -75,9 +74,6 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
     @Override
     protected ListFetchRequest newFetchRequest(long sourceEpoch, TxnId syncId, Ranges ranges, PartialDeps partialDeps, PartialTxn partialTxn)
     {
-        if (((ListAgent)node.agent()).collectMaxApplied())
-            return new CollectMaxAppliedFetchRequest(sourceEpoch, syncId, ranges, partialDeps, partialTxn);
-
         return new ListFetchRequest(sourceEpoch, syncId, ranges, partialDeps, partialTxn);
     }
 
@@ -93,43 +89,6 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
         {
             readStarted(safeStore, unavailable);
             return super.beginRead(safeStore, executeAt, txn, unavailable);
-        }
-    }
-
-    static class CollectMaxAppliedFetchRequest extends ListFetchRequest
-    {
-        private transient Timestamp maxApplied;
-
-        public CollectMaxAppliedFetchRequest(long sourceEpoch, TxnId syncId, Ranges ranges, PartialDeps partialDeps, PartialTxn partialTxn)
-        {
-            super(sourceEpoch, syncId, ranges, partialDeps, partialTxn);
-        }
-
-        @Override
-        protected void readStarted(SafeCommandStore safeStore, Ranges unavailable)
-        {
-            CommandStore commandStore = safeStore.commandStore();
-            Ranges slice = safeStore.ranges().allAt(txnId).without(unavailable);
-            ((InMemoryCommandStore)commandStore).maxAppliedFor(scope, slice).begin((newMaxApplied, failure) -> {
-                if (failure != null)
-                {
-                    commandStore.agent().onUncaughtException(failure);
-                }
-                else
-                {
-                    synchronized (this)
-                    {
-                        if (maxApplied == null) maxApplied = newMaxApplied;
-                        else maxApplied = Timestamp.max(maxApplied, newMaxApplied);
-                    }
-                }
-            });
-        }
-
-        @Override
-        protected Timestamp safeToReadAfter()
-        {
-            return maxApplied;
         }
     }
 }

@@ -266,7 +266,6 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
 
     public static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, StoreParticipants participants, EpochSupplier minEpoch, Timestamp executeAt, boolean nullIfRedundant)
     {
-        // TODO (expected): do not build covering ranges; no longer especially valuable given use of FullRoute
         // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
         try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder(true);
              RangeDeps.BuilderByRange redundantBuilder = RangeDeps.builderByRange())
@@ -288,7 +287,6 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                                     in.add(keyOrRange, testTxnId);
                                 }, executeAt.equals(txnId) ? null : txnId, builder);
 
-            // TODO (required): make sure any sync point is in the past
             Deps result = builder.build();
             result = new Deps(result.keyDeps, result.rangeDeps.with(redundant), result.directKeyDeps);
             Invariants.require(!result.contains(txnId));

@@ -308,7 +308,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         }
 
         // loop over any range covered by both
-        // TODO (expected): optimise merging of very different sized maps (i.e. for inserts)
+        // TODO (desired): optimise merging of very different sized maps (i.e. for inserts)
         while (left.hasCurrent() && right.hasCurrent())
         {
             int cmp = left.end().compareTo(right.end());

@@ -72,7 +72,6 @@ import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.Command.PreAccepted.preaccepted;
 import static accord.local.Command.Truncated.erased;
 import static accord.local.Command.Truncated.invalidated;
-import static accord.local.Command.Truncated.truncatedApply;
 import static accord.local.Command.Truncated.vestigial;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
@@ -425,9 +424,9 @@ public class CommandChange
             {
                 default: throw new UnhandledEnum(status);
                 case TruncatedApplyWithOutcome:
-                case TruncatedApplyWithDeps:
                 case TruncatedApply:
-                    return truncatedApply(txnId, status, durability, participants, executeAt, writes, result, executesAtLeast);
+                case TruncatedUnapplied:
+                    return Command.Truncated.truncated(txnId, status, durability, participants, executeAt, writes, result, executesAtLeast);
                 case Vestigial:
                     return vestigial(txnId, participants);
                 case Erased:

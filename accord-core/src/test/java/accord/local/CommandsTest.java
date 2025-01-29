@@ -56,6 +56,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static accord.Utils.listWriteTxn;
+import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Property.qt;
 import static accord.utils.Utils.addAll;
 
@@ -95,7 +96,7 @@ class CommandsTest
                     Keys keys = Keys.of(Gens.lists(keyGen).unique().ofSizeBetween(1, 10).next(rs));
                     Txn txn = listWriteTxn(from, keys);
 
-                    TxnId txnId = node.nextTxnId(Txn.Kind.Write, Routable.Domain.Key);
+                    TxnId txnId = node.nextTxnId(Write, Routable.Domain.Key);
 
                     for (Node n : nodeMap.values())
                         ((TestableConfigurationService) n.configService()).reportTopology(updatedTopology);

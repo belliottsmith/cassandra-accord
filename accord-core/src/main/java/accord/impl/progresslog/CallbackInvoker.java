@@ -82,7 +82,7 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>
             callback.callback(safeStore, safeCommand, owner, txnId, param, success, fail);
             owner.undebugActive(this);
 
-        }).begin(owner.commandStore.agent());
+        }, owner.commandStore.agent());
     }
 
     @Override

@@ -34,9 +34,9 @@ import javax.annotation.Nonnull;
 import java.util.function.BiFunction;
 
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.*;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
-import static accord.primitives.TxnId.FastPath.UNOPTIMISED;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
+import static accord.primitives.TxnId.FastPath.Unoptimised;
 
 // TODO (desired, efficiency): if any shard *cannot* take the fast path, and all shards have accepted, terminate
 public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathShardTracker>
@@ -246,9 +246,9 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
         switch (txnId.fastPath())
         {
             default: throw new UnhandledEnum(txnId.fastPath());
-            case UNOPTIMISED: return (i, s) -> create(UNOPTIMISED, i, s);
-            case PRIVILEGED_COORDINATOR_WITHOUT_DEPS: return (i, s) -> create(PRIVILEGED_COORDINATOR_WITHOUT_DEPS, i, s);
-            case PRIVILEGED_COORDINATOR_WITH_DEPS: return (i, s) -> create(PRIVILEGED_COORDINATOR_WITH_DEPS, i, s);
+            case Unoptimised: return (i, s) -> create(Unoptimised, i, s);
+            case PrivilegedCoordinatorWithoutDeps: return (i, s) -> create(PrivilegedCoordinatorWithoutDeps, i, s);
+            case PrivilegedCoordinatorWithDeps: return (i, s) -> create(PrivilegedCoordinatorWithDeps, i, s);
         }
     }
 

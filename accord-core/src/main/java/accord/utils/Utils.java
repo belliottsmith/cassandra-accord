@@ -152,6 +152,18 @@ public class Utils
         }
     }
 
+    public static void shuffle(Object[] array, RandomSource rs)
+    {
+        for (int i = array.length; i > 1; i--)
+        {
+            int j = i - 1;
+            int k = rs.nextInt(j);
+            Object tmp = array[j];
+            array[j] = array[k];
+            array[k] = tmp;
+        }
+    }
+
     public static <A, B> B reduce(B zero,
                                   Iterable<A> input,
                                   Predicate<A> filter,

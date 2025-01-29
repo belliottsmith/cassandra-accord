@@ -23,33 +23,35 @@ import java.util.Arrays;
 
 import javax.annotation.Nonnull;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.primitives.Ints;
 
 import accord.api.RoutingKey;
+import accord.local.Node.Id;
 import accord.local.RedundantBefore;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.local.cfk.CommandsForKey.InternalStatus;
 import accord.local.cfk.CommandsForKey.TxnInfoExtra;
 import accord.local.cfk.CommandsForKey.Unmanaged;
-import accord.local.Node;
 import accord.primitives.Ballot;
-import accord.primitives.Routable.Domain;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.BitUtils;
 import accord.utils.Invariants;
-import accord.utils.UnhandledEnum;
 import accord.utils.VIntCoding;
 
 import static accord.local.cfk.CommandsForKey.NO_BOUNDS_INFO;
 import static accord.local.cfk.CommandsForKey.NO_PENDING_UNMANAGED;
+import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.primitives.TxnId.MediumPath.TRACK_STABLE;
-import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.primitives.Txn.Kind.Read;
-import static accord.primitives.Txn.Kind.SyncPoint;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
+import static accord.primitives.TxnId.MediumPath.TrackStable;
+import static accord.primitives.TxnId.NO_TXNIDS;
+import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.ArrayBuffers.cachedInts;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
 import static accord.utils.BitUtils.flushBits;
@@ -64,7 +66,6 @@ import static accord.utils.VIntCoding.sizeOfVInt;
 
 public class Serialize
 {
-    private static final int RAW_FLAG_BITS = 0;
     private static final int TIMESTAMP_BASE_SIZE = 16;
     private static final InternalStatus[] DECODE_STATUS = InternalStatus.values();
 
@@ -76,8 +77,6 @@ public class Serialize
     private static final int HAS_BALLOT_HEADER_BIT_SHIFT = 2;
     private static final int HAS_STATUS_OVERRIDES_HEADER_BIT = 0x8;
     private static final int HAS_STATUS_OVERRIDES_HEADER_BIT_SHIFT = 3;
-    private static final int HAS_NON_STANDARD_FLAGS_HEADER_BIT = 0x10;
-    private static final int HAS_NON_STANDARD_FLAGS_HEADER_BIT_SHIFT = 4;
     private static final int COMMAND_HEADER_BIT_FLAGS_MASK = 0x1f;
     private static final int HAS_BOOTSTRAPPED_AT_HEADER_BIT = 0x20;
     private static final int HAS_BOUNDS_FLAGS_HEADER_BIT = 0x40;
@@ -126,10 +125,10 @@ public class Serialize
      * as we can encode a single bit stream with the optimal number of bits.
      * TODO (desired): we could prefix this collection with the subset of TxnId that are actually missing from any other
      *   deps, so as to shrink this collection much further.
+     * TODO (desired): offer filtering option that does not need to reconstruct objects/info, reusing prior encoding decisions
+     * TODO (desired): accept new redundantBefore on load to avoid deserializing stale data
+     * TODO (desired): determine timestamp resolution as a factor of 10
      */
-    // TODO (expected): offer filtering option that does not need to reconstruct objects/info, reusing prior encoding decisions
-    // TODO (expected): accept new redundantBefore on load to avoid deserializing stale data
-    // TODO (desired): determine timestamp resolution as a factor of 10
     public static ByteBuffer toBytesWithoutKey(CommandsForKey cfk)
     {
         Invariants.requireArgument(!cfk.isLoadingPruned());
@@ -161,7 +160,6 @@ public class Serialize
             // first compute the unique Node Ids and some basic characteristics of the data, such as
             // whether we have any missing transactions to encode, any executeAt that are not equal to their TxnId
             // and whether there are any non-standard flag bits to encode
-            boolean hasExtendedFlags = false;
             int nodeIdCount, missingIdCount = 0, executeAtCount = 0, ballotCount = 0, overrideCount = 0;
             int bitsPerExecuteAtEpoch = 0, bitsPerExecuteAtFlags = 0, bitsPerExecuteAtHlc = 1; // to permit us to use full 64 bits and encode in 5 bits we force at least one hlc bit
             {
@@ -184,7 +182,6 @@ public class Serialize
                     TxnInfo txn = cfk.get(i);
                     Invariants.require(!txn.is(InternalStatus.PRUNED));
                     overrideCount += txn.statusOverrides();
-                    hasExtendedFlags |= hasExtendedFlags(txn);
                     nodeIds[nodeIdCount++] = txn.node.id;
 
                     if (txn.executeAt != txn)
@@ -231,7 +228,7 @@ public class Serialize
             // We can now use this information to calculate the fixed header size, compute the amount
             // of additional space we'll need to store the TxnId and its basic info
             int bitsPerNodeId = numberOfBitsToRepresent(nodeIdCount);
-            int minHeaderBits = 9 + bitsPerNodeId + (hasExtendedFlags ? 1 : 0) + (overrideCount > 0 ? 1 : 0);
+            int minHeaderBits = 10 + bitsPerNodeId + (overrideCount > 0 ? 1 : 0);
             int headerFlags = (executeAtCount > 0 ? 1 : 0)
                             | (missingIdCount > 0 ? 2 : 0)
                             | (ballotCount > 0 ? 4 : 0);
@@ -241,6 +238,7 @@ public class Serialize
 
             int prunedBeforeIndex = cfk.prunedBefore().equals(TxnId.NONE) ? -1 : cfk.indexOf(cfk.prunedBefore());
 
+            long flagHistory = EMPTY_FLAG_HISTORY;
             long prevEpoch = cfk.redundantBefore().epoch();
             long prevHlc = cfk.redundantBefore().hlc();
             int[] bytesHistogram = cachedInts().getInts(12);
@@ -277,8 +275,11 @@ public class Serialize
                     prevHlc = hlc;
                 }
 
-                if (txnIdFlagsBits(txn, hasExtendedFlags) == RAW_FLAG_BITS)
-                    totalBytes += 2;
+                int flags = txn.flags();
+                int encodedFlagBits = encodedFlagBits(flags, flagHistory);
+                flagHistory = updateFlagHistory(flags, encodedFlagBits, flagHistory);
+                if (encodedFlagBits < 2)
+                    totalBytes += 1 + encodedFlagBits;
 
                 if (txn.hasExecuteAt())
                     headerBits += headerFlags & 0x1;
@@ -304,7 +305,6 @@ public class Serialize
             int globalFlags =   (missingIdCount          > 0  ? HAS_MISSING_DEPS_HEADER_BIT       : 0)
                               | (executeAtCount          > 0  ? HAS_EXECUTE_AT_HEADER_BIT         : 0)
                               | (ballotCount             > 0  ? HAS_BALLOT_HEADER_BIT             : 0)
-                              | (hasExtendedFlags             ? HAS_NON_STANDARD_FLAGS_HEADER_BIT : 0)
                               | (overrideCount           > 0  ? HAS_STATUS_OVERRIDES_HEADER_BIT   : 0)
                               | (cfk.bootstrappedAt() != null ? HAS_BOOTSTRAPPED_AT_HEADER_BIT    : 0)
                               | (hasBoundsFlags(cfk)          ? HAS_BOUNDS_FLAGS_HEADER_BIT       : 0)
@@ -470,7 +470,8 @@ public class Serialize
             }
             VIntCoding.writeUnsignedVInt32(prunedBeforeIndex + 1, out);
 
-            int flagsPlus = (globalFlags & COMMAND_HEADER_BIT_FLAGS_MASK) + (2 << HAS_NON_STANDARD_FLAGS_HEADER_BIT_SHIFT);
+            flagHistory = EMPTY_FLAG_HISTORY;
+            int flagsPlus = globalFlags & COMMAND_HEADER_BIT_FLAGS_MASK;
             // TODO (desired): check this loop compiles correctly to only branch on epoch case, for binarySearch and flushing
             for (int i = 0 ; i < commandCount ; ++i)
             {
@@ -499,10 +500,14 @@ public class Serialize
                 bits |= hasBallot << bitIndex;
                 bitIndex += statusHasBallot & (flagsPlus >>> HAS_BALLOT_HEADER_BIT_SHIFT);
 
-                long flagBits = txnIdFlagsBits(txn, hasExtendedFlags);
-                boolean writeFullFlags = flagBits == RAW_FLAG_BITS;
-                bits |= flagBits << bitIndex;
-                bitIndex += flagsPlus >>> HAS_NON_STANDARD_FLAGS_HEADER_BIT_SHIFT;
+                int encodedFlagBits;
+                {
+                    int flags = txn.flags();
+                    encodedFlagBits = encodedFlagBits(flags, flagHistory);
+                    flagHistory = updateFlagHistory(flags, encodedFlagBits, flagHistory);
+                    bits |= (long)encodedFlagBits << bitIndex;
+                    bitIndex += 3;
+                }
 
                 long hlcBits;
                 int extraEpochDeltaBytes = 0;
@@ -555,8 +560,12 @@ public class Serialize
                 writeLeastSignificantBytes(bits, headerBytes, out);
                 writeLeastSignificantBytes(hlcBits, getHlcBytes(hlcBytesLookup, hlcFlag), out);
 
-                if (writeFullFlags)
-                    out.putShort((short)txn.flags());
+                if (encodedFlagBits < 2)
+                {
+                    int flags = txn.flags();
+                    if (encodedFlagBits == 0) out.put((byte)flags);
+                    else out.putShort((short)flags);
+                }
 
                 if (extraEpochDeltaBytes > 0)
                 {
@@ -725,23 +734,22 @@ public class Serialize
         int nodeIdCount = VIntCoding.readUnsignedVInt32(in);
         int bitsPerNodeId = numberOfBitsToRepresent(nodeIdCount);
         long nodeIdMask = (1L << bitsPerNodeId) - 1;
-        Node.Id[] nodeIds = new Node.Id[nodeIdCount]; // TODO (expected): use a shared reusable scratch buffer
+        Object[] nodeIds = cachedAny().get(nodeIdCount);
         {
             int prev = VIntCoding.readUnsignedVInt32(in);
-            nodeIds[0] = new Node.Id(prev);
+            nodeIds[0] = new Id(prev);
             for (int i = 1 ; i < nodeIdCount ; ++i)
-                nodeIds[i] = new Node.Id(prev += VIntCoding.readUnsignedVInt32(in));
+                nodeIds[i] = new Id(prev += VIntCoding.readUnsignedVInt32(in));
         }
 
         int globalFlags = (int) readLeastSignificantBytes(3, in);
-        int txnIdFlagsMask;
         int headerByteCount, hlcBytesLookup;
         {
-            txnIdFlagsMask = 0 != (globalFlags & HAS_NON_STANDARD_FLAGS_HEADER_BIT) ? 7 : 3;
             headerByteCount = 1 + ((globalFlags >>> 14) & 0x3);
             hlcBytesLookup = setHlcByteDeltas((globalFlags >>> 16) & 0x3, (globalFlags >>> 18) & 0x3, (globalFlags >>> 20) & 0x3, (globalFlags >>> 22) & 0x3);
         }
 
+        long flagHistory = EMPTY_FLAG_HISTORY;
         RedundantBefore.Entry boundsInfo;
         long prevEpoch, prevHlc, maxUniqueHlc = 0;
         {
@@ -759,7 +767,7 @@ public class Serialize
             prevHlc = VIntCoding.readUnsignedVInt(in);
             {
                 int flags = ((globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT) == 0) ? RX_FLAGS : VIntCoding.readUnsignedVInt32(in);
-                Node.Id node = nodeIds[VIntCoding.readUnsignedVInt32(in)];
+                Id node = (Id)nodeIds[VIntCoding.readUnsignedVInt32(in)];
                 boundsInfo = boundsInfo.withGcBeforeBeforeAtLeast(TxnId.fromValues(prevEpoch, prevHlc, flags, node));
             }
             if (0 != (globalFlags & HAS_BOOTSTRAPPED_AT_HEADER_BIT))
@@ -767,7 +775,7 @@ public class Serialize
                 long epoch = prevEpoch + VIntCoding.readUnsignedVInt(in);
                 long hlc = prevHlc + VIntCoding.readVInt(in);
                 int flags = ((globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT) == 0) ? RX_FLAGS : VIntCoding.readUnsignedVInt32(in);
-                Node.Id node = nodeIds[VIntCoding.readUnsignedVInt32(in)];
+                Id node = (Id)nodeIds[VIntCoding.readUnsignedVInt32(in)];
                 boundsInfo = boundsInfo.withBootstrappedAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
             }
             if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
@@ -803,12 +811,8 @@ public class Serialize
                 commandFlags[i] = commandDecodeFlags;
             }
 
-            Txn.Kind kind; Domain domain; {
-                int flags = (int)header & txnIdFlagsMask;
-                kind = kindLookup(flags);
-                domain = domainLookup(flags);
-            }
-            header >>>= Integer.bitCount(txnIdFlagsMask);
+            int encodedFlags = (int)header & 7;
+            header >>>= 3;
 
             boolean hlcIsNegative = false;
             long epoch = prevEpoch;
@@ -834,7 +838,7 @@ public class Serialize
                 }
             }
 
-            Node.Id node = nodeIds[(int)(header & nodeIdMask)];
+            Id node = (Id)nodeIds[(int)(header & nodeIdMask)];
             header >>>= bitsPerNodeId;
 
             int readHlcBytes = getHlcBytes(hlcBytesLookup, (int)(header & 0x3));
@@ -851,13 +855,19 @@ public class Serialize
                 hlc = -1-hlc;
             hlc += prevHlc;
 
-            int flags = kind != null ? 0 : in.getShort();
+            int decodedFlags;
+            switch (encodedFlags)
+            {
+                case 0: decodedFlags = in.get() & 0xff; break;
+                case 1: decodedFlags = in.getShort() & 0xffff; break;
+                default: decodedFlags = selectFlagHistory(encodedFlags, flagHistory);
+            }
             if (readEpochBytes > 0)
                 epoch += readEpochBytes == 1 ? (in.get() & 0xff) : in.getInt();
 
-            // TODO (required): efficiently encode medium path / coordinator optimisation Flag
-            txnIds[i] = kind != null ? new TxnId(epoch, hlc, 0, kind, domain, node)
-                                     : TxnId.fromValues(epoch, hlc, flags, node);
+            TxnId txnId = TxnId.fromValues(epoch, hlc, decodedFlags, node);
+            txnIds[i] = txnId;
+            flagHistory = updateFlagHistory(decodedFlags, encodedFlags, flagHistory);
 
             prevEpoch = epoch;
             prevHlc = hlc;
@@ -925,7 +935,7 @@ public class Serialize
                 {
                     long epoch, hlc;
                     int flags;
-                    Node.Id id;
+                    Id id;
                     if (bitsPerExecuteAt <= 64)
                     {
                         long executeAtBits = reader.read(bitsPerExecuteAt, in);
@@ -935,14 +945,14 @@ public class Serialize
                         executeAtBits >>>= bitsPerExecuteAtHlc;
                         flags = (int)(executeAtBits & executeAtFlagsMask);
                         executeAtBits >>>= bitsPerExecuteAtFlags;
-                        id = nodeIds[(int)(executeAtBits & nodeIdMask)];
+                        id = (Id)nodeIds[(int)(executeAtBits & nodeIdMask)];
                     }
                     else
                     {
                         epoch = txnId.epoch() + reader.read(bitsPerExecuteAtEpoch, in);
                         hlc = txnId.hlc() + reader.read(bitsPerExecuteAtHlc, in);
                         flags = (int) reader.read(bitsPerExecuteAtFlags, in);
-                        id = nodeIds[(int)(reader.read(bitsPerNodeId, in))];
+                        id = (Id)nodeIds[(int)(reader.read(bitsPerNodeId, in))];
                     }
                     executeAt = Timestamp.fromValues(epoch, hlc, flags, id);
                 }
@@ -976,14 +986,14 @@ public class Serialize
                     {
                         long msb = reader.read(64, in);
                         long lsb = reader.read(64, in);
-                        Node.Id id = nodeIds[(int)(reader.read(bitsPerNodeId, in))];
+                        Id id = (Id)nodeIds[(int)(reader.read(bitsPerNodeId, in))];
                         ballot = Ballot.fromBits(msb, lsb, id);
                     }
                     else
                     {
                         long epoch, hlc;
                         int flags;
-                        Node.Id id;
+                        Id id;
                         if (bitsPerBallot <= 64)
                         {
                             long ballotBits = reader.read(bitsPerBallot, in);
@@ -993,14 +1003,14 @@ public class Serialize
                             ballotBits >>>= bitsPerBallotHlc;
                             flags = (int)(ballotBits & ballotFlagsMask);
                             ballotBits >>>= bitsPerBallotFlags;
-                            id = nodeIds[(int)(ballotBits & nodeIdMask)];
+                            id = (Id)nodeIds[(int)(ballotBits & nodeIdMask)];
                         }
                         else
                         {
                             epoch = prevBallot.epoch() + decodeZigZag64(reader.read(bitsPerBallotEpoch, in));
                             hlc = prevBallot.hlc() + decodeZigZag64(reader.read(bitsPerBallotHlc, in));
                             flags = (int) reader.read(bitsPerBallotFlags, in);
-                            id = nodeIds[(int)(reader.read(bitsPerNodeId, in))];
+                            id = (Id)nodeIds[(int)(reader.read(bitsPerNodeId, in))];
                         }
                         ballot = Ballot.fromValues(epoch, hlc, flags, id);
                     }
@@ -1028,7 +1038,7 @@ public class Serialize
             }
         }
         cachedTxnIds().forceDiscard(txnIds, commandCount);
-
+        cachedAny().forceDiscard(nodeIds, nodeIdCount);
         return CommandsForKey.SerializerSupport.create(key, txns, maxUniqueHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], boundsInfo);
     }
 
@@ -1069,7 +1079,7 @@ public class Serialize
         return (bootstrappedAt != null && bootstrappedAt.flags() != RX_FLAGS) || (redundantBefore.flags() != RX_FLAGS);
     }
 
-    private static final int RX_FLAGS = new TxnId(0, 0, TRACK_STABLE.bits, ExclusiveSyncPoint, Domain.Range, Node.Id.NONE).flags();
+    private static final int RX_FLAGS = new TxnId(0, 0, TrackStable.bit(), ExclusiveSyncPoint, Range, Id.NONE).flags();
 
     private static int hlcBytesLookupToHlcFlagLookup(int bytesLookup)
     {
@@ -1098,83 +1108,111 @@ public class Serialize
         return count;
     }
 
-    private static boolean hasExtendedFlags(TxnId txnId)
+    // a static initial flag history that may capture some of the more common flags
+    // TODO (desired): let the implementation define this, or encode a compressed set of flags in an initial bit mask
+    static final long EMPTY_FLAG_HISTORY;
+    static
     {
-        if (txnId.flags() > Timestamp.KIND_AND_DOMAIN_FLAGS)
-            return false; // will be encoded raw, so not non-standard
+        long empty = 0L;
+        empty |=        new TxnId(0, 0, TrackStable.bit() | PrivilegedCoordinatorWithoutDeps.bits, Read, Key, SingleKey, Id.NONE).flags();
+        empty |= (long) new TxnId(0, 0, TrackStable.bit(), Read, Key, Id.NONE).flags() << 9;
+        empty |= (long) new TxnId(0, 0, TrackStable.bit() | PrivilegedCoordinatorWithoutDeps.bits, Write, Key, SingleKey, Id.NONE).flags() << 18;
+        empty |= (long) new TxnId(0, 0, TrackStable.bit(), Write, Key, SingleKey, Id.NONE).flags() << 27;
+        empty |= (long) new TxnId(0, 0, TrackStable.bit(), Write, Key, Id.NONE).flags() << 36;
+        empty |= (long) new TxnId(0, 0, TrackStable.bit(), ExclusiveSyncPoint, Range, Id.NONE).flags() << 45;
+        EMPTY_FLAG_HISTORY = empty;
+    }
 
-        int flagBits = txnIdFlagsBits(txnId, true);
-        return flagBits > 3;
+    private static final long MATCH_MASK1 = replicateMatchBits(0x0ff);
+    private static final long MATCH_INCR  = replicateMatchBits(0x001);
+    private static final long MATCH_MASK2 = replicateMatchBits(0x100);
+    private static final long MAP_FLAG_BITS = 2L  | (3L << 9) | (4L << 18) | (5L << 27) | (6L << 36) | (7L << 45);
+
+    // copy the provided 8 bits into bit positions 9, 18, 27, 36 and 45
+    private static long replicateMatchBits(long flags)
+    {
+        flags = flags | (flags << 9) | (flags << 18); // duplicate the flag values so they occur at both position 0 and 9
+        return flags | (flags << 27);    // duplicate the flag values so they occur at both position 0, 9, 18, 27, 36, 45
+    }
+
+    // OR all 8 bits at each bit position 0, 9, 18, 27, 36 and 45 into position 0
+    private static long collapseMatchBits(long flags)
+    {
+        flags = flags | (flags >>> 9) | (flags >>> 18);
+        return flags | (flags >>> 27);
     }
 
     /**
-     * 0 => write full flags
-     * 1 => KR (Key Read)
-     * 2 => KW (Key Write)
-     * 3 => KS (Key SyncPoint)
-     * 4 => RR (Range Read)
-     * 5 => RX (Range Exclusive SyncPoint)
-     * 6, 7 => UNUSED
+     * The bits we write to the output to encode the input flags.
+     * If the flags are equal to any of the flagHistory entries, we encode the relevant index (plus 2);
+     * otherwise we encode how many bytes (1 or 2) we must read (as 0 or 1).
+     *
+     * 0 => write 1 byte flags
+     * 1 => write 2 byte flags
+     * 2 to 6 => index into the flagHistory for a recently encoded 1-byte flag
      */
-    private static int txnIdFlagsBits(TxnId txnId, boolean extended)
+    @VisibleForTesting
+    static int encodedFlagBits(int flags, long flagHistory)
     {
-        // TODO (required): we expect to almost always have more flags than this, so optimise handling
-        if (txnId.flags() > Timestamp.KIND_AND_DOMAIN_FLAGS)
-            return 0;
+        if (flags > 0xff)
+            return 1;
 
-        Txn.Kind kind = txnId.kind();
-        Domain domain = txnId.domain();
-        switch (domain)
+        long flagMask = replicateMatchBits(flags);      // duplicate the flag values so they occur at both position 0, 9, 18, 27, 36, 45
+        long matches = ~flagHistory ^ flagMask;         // set 0xff if either history position is equal to the current flags value
+        matches &= MATCH_MASK1;                         // clear any unrelated bits, so we can use integer overflow
+        matches += MATCH_INCR;                          // increment by 1 - if 0xff was set ONLY, this will overflow to the next higher bit
+        matches &= MATCH_MASK2;                         // clear all but these overflow bits (if any)
+        matches -= matches >>> 8;                       // subtract the overflow bit from itself shifted down by 8 - this will set 0xff in the correct position
+        matches &= MAP_FLAG_BITS;                       // apply all potential masks simultaneously to the relevant decodeBits positions - only one is set (assuming no duplicate flag history entry)
+        return (int) collapseMatchBits(matches) & 0xff; // collapse all 6 possible match positions into an answer (only one will be non-zero)
+    }
+
+    // update the flag history register, moving any decoded value into the most recent position and shifting all
+    // values that were previously more recent back by one
+    static long updateFlagHistory(int flags, int encoded, long flagHistory)
+    {
+        switch (encoded)
         {
-            case Key:
-                switch (kind)
-                {
-                    case Read: return 1;
-                    case Write: return 2;
-                    case SyncPoint: return 3;
-                    default: return 0;
-                }
-            case Range:
-                if (!extended)
-                    return 0;
-
-                switch (kind)
-                {
-                    case Read: return 4;
-                    case ExclusiveSyncPoint: return 5;
-                    default: return 0;
-                }
-            default: throw new UnhandledEnum(domain);
+            case 0:
+            case 7: // we're evicting least recently used
+                flagHistory <<= 9;
+                flagHistory |= flags;
+            case 2: // have re-used most recent value
+                return flagHistory;
+            default:
+                long mask = -1L << flagHistoryShift(encoded + 1);
+                flagHistory = (flagHistory & mask) | ((flagHistory << 9) & ~mask);
+                flagHistory |= flags;
+                return flagHistory;
         }
     }
 
-    private static Domain domainLookup(int flags)
+    static int selectFlagHistory(int encoded, long flagHistory)
     {
-        return flags < 4 ? Domain.Key : Domain.Range;
+        return (int) ((flagHistory >>> flagHistoryShift(encoded)) & 0xff);
     }
 
-    private static Txn.Kind kindLookup(int flags)
+    private static int flagHistoryShift(int encodedFlagBits)
     {
-        return TXN_ID_FLAG_BITS_KIND_LOOKUP[flags];
+        int pos = encodedFlagBits - 2;
+        return (pos * 8) + pos;
     }
 
-    private static final Txn.Kind[] TXN_ID_FLAG_BITS_KIND_LOOKUP = new Txn.Kind[] { null, Read, Write, SyncPoint, Read, ExclusiveSyncPoint, null, null };
-
-    private static Timestamp readTimestamp(ByteBuffer in, Node.Id[] ids, int idBytes)
+    private static Timestamp readTimestamp(ByteBuffer in, Object[] ids, int idBytes)
     {
         // TODO (desired): smarter encoding, separating into epoch,hlc,flag parts to be encoded separately
         //   OR encode Unmanaged as a list using same logic as we do for managed transactions
         long msb = in.getLong();
         long lsb = in.getLong();
-        Node.Id id = ids[(int) readLeastSignificantBytes(idBytes, in)];
+        Id id = (Id)ids[(int) readLeastSignificantBytes(idBytes, in)];
         return Timestamp.fromBits(msb, lsb, id);
     }
 
-    private static TxnId readTxnId(ByteBuffer in, Node.Id[] ids, int idBytes)
+    private static TxnId readTxnId(ByteBuffer in, Object[] ids, int idBytes)
     {
         long msb = in.getLong();
         long lsb = in.getLong();
-        Node.Id id = ids[(int) readLeastSignificantBytes(idBytes, in)];
+        Id id = (Id)ids[(int) readLeastSignificantBytes(idBytes, in)];
         return TxnId.fromBits(msb, lsb, id);
     }
 

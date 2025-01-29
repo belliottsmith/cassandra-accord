@@ -28,8 +28,6 @@ import static accord.utils.Invariants.illegalState;
 
 public interface PartialTxn extends Txn
 {
-    // TODO (expected): we no longer need this if everyone has a FullRoute
-    // TODO (low priority, efficiency): efficient merge when more than one input
     PartialTxn with(PartialTxn add);
     Txn reconstitute(FullRoute<?> route);
     PartialTxn reconstitutePartial(Participants<?> covering);

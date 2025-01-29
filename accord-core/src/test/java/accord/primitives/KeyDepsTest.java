@@ -61,7 +61,7 @@ import static accord.utils.Property.qt;
 import static accord.utils.Utils.toArray;
 import static org.assertj.core.api.Assertions.assertThat;
 
-// TODO (expected, testing): test Keys with no contents, "without", "with" where TxnId and Keys are the same, but Key -> [TxnId] does not match;
+// TODO (testing): test Keys with no contents, "without", "with" where TxnId and Keys are the same, but Key -> [TxnId] does not match;
 //  ensure high code coverage
 public class KeyDepsTest
 {

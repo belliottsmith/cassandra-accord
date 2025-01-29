@@ -267,13 +267,13 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
 
         @Override
-        public AsyncChain<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
             return submit(newTask(context, i -> { consumer.accept(i); return null; }));
         }
 
         @Override
-        public <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> function)
         {
             return submit(newTask(context, function));
         }

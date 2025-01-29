@@ -17,10 +17,12 @@
  */
 package accord.messages;
 
+import accord.api.ProtocolModifiers;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.coordinate.FetchData.FetchResult;
 import accord.coordinate.Infer.InvalidIf;
+import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
@@ -46,7 +48,6 @@ import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
-import accord.utils.UnhandledEnum;
 
 import javax.annotation.Nullable;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
@@ -57,6 +58,8 @@ import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.VESTIGIAL;
 import static accord.local.Commands.purge;
+import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_SYNCED;
 import static accord.local.StoreParticipants.Filter.UPDATE;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
@@ -88,7 +91,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     final WithQuorum withQuorum;
     @Nullable final PartialTxn partialTxn;
     @Nullable final PartialDeps stableDeps;
-    // TODO (expected): toEpoch may only apply to certain local command stores that have "witnessed the future" - confirm it is fine to use globally or else narrow its scope
     final long lowEpoch, highEpoch;
     @Nullable final Timestamp committedExecuteAt;
     @Nullable final Writes writes;
@@ -176,10 +178,12 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     public Void apply(SafeCommandStore safeStore)
     {
         long executeAtEpoch = committedExecuteAt == null ? txnId.epoch() : committedExecuteAt.epoch();
-        // TODO (required): rework low and high epoch handling; we should replicate coordination quorum intersections here,
-        //  and then we can safely compute our participants based on this. right now we're ignoring low/high epoch except for
-        //  deciding which commandStores to notify
         StoreParticipants participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, highEpoch, committedExecuteAt != null);
+        // TODO (expected): can we come up with a better more universal pattern for avoiding updating a command we don't intersect with?
+        //   ideally integrated with safeStore.get()
+        if (participants.owns().isEmpty() && safeStore.ifInitialised(txnId) == null)
+            return null;
+
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
 
@@ -214,8 +218,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         boolean isShardTruncated = withQuorum == HasQuorum && known.hasAnyFullyTruncated(participants.stillTouches());
         if (isShardTruncated)
         {
-            // TODO (required): do not markShardStale for reads; in general optimise handling of case where we cannot recover a known no-op transaction
-            // TODO (required): permit staleness to be gated by some configuration state
             found = tryUpgradeTruncated(safeStore, safeCommand, participants, command, executeAtIfKnown);
             if (found == null)
             {
@@ -382,15 +384,18 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             return null;
 
         Participants<?> stale = staleTouches.with((Participants) staleOwnsOrMayExecutes);
-        // TODO (required): fetch redundant before information, it should be available
+        // TODO (expected): trigger a refresh of redundantBefore; should be available on a peer
         // wait until we know the shard is ahead and we are behind
         if (!safeStore.redundantBefore().isShardOnlyRedundant(txnId, stale))
             return null;
 
-        // TODO (required): if the above last ditch doesn't work, see if only the stale ranges can't apply and so some shenanigans to apply partially and move on
-        safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown == null ? txnId : executeAtIfKnown, stale.toRanges(), true);
-        if (!stale.containsAll(stillTouches) || !stale.containsAll(stillOwnsOrMayExecute))
-            return required;
+        // TODO (expected): if the above last ditch doesn't work, see if only the stale ranges can't apply and so some shenanigans to apply partially and move on
+        if (ProtocolModifiers.Toggles.markStaleIfCannotExecute(txnId.kind()))
+        {
+            safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown == null ? txnId : executeAtIfKnown, stale.toRanges(), true);
+            if (!stale.containsAll(stillTouches) || !stale.containsAll(stillOwnsOrMayExecute))
+                return required;
+        }
 
         // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
         Commands.setTruncatedApplyOrErasedVestigial(safeStore, safeCommand, participants, executeAtIfKnown);
@@ -399,34 +404,12 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
     private boolean tryPurge(SafeCommandStore safeStore, SafeCommand safeCommand, RedundantStatus status)
     {
-        switch (status)
-        {
-            default: throw new UnhandledEnum(status);
-            case NOT_OWNED:
-            case LOCALLY_REDUNDANT:
-            case PARTIALLY_LOCALLY_REDUNDANT:
-            case SHARD_REDUNDANT:
-            case PARTIALLY_SHARD_REDUNDANT:
-            case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
-            case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-            case TRUNCATE_BEFORE:
-            case GC_BEFORE:
-                // TODO (required): consider HLC clashes
-            case PRE_BOOTSTRAP_OR_STALE:
-                purge(safeStore, safeCommand, ERASE, true, true);
-                return true;
+        if (!status.all(SHARD_APPLIED_AND_LOCALLY_SYNCED))
+            return false;
 
-            case WAS_OWNED_PARTIALLY_RETIRED:
-            case WAS_OWNED_RETIRED:
-                purge(safeStore, safeCommand, VESTIGIAL, true, true);
-                return true;
-
-            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-            case LIVE:
-            case WAS_OWNED:
-            case WAS_OWNED_CLOSED:
-                return false;
-        }
+        Cleanup cleanup = status.all(LOCALLY_DEFUNCT) ? VESTIGIAL : ERASE;
+        purge(safeStore, safeCommand, cleanup, true, true);
+        return true;
     }
 
     /*
@@ -434,7 +417,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
      */
     private Void updateDurability(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
     {
-        // TODO (expected): Infer durability status from cleanup/truncation
         if (!durability.isDurable() || homeKey == null)
             return null;
 

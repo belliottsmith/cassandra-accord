@@ -74,14 +74,14 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
     abstract long executeAtEpoch();
 
     @Override
-    public synchronized final void onFailure(Id from, Throwable failure)
+    public final void onFailure(Id from, Throwable failure)
     {
         if (!isDone)
             onFailureInternal(from, failure);
     }
 
     @Override
-    public final synchronized boolean onCallbackFailure(Id from, Throwable failure)
+    public final boolean onCallbackFailure(Id from, Throwable failure)
     {
         if (isDone) return false;
         isDone = true;
@@ -89,15 +89,14 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
     }
 
     @Override
-    // TODO (expected): shouldn't need synchronized
-    public final synchronized void onSuccess(Id from, R reply)
+    public final void onSuccess(Id from, R reply)
     {
         if (!isDone)
             onSuccessInternal(from, reply);
     }
 
     @Override
-    public final synchronized void onSlowResponse(Id from)
+    public final void onSlowResponse(Id from)
     {
         if (!isDone)
             onSlowResponseInternal(from);

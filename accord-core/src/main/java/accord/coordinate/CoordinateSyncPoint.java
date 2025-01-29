@@ -56,6 +56,7 @@ import static accord.messages.Apply.participates;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
+import static accord.primitives.TxnId.Cardinality.cardinality;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
@@ -124,14 +125,14 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
-        TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain());
+        TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain(), cardinality(keysOrRanges));
         return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, keysOrRanges, adapter)).beginAsResult();
     }
 
     public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
-        TxnId txnId = node.nextTxnId(kind, route.domain());
+        TxnId txnId = node.nextTxnId(kind, route.domain(), cardinality(route));
         return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, route, adapter)).beginAsResult();
     }
 
@@ -150,7 +151,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
                                     : TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
-        CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter);
+        CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter);
         coordinate.start();
         return coordinate;
     }

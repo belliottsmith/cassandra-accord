@@ -122,7 +122,7 @@ class Bootstrap
             if (!node.topology().hasEpoch(globalSyncId.epoch()))
             {
                 // Ignore timeouts fetching the epoch, always keep trying to bootstrap
-                node.withEpoch(globalSyncId.epoch(), (ignored, failure) -> store.execute(empty(), Attempt.this::start).begin((ignored1, failure2) -> {
+                node.withEpoch(globalSyncId.epoch(), (ignored, failure) -> store.execute(empty(), Attempt.this::start, (ignored1, failure2) -> {
                     if (failure2 != null)
                         node.agent().acceptAndWrap(null, failure2);
                 }));
@@ -135,12 +135,12 @@ class Bootstrap
             safeStore = safeStore;
             // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
             safeStore.commandStore()
-                     .submit(empty(), safeStore0 -> {
+                     .build(empty(), safeStore0 -> {
                          store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
                          return CoordinateSyncPoint.exclusiveSyncPoint(node, globalSyncId, commitRanges);
                      })
                      .flatMap(i -> i)
-                     .flatMap(syncPoint -> node.withEpoch(epoch, () -> store.submit(empty(), safeStore1 -> {
+                     .flatMap(syncPoint -> node.withEpoch(epoch, () -> store.build(empty(), safeStore1 -> {
                          if (valid.isEmpty()) // we've lost ownership of the range
                              return AsyncResults.success(Ranges.EMPTY);
                          return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
@@ -270,7 +270,7 @@ class Bootstrap
                 accept(null, failure);
 
             store.agent().onFailedBootstrap("PartialFetch", newFailures, () -> {
-                store.execute(empty(), safeStore -> restart(safeStore, newFailures.slice(allValid))).begin(store.agent());
+                store.execute(empty(), safeStore -> restart(safeStore, newFailures.slice(allValid)), store.agent());
             }, failure);
             Invariants.require(!newFailures.intersects(fetchedAndSafeToRead));
         }
@@ -307,9 +307,9 @@ class Bootstrap
             if (completed)
                 return;
 
-            // TODO (now): we don't need this method, as we should have the user implementation invoke us as necessary
-            //             at most this should interpret failure to account for non-fetch related breakages
-            //             so as to schedule a retry
+            // TODO (desired): we shouldn't need this method, as we should have the user implementation invoke us as necessary
+            //      at most this should interpret failure to account for non-fetch related breakages
+            //      so as to schedule a retry
             synchronized (this)
             {
                 fetchCompleted = true;
@@ -344,7 +344,7 @@ class Bootstrap
             if (!retry.isEmpty())
             {
                 store.agent().onFailedBootstrap("Fetch", retry, () -> {
-                    store.execute(empty(), safeStore -> restart(safeStore, retry)).begin(node.agent());
+                    store.execute(empty(), safeStore -> restart(safeStore, retry), node.agent());
                 }, fetchOutcome);
             }
         }

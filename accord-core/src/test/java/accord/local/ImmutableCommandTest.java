@@ -172,11 +172,11 @@ public class ImmutableCommandTest
         setTopologyEpoch(support.local, 2);
         ((TestableConfigurationService)node.configService()).reportTopology(TopologyUtils.withEpoch(support.local.get(), 2));
         Timestamp expectedTimestamp = Timestamp.fromValues(2, 110, ID1);
-        getUninterruptibly(commands.execute(context, (Consumer<? super SafeCommandStore>) safeStore -> {
+        getUninterruptibly(commands.build(context, (Consumer<? super SafeCommandStore>) safeStore -> {
             StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, 2);
             Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txn.slice(FULL_RANGES, true), null, false, ROUTE);
         }));
-        commands.execute(PreLoadContext.contextFor(txnId, txn.keys().toParticipants()), safeStore -> {
+        commands.build(PreLoadContext.contextFor(txnId, txn.keys().toParticipants()), safeStore -> {
             Command command = safeStore.get(txnId).current();
             Assertions.assertEquals(Status.PreAccepted, command.status());
             Assertions.assertEquals(expectedTimestamp, command.executeAt());

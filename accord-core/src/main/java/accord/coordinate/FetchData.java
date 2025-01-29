@@ -237,7 +237,7 @@ public class FetchData extends CheckShards<Route<?>>
             case Erased:
             case WasApply:
             case Apply:
-                // TODO (expected): we may be stale
+                // TODO (required): we may be stale
                 req.callback.accept(new FetchResult(found, req.fetchKeys.slice(0, 0), req.fetchKeys), null);
         }
     }
@@ -353,7 +353,7 @@ public class FetchData extends CheckShards<Route<?>>
             if (success == ReadCoordinator.Success.Success)
                 Invariants.require(isSufficient(merged), "Status %s is not sufficient", merged);
 
-            // TODO (expected): should we automatically trigger a new fetch if we find executeAt but did not request enough information? would be more rob ust
+            // TODO (expected): should we automatically trigger a new fetch if we find executeAt but did not request enough information? would be more robust
             Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, lowEpoch, highEpoch, success.withQuorum, query(), propagateTo, target, (CheckStatusOkFull) merged, callback);
         }
     }

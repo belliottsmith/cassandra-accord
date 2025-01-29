@@ -63,7 +63,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
          * This means it did not witness any conflicts in a future epoch, and so all transactions that
          * might take a lower HLC must have been witnessed.
          */
-        HLC_BOUND(0x0400)
+        HLC_BOUND(0x0400),
         ;
         public final int bit;
 
@@ -181,7 +181,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     }
 
     // if caller masks no need to mask before returning
-    final int flagsUnmasked()
+    public final int flagsUnmasked()
     {
         return (int)lsb;
     }

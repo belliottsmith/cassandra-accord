@@ -55,6 +55,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Key;
+import accord.api.ProtocolModifiers.Toggles;
 import accord.burn.random.FrequentLargeRange;
 import accord.impl.MessageListener;
 import accord.impl.PrefixedIntHashKey;
@@ -87,6 +88,7 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
+import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
 import accord.primitives.TxnId.FastPath;
 import accord.primitives.TxnId.MediumPath;
@@ -115,6 +117,7 @@ import static accord.impl.list.ListResult.Status.Lost;
 import static accord.impl.list.ListResult.Status.RecoveryApplied;
 import static accord.impl.list.ListResult.Status.Truncated;
 import static accord.primitives.Txn.Kind.EphemeralRead;
+import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Utils.toArray;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -141,13 +144,29 @@ public class BurnTestBase
         double readInCommandStore = random.nextDouble();
         Function<int[], Range> nextRange = randomRanges(random);
 
+        {
+            Kind[] kinds = Kind.values();
+            kinds[Write.ordinal()] = kinds[0];
+            kinds[0] = Write;
+            int count = 1 + random.nextInt(kinds.length - 1);
+            for (int i = 1 ; i < count ; ++i)
+            {
+                int j = random.nextInt(i, kinds.length);
+                Kind tmp = kinds[i];
+                kinds[i] = kinds[j];
+                kinds[j] = tmp;
+            }
+            kinds = Arrays.copyOf(kinds, count);
+            Toggles.setMarkStaleIfCannotExecute(kinds);
+        }
+
         FastPath[] fastPaths;
         switch (random.nextInt(0, 2))
         {
             default: throw new IllegalStateException();
-            case 0: fastPaths = new FastPath[] { FastPath.UNOPTIMISED }; break;
-            case 1: fastPaths = new FastPath[] { FastPath.UNOPTIMISED, random.nextBoolean() ? FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS : FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS }; break;
-            case 2: fastPaths = new FastPath[] { FastPath.UNOPTIMISED, FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS, FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS };
+            case 0: fastPaths = new FastPath[] { FastPath.Unoptimised }; break;
+            case 1: fastPaths = new FastPath[] { FastPath.Unoptimised, random.nextBoolean() ? FastPath.PrivilegedCoordinatorWithDeps : FastPath.PrivilegedCoordinatorWithoutDeps }; break;
+            case 2: fastPaths = new FastPath[] { FastPath.Unoptimised, FastPath.PrivilegedCoordinatorWithoutDeps, FastPath.PrivilegedCoordinatorWithDeps };
         }
 
         MediumPath[] mediumPaths;
@@ -209,7 +228,7 @@ public class BurnTestBase
                     boolean isWrite = random.nextBoolean();
                     int readCount = 1 + random.nextInt(2);
                     int writeCount = isWrite ? 1 + random.nextInt(2) : 0;
-                    Txn.Kind kind = isWrite ? Txn.Kind.Write : readCount == 1 ? EphemeralRead : Txn.Kind.Read;
+                    Kind kind = isWrite ? Kind.Write : readCount == 1 ? EphemeralRead : Kind.Read;
 
                     TreeSet<Key> requestKeys = new TreeSet<>();
                     IntHashSet readValues = new IntHashSet();
@@ -374,7 +393,7 @@ public class BurnTestBase
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
-            // TODO (expected): meta-randomise scale of clock drift
+            // TODO (testing): meta-randomise scale of clock drift
             return FrequentLargeRange.builder(forked)
                                      .ratio(1, 5)
                                      .small(50, 5000, TimeUnit.MICROSECONDS)

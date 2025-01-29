@@ -410,8 +410,8 @@ public class RemoteListenersTest
         }
 
         @Override public boolean inStore() { return false; }
-        @Override public AsyncChain<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
-        @Override public <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
+        @Override public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
+        @Override public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
         @Override public void shutdown() {}
         @Override protected void registerTransitive(SafeCommandStore safeStore, RangeDeps deps) { }
         @Override public <T> AsyncChain<T> submit(Callable<T> task) { return null; }

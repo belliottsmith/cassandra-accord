@@ -179,7 +179,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         }
 
         @Override
-        public synchronized void onSuccess(Node.Id from, ReadReply reply)
+        public void onSuccess(Node.Id from, ReadReply reply)
         {
             if (reply instanceof ReadData.ReadOkWithFutureEpoch)
                 retryInFutureEpoch = Math.max(retryInFutureEpoch, ((ReadData.ReadOkWithFutureEpoch) reply).futureEpoch);
@@ -240,7 +240,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
     protected abstract void start();
 
     @Override
-    public synchronized void onSuccess(Node.Id from, ReadReply reply)
+    public void onSuccess(Node.Id from, ReadReply reply)
     {
         if (isDone()) return;
         if (debug != null)
@@ -281,7 +281,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
     }
 
     @Override
-    public synchronized void onFailure(Node.Id from, Throwable failure)
+    public void onFailure(Node.Id from, Throwable failure)
     {
         if (isDone()) return;
         if (debug != null)

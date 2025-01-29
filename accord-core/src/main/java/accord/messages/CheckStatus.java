@@ -240,9 +240,6 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     public static class CheckStatusOk implements CheckStatusReply
     {
         public final KnownMap map;
-        // TODO (required): tighten up constraints here to ensure we only report truncated when the range is Durable
-        // TODO (expected, cleanup): stop using saveStatus and maxSaveStatus - move to only Known
-        //   care needed when merging Accepted and AcceptedInvalidate; might be easier to retain saveStatus only for merging these cases
         public final SaveStatus maxKnowledgeSaveStatus, maxSaveStatus;
         public final Ballot maxPromised;
         public final Ballot acceptedOrCommitted;
@@ -254,7 +251,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
          * with other commit records that in fact supersede the data we have.
          */
         public final Ballot maxAcceptedOrCommitted;
-        // TODO (expected, cleanup): try convert to committedExecuteAt, so null if not 'known'
+        // TODO (expected): convert to committedExecuteAt if safe to do so; then null if not 'known'
         public final @Nullable Timestamp executeAt; // not set if invalidating or invalidated
         public final boolean isCoordinating;
         public final Durability durability;

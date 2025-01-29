@@ -67,7 +67,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
 
     private static Topologies topologyFor(Node node, TxnId txnId, Unseekables<?> contact, long epoch)
     {
-        // TODO (expected): only fetch data from source epoch
+        // TODO (desired): only fetch data from source epoch
         return node.topology().preciseEpochs(contact, txnId.epoch(), epoch);
     }
 

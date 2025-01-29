@@ -33,7 +33,6 @@ import accord.utils.Invariants;
 
 import static accord.utils.Utils.toArray;
 
-// TODO (now): burn test is producing prefix keys over full integer range rather than 16bits
 public class PrefixedIntHashKey implements RoutableKey
 {
     public static final int MIN_KEY = Integer.MIN_VALUE + 1;

@@ -302,9 +302,12 @@ public class Topology
         for (int shardIndex : newSubset)
         {
             Shard shard = shards[shardIndex];
+            int i = 0;
             for (Id id : shard.nodes)
             {
-                nodes.set(nodeIds.find(id));
+                i = nodeIds.findNext(i, id);
+                if (i >= 0) nodes.set(i++);
+                else i = -1 - i;
                 // TODO (expected): do we need to shrink to the subset? I don't think we do anymore, and if not we can avoid copying the nodeLookup entirely
                 nodeLookup.putIfAbsent(id.id, this.nodeLookup.get(id.id).forSubset(newSubset));
             }

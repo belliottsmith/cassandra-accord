@@ -49,7 +49,6 @@ import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.RelationMultiMap.*;
 import static accord.utils.SortedArrays.Search.FAST;
 
-// TODO (desired, consider): switch to RoutingKey? Would mean adopting execution dependencies less precisely, but saving ser/deser of large keys
 // TODO (expected): consider which projection we should default to on de/serialise
 /**
  * A collection of dependencies for a transaction, organised by the key the dependency is adopted via.
@@ -176,7 +175,6 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
      *   }
      * }
      */
-    // TODO (expected): support deserializing to one or the other
     int[] keysToTxnIds; // Key -> [TxnId]
     int[] txnIdsToKeys; // TxnId -> [Key]
 

@@ -43,8 +43,7 @@ import static accord.primitives.Route.tryCastToRoute;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
-// TODO (desired): split into a single sub-class to save memory in typical case of owns==touches==hasTouched
-// TODO (required): add invariants confirming owns contains AT LEAST anything in hasTouched() that intersects txnId.epoch()
+// TODO (expected): add invariants confirming owns contains AT LEAST anything in hasTouched() that intersects txnId.epoch()
 public class StoreParticipants
 {
     public enum Filter { QUERY, LOAD, UPDATE }
@@ -63,7 +62,8 @@ public class StoreParticipants
             this.hasTouched = hasTouched;
             Invariants.requireArgument(route != null || (!Route.isRoute(owns) && !Route.isRoute(executes) && !Route.isRoute(touches) && !Route.isRoute(hasTouched)));
             Routable.Domain domain = owns.domain();
-            Invariants.requireArgument(touches.containsAll(owns));
+            Invariants.paranoid(route == null || route.containsAll(owns));
+            Invariants.paranoid(touches.containsAll(owns));
             Invariants.requireArgument(route == null || domain == route.domain());
             Invariants.requireArgument(domain == touches.domain());
             Invariants.requireArgument(domain == hasTouched.domain());
@@ -395,8 +395,9 @@ public class StoreParticipants
      */
     public final StoreParticipants merge(@Nullable Route<?> route, @Nullable Participants<?> owns, @Nullable Participants<?> touches, @Nullable Participants<?> hasTouched)
     {
-        route = Route.merge(this.route, (Route)route);
         owns = Participants.merge(this.owns, (Participants) owns);
+        route = Route.merge(this.route, (Route)route);
+        if (route != null) route = route.with((Participants)owns);
         Participants<?> curTouches = touches(), curHasTouched = hasTouched();
         touches = Participants.merge(curTouches, (Participants) touches);
         hasTouched = Participants.merge(curHasTouched, (Participants) hasTouched);

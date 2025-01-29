@@ -33,6 +33,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -42,6 +43,7 @@ import accord.local.CommandSummaries.IsDep;
 import accord.local.CommandSummaries.SummaryStatus;
 import accord.local.CommandSummaries.ComputeIsDep;
 import accord.local.CommandSummaries.TestStartedAt;
+import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.cfk.PostProcess.NotifyUnmanagedResult;
@@ -92,7 +94,7 @@ import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.Paranoia.NONE;
@@ -208,11 +210,7 @@ import static accord.utils.SortedArrays.Search.FAST;
  *         decisions, so that recovery does not need to contact future epochs to find any superseding transactions
  *      3) when an accept round visits a later epoch than the one in which it is agreed.
  * TODO (desired):  track whether a TxnId is a write on this key only for execution (rather than globally)
- * TODO (expected): merge with TimestampsForKey
  * TODO (desired):  save space by encoding InternalStatus in TxnId.flags(), so that when executeAt==txnId we can save 8 bytes per entry
- * TODO (expected): remove a command that is committed to not intersect with the key for this store (i.e. if accepted in a later epoch than committed on, so ownership changes)
- * TODO (expected): avoid updating transactions we don't manage the execution of - perhaps have a dedicated InternalStatus
- * TODO (expected): minimise repeated notification, either by logic or marking a command as notified once ready-to-execute
  * TODO (required): better linearizability violation detection
  * TODO (expected): cleanup unmanaged transitively known transactions
  * TODO (desired): introduce a new status or other fast and simple mechanism for filtering treatment of range or unmanaged transactions
@@ -281,11 +279,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public static boolean executes(RedundantBefore.Entry boundsInfo, TxnId txnId, Timestamp executeAt)
     {
-        return executesIgnoreBootstrap(boundsInfo, txnId, executeAt)
+        return executesIgnoringBootstrap(boundsInfo, txnId, executeAt)
                && boundsInfo.bootstrappedAt.compareTo(txnId) < 0;
     }
 
-    public static boolean executesIgnoreBootstrap(RedundantBefore.Entry boundsInfo, TxnId txnId, Timestamp executeAt)
+    public static boolean executesIgnoringBootstrap(RedundantBefore.Entry boundsInfo, TxnId txnId, Timestamp executeAt)
     {
         return managesExecution(txnId)
                && boundsInfo.endOwnershipEpoch > executeAt.epoch()
@@ -389,7 +387,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             Invariants.require(executeAt == txnId || !executeAt.equals(txnId));
             Invariants.require(status.hasExecuteAt || executeAt == txnId);
             Invariants.require(status.hasDeps || missing == NO_TXNIDS);
-            Invariants.require(status.hasBallot || ballot == Ballot.ZERO);
+            Invariants.expect(status.hasBallot || ballot == Ballot.ZERO);
             int encodedStatus = encode(txnId, status, mayExecute, statusOverrideXor);
             if (missing == NO_TXNIDS && (!status.hasBallot || ballot == Ballot.ZERO))
                 return new TxnInfo(txnId, encodedStatus, executeAt);
@@ -835,6 +833,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         APPLIED_DURABLE                        (APPLIED,                              true, true, false, true),
         APPLIED_NOT_EXECUTED /*(reserved)*/    (APPLIED,                              true, true, false, true),
         INVALIDATED                            (SummaryStatus.INVALIDATED,            false,false,false, false),
+        ERASED                                 (SummaryStatus.NONE,                   false,false,false, false),
         PRUNED                                 (SummaryStatus.NONE,                   false,false,false, false)
         ;
 
@@ -871,9 +870,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
             // esp. to support pruning where we expect the prunedBefore entr*ies* to be APPLIED
             // Note importantly that we have multiple logical pruned befores - the last APPLIED
             // write per epoch is retained to cleanly support
-            // TODO (desired): can we improve our semantics here to at least PRUNE truncated commands if there's a
-            //  superseding APPLIED command?
-            // TODO (expected): if we truncate (but don't invalidate) a command that had not been decided, we should probably erase it?
+            // TODO (desired): can we improve our semantics here to at least PRUNE truncated commands if there's a superseding APPLIED command?
+            // TODO (desired): move all truncated to ERASED, but we have to handle the case we erase our prunedBefore boundary
+            FROM_SAVE_STATUS.put(SaveStatus.Vestigial, ERASED);
             FROM_SAVE_STATUS.put(SaveStatus.Invalidated, INVALIDATED);
             for (SaveStatus saveStatus : SaveStatus.values())
                 Invariants.require(FROM_SAVE_STATUS.get(saveStatus) != null || saveStatus.is(Status.Truncated) || saveStatus.is(Status.NotDefined));
@@ -1140,7 +1139,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
          *
          * However, it can be safely used as a prune lower bound that we know we do not need to go to disk to load.
          */
-        return boundsInfo.locallyDecidedAndAppliedOrInvalidatedBefore;
+        return boundsInfo.locallyDecidedAndAppliedBefore;
     }
 
     public TxnId redundantOrBootstrappedBefore()
@@ -1317,7 +1316,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                     }
 
                     if (txn.compareTo(ACCEPTED) >= 0) dep = hasAsDep ? IS_STABLE_DEP : IS_NOT_STABLE_DEP;
-                    else if (txn.is(PRIVILEGED_COORDINATOR_WITH_DEPS)) dep = hasAsDep ? IS_COORD_DEP : IS_NOT_COORD_DEP;
+                    else if (txn.is(PrivilegedCoordinatorWithDeps)) dep = hasAsDep ? IS_COORD_DEP : IS_NOT_COORD_DEP;
                     else dep = NOT_ELIGIBLE;
                 }
             }
@@ -1371,6 +1370,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             {
                 case TRANSITIVE:
                 case INVALIDATED:
+                case ERASED:
                 case PRUNED:
                     continue;
 
@@ -1633,7 +1633,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         Invariants.requireArgument(!mayExecute);
         int statusOverridesXor = newStatus.flags & 1;
         TxnInfo newInfo;
-        if (curInfo == null) newInfo = TxnInfo.create(plainTxnId, newStatus, false, statusOverridesXor, plainTxnId, updated.acceptedOrCommitted());
+        if (curInfo == null) newInfo = TxnInfo.create(plainTxnId, newStatus, false, statusOverridesXor, plainTxnId, newStatus.hasBallot ? updated.acceptedOrCommitted() : Ballot.ZERO);
         else newInfo = curInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, false, statusOverridesXor));
         // out of range means we have no deps, we're just marking committed, so we set HAS_DEPS to 0
         return insertOrUpdate(this, updatePos, plainTxnId, curInfo, newInfo, wasPruned, loadingAsPrunedFor, updated);
@@ -1888,7 +1888,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                             {
                                 TxnId txnId = txn.plainTxnId();
                                 notifySink.notWaiting(safeStore, txnId, key, txnId.is(Write) ? maxUniqueHlc + 1 : 0);
-                                // TODO (required): avoid invoking this here; we may do redundant work if we have local dependencies we're already waiting on
+                                // TODO (expected): avoid invoking this here; we may do redundant work if we have local dependencies we're already waiting on
                                 notifySink.waitingOn(safeStore, txn, key, SaveStatus.PreApplied, CanApply, false);
                                 txn.setNotifiedReadyInPlace();
                             }
@@ -1964,7 +1964,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
         else if (newBoundsInfo.gcBefore.equals(boundsInfo.gcBefore)
                  && newBoundsInfo.bootstrappedAt.equals(boundsInfo.bootstrappedAt)
-                 && newBoundsInfo.locallyDecidedAndAppliedOrInvalidatedBefore.equals(boundsInfo.locallyDecidedAndAppliedOrInvalidatedBefore)
+                 && newBoundsInfo.locallyDecidedAndAppliedBefore.equals(boundsInfo.locallyDecidedAndAppliedBefore)
                  && newBoundsInfo.endOwnershipEpoch == boundsInfo.endOwnershipEpoch)
         {
             return this;
@@ -2124,11 +2124,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
             for (int i = maxAppliedWriteByExecuteAt ; i >= 0 ; --i)
             {
                 TxnInfo txn = committedByExecuteAt[i];
-                if (newInfo == txn && CommandsForKey.reportLinearizabilityViolations())
+                if (newInfo == txn)
                 {
-                    // we haven't found anything pre-bootstrap that follows this command, so log a linearizability violation
-                    // TODO (expected): this should be a rate-limited logger; need to integrate with Cassandra
-                    logger.error("Linearizability violation on key {}: {} is committed to execute (at {}) before {} that should witness it but has already applied (at {})", key, newInfo.plainTxnId(), newInfo.plainExecuteAt(), maxAppliedWrite.plainTxnId(), maxAppliedWrite.plainExecuteAt());
+                    reportLinearizabilityViolation(key, newInfo.plainTxnId(), newInfo.plainExecuteAt(), maxAppliedWrite.plainTxnId(), maxAppliedWrite.plainExecuteAt());
                     break;
                 }
 
@@ -2299,6 +2297,20 @@ public class CommandsForKey extends CommandsForKeyUpdate
     public static boolean reportLinearizabilityViolations()
     {
         return reportLinearizabilityViolations;
+    }
+
+    static void reportLinearizabilityViolation(RoutingKey key, TxnId notWitnessed, Timestamp notWitnessedExecuteAt, TxnId by, Timestamp byExecuteAt)
+    {
+        if (!reportLinearizabilityViolations)
+            return;
+
+        String message = "Linearizability violation on key " + key + ": "
+                         + notWitnessed + " is committed to execute (at " + notWitnessedExecuteAt + ") before "
+                         + by + " that should witness it but has already applied (at " + byExecuteAt + ")";
+
+        CommandStore commandStore = CommandStore.maybeCurrent();
+        if (commandStore == null) logger.error(message);
+        else commandStore.agent().onViolation(message, RoutingKeys.of(key), notWitnessed, notWitnessedExecuteAt, by, byExecuteAt);
     }
 
     public static void enableLinearizabilityViolationsReporting()

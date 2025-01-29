@@ -616,9 +616,7 @@ public abstract class CommandStores
         List<AsyncChain<Void>> list = new ArrayList<>();
         Snapshot snapshot = current;
         for (ShardHolder shard : snapshot.shards)
-        {
-            list.add(shard.store.execute(empty(), forEach));
-        }
+            list.add(shard.store.build(empty(), forEach));
         return AsyncChains.reduce(list, (a, b) -> null);
     }
 
@@ -714,7 +712,7 @@ public abstract class CommandStores
             if (!shardRanges.intersects(keys))
                 continue;
 
-            AsyncChain<O> next = shard.store.submit(context, mapReduce);
+            AsyncChain<O> next = shard.store.build(context, mapReduce);
             chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
@@ -731,7 +729,7 @@ public abstract class CommandStores
         List<AsyncChain<O>> results = new ArrayList<>(shards.length);
 
         for (ShardHolder shard : shards)
-            results.add(shard.store.submit(context, mapper));
+            results.add(shard.store.build(context, mapper));
 
         return AsyncChains.all(results);
     }
@@ -745,7 +743,7 @@ public abstract class CommandStores
         for (int id : ids)
         {
             CommandStore commandStore = forId(id);
-            AsyncChain<O> next = commandStore.submit(context, mapReduce);
+            AsyncChain<O> next = commandStore.build(context, mapReduce);
             chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
@@ -765,7 +763,7 @@ public abstract class CommandStores
         for (ShardHolder shardHolder : current.shards)
         {
             CommandStore commandStore = shardHolder.store;
-            AsyncChain<O> next = commandStore.submit(context, mapReduce);
+            AsyncChain<O> next = commandStore.build(context, mapReduce);
             chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;

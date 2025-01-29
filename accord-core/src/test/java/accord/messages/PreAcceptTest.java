@@ -103,7 +103,7 @@ public class PreAcceptTest
             clock.increment(10);
             preAccept.process(node, ID2, REPLY_CONTEXT);
 
-            commandStore.execute(PreLoadContext.contextFor(txnId, txn.keys().toParticipants(), SYNC), safeStore -> {
+            commandStore.build(PreLoadContext.contextFor(txnId, txn.keys().toParticipants(), SYNC), safeStore -> {
                 CommandsForKey cfk = safeStore.get(key.toUnseekable()).current();
                 TxnId commandId = cfk.get(0).plainTxnId();
                 Command command = safeStore.ifInitialised(commandId).current();
@@ -165,7 +165,7 @@ public class PreAcceptTest
             invalidate.process(node, ID2, REPLY_CONTEXT);
 
             messageSink.assertHistorySizes(0, 1);
-            assertThat(messageSink.responses.get(0).payload).isEqualTo(new BeginInvalidation.InvalidateReply(null, Ballot.ZERO, SaveStatus.Uninitialised, false, null, null, null));
+            assertThat(messageSink.responses.get(0).payload).isEqualTo(new BeginInvalidation.InvalidateReply(null, Ballot.ZERO, SaveStatus.NotDefined, false, null, null, null));
             messageSink.clearHistory();
 
             PreAccept preAccept = preAccept(txnId, txn, key.toUnseekable());
@@ -272,7 +272,7 @@ public class PreAcceptTest
             clock.increment(10);
             preAccept.process(node, ID2, REPLY_CONTEXT);
 
-            commandStore.execute(PreLoadContext.contextFor(txnId, txn.keys().toParticipants(), SYNC), safeStore -> {
+            commandStore.build(PreLoadContext.contextFor(txnId, txn.keys().toParticipants(), SYNC), safeStore -> {
                 CommandsForKey cfk = safeStore.get(key.toUnseekable()).current();
                 TxnId commandId = cfk.get(0).plainTxnId();
                 Command command = safeStore.ifInitialised(commandId).current();

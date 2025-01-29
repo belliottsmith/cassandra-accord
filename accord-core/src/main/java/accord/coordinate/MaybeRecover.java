@@ -68,7 +68,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
     public boolean hasMadeProgress(CheckStatusOk ok)
     {
-        // TODO (required, liveness): if Ballot.hlc is stale enough then preempt; also do not query isCoordinating, query directly the node that owns the ballot (or TxnId if Ballot is ZERO)
+        // TODO (required): if Ballot.hlc is stale enough then preempt; also do not query isCoordinating, query directly the node that owns the ballot (or TxnId if Ballot is ZERO)
         return ok != null && (ok.isCoordinating
                               || ok.toProgressToken().compareTo(prevProgress) > 0);
     }
@@ -129,7 +129,6 @@ public class MaybeRecover extends CheckShards<Route<?>>
                 case WasApply:
                 case Erased:
                     // TODO (required): if we're home replica, don't want to cancel coordination without either invalidating or applying unless we're stale
-                    // TODO (required): on Erased, should we maybe mark stale, or leave to FetchData?
                     callback.accept(full.toProgressToken(), null);
                     break;
 

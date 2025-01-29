@@ -106,7 +106,7 @@ public class Invalidate implements Callback<InvalidateReply>
     }
 
     @Override
-    public synchronized void onSuccess(Id from, InvalidateReply reply)
+    public void onSuccess(Id from, InvalidateReply reply)
     {
         if (isDone || isPrepareDone)
             return;

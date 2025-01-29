@@ -59,7 +59,6 @@ import accord.local.Commands;
 import accord.local.KeyHistory;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
-import accord.local.RedundantBefore;
 import accord.local.RejectBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -90,6 +89,7 @@ import org.agrona.collections.ObjectHashSet;
 
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.KeyHistory.ASYNC;
+import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -284,7 +284,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         for (TxnId txnId : clearing)
         {
             GlobalCommand globalCommand = commands.get(txnId);
-;            Invariants.require(globalCommand != null && !globalCommand.isEmpty());
+            Invariants.require(globalCommand != null && !globalCommand.isEmpty());
             Command command = globalCommand.value();
             Cleanup cleanup = Cleanup.shouldCleanup(FULL, agent, txnId, command.executeAt(), command.saveStatus(), command.durability(), command.participants(), unsafeGetRedundantBefore(), durableBefore());
             Invariants.require(command.hasBeen(Applied)
@@ -431,22 +431,6 @@ public abstract class InMemoryCommandStore extends CommandStore
             logger.error("Uncaught exception", t);
             callback.accept(null, t);
         }
-    }
-
-    private static Timestamp maxApplied(SafeCommandStore safeStore, Unseekables<?> keysOrRanges, Ranges slice)
-    {
-        Timestamp max = ((InMemoryCommandStore)safeStore.commandStore()).maxRedundant;
-        for (GlobalCommand command : ((InMemoryCommandStore) safeStore.commandStore()).commands.values())
-        {
-            if (command.value().hasBeen(Applied))
-                max = Timestamp.max(command.value().executeAt(), max);
-        }
-        return max;
-    }
-
-    public AsyncChain<Timestamp> maxAppliedFor(Unseekables<?> keysOrRanges, Ranges slice)
-    {
-        return submit(PreLoadContext.contextFor(keysOrRanges), safeStore -> maxApplied(safeStore, keysOrRanges, slice));
     }
 
     @Override
@@ -681,7 +665,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             if (txnId.domain() != Domain.Range)
                 return;
 
-            // TODO (expected): consider removing if erased
+            // TODO (testing): consider removing if erased
             if (updated.saveStatus() == Erased || updated.saveStatus() == Vestigial)
                 return;
 
@@ -797,7 +781,6 @@ public abstract class InMemoryCommandStore extends CommandStore
             commandsForRanges().visit(keysOrRanges, startedBefore, testKind, visitor, p1, p2);
         }
 
-        // TODO (expected): instead of accepting a slice, accept the min/max epoch and let implementation handle it
         @Override
         public boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, TestStartedAt testStartedAt, Timestamp testStartedAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit)
         {
@@ -822,7 +805,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 Participants<?> intersecting = txnId.is(ExclusiveSyncPoint) ? command.participants().owns().intersecting(updated.participants().touches(), Minimal)
                                                                             : command.participants().stillExecutes().intersecting(covering, Minimal);
                 if (intersecting.isEmpty()) continue;
-                if (commandStore().unsafeGetRedundantBefore().preBootstrapOrStale(command.txnId(), intersecting) == RedundantBefore.PreBootstrapOrStale.FULLY) continue;
+                if (commandStore().unsafeGetRedundantBefore().preBootstrapOrStale(command.txnId(), intersecting) == ALL) continue;
                 illegalState();
             }
         }
@@ -876,13 +859,13 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public AsyncChain<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
-            return submit(context, i -> { consumer.accept(i); return null; });
+            return build(context, i -> { consumer.accept(i); return null; });
         }
 
         @Override
-        public <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> function)
         {
             return new AsyncChains.Head<T>()
             {
@@ -957,13 +940,13 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public AsyncChain<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
-            return submit(context, i -> { consumer.accept(i); return null; });
+            return build(context, i -> { consumer.accept(i); return null; });
         }
 
         @Override
-        public <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> function)
         {
             return AsyncChains.ofCallable(executor, () -> executeInContext(this, context, function));
         }

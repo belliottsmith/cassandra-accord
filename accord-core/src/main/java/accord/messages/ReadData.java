@@ -62,8 +62,9 @@ import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-// TODO (expected): if one shard timesout waiting to reply, but another shard produces a reply, return a partial response (or response with suitably populated unavailable)
-//   this means timing out a little earlier so the reply has time to arrive (but this should anyway be the case)
+// TODO (required): (v1.1) if one shard times out waiting to reply, but another shard produces a reply, return a partial response (or response with suitably populated unavailable)
+//   this means timing out a little earlier so the reply has time to arrive (but this should anyway be the case).
+//   This ensures a multi-key transaction interacting with replicas that have different stale shards on a replica can make progress
 public abstract class ReadData implements PreLoadContext, Request, MapReduceConsume<SafeCommandStore, ReadData.CommitOrReadNack>, LocalListeners.ComplexListener, Timeouts.Timeout
 {
     private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
@@ -351,7 +352,10 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         Timestamp executeAt = command.executesAtLeast();
         if (executeAt == null) executeAt = command.executeAtOrTxnId();
         // TODO (required): for awaitsOnlyDeps commands, if we cannot infer an actual executeAtLeast we should confirm no situation where txnId is not an adequately conservative value for unavailable/unsafeToRead
-        return safeStore.unsafeToReadAt(executeAt);
+        Ranges ranges = safeStore.unsafeToReadAt(executeAt);
+        if (ranges.size() > command.route().size())
+            ranges = ranges.intersecting(command.route(), Minimal);
+        return ranges;
     }
 
     protected void read(SafeCommandStore safeStore, Command command)
@@ -610,8 +614,6 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         /**
          * if the replica we contacted was unable to fully answer the query, due to bootstrapping some portion,
          * this is set to the ranges that were unavailable
-         *
-         * TODO (required): narrow to only the *intersecting* ranges that are unavailable, or do so on the recipient
          */
         public final @Nullable Ranges unavailable;
         public final @Nullable Data data;

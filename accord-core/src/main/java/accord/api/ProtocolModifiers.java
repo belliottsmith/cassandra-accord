@@ -21,11 +21,13 @@ package accord.api;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.TxnId.FastPath;
 import accord.primitives.TxnId.FastPaths;
 import accord.primitives.TxnId.MediumPath;
 import accord.utils.Invariants;
+import accord.utils.TinyEnumSet;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.Chase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.DoNotChase;
@@ -162,7 +164,6 @@ public class ProtocolModifiers
 
         static
         {
-            // TODO (expected): configurable
             Spec spec = new Spec(false, false, false, false);
             txnInstability = spec.txnInstability;
             txnDiscardPreAcceptDeps = spec.txnDiscardPreAcceptDeps;
@@ -187,7 +188,7 @@ public class ProtocolModifiers
         public static void setPermittedFastPaths(FastPaths newPermittedFastPaths) { permittedFastPaths = newPermittedFastPaths; }
         public static FastPath ensurePermitted(FastPath path) { return path.toPermitted(permittedFastPaths); }
 
-        private static MediumPath defaultMediumPath = MediumPath.TRACK_STABLE;
+        private static MediumPath defaultMediumPath = MediumPath.TrackStable;
         public static MediumPath defaultMediumPath() { return defaultMediumPath; }
         public static void setDefaultMediumPath(MediumPath newDefaultMediumPath) { defaultMediumPath = newDefaultMediumPath; }
 
@@ -202,6 +203,15 @@ public class ProtocolModifiers
         private static boolean requiresUniqueHlcs = true;
         public static boolean requiresUniqueHlcs() { return requiresUniqueHlcs; }
         public static void setRequiresUniqueHlcs(boolean newRequiresUniqueHlcs) { requiresUniqueHlcs = newRequiresUniqueHlcs; }
+
+        private static int markStaleIfCannotExecute = TinyEnumSet.encode(Txn.Kind.Write);
+        public static boolean markStaleIfCannotExecute(Txn.Kind kind) { return TinyEnumSet.contains(markStaleIfCannotExecute, kind); }
+        public static void setMarkStaleIfCannotExecute(Txn.Kind ... kinds)
+        {
+            int newMarkStaleIfCannotExecute = TinyEnumSet.encode(kinds);
+            Invariants.require(TinyEnumSet.contains(newMarkStaleIfCannotExecute, Txn.Kind.Write));
+            markStaleIfCannotExecute = newMarkStaleIfCannotExecute;
+        }
 
         public enum DependencyElision { OFF, ON, IF_DURABLE }
         private static DependencyElision dependencyElision = IF_DURABLE;

@@ -155,7 +155,7 @@ public class SortedArrays
         public SortedArrayList<T> without(SortedArrayList<T> without)
         {
             // TODO (expected): wrap cachedAny with a complete() method that copies to an array of the source type.
-            T[] array = (T[])SortedArrays.linearSubtract(Comparable::compareTo, this.array, without.array, ArrayBuffers.uncached(this.array));
+            T[] array = SortedArrays.linearSubtract(Comparable::compareTo, this.array, without.array, ArrayBuffers.uncached(this.array));
             return array == this.array ? this : new SortedArrayList<>(array);
         }
 

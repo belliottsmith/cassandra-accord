@@ -35,7 +35,7 @@ import com.google.common.collect.Iterables;
 
 import accord.utils.random.Picker;
 
-// TODO (expected): merge with C* RandomSource
+// TODO (desired): merge with C* RandomSource
 public interface RandomSource
 {
     static RandomSource wrap(Random random)

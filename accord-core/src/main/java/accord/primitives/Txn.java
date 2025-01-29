@@ -97,8 +97,6 @@ public interface Txn
          *
          * Invisible to other transactions.
          */
-        // TODO (expected): introduce a special kind of visible ExclusiveSyncPoint that creates a precise moment,
-        //    and is therefore visible to all transactions.
         ExclusiveSyncPoint('X', true, true, true, true),
         ;
 

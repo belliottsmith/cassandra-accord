@@ -30,9 +30,9 @@ import accord.topology.Topologies;
 import accord.utils.UnhandledEnum;
 
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.*;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITHOUT_DEPS;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
-import static accord.primitives.TxnId.FastPath.UNOPTIMISED;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
+import static accord.primitives.TxnId.FastPath.Unoptimised;
 
 public class InvalidationTracker extends AbstractTracker<InvalidationTracker.InvalidationShardTracker>
 {
@@ -197,9 +197,9 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
         switch (txnId.fastPath())
         {
             default: throw new UnhandledEnum(txnId.fastPath());
-            case UNOPTIMISED: return (i, s) -> new InvalidationShardTracker(UNOPTIMISED, s);
-            case PRIVILEGED_COORDINATOR_WITHOUT_DEPS: return (i, s) -> new InvalidationShardTracker(PRIVILEGED_COORDINATOR_WITHOUT_DEPS, s);
-            case PRIVILEGED_COORDINATOR_WITH_DEPS: return (i, s) -> new InvalidationShardTracker(PRIVILEGED_COORDINATOR_WITH_DEPS, s);
+            case Unoptimised: return (i, s) -> new InvalidationShardTracker(Unoptimised, s);
+            case PrivilegedCoordinatorWithoutDeps: return (i, s) -> new InvalidationShardTracker(PrivilegedCoordinatorWithoutDeps, s);
+            case PrivilegedCoordinatorWithDeps: return (i, s) -> new InvalidationShardTracker(PrivilegedCoordinatorWithDeps, s);
         }
     }
 }

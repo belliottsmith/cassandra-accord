@@ -35,7 +35,6 @@ import accord.primitives.Route;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
-// TODO (expected): evict to disk
 public class DefaultRemoteListeners implements RemoteListeners
 {
     public interface NotifySink

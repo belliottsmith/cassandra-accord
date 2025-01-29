@@ -46,12 +46,12 @@ import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.SimpleBitSet;
 import accord.utils.SortedList;
-import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 
 import static accord.local.KeyHistory.INCR;
 import static accord.local.KeyHistory.NONE;
-import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
+import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED_ONLY;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.SaveStatus.Applied;
@@ -76,11 +76,13 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
      */
     public @Nullable SafeCommand ifInitialised(TxnId txnId)
     {
-        SafeCommand safeCommand = get(txnId);
+        SafeCommand safeCommand = getInternal(txnId);
+        if (safeCommand == null)
+            return null;
         Command command = safeCommand.current();
         if (command.saveStatus().isUninitialised())
             return null;
-        return safeCommand;
+        return maybeCleanup(safeCommand);
     }
 
     // decidedExecuteAt == null if not yet PreCommitted
@@ -327,12 +329,12 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (update.isEmpty())
             return;
 
-        // TODO (expected): we don't want to insert any dependencies for those we only touch; we just need to record them as decided/applied for execution
+        // TODO (required): we don't want to insert any dependencies for those we only touch; we just need to record them as decided/applied for execution
         PreLoadContext context = PreLoadContext.contextFor(next.txnId(), update, INCR);
         PreLoadContext execute = safeStore.canExecute(context);
         if (execute != null)
         {
-            updateManagedCommandsForKey(safeStore, execute.keys(), participants, next);
+            updateManagedCommandsForKey(safeStore, execute.keys(), next.txnId());
         }
         if (execute != context)
         {
@@ -345,16 +347,20 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 PreLoadContext ctx = safeStore0.context();
                 TxnId txnId = ctx.primaryTxnId();
                 Unseekables<?> keys = ctx.keys();
-                updateManagedCommandsForKey(safeStore0, keys, participants, safeStore0.get(txnId).current());
-            }).begin(safeStore.commandStore().agent);
+                updateManagedCommandsForKey(safeStore0, keys, txnId);
+            }, safeStore.commandStore().agent);
         }
     }
 
-    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, StoreParticipants participants, Command next)
+    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, TxnId txnId)
     {
+        // TODO (expected): avoid reentrancy / recursion
+        SafeCommand safeCommand = safeStore.get(txnId);
         for (RoutingKey key : (AbstractUnseekableKeys)update)
         {
-            safeStore.get(key).callback(safeStore, next);
+            // we use callback and re-fetch current to guard against reentrancy causing
+            // us to interact with "future" or stale information (respectively)
+            safeStore.get(key).callback(safeStore, safeCommand.current());
         }
     }
 
@@ -382,30 +388,10 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 SortedList<TxnId> txnIdsForKey = deps.txnIdsForKeyIndex(i);
                 RoutingKey key = keys.get(i);
                 TxnId maxTxnId = txnIdsForKey.get(txnIdsForKey.size() - 1);
-                // TODO (required): convert to O(n) merge
+                // TODO (desired): convert to O(n) merge
                 RedundantStatus status = redundantBefore.status(maxTxnId, null, key);
-                switch (status)
-                {
-                    default: throw new UnhandledEnum(status);
-                    case NOT_OWNED:
-                    case WAS_OWNED:
-                    case WAS_OWNED_CLOSED:
-                    case WAS_OWNED_PARTIALLY_RETIRED: // means fully locally redundant in this case
-                    case LIVE:
-                    case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-                    case PRE_BOOTSTRAP_OR_STALE:
-                    case PARTIALLY_LOCALLY_REDUNDANT:
-                    case LOCALLY_REDUNDANT:
-                        // we need to record transitive dependencies for coordination decisions
-                        select.set(i);
-                    case WAS_OWNED_RETIRED:
-                    case PARTIALLY_SHARD_REDUNDANT:
-                    case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
-                    case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-                    case SHARD_REDUNDANT:
-                    case TRUNCATE_BEFORE:
-                    case GC_BEFORE:
-                }
+                if (!status.all(SHARD_APPLIED_ONLY) || !status.all(LOCALLY_REDUNDANT))
+                    select.set(i);
             }
             if (select.getSetBitCount() != keys.size())
             {
@@ -440,9 +426,9 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
             safeStore = safeStore;
             CommandStore unsafeStore = safeStore.commandStore();
-            AsyncChain<Void> submit = unsafeStore.execute(context, safeStore0 -> updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys(), txnId, mode));
+            AsyncChain<Void> submit = unsafeStore.build(context, safeStore0 -> { updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys() , txnId, mode); });
             if (next.txnId().is(Range))
-                submit = submit.flatMap(success -> unsafeStore.execute(PreLoadContext.empty(), safeStore0 -> registerTransitive(safeStore0, txnId, next)));
+                submit = submit.flatMap(success -> unsafeStore.build(PreLoadContext.empty(), safeStore0 -> { registerTransitive(safeStore0, txnId, next); }));
             submit.begin(safeStore.commandStore().agent);
         }
     }
@@ -520,13 +506,6 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     public @Nonnull Ranges unsafeToReadAt(Timestamp at)
     {
         return ranges().allAt(at).without(safeToReadAt(at));
-    }
-
-    // if we have to re-bootstrap (due to failed bootstrap or catching up on a range) then we may
-    // have dangling redundant commands; these can safely be executed locally because we are a timestamp store
-    final boolean isFullyPreBootstrapOrStale(Command command, Participants<?> forKeys)
-    {
-        return redundantBefore().preBootstrapOrStale(command.txnId(), forKeys) == FULLY;
     }
 
     public void registerListener(SafeCommand listeningTo, SaveStatus await, TxnId waiting)

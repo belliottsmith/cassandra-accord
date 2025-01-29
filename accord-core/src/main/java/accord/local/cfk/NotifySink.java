@@ -33,6 +33,7 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
+import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.KeyHistory.SYNC;
 import static accord.primitives.Status.Truncated;
 
@@ -53,8 +54,9 @@ interface NotifySink
             if (safeCommand != null) notWaiting(safeStore, safeCommand, key, uniqueHlc);
             else
             {
-                safeStore.commandStore().execute(txnId, safeStore0 -> notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc))
-                         .begin(safeStore.agent());
+                safeStore.commandStore().execute(txnId, safeStore0 -> {
+                    notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc);
+                }, safeStore.agent());
             }
         }
 
@@ -71,15 +73,15 @@ interface NotifySink
             if (safeStore.canExecuteWith(txnId)) doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);
             else safeStore.commandStore().execute(txnId, safeStore0 -> {
                 doNotifyWaitingOn(safeStore0, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);
-            }).begin(safeStore.agent());
+            }, safeStore.agent());
         }
 
         // TODO (desired): we could complicate our state machine to replicate PreCommitted here, so we can simply wait for waitingOnStatus.execution
         private void doNotifyWaitingOn(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk)
         {
-            SafeCommand safeCommand = safeStore.unsafeGet(txnId);
-            safeCommand.initialise();
+            SafeCommand safeCommand = safeStore.unsafeGetNoCleanup(txnId);
             Command command = safeCommand.current();
+            if (command == null) command = uninitialised(txnId);
             StoreParticipants participants = command.participants();
             if (!participants.hasTouched(key))
             {
@@ -122,7 +124,7 @@ interface NotifySink
                 safeStore = safeStore; // prevent use in lambda
                 safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, keys, SYNC), safeStore0 -> {
                     doNotifyAlreadyReady(safeStore0, txnId, key);
-                }).begin(safeStore.agent());
+                }, safeStore.agent());
             }
         }
     }

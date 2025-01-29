@@ -158,7 +158,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                         if (reply != Redundant)
                             throw new UnhandledEnum((CommitOrReadNack)reply);
                         // too late, sync point has been erased
-                        // TODO (expected): stop fetch sync points from garbage collecting too quickly
+                        // TODO (desired): stop fetch sync points from garbage collecting too quickly
                     }
                     return;
                 }
@@ -180,7 +180,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                     received = ranges;
                 }
 
-                // TODO (required): make sure it works if invoked in either order
+                // TODO (expected): make sure it works if invoked in either order
                 inflight.remove(key).started(ok.safeToReadAfter);
                 onReadOk(to, commandStore, ok.data, received);
                 // received must be invoked after submitting the persistence future, as it triggers onDone
@@ -197,7 +197,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
             @Override
             public boolean onCallbackFailure(Node.Id from, Throwable failure)
             {
-                // TODO (soon)
+                // TODO (required): improve this
                 logger.error("Fetch coordination failure from " + from, failure);
                 return true;
             }

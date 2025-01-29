@@ -18,429 +18,235 @@
 
 package accord.local;
 
-import java.util.EnumMap;
-
 import accord.utils.Invariants;
+import accord.utils.TinyEnumSet;
 
-// TODO (desired): is there a better way to represent these states? can we (for instance) collapse WAS_OWNED to a bit flag
-//  Consider: can we collapse all PARTIALLY_LOCALLY states into simply LOCALLY? Since we know the transaction must be redundant in this case.
-// TODO (required): much better documentation
-public enum RedundantStatus
+import static accord.local.RedundantStatus.Coverage.ALL;
+import static accord.local.RedundantStatus.Coverage.SOME;
+import static accord.local.RedundantStatus.Property.GC_BEFORE;
+import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
+import static accord.local.RedundantStatus.Property.NOT_OWNED;
+import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
+import static accord.local.RedundantStatus.Property.REVERSE_PROPERTIES;
+import static accord.local.RedundantStatus.Property.SHARD_AND_LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_SYNCED;
+import static accord.local.RedundantStatus.Property.TRUNCATE_BEFORE;
+import static accord.local.RedundantStatus.Property.WAS_OWNED;
+
+public class RedundantStatus
 {
-    /**
-     * None of the relevant ranges are owned by the command store
-     */
-    NOT_OWNED,
-
-    /**
-     * None of the relevant ranges are owned by the command store anymore
-     */
-    WAS_OWNED,
-
-    /**
-     * None of the relevant ranges are owned by the command store anymore, and all of those ranges are closed
-     * (i.e. we should know all participating commands already)
-     */
-    WAS_OWNED_CLOSED,
-
-    /**
-     * None of the relevant ranges are owned by the command store anymore, and at least some of those ranges are
-     * retired locally.
-     * (i.e. we should not expect any knowledge of such a transaction)
-     * TODO (desired): do we need this state?
-     */
-    WAS_OWNED_PARTIALLY_RETIRED,
-
-    /**
-     * None of the relevant ranges are owned by the command store anymore, and all of those ranges are retired
-     * at all healthy participating replicas
-     * (i.e. we should not participate in any decisions)
-     */
-    WAS_OWNED_RETIRED,
-
-    /**
-     * Some of the relevant ranges are owned by the command store and valid for execution
-     */
-    LIVE,
-
-    /**
-     * The relevant owned ranges are part live and part pre-bootstrap or stale
-     */
-    PARTIALLY_PRE_BOOTSTRAP_OR_STALE,
-
-    /**
-     * The relevant owned ranges are ALL pre-bootstrap or stale, meaning we are either
-     *  1) fetching the transaction's entire result from another node's snapshot already; or
-     *  2) the range is stale and _must be bootstrapped_
-     */
-    PRE_BOOTSTRAP_OR_STALE,
-
-    /**
-     * Some of the relevant owned ranges are redundant, meaning any intersecting transaction is known to be either applied
-     * or invalidated via a sync point that has applied locally, but these ranges may be pre-bootstrap or stale,
-     * so that we cannot treat the transaction as having been fully applied locally, and other ranges may still be LIVE
-     * so that we cannot fully cleanup the transaction.
-     *
-     * Note that this status overrides PRE_BOOTSTRAP_OR_STALE, since it implies the transaction has applied.
-     */
-    PARTIALLY_LOCALLY_REDUNDANT,
-
-    /**
-     * The relevant owned ranges are redundant, meaning any intersecting transaction is known to be either applied or invalidated
-     * via a sync point that has applied locally.
-     *
-     * Note that this status overrides PRE_BOOTSTRAP_OR_STALE, since it implies the transaction has applied.
-     */
-    LOCALLY_REDUNDANT,
-
-    /**
-     * The relevant owned ranges are all shard-redundant AND (pre-bootstrap or stale), meaning any intersecting transaction
-     * is known to be either applied or invalidated via a sync point that has applied locally AND on all healthy shards.
-     * But the transaction may not have been maintained locally.
-     */
-    SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE,
-
-    /**
-     * Some of the relevant owned ranges are redundant, meaning any intersecting transaction is known to be either applied
-     * or invalidated via a sync point that has applied locally AND remotely, but these ranges may be pre-bootstrap or stale,
-     * so that we cannot treat the transaction as having been fully applied locally, and other ranges may still be LIVE
-     * so that we cannot fully cleanup the transaction.
-     *
-     * Note that this status overrides PRE_BOOTSTRAP_OR_STALE, since it implies the transaction has applied.
-     */
-    PARTIALLY_SHARD_REDUNDANT,
-
-    /**
-     * Some of the relevant owned ranges are redundant, meaning any intersecting transaction is known to be either applied
-     * or invalidated via a sync point that has applied locally AND on all healthy shards.
-     * TODO (desired): do we need this state?
-     */
-    PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT,
-
-    /**
-     * The relevant owned ranges are redundant, meaning any intersecting transaction is known to be either applied or invalidated
-     * via a sync point that has applied locally AND on all healthy shards. Note that this status CANNOT be taken if
-     * we are not ALSO LOCALLY_REDUNDANT, so we can use this to cleanup transactions < PreCommitted (or Erased).
-     *
-     * Note that this status overrides PRE_BOOTSTRAP_OR_STALE, since it implies the transaction has applied.
-     */
-    SHARD_REDUNDANT,
-
-    /**
-     * Note: some shards may be SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, others TRUNCATE_BEFORE or GC_BEFORE.
-     *
-     * All of the relevant owned ranges are either shard redundant and pre-bootstrap OR truncatable OR gc-able,
-     * meaning any intersecting transaction is known to be applied at a majority of the shard,
-     * or invalidated via a sync point that we have applied locally.
-     *
-     * We do not need to know anymore about the command's outcome ourselves and may TRUNCATE it.
-     * We cannot ERASE it, because we may yet need the executeAt TIMESTAMP (only) for computing unique HLC
-     * (for implementations where this matters)
-     */
-    TRUNCATE_BEFORE,
-
-    /**
-     * The relevant owned ranges are redundant, meaning any intersecting transaction is known to be either applied or invalidated
-     * via a sync point that has applied locally AND on all healthy shards. Note that this status CANNOT be taken if
-     * we are not ALSO LOCALLY_REDUNDANT, so we can use this to cleanup local state.
-     *
-     * Note that this status overrides PRE_BOOTSTRAP_OR_STALE, since it implies the transaction has applied.
-     */
-    GC_BEFORE,
-    ;
-
-    private EnumMap<RedundantStatus, RedundantStatus> merge;
-
-    static
+    public enum Coverage
     {
-        NOT_OWNED.merge = new EnumMap<>(RedundantStatus.class);
-        NOT_OWNED.merge.put(NOT_OWNED, NOT_OWNED);
-        NOT_OWNED.merge.put(WAS_OWNED, WAS_OWNED);
-        NOT_OWNED.merge.put(WAS_OWNED_CLOSED, WAS_OWNED_CLOSED);
-        NOT_OWNED.merge.put(WAS_OWNED_PARTIALLY_RETIRED, WAS_OWNED_PARTIALLY_RETIRED);
-        NOT_OWNED.merge.put(WAS_OWNED_RETIRED, WAS_OWNED_RETIRED);
-        NOT_OWNED.merge.put(LIVE, LIVE);
-        NOT_OWNED.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        NOT_OWNED.merge.put(PRE_BOOTSTRAP_OR_STALE, PRE_BOOTSTRAP_OR_STALE);
-        NOT_OWNED.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        NOT_OWNED.merge.put(LOCALLY_REDUNDANT, LOCALLY_REDUNDANT);
-        NOT_OWNED.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        NOT_OWNED.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        NOT_OWNED.merge.put(SHARD_REDUNDANT, SHARD_REDUNDANT);
-        NOT_OWNED.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE);
-        NOT_OWNED.merge.put(TRUNCATE_BEFORE, TRUNCATE_BEFORE);
-        NOT_OWNED.merge.put(GC_BEFORE, GC_BEFORE);
-        WAS_OWNED.merge = new EnumMap<>(RedundantStatus.class);
-        WAS_OWNED.merge.put(NOT_OWNED, WAS_OWNED);
-        WAS_OWNED.merge.put(WAS_OWNED, WAS_OWNED);
-        WAS_OWNED.merge.put(WAS_OWNED_CLOSED, WAS_OWNED);
-        WAS_OWNED.merge.put(WAS_OWNED_PARTIALLY_RETIRED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED.merge.put(WAS_OWNED_RETIRED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED.merge.put(LIVE, LIVE);
-        WAS_OWNED.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        WAS_OWNED.merge.put(LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        WAS_OWNED.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED.merge.put(GC_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_CLOSED.merge = new EnumMap<>(RedundantStatus.class);
-        WAS_OWNED_CLOSED.merge.put(NOT_OWNED, WAS_OWNED_CLOSED);
-        WAS_OWNED_CLOSED.merge.put(WAS_OWNED, WAS_OWNED);
-        WAS_OWNED_CLOSED.merge.put(WAS_OWNED_CLOSED, WAS_OWNED_CLOSED);
-        WAS_OWNED_CLOSED.merge.put(WAS_OWNED_PARTIALLY_RETIRED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_CLOSED.merge.put(WAS_OWNED_RETIRED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_CLOSED.merge.put(LIVE, LIVE);
-        WAS_OWNED_CLOSED.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED_CLOSED.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED_CLOSED.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        WAS_OWNED_CLOSED.merge.put(LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        WAS_OWNED_CLOSED.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_CLOSED.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_CLOSED.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_CLOSED.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_CLOSED.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_CLOSED.merge.put(GC_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_PARTIALLY_RETIRED.merge = new EnumMap<>(RedundantStatus.class);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(NOT_OWNED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(WAS_OWNED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(WAS_OWNED_CLOSED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(WAS_OWNED_PARTIALLY_RETIRED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(WAS_OWNED_RETIRED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(LIVE, LIVE);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(PRE_BOOTSTRAP_OR_STALE, PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_PARTIALLY_RETIRED.merge.put(GC_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_RETIRED.merge = new EnumMap<>(RedundantStatus.class);
-        WAS_OWNED_RETIRED.merge.put(NOT_OWNED, WAS_OWNED_RETIRED);
-        WAS_OWNED_RETIRED.merge.put(WAS_OWNED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_RETIRED.merge.put(WAS_OWNED_CLOSED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_RETIRED.merge.put(WAS_OWNED_PARTIALLY_RETIRED, WAS_OWNED_PARTIALLY_RETIRED);
-        WAS_OWNED_RETIRED.merge.put(WAS_OWNED_RETIRED, WAS_OWNED_RETIRED);
-        WAS_OWNED_RETIRED.merge.put(LIVE, LIVE);
-        WAS_OWNED_RETIRED.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED_RETIRED.merge.put(PRE_BOOTSTRAP_OR_STALE, PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED_RETIRED.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        WAS_OWNED_RETIRED.merge.put(LOCALLY_REDUNDANT, LOCALLY_REDUNDANT);
-        WAS_OWNED_RETIRED.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        WAS_OWNED_RETIRED.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        WAS_OWNED_RETIRED.merge.put(SHARD_REDUNDANT, SHARD_REDUNDANT);
-        WAS_OWNED_RETIRED.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE);
-        WAS_OWNED_RETIRED.merge.put(TRUNCATE_BEFORE, TRUNCATE_BEFORE);
-        WAS_OWNED_RETIRED.merge.put(GC_BEFORE, GC_BEFORE);
-        LIVE.merge = new EnumMap<>(RedundantStatus.class);
-        LIVE.merge.put(NOT_OWNED, LIVE);
-        LIVE.merge.put(WAS_OWNED, LIVE);
-        LIVE.merge.put(WAS_OWNED_CLOSED, LIVE);
-        LIVE.merge.put(WAS_OWNED_PARTIALLY_RETIRED, LIVE);
-        LIVE.merge.put(WAS_OWNED_RETIRED, LIVE);
-        LIVE.merge.put(LIVE, LIVE);
-        LIVE.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        LIVE.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        LIVE.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        LIVE.merge.put(LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        LIVE.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        LIVE.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        LIVE.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        LIVE.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        LIVE.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        LIVE.merge.put(GC_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge = new EnumMap<>(RedundantStatus.class);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(NOT_OWNED, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_CLOSED, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_RETIRED, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(LIVE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_PRE_BOOTSTRAP_OR_STALE.merge.put(GC_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        PRE_BOOTSTRAP_OR_STALE.merge = new EnumMap<>(RedundantStatus.class);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(NOT_OWNED, PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_CLOSED, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_RETIRED, PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(LIVE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(PRE_BOOTSTRAP_OR_STALE, PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PRE_BOOTSTRAP_OR_STALE);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        PRE_BOOTSTRAP_OR_STALE.merge.put(GC_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge = new EnumMap<>(RedundantStatus.class);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(NOT_OWNED, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(WAS_OWNED, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(WAS_OWNED_CLOSED, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(WAS_OWNED_RETIRED, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(LIVE, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(GC_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_LOCALLY_REDUNDANT.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        LOCALLY_REDUNDANT.merge = new EnumMap<>(RedundantStatus.class);
-        LOCALLY_REDUNDANT.merge.put(NOT_OWNED, LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(WAS_OWNED, PARTIALLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(WAS_OWNED_CLOSED, PARTIALLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(WAS_OWNED_RETIRED, LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(LIVE, PARTIALLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(LOCALLY_REDUNDANT, LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        LOCALLY_REDUNDANT.merge.put(GC_BEFORE, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge = new EnumMap<>(RedundantStatus.class);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(NOT_OWNED, SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_CLOSED, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(WAS_OWNED_RETIRED, SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(LIVE, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(PRE_BOOTSTRAP_OR_STALE, PRE_BOOTSTRAP_OR_STALE);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(SHARD_REDUNDANT, SHARD_REDUNDANT);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(TRUNCATE_BEFORE, TRUNCATE_BEFORE);
-        SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE.merge.put(GC_BEFORE, TRUNCATE_BEFORE);
-        PARTIALLY_SHARD_REDUNDANT.merge = new EnumMap<>(RedundantStatus.class);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(NOT_OWNED, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(WAS_OWNED, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(WAS_OWNED_CLOSED, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(WAS_OWNED_RETIRED, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(LIVE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_REDUNDANT.merge.put(GC_BEFORE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge = new EnumMap<>(RedundantStatus.class);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(NOT_OWNED, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(WAS_OWNED, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(WAS_OWNED_CLOSED, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(WAS_OWNED_RETIRED, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(LIVE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(SHARD_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(TRUNCATE_BEFORE, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT.merge.put(GC_BEFORE, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        SHARD_REDUNDANT.merge = new EnumMap<>(RedundantStatus.class);
-        SHARD_REDUNDANT.merge.put(NOT_OWNED, SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(WAS_OWNED, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(WAS_OWNED_CLOSED, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(WAS_OWNED_RETIRED, SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(LIVE, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        // TODO (required): we merge LOCALLY_REDUNDANT and PARTIALLY_LOCALLY_REDUNDANT inconsistently.
-        //   Consider: do we ever need to know LOCALLY_REDUNDANT *and* PARTIALLY_SHARD_REDUNDANT?
-        SHARD_REDUNDANT.merge.put(LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(SHARD_REDUNDANT, SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(TRUNCATE_BEFORE, SHARD_REDUNDANT);
-        SHARD_REDUNDANT.merge.put(GC_BEFORE, SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge = new EnumMap<>(RedundantStatus.class);
-        TRUNCATE_BEFORE.merge.put(NOT_OWNED, TRUNCATE_BEFORE);
-        TRUNCATE_BEFORE.merge.put(WAS_OWNED, PARTIALLY_SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(WAS_OWNED_CLOSED, PARTIALLY_SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(WAS_OWNED_RETIRED, TRUNCATE_BEFORE);
-        TRUNCATE_BEFORE.merge.put(LIVE, PARTIALLY_SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(SHARD_REDUNDANT, SHARD_REDUNDANT);
-        TRUNCATE_BEFORE.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, TRUNCATE_BEFORE);
-        TRUNCATE_BEFORE.merge.put(TRUNCATE_BEFORE, TRUNCATE_BEFORE);
-        TRUNCATE_BEFORE.merge.put(GC_BEFORE, TRUNCATE_BEFORE);
-        GC_BEFORE.merge = new EnumMap<>(RedundantStatus.class);
-        GC_BEFORE.merge.put(NOT_OWNED, GC_BEFORE);
-        GC_BEFORE.merge.put(WAS_OWNED, PARTIALLY_SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(WAS_OWNED_CLOSED, PARTIALLY_SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(WAS_OWNED_PARTIALLY_RETIRED, PARTIALLY_SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(WAS_OWNED_RETIRED, GC_BEFORE);
-        GC_BEFORE.merge.put(LIVE, PARTIALLY_SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(PARTIALLY_PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(PRE_BOOTSTRAP_OR_STALE, PARTIALLY_SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(PARTIALLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        GC_BEFORE.merge.put(PARTIALLY_SHARD_REDUNDANT, PARTIALLY_SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT, PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT);
-        GC_BEFORE.merge.put(SHARD_REDUNDANT, SHARD_REDUNDANT);
-        GC_BEFORE.merge.put(SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE, TRUNCATE_BEFORE);
-        GC_BEFORE.merge.put(TRUNCATE_BEFORE, TRUNCATE_BEFORE);
-        GC_BEFORE.merge.put(GC_BEFORE, GC_BEFORE);
+        NONE,
+        SOME,
+        ALL;
 
-        for (RedundantStatus a : values())
+        public boolean atLeast(Coverage coverage)
         {
-            for (RedundantStatus b : values())
+            return compareTo(coverage) >= 0;
+        }
+    }
+
+    public enum Property
+    {
+        NOT_OWNED                          (false),
+        // applied or pre-bootstrap or stale or was owned
+        LOCALLY_REDUNDANT                  ( true),
+
+        // was owned OR pre-bootstrap or stale
+        LOCALLY_DEFUNCT                    ( true, LOCALLY_REDUNDANT),
+        WAS_OWNED                          ( true, LOCALLY_DEFUNCT),
+        PRE_BOOTSTRAP_OR_STALE             (false, LOCALLY_DEFUNCT),
+
+        // we've applied a sync point locally covering the transaction, but the transaction itself may not have applied
+        LOCALLY_SYNCED                     ( true, LOCALLY_REDUNDANT),
+        LOCALLY_APPLIED                    (false, LOCALLY_SYNCED),
+
+        SHARD_APPLIED_ONLY                 ( true),
+        SHARD_APPLIED_AND_LOCALLY_REDUNDANT( true, SHARD_APPLIED_ONLY,                  LOCALLY_REDUNDANT),
+        SHARD_APPLIED_AND_LOCALLY_SYNCED   ( true, SHARD_APPLIED_AND_LOCALLY_REDUNDANT, LOCALLY_SYNCED),
+        SHARD_AND_LOCALLY_APPLIED          (false, SHARD_APPLIED_AND_LOCALLY_SYNCED,    LOCALLY_APPLIED),
+        TRUNCATE_BEFORE                    (false, SHARD_AND_LOCALLY_APPLIED),
+        GC_BEFORE                          (false, TRUNCATE_BEFORE),
+        ;
+
+        static final Property[] PROPERTIES = values();
+        static final Property[] REVERSE_PROPERTIES = values();
+        static
+        {
+            for (int i = 0 ; i < REVERSE_PROPERTIES.length / 2 ; ++i)
             {
-                Invariants.require(a.merge(b) == b.merge(a), "non-symmetric merge of %s and %s", a, b);
+                REVERSE_PROPERTIES[i] = REVERSE_PROPERTIES[REVERSE_PROPERTIES.length - (1 + i)];
+                REVERSE_PROPERTIES[REVERSE_PROPERTIES.length - (1 + i)] = PROPERTIES[i];
             }
         }
+
+        final boolean mergeWithWasOwned;
+        final Property[] implies;
+
+        Property(boolean mergeWithWasOwned, Property ... implies)
+        {
+            this.mergeWithWasOwned = mergeWithWasOwned;
+            this.implies = implies;
+        }
+
+        final int shift()
+        {
+            return ordinal() * 2;
+        }
+    }
+
+    public static final RedundantStatus NONE = new RedundantStatus(0);
+    public static final RedundantStatus NOT_OWNED_ONLY = one(NOT_OWNED);
+
+    public static final RedundantStatus WAS_OWNED_ONLY = one(WAS_OWNED);
+    public static final RedundantStatus WAS_OWNED_LOCALLY_RETIRED = multi(WAS_OWNED, LOCALLY_SYNCED);
+    public static final RedundantStatus WAS_OWNED_SHARD_RETIRED = multi(WAS_OWNED, SHARD_APPLIED_AND_LOCALLY_SYNCED);
+
+    public static final RedundantStatus PRE_BOOTSTRAP_OR_STALE_ONLY = one(PRE_BOOTSTRAP_OR_STALE);
+    public static final RedundantStatus LOCALLY_SYNCED_AND_PRE_BOOTSTRAP_OR_STALE = multi(LOCALLY_SYNCED, PRE_BOOTSTRAP_OR_STALE);
+    public static final RedundantStatus SHARD_APPLIED_AND_LOCALLY_SYNCED_AND_PRE_BOOTSTRAP_OR_STALE = multi(SHARD_APPLIED_AND_LOCALLY_SYNCED, PRE_BOOTSTRAP_OR_STALE);
+    public static final RedundantStatus SHARD_ONLY_APPLIED_AND_PRE_BOOTSTRAP_OR_STALE = multi(SHARD_APPLIED_AND_LOCALLY_REDUNDANT, PRE_BOOTSTRAP_OR_STALE);
+
+    public static final RedundantStatus LOCALLY_REDUNDANT_ONLY = one(LOCALLY_REDUNDANT);
+    public static final RedundantStatus SHARD_AND_LOCALLY_APPLIED_ONLY = one(SHARD_AND_LOCALLY_APPLIED);
+    public static final RedundantStatus TRUNCATE_BEFORE_ONLY = one(TRUNCATE_BEFORE);
+    public static final RedundantStatus GC_BEFORE_ONLY = one(GC_BEFORE);
+
+    final long encoded;
+    RedundantStatus(long encoded)
+    {
+        this.encoded = encoded;
     }
 
     public RedundantStatus merge(RedundantStatus that)
     {
-        RedundantStatus result = merge.get(that);
-        Invariants.require(result != null, "Invalid RedundantStatus combination: " + this + " and " + that);
+        long merged = merge(this.encoded, that.encoded);
+        if (merged == this.encoded)
+            return this;
+        if (merged == that.encoded)
+            return that;
+        return new RedundantStatus(merged);
+    }
+
+    public RedundantStatus add(RedundantStatus that)
+    {
+        return new RedundantStatus(this.encoded | that.encoded);
+    }
+
+    public Coverage get(Property property)
+    {
+        return decode(encoded, property);
+    }
+
+    public boolean all(Property property)
+    {
+        return get(property) == ALL;
+    }
+
+    public boolean none(Property property)
+    {
+        return get(property) == Coverage.NONE;
+    }
+
+    public boolean any(Property property)
+    {
+        return get(property) != Coverage.NONE;
+    }
+
+    public static Coverage decode(long encoded, Property property)
+    {
+        int coverage = (int)((encoded >>> property.shift()) & 0x3);
+        switch (coverage)
+        {
+            default: throw new IllegalStateException("Invalid Coverage value encoded for " + property + ": " + coverage);
+            case 0: return Coverage.NONE;
+            case 1: return SOME;
+            case 3: return ALL;
+        }
+    }
+
+    private static final long ALL_BITS = 0xAAAAAAAAAAAAAAAAL;
+    private static final long ANY_BITS = 0x5555555555555555L;
+    private static final long WAS_OWNED_MERGE_MASK;
+    private static final long WAS_OWNED_MASK = 0x3L << WAS_OWNED.shift();
+    private static final long NOT_OWNED_MASK = 0x3L << NOT_OWNED.shift();
+    static
+    {
+        long mask = 0;
+        for (Property property : Property.values())
+        {
+            if (!property.mergeWithWasOwned)
+                mask |= (0x3L << property.shift());
+        }
+        WAS_OWNED_MERGE_MASK = mask;
+    }
+
+    public static long merge(long a, long b)
+    {
+        long either = a | b;
+        Invariants.require((either & NOT_OWNED_MASK) == 0);
+        long all = (a & b) & ALL_BITS;
+        long any = either & ANY_BITS;
+        long result = all | any;
+        if ((either & WAS_OWNED_MASK) == WAS_OWNED_MASK)
+            result |= either & WAS_OWNED_MERGE_MASK;
         return result;
+    }
+
+    private static RedundantStatus one(Property property)
+    {
+        return new RedundantStatus(transitiveClosure(property));
+    }
+
+    private static RedundantStatus multi(Property ... properties)
+    {
+        long encoded = 0;
+        for (Property property : properties)
+            encoded |= transitiveClosure(property);
+        return new RedundantStatus(encoded);
+    }
+
+    private static long transitiveClosure(Property property)
+    {
+        long encoded = 0x3L << (property.shift());
+        for (Property implied : property.implies)
+            encoded |= transitiveClosure(implied);
+        return encoded;
+    }
+
+    private static final Coverage[] COVERAGE_TO_STRING = new Coverage[] { ALL, SOME };
+    @Override
+    public String toString()
+    {
+        StringBuilder builder = new StringBuilder("{");
+        boolean firstCoverage = true;
+        for (Coverage coverage : COVERAGE_TO_STRING)
+        {
+            if (!firstCoverage) builder.append(',');
+            firstCoverage = false;
+            builder.append(coverage);
+            builder.append(":[");
+            int implied = 0;
+            boolean firstProperty = true;
+            for (Property property : REVERSE_PROPERTIES)
+            {
+                if (TinyEnumSet.contains(implied, property))
+                {
+                    implied |= TinyEnumSet.encode(property.implies);
+                }
+                else if (get(property) == coverage)
+                {
+                    if (!firstProperty) builder.append(",");
+                    firstProperty = false;
+                    builder.append(property);
+                }
+            }
+            builder.append("]");
+        }
+        builder.append("}");
+        return builder.toString();
     }
 }

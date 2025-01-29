@@ -19,6 +19,7 @@
 package accord.local;
 
 import java.util.function.Consumer;
+import java.util.function.Function;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -40,6 +41,7 @@ import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Known;
+import accord.primitives.Known.KnownExecuteAt;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
@@ -61,12 +63,13 @@ import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
+import static accord.api.ProtocolModifiers.Toggles.markStaleIfCannotExecute;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.shouldCleanup;
 import static accord.local.Command.Truncated.erased;
 import static accord.local.Command.Truncated.invalidated;
-import static accord.local.Command.Truncated.truncatedApply;
+import static accord.local.Command.Truncated.truncated;
 import static accord.local.Command.Truncated.truncatedApplyWithOutcome;
 import static accord.local.Command.Truncated.vestigial;
 import static accord.local.Commands.Validated.INSUFFICIENT;
@@ -76,7 +79,16 @@ import static accord.local.Commands.Validated.UPDATE_TXN_AND_DEPS;
 import static accord.local.KeyHistory.INCR;
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.PreLoadContext.contextFor;
-import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
+import static accord.local.RedundantStatus.Coverage.ALL;
+import static accord.local.RedundantStatus.Coverage.NONE;
+import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
+import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
+import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
+import static accord.local.RedundantStatus.Property.SHARD_AND_LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.Property.WAS_OWNED;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.local.StoreParticipants.Filter.UPDATE;
 import static accord.messages.Commit.Kind.StableMediumPath;
@@ -106,7 +118,7 @@ import static accord.primitives.Status.Truncated;
 import static accord.primitives.Route.isFullRoute;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
 
 public class Commands
@@ -121,7 +133,7 @@ public class Commands
 
     public static AcceptOutcome preaccept(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Txn partialTxn, @Nullable Deps partialDeps, boolean hasCoordinatorVote, FullRoute<?> route)
     {
-        Invariants.require(partialDeps == null || txnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
+        Invariants.require(partialDeps == null || txnId.is(PrivilegedCoordinatorWithDeps));
         Invariants.require(!hasCoordinatorVote || txnId.hasPrivilegedCoordinator());
         SaveStatus newSaveStatus;
         if (partialDeps != null) newSaveStatus = PreAcceptedWithDeps;
@@ -192,7 +204,7 @@ public class Commands
         }
         else
         {
-            // TODO (expected, ?): in the case that we are pre-committed but had not been preaccepted/accepted, should we inform progressLog?
+            // TODO (expected): in the case that we are pre-committed but had not been preaccepted/accepted, should we inform progressLog?
             PartialTxn partialTxn = prepareTxn(newSaveStatus, participants, command, txn);
             participants = prepareParticipants(validated, participants, command);
             safeCommand.markDefined(safeStore, participants, ballot, partialTxn);
@@ -255,7 +267,6 @@ public class Commands
 
     public static AcceptOutcome notAccept(SafeCommandStore safeStore, SafeCommand safeCommand, Status status, Ballot ballot)
     {
-        // TODO (expected): save some partial route we can use to determine if it can be GC'd
         final Command command = safeCommand.current();
         if (command.hasBeen(PreCommitted))
         {
@@ -341,7 +352,6 @@ public class Commands
             WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, executeAt, participants, partialDeps);
             committed = safeCommand.stable(safeStore, participants, ballot, executeAt, partialTxn, partialDeps, waitingOn);
             safeStore.agent().metricsEventsListener().onStable(committed);
-            // TODO (expected, safety): introduce intermediate status to avoid reentry when notifying listeners (which might notify us)
             maybeExecute(safeStore, safeCommand, true, true);
         }
         else
@@ -386,7 +396,6 @@ public class Commands
 
     public static void ephemeralRead(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Route<?> route, TxnId txnId, PartialTxn txn, PartialDeps deps)
     {
-        // TODO (expected): introduce in-memory only commands
         Command command = safeCommand.current();
         if (command.hasBeen(Stable))
             return;
@@ -421,7 +430,6 @@ public class Commands
         safeCommand.set(erased(command));
     }
 
-    // TODO (expected, ?): commitInvalidate may need to update cfks _if_ possible
     public static void commitInvalidate(SafeCommandStore safeStore, SafeCommand safeCommand, Unseekables<?> scope)
     {
         final Command command = safeCommand.current();
@@ -456,7 +464,21 @@ public class Commands
         if (command.hasBeen(PreApplied))
         {
             logger.trace("{}: skipping apply - already preapplied ({})", txnId, command.status());
-            if (command.executeAt() != null && !executeAt.equalsStrict(command.executeAt()) && command.saveStatus().compareTo(Erased) < 0)
+            boolean inconsistent = false;
+            Timestamp cur = command.executeAt();
+            KnownExecuteAt known = command.known().executeAt();
+            switch (known)
+            {
+                default: throw UnhandledEnum.unknown(known);
+                case ExecuteAtProposed:
+                case ExecuteAtUnknown:
+                    throw UnhandledEnum.invalid(known);
+                case ApplyAtKnown: inconsistent = !executeAt.equalsStrict(cur); break;
+                case ExecuteAtKnown: inconsistent = !executeAt.equals(cur); break;
+                case NoExecuteAt: inconsistent = true;
+                case ExecuteAtErased:
+            }
+            if (inconsistent)
                 safeStore.agent().onInconsistentTimestamp(command, command.executeAt(), executeAt);
             return ApplyOutcome.Redundant;
         }
@@ -470,7 +492,7 @@ public class Commands
         participants = participants.filter(UPDATE, safeStore, txnId, executeAt);
         Validated validated = validate(Ballot.ZERO, SaveStatus.PreApplied, command, participants, route, txn, deps);
         if (validated == INSUFFICIENT)
-            return ApplyOutcome.Insufficient; // TODO (expected, consider): this should probably be an assertion failure if !TrySet
+            return ApplyOutcome.Insufficient;
 
         PartialTxn partialTxn = prepareTxn(SaveStatus.PreApplied, participants, command, txn);
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
@@ -562,7 +584,7 @@ public class Commands
         Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
         return command.writes().apply(safeStore, executes, command.partialTxn())
                       // TODO (expected): once we guarantee execution order KeyHistory can be ASYNC
-               .flatMap(unused -> unsafeStore.submit(contextFor(txnId, executes, SYNC), ss -> {
+               .flatMap(unused -> unsafeStore.build(contextFor(txnId, executes, SYNC), ss -> {
                    Command cmd = ss.get(txnId).current();
                    if (!cmd.hasBeen(Applied))
                        ss.agent().metricsEventsListener().onApplied(cmd, t0);
@@ -579,7 +601,7 @@ public class Commands
         Participants<?> executes = executed.participants().stillExecutes();
         if (!executes.isEmpty())
             return command.writes().apply(safeStore, executes, command.partialTxn())
-                          .flatMap(unused -> unsafeStore.submit(context, ss -> {
+                          .flatMap(unused -> unsafeStore.build(context, ss -> {
                               postApply(ss, command);
                               return null;
                           }));
@@ -616,16 +638,11 @@ public class Commands
             return false;
         }
 
-        // TODO (required): slice our execute ranges based on any pre-bootstrap state
-        // FIXME: need to communicate to caller that we didn't execute if we take one of the above paths
         TxnId txnId = command.txnId();
         switch (command.status())
         {
             case Stable:
-                // TODO (desirable, efficiency): maintain distinct ReadyToRead and ReadyToWrite states
-                // TODO (required): we can have dangling transactions if we don't execute them,
-                //  but we don't want to erase the transaction until
-                //  We can also have dangling progress log entries for commands we simply don't execute
+                // TODO (required): maintain distinct ReadyToRead and ReadyToWrite states
                 // immediately, as no transaction should take a local dependency on this transaction.
                 // This handles both transactions whose ownership is lost, as well as those that become pre-bootstrap or stale
                 safeCommand.readyToExecute(safeStore);
@@ -700,12 +717,16 @@ public class Commands
             switch (dependency.saveStatus())
             {
                 default: throw new AssertionError("Unhandled saveStatus: " + dependency.saveStatus());
-                case TruncatedApply:
                 case TruncatedApplyWithOutcome:
-                case TruncatedApplyWithDeps:
+                case TruncatedApply:
+                case TruncatedUnapplied:
                     Invariants.require(dependency.executeAt().compareTo(waitingExecuteAt) < 0
                                        || waitingId.awaitsOnlyDeps()
-                                       || waiting.participants().stillExecutes().isEmpty());
+                                       || waiting.participants().stillExecutes().isEmpty()
+                                       || !markStaleIfCannotExecute(dependencyId.kind())
+                                       || safeStore.redundantBefore().status(dependencyId, null,
+                                                 waiting.partialDeps().participants(dependencyId)).all(LOCALLY_DEFUNCT)
+                    );
                 case Vestigial:
                 case Erased:
                     logger.trace("{}: {} is truncated. Stop listening and removing from waiting on commit set.", waitingId, dependencyId);
@@ -736,14 +757,10 @@ public class Commands
             Participants<?> participants = waiting.partialDeps().participants(dependency.txnId());
             Participants<?> executes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
             RedundantStatus status = safeStore.redundantBefore().status(dependencyId, waitingExecuteAt, executes);
-            switch (status)
-            {
-                case WAS_OWNED_PARTIALLY_RETIRED:
-                case WAS_OWNED_RETIRED:
-                case PRE_BOOTSTRAP_OR_STALE:
-                case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-                    return false;
-            }
+
+            if (status.get(LOCALLY_DEFUNCT) == ALL)
+                return false;
+
             throw illegalState("We have a dependency (" + dependency + ") to wait on, but have already finished waiting (" + waiting + ")");
         }
     }
@@ -770,7 +787,7 @@ public class Commands
             {
                 TxnId nextWaitingOn = command.waitingOn().nextWaitingOn();
                 if (nextWaitingOn != null && nextWaitingOn.equals(pred.txnId()) && !pred.hasBeen(PreApplied))
-                    safeStore.progressLog().waiting(CanApply, safeStore, predecessor, pred.route(), null, null);
+                    safeStore.progressLog().waiting(CanApply, safeStore, predecessor, null, null, null);
             }
         }
     }
@@ -805,7 +822,6 @@ public class Commands
 
     public static void setTruncatedApplyOrErasedVestigial(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, @Nullable Timestamp executeAt)
     {
-        // TODO (expected): tighten up and declare invariants and reasoning here
         Command command = safeCommand.current();
         SaveStatus saveStatus = command.saveStatus();
         if (saveStatus.compareTo(TruncatedApply) >= 0) return;
@@ -822,13 +838,13 @@ public class Commands
             command = command.updateParticipants(participants);
             if (!safeCommand.txnId().awaitsOnlyDeps())
             {
-                safeCommand.update(safeStore, truncatedApply(command, TruncatedApply, executeAt, null, null));
+                safeCommand.update(safeStore, Command.Truncated.truncated(command, TruncatedApply, executeAt, null, null));
             }
             else if (safeCommand.current().saveStatus().hasBeen(Applied))
             {
                 Timestamp executesAtLeast = safeCommand.current().executesAtLeast();
                 if (executesAtLeast == null) safeCommand.update(safeStore, erased(command));
-                else safeCommand.update(safeStore, truncatedApply(command, TruncatedApply, executeAt, null, null, executesAtLeast));
+                else safeCommand.update(safeStore, Command.Truncated.truncated(command, TruncatedApply, executeAt, null, null, executesAtLeast));
             }
             safeStore.progressLog().clear(command.txnId());
         }
@@ -892,14 +908,7 @@ public class Commands
         // TODO (desired): consider if there are better invariants we can impose for undecided transactions, to verify they aren't later committed (should be detected already, but more is better)
         // note that our invariant here is imperfectly applied to keep the code cleaner: we don't verify that the caller was safe to invoke if we don't already have a route in the command and we're only PreCommitted
 
-        Invariants.require(command.hasBeen(Applied)
-                           || !command.hasBeen(PreCommitted)
-                           || participants.route() == null   // TODO (expected): tighten this e.g. with && participants.owns.isEmpty()
-                           || validateSafeToCleanup(store.redundantBefore(), command, participants)
-                           || store.redundantBefore().preBootstrapOrStale(command.txnId(), participants.owns()) == FULLY
-                           || (force && participants.executes() != null && participants.stillExecutes().isEmpty())
-        , "Command %s could not be purged", command);
-
+        Invariants.require(validateSafeToCleanup(store.redundantBefore(), command, participants, force), "Command %s could not be purged", command);
         return purge(command, participants, cleanup);
     }
 
@@ -911,7 +920,7 @@ public class Commands
             default: throw new AssertionError("Unexpected cleanup: " + cleanup);
             case INVALIDATE:
                 Invariants.requireArgument(!command.hasBeen(PreCommitted));
-                result = invalidated(command);
+                result = invalidated(command, newParticipants);
                 break;
 
             case TRUNCATE_WITH_OUTCOME:
@@ -922,52 +931,44 @@ public class Commands
                 break;
 
             case TRUNCATE:
-                Invariants.require(command.saveStatus().compareTo(TruncatedApply) < 0);
-                Invariants.requireArgument(command.known().is(ApplyAtKnown));
-                result = truncatedApply(command, newParticipants);
+                result = truncated(command, newParticipants);
                 break;
 
             case VESTIGIAL:
-                Invariants.require(command.saveStatus().compareTo(Erased) < 0);
-                result = vestigial(command);
+                Invariants.require(command.saveStatus().compareTo(SaveStatus.PreApplied) < 0);
+                result = vestigial(command, newParticipants);
                 break;
 
             case ERASE:
             case EXPUNGE:
                 Invariants.require(command.saveStatus().compareTo(Erased) < 0);
-                result = erased(command);
+                result = erased(command, newParticipants);
                 break;
         }
         return result;
     }
 
-    private static boolean validateSafeToCleanup(RedundantBefore redundantBefore, Command command, @Nonnull StoreParticipants participants)
+    private static boolean validateSafeToCleanup(RedundantBefore redundantBefore, Command command, @Nonnull StoreParticipants participants, boolean force)
     {
+        if (command.hasBeen(Applied)) return true;
+        if (!command.hasBeen(PreCommitted)) return true;
+        if (participants.route() == null) return true;   // TODO (expected): tighten this e.g. with && participants.owns.isEmpty()
+
         TxnId txnId = command.txnId();
-        RedundantStatus status = redundantBefore.status(txnId, null, participants.owns());
-        switch (status)
+        RedundantStatus status = redundantBefore.status(txnId, null, participants.route());
+        if (status.any(SHARD_AND_LOCALLY_APPLIED))
         {
-            default: throw new UnhandledEnum(status);
-            case LIVE:
-            case WAS_OWNED:
-            case WAS_OWNED_CLOSED:
-            case PARTIALLY_LOCALLY_REDUNDANT:
-            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-                return false;
-            case LOCALLY_REDUNDANT:
-            case PARTIALLY_SHARD_REDUNDANT:
-            case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
-            case SHARD_REDUNDANT:
-            case GC_BEFORE:
-            case TRUNCATE_BEFORE:
-                Invariants.paranoid(!command.hasBeen(PreCommitted) || command.participants().stillExecutes().isEmpty());
-            case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-            case PRE_BOOTSTRAP_OR_STALE:
-            case NOT_OWNED:
-            case WAS_OWNED_PARTIALLY_RETIRED:
-            case WAS_OWNED_RETIRED:
-                return true;
+            Invariants.paranoid(command.participants().stillExecutes().isEmpty());
+            return true;
         }
+
+        if (status.all(SHARD_APPLIED_AND_LOCALLY_REDUNDANT) || status.all(PRE_BOOTSTRAP_OR_STALE))
+            return true;
+
+        if (force && participants.executes() != null && participants.stillExecutes().isEmpty())
+            return true;
+
+        return false;
     }
 
     public static boolean maybeCleanup(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, @Nonnull StoreParticipants newParticipants)
@@ -976,7 +977,7 @@ public class Commands
         Cleanup cleanup = shouldCleanup(FULL, safeStore, command, cleanupParticipants);
         if (cleanup == NO)
         {
-            if (cleanupParticipants == newParticipants)
+            if (cleanupParticipants == command.participants())
                 return false;
 
             safeCommand.updateParticipants(safeStore, cleanupParticipants);
@@ -988,7 +989,6 @@ public class Commands
         return true;
     }
 
-    // TODO (expected): either ignore this message if we don't have a route, or else require FullRoute requiring route, or else require FullRoute
     public static Command setDurability(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Durability durability, @Nullable Timestamp executeAt)
     {
         final Command command = safeCommand.current();
@@ -1022,8 +1022,9 @@ public class Commands
 
                     Invariants.require(!context.keys().isEmpty());
                     safeStore = safeStore; // prevent accidental usage inside lambda
-                    safeStore.commandStore().execute(context, safeStore0 -> setDurable(safeStore0, safeStore0.context(), txnId))
-                             .begin(safeStore.commandStore().agent);
+                    safeStore.commandStore().execute(context, safeStore0 -> {
+                        setDurable(safeStore0, safeStore0.context(), txnId);
+                    }, safeStore.commandStore().agent);
                 }
             }
         }
@@ -1065,44 +1066,9 @@ public class Commands
 
                 if (loadDepId != null)
                 {
-                    depSafe = safeStore.get(loadDepId);
-                    if (depSafe.current().saveStatus() == Uninitialised)
-                    {
-                        RedundantStatus redundantStatus = safeStore.redundantBefore().status(loadDepId, null, waiting.partialDeps().participants(loadDepId));
-                        switch (redundantStatus)
-                        {
-                            default: throw new AssertionError("Unexpected redundant status: " + redundantStatus);
-                            case NOT_OWNED:
-                                throw new AssertionError("Invalid state: waiting for execution of command that is not owned at the execution time");
-
-                            case WAS_OWNED_PARTIALLY_RETIRED:
-                            case WAS_OWNED_RETIRED:
-                            case PRE_BOOTSTRAP_OR_STALE:
-                            case PARTIALLY_LOCALLY_REDUNDANT:
-                            case LOCALLY_REDUNDANT:
-                            case PARTIALLY_SHARD_REDUNDANT:
-                            case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
-                            case SHARD_REDUNDANT:
-                            case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-                            case TRUNCATE_BEFORE:
-                            case GC_BEFORE:
-                                removeRedundantDependencies(safeStore, waitingSafe, loadDepId);
-                                depSafe = null;
-                                break;
-
-                            case WAS_OWNED:
-                            case WAS_OWNED_CLOSED:
-                                if (!waitingId.awaitsPreviouslyOwned())
-                                {
-                                    removeNoLongerOwnedDependency(safeStore, waitingSafe, loadDepId);
-                                    depSafe = null;
-                                    break;
-                                }
-
-                            case LIVE:
-                            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-                        }
-                    }
+                    depSafe = safeStore.ifInitialised(loadDepId);
+                    if (depSafe == null)
+                        depSafe = initialiseOrRemoveDependency(safeStore, waitingSafe, loadDepId, waiting.partialDeps().participants(loadDepId));
                 }
             }
 
@@ -1141,7 +1107,7 @@ public class Commands
                     if (depSafe == null)
                     {
                         loadDepId = directlyBlockedOn;
-                        safeStore.commandStore().execute(this, this).begin(safeStore.agent());
+                        safeStore.commandStore().execute(this, this, safeStore.agent());
                         return;
                     }
                 }
@@ -1158,45 +1124,11 @@ public class Commands
                     {
                         // TODO (desired): slightly costly to invert a large partialDeps collection
                         participants = waiting.partialDeps().participants(dep.txnId());
-                        Participants<?> executes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
+                        Participants<?> stillExecutes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
 
-                        RedundantStatus redundantStatus = safeStore.redundantBefore().status(dep.txnId(), null, executes);
-                        switch (redundantStatus)
-                        {
-                            default: throw new AssertionError("Unknown redundant status: " + redundantStatus);
-                            case WAS_OWNED:
-                            case WAS_OWNED_CLOSED:
-                                if (waitingId.awaitsPreviouslyOwned())
-                                    break;
-
-                            case WAS_OWNED_PARTIALLY_RETIRED:
-                            case WAS_OWNED_RETIRED:
-                            case NOT_OWNED:
-                                if (!waitingId.awaitsPreviouslyOwned() && !safeStore.redundantBefore().preBootstrapOrStale(waitingId, participants).isAny())
-                                    throw illegalState("Invalid state: %s waiting for execution of %s that is not owned at the execution time %s", waitingId, dep.txnId(), waiting.executeAt());
-
-                                removeRedundantDependencies(safeStore, waitingSafe, dep.txnId());
-                                depSafe = null;
-                                continue;
-
-                            case PARTIALLY_LOCALLY_REDUNDANT:
-                            case LOCALLY_REDUNDANT:
-                            case PARTIALLY_SHARD_REDUNDANT:
-                            case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
-                            case SHARD_REDUNDANT:
-                            case TRUNCATE_BEFORE:
-                            case GC_BEFORE:
-                                Invariants.require(dep.hasBeen(Applied) || !dep.hasBeen(PreCommitted));
-                            case PRE_BOOTSTRAP_OR_STALE:
-                            case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-                                // we've been applied, invalidated, or are no longer relevant
-                                removeRedundantDependencies(safeStore, waitingSafe, dep.txnId());
-                                depSafe = null;
-                                continue;
-
-                            case LIVE:
-                            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-                        }
+                        depSafe = maybeCleanupRedundantDependency(safeStore, waitingSafe, depSafe, stillExecutes);
+                        if (depSafe == null)
+                            continue;
                     }
 
                     switch (depExecution)
@@ -1205,13 +1137,13 @@ public class Commands
                         case NotReady:
                             if (logger.isTraceEnabled()) logger.trace("{} blocked on {} until ReadyToExclude", waitingId, dep.txnId());
                             safeStore.registerListener(depSafe, HasDecidedExecuteAt.unblockedFrom, waitingId);
-                            safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, dep.route(), participants, null);
+                            safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, null, participants, null);
                             return;
 
                         case ReadyToExclude:
                         case WaitingToExecute:
                         case ReadyToExecute:
-                            safeStore.progressLog().waiting(CanApply, safeStore, depSafe, dep.route(), participants, null);
+                            safeStore.progressLog().waiting(CanApply, safeStore, depSafe, null, participants, null);
 
                         case Applying:
                             safeStore.registerListener(depSafe, SaveStatus.Applied, waitingId);
@@ -1247,6 +1179,46 @@ public class Commands
                     }
                 }
             }
+        }
+
+        static SafeCommand maybeCleanupRedundantDependency(SafeCommandStore safeStore, SafeCommand waitingSafe, SafeCommand depSafe, Participants<?> executes)
+        {
+            return maybeCleanupRedundantDependency(safeStore, waitingSafe, depSafe.txnId(), sc -> sc.current().saveStatus(), executes, depSafe);
+        }
+
+        static SafeCommand initialiseOrRemoveDependency(SafeCommandStore safeStore, SafeCommand waitingSafe, TxnId depId, Participants<?> executes)
+        {
+            depId = maybeCleanupRedundantDependency(safeStore, waitingSafe, depId, ignore -> Uninitialised, executes, depId);
+            return depId != null ? safeStore.get(depId) : null;
+        }
+
+        // executes is not expected to be stillExecutes, i.e. does not need to remove pre-bootstrap, stale or was-owned+redundant
+        // (although in the hot path this is the case)
+        static <R> R maybeCleanupRedundantDependency(SafeCommandStore safeStore, SafeCommand waitingSafe, TxnId depId, Function<R, SaveStatus> saveStatusGetter, Participants<?> executes, R ifNotRedundant)
+        {
+            RedundantStatus status = safeStore.redundantBefore().status(depId, null, executes);
+            if (status.get(LOCALLY_REDUNDANT) == NONE)
+                return ifNotRedundant;
+
+            if (status.get(LOCALLY_APPLIED) != NONE)
+            {
+                // we've been applied or invalidated
+                SaveStatus saveStatus = saveStatusGetter.apply(ifNotRedundant);
+                Invariants.require(saveStatus.hasBeen(Applied) || !saveStatus.hasBeen(PreCommitted));
+                removeRedundantDependencies(safeStore, waitingSafe, depId);
+                return null;
+            }
+
+            boolean remove = status.get(LOCALLY_REDUNDANT) == ALL;
+            if (remove && waitingSafe.txnId().awaitsPreviouslyOwned())
+                remove = status.get(LOCALLY_SYNCED) == ALL || status.get(PRE_BOOTSTRAP_OR_STALE) == ALL;
+
+            if (!remove)
+                return ifNotRedundant;
+
+            if (status.get(WAS_OWNED) == ALL) removeNoLongerOwnedDependency(safeStore, waitingSafe, depId);
+            else removeRedundantDependencies(safeStore, waitingSafe, depId);
+            return null;
         }
 
         @Override

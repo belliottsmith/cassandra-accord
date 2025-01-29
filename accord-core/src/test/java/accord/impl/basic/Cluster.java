@@ -130,6 +130,7 @@ import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
 import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
 import static accord.impl.basic.NodeSink.Action.DELIVER;
 import static accord.impl.basic.NodeSink.Action.DROP;
+import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.utils.AccordGens.keysInsideRanges;
 import static accord.utils.AccordGens.rangeInsideRange;
@@ -390,7 +391,7 @@ public class Cluster
         onDone.add(run);
     }
 
-    // TODO (expected): merge with BurnTest.burn
+    // TODO (testing): merge with BurnTest.burn
     public static Map<MessageType, Cluster.Stats> run(Supplier<RandomSource> randomSupplier,
                                                       int[] prefixes,
                                                       List<Node.Id> nodes,
@@ -645,7 +646,7 @@ public class Cluster
             NodeSink.TimeoutSupplier timeouts = new NodeSink.TimeoutSupplier()
             {
                 final RandomSource random = randomSupplier.get();
-                // TODO (expected): slow/expires should be broadly in sync with our link latency config
+                // TODO (testing): slow/expires should be broadly in sync with our link latency config
                 final LongSupplier slowAt, expiresAt, failsAt;
                 {
                     int medianSlowAt = random.nextInt(100, 200);
@@ -1453,7 +1454,11 @@ public class Cluster
         }
         Command blockedOn = null;
         if (blockedOnId != null)
-            blockedOn = store.unsafeCommands().get(blockedOnId).value();
+        {
+            GlobalCommand cmd = store.unsafeCommands().get(blockedOnId);
+            if (cmd == null) blockedOn = uninitialised(blockedOnId);
+            else blockedOn = cmd.value();
+        }
         return new BlockingTransaction(command.txnId(), command, store, blockedOn, blockedVia);
     }
 

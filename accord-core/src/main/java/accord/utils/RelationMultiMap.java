@@ -57,9 +57,9 @@ import static java.lang.String.format;
  *   }
  * }
  *
- * // TODO (expected, performance): it would be trivial to special-case transactions that intersect on all keys (e.g. by setting the top integer bit, and otherwise propagating the prior limit).
- *                                  This would also neatly optimise cases where we only have a single key.
- * // TODO (desired, performance): it would also be simple to bitmask our integers, compressing to e.g. byte or short boundaries as permitted. We could do this for all values, including our offsets header.
+ * // TODO (desired): it would be trivial to special-case transactions that intersect on all keys (e.g. by setting the top integer bit, and otherwise propagating the prior limit).
+ *                     This would also neatly optimise cases where we only have a single key.
+ * // TODO (desired): it would also be simple to bitmask our integers, compressing to e.g. byte or short boundaries as permitted. We could do this for all values, including our offsets header.
  */
 public class RelationMultiMap
 {
@@ -95,7 +95,7 @@ public class RelationMultiMap
         default BiFunction<V, V, V> valueMerger() { return null; }
     }
 
-    // TODO (expected, efficiency): cache this object per thread
+    // TODO (desired): cache this object per thread
     public static abstract class AbstractBuilder<K, V, T> implements AutoCloseable
     {
         final Adapter<K, V> adapter;
@@ -990,7 +990,7 @@ public class RelationMultiMap
                               param, removeAndSplitValues, true);
     }
 
-    // TODO (required): add dedicated tests for partial overlap removals
+    // TODO (testing): add dedicated tests for partial overlap removals
     private static <P, K, V> boolean removeInternal(K[] oldKeys, V[] oldValues, int[] oldKeysToValues,
                                                     K[] removeKeys, V[] removeValues, int[] removeKeysToValues,
                                                     Comparator<K> keyComparator, Comparator<V> valueComparator,

@@ -27,10 +27,6 @@ import accord.primitives.TxnId;
 
 import static accord.messages.SimpleReply.Ok;
 
-// TODO (required): if we have epochs 1 and 2, and a syncpoint that executes on epoch 2, where the transactions have not
-//    finished executing on epoch 1, it may not be safe to mark durable on replicas on epoch 1. This is a very unlikely
-//    race condition, but must consider our behaviour - it may be simpler to wait for a sync point to execute on all epochs
-//    that haven't been closed off.
 public class SetGloballyDurable implements Request, PreLoadContext
 {
     public final DurableBefore durableBefore;

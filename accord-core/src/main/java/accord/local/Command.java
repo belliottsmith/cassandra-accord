@@ -62,10 +62,13 @@ import static accord.local.Command.Committed.committed;
 import static accord.local.Command.Executed.executed;
 import static accord.local.Command.NotAcceptedWithoutDefinition.notAccepted;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
+import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
+import static accord.primitives.SaveStatus.TruncatedApply;
+import static accord.primitives.SaveStatus.TruncatedUnapplied;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Uninitialised;
@@ -195,17 +198,6 @@ public abstract class Command implements ICommand
         return txnId;
     }
 
-    /**
-     * We require that this is a FullRoute for all states where isDefinitionKnown().
-     * In some cases, the home shard will contain an arbitrary slice of the Route where !isDefinitionKnown(),
-     * i.e. when a non-home shard informs the home shards of a transaction to ensure forward progress.
-     *
-     * If hasBeen(Committed) this must contain the keys for both txnId.epoch and executeAt.epoch
-     *
-     * TODO (required): audit uses; do not assume non-null means it is a complete route for the shard;
-     *    preferably introduce two variations so callers can declare whether they need the full shard's route
-     *    or any route will do
-     */
     @Override
     public final StoreParticipants participants()
     {
@@ -408,8 +400,13 @@ public abstract class Command implements ICommand
     {
         public static Truncated erased(Command command)
         {
+            return erased(command, command.participants());
+        }
+
+        public static Truncated erased(Command command, StoreParticipants participants)
+        {
             Durability durability = Durability.mergeAtLeast(command.durability(), UniversalOrInvalidated);
-            return erased(command.txnId(), durability, command.participants());
+            return erased(command.txnId(), durability, participants);
         }
 
         public static Truncated erased(TxnId txnId, Status.Durability durability, StoreParticipants participants)
@@ -422,59 +419,70 @@ public abstract class Command implements ICommand
             return vestigial(command.txnId(), command.participants());
         }
 
+        public static Truncated vestigial(Command command, StoreParticipants participants)
+        {
+            return vestigial(command.txnId(), participants);
+        }
+
         public static Truncated vestigial(TxnId txnId, StoreParticipants participants)
         {
             return validate(new Truncated(txnId, SaveStatus.Vestigial, NotDurable, participants, null, null, null));
         }
 
-        public static Truncated truncatedApply(Command command)
+        public static Truncated truncated(Command command)
         {
-            return truncatedApply(command, command.participants());
+            return truncated(command, command.participants());
         }
 
-        public static Truncated truncatedApply(Command command, @Nonnull StoreParticipants participants)
+        public static Truncated truncated(Command command, @Nonnull StoreParticipants participants)
         {
             Invariants.requireArgument(command.known().isExecuteAtKnown());
+            SaveStatus newSaveStatus = command.known().is(ApplyAtKnown) ? TruncatedApply : TruncatedUnapplied;
             Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
             if (command.txnId().awaitsOnlyDeps())
             {
                 Timestamp executesAtLeast = command.hasBeen(Stable) ? command.executesAtLeast() : null;
-                return validate(new TruncatedAwaitsOnlyDeps(command.txnId(), SaveStatus.TruncatedApply, durability, participants, command.executeAt(), null, null, executesAtLeast));
+                return validate(new TruncatedAwaitsOnlyDeps(command.txnId(), newSaveStatus, durability, participants, command.executeAt(), null, null, executesAtLeast));
             }
-            return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApply, durability, participants, command.executeAt(), null, null));
+            return validate(new Truncated(command.txnId(), newSaveStatus, durability, participants, command.executeAt(), null, null));
         }
 
         public static Truncated truncatedApplyWithOutcome(Executed command)
         {
+            return truncatedApplyWithOutcome(command, command.participants());
+        }
+
+        public static Truncated truncatedApplyWithOutcome(Executed command, StoreParticipants participants)
+        {
             Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
             if (command.txnId().awaitsOnlyDeps())
                 return validate(new TruncatedAwaitsOnlyDeps(command.txnId(), SaveStatus.TruncatedApplyWithOutcome, durability, command.participants(), command.executeAt(), command.writes, command.result, command.executesAtLeast()));
-            return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApplyWithOutcome, durability, command.participants(), command.executeAt(), command.writes, command.result));
+            return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApplyWithOutcome, durability, participants, command.executeAt(), command.writes, command.result));
         }
 
-        public static Truncated truncatedApply(ICommand common, SaveStatus saveStatus, Timestamp executeAt, Writes writes, Result result)
+        public static Truncated truncated(ICommand common, SaveStatus saveStatus, Timestamp executeAt, Writes writes, Result result)
         {
-            return truncatedApply(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, writes, result);
+            return truncated(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, writes, result);
         }
 
-        public static Truncated truncatedApply(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, Writes writes, Result result)
+        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, Writes writes, Result result)
         {
             Invariants.requireArgument(!txnId.awaitsOnlyDeps());
             durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
             return validate(new Truncated(txnId, saveStatus, durability, participants, executeAt, writes, result));
         }
 
-        public static Truncated truncatedApply(ICommand common, SaveStatus saveStatus, Timestamp executeAt, Writes writes, Result result, @Nullable Timestamp dependencyExecutesAt)
+        public static Truncated truncated(ICommand common, SaveStatus saveStatus, Timestamp executeAt, Writes writes, Result result, @Nullable Timestamp dependencyExecutesAt)
         {
-            return truncatedApply(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, writes, result, dependencyExecutesAt);
+            return truncated(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, writes, result, dependencyExecutesAt);
         }
 
-        public static Truncated truncatedApply(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, Writes writes, Result result, @Nullable Timestamp dependencyExecutesAt)
+        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, Writes writes, Result result, @Nullable Timestamp dependencyExecutesAt)
         {
             if (!txnId.awaitsOnlyDeps())
             {
                 Invariants.require(dependencyExecutesAt == null);
-                return truncatedApply(txnId, saveStatus, durability, participants, executeAt, writes, result);
+                return truncated(txnId, saveStatus, durability, participants, executeAt, writes, result);
             }
             durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
             return validate(new TruncatedAwaitsOnlyDeps(txnId, saveStatus, durability, participants, executeAt, writes, result, dependencyExecutesAt));
@@ -483,20 +491,23 @@ public abstract class Command implements ICommand
         private static Durability checkTruncatedApplyInvariants(Durability durability, SaveStatus saveStatus, Timestamp executeAt)
         {
             Invariants.requireArgument(executeAt != null);
-            Invariants.requireArgument(saveStatus == SaveStatus.TruncatedApply || saveStatus == SaveStatus.TruncatedApplyWithDeps || saveStatus == SaveStatus.TruncatedApplyWithOutcome);
+            Invariants.requireArgument(saveStatus == SaveStatus.TruncatedApply || saveStatus == SaveStatus.TruncatedUnapplied || saveStatus == SaveStatus.TruncatedApplyWithOutcome);
             return Durability.mergeAtLeast(durability, ShardUniversal);
         }
 
         public static Truncated invalidated(Command command)
         {
+            return invalidated(command, command.participants());
+        }
+
+        public static Truncated invalidated(Command command, StoreParticipants participants)
+        {
             Invariants.require(!command.hasBeen(Status.PreCommitted));
-            return invalidated(command.txnId(), command.participants());
+            return invalidated(command.txnId(), participants);
         }
 
         public static Truncated invalidated(TxnId txnId, StoreParticipants participants)
         {
-            // TODO (expected): migrate to using null for executeAt when invalidated
-            // TODO (expected): is UniversalOrInvalidated correct here? Should we have a lower implication pure Invalidated?
             // NOTE: we *must* save participants here so that on replay we properly repopulate CommandsForKey
             // (otherwise we may see this as a transitive transaction, but never mark it invalidated)
             return validate(new Truncated(txnId, SaveStatus.Invalidated, UniversalOrInvalidated, participants, Timestamp.NONE, null, null));
@@ -507,13 +518,12 @@ public abstract class Command implements ICommand
 
         public Truncated(ICommand copy, SaveStatus saveStatus)
         {
-            // TODO (expected): is Ballot.MAX helpful or harmful here?
-            //  We have to special-case partial truncation anyway as we can infinite loop if we think there's a superseding recovery.
             super(copy, saveStatus);
             this.writes = copy.writes();
             this.result = copy.result();
         }
 
+        // TODO (required): is Ballot.MAX helpful or harmful here? We must consider how to best protect against infinite reject loops.
         public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable Writes writes, @Nullable Result result)
         {
             super(txnId, saveStatus, durability, participants, Ballot.MAX, executeAt, null, null, Ballot.MAX);
@@ -1213,7 +1223,6 @@ public abstract class Command implements ICommand
             {
                 int index = keys.indexOf(key);
                 // we can be a member of a CFK we aren't waiting on, if we Accept in a later epoch using a key we don't own once Committed to an earlier eopch
-                // TODO (expected): simply remove ourselves from any CFK we aren't waiting on
                 if (index < 0) return false;
 
                 index += txnIdCount();
@@ -1641,7 +1650,7 @@ public abstract class Command implements ICommand
             case Applied:
                 return validateCommandClass(status, Executed.class, klass);
             case TruncatedApply:
-            case TruncatedApplyWithDeps:
+            case TruncatedUnapplied:
             case TruncatedApplyWithOutcome:
                 if (txnId.awaitsOnlyDeps())
                     return validateCommandClass(status, TruncatedAwaitsOnlyDeps.class, klass);
@@ -1657,6 +1666,7 @@ public abstract class Command implements ICommand
     public static <T extends Command> T validate(T validate)
     {
         Invariants.require(validate.txnId().hasOnlyIdentityFlags());
+        Invariants.require(!validate.participants().hasTouched().isEmpty() || validate.saveStatus() == Uninitialised);
         Known known = validate.known();
         switch (known.route())
         {

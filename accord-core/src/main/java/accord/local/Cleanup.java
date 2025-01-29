@@ -23,20 +23,29 @@ import javax.annotation.Nonnull;
 import accord.api.Agent;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
+import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.Input.PARTIAL;
-import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
-import static accord.local.RedundantStatus.NOT_OWNED;
-import static accord.local.RedundantStatus.TRUNCATE_BEFORE;
+import static accord.local.RedundantStatus.Coverage.ALL;
+import static accord.local.RedundantStatus.Property.GC_BEFORE;
+import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
+import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.Property.NOT_OWNED;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED_ONLY;
+import static accord.local.RedundantStatus.Property.TRUNCATE_BEFORE;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.Invalidated;
 import static accord.primitives.SaveStatus.TruncatedApply;
@@ -46,11 +55,11 @@ import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.PreCommitted;
+import static accord.primitives.Status.Truncated;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.EphemeralRead;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.utils.Invariants.illegalState;
+import static accord.primitives.TxnId.Cardinality.Any;
 
 /**
  * Logic related to whether metadata about transactions is safe to discard given currently available information.
@@ -61,7 +70,6 @@ public enum Cleanup
     NO(Uninitialised),
     // we don't know if the command has been applied or invalidated as we have incomplete information
     // so erase what information we don't need in future to decide this
-    // TODO (required): tighten up semantics here (and maybe infer more aggressively)
     TRUNCATE_WITH_OUTCOME(TruncatedApplyWithOutcome),
     TRUNCATE(TruncatedApply),
     VESTIGIAL(Vestigial),
@@ -135,8 +143,6 @@ public enum Cleanup
      * If we know a transaction is invalidated, but don't know its FullRoute,
      * we pessimistically assume the whole cluster may need to see its outcome
      * TODO (expected): we should be able to rely on replicas to infer Invalidated from an Erased record
-     * </p>
-     *
      */
     private static Cleanup shouldCleanupInternal(Input input, Agent agent, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
@@ -149,48 +155,9 @@ public enum Cleanup
         if (participants == null)
             return NO;
 
-        if (!participants.hasFullRoute())
-            return cleanupIfUndecided(input, txnId, saveStatus, participants, redundantBefore);
-
-        return cleanupWithFullRoute(input, agent, participants, txnId, executeAt, saveStatus, durability, redundantBefore, durableBefore);
-    }
-
-    private static Cleanup cleanupIfUndecided(Input input, TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, RedundantBefore redundantBefore)
-    {
-        // TODO (expected): consider if we can truncate more aggressively partial records, although we cannot infer anything from the fact they're undecided
-        if (input == PARTIAL || saveStatus.hasBeen(PreCommitted))
-            return NO;
-
-        if (participants.owns().isEmpty())
-            return txnId.compareTo(redundantBefore.minShardRedundantBefore()) < 0 ? vestigial() : NO;
-
-        RedundantStatus redundant = redundantBefore.status(txnId, null, participants.owns());
-        switch (redundant)
-        {
-            default: throw new UnhandledEnum(redundant);
-            case WAS_OWNED:
-            case WAS_OWNED_CLOSED:
-            case LIVE:
-            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-            case PRE_BOOTSTRAP_OR_STALE:
-            case LOCALLY_REDUNDANT:
-            case PARTIALLY_LOCALLY_REDUNDANT:
-            case PARTIALLY_SHARD_REDUNDANT:
-                return NO;
-
-            case WAS_OWNED_PARTIALLY_RETIRED:
-            case WAS_OWNED_RETIRED:
-            case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-                return vestigial();
-
-            case SHARD_REDUNDANT:
-            case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
-            case TRUNCATE_BEFORE:
-            case GC_BEFORE:
-                // correctness here relies on the fact that we process expunges first via global properties
-                // so, if we reach here we would expect any Erase/Truncate to still exist and this path would not be taken
-                return invalidate();
-        }
+        if (participants.hasFullRoute())
+            return cleanupWithFullRoute(input, agent, participants, txnId, executeAt, saveStatus, durability, redundantBefore, durableBefore);
+        return cleanupWithoutFullRoute(input, txnId, saveStatus, participants, redundantBefore, durableBefore);
     }
 
     private static Cleanup cleanupWithFullRoute(Input input, Agent agent, StoreParticipants participants, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, RedundantBefore redundantBefore, DurableBefore durableBefore)
@@ -200,88 +167,107 @@ public enum Cleanup
         FullRoute<?> route = Route.castToFullRoute(participants.route());
         if (!saveStatus.known.is(ApplyAtKnown)) executeAt = null;
         RedundantStatus redundant = redundantBefore.status(txnId, executeAt, route);
-        if (redundant == NOT_OWNED)
-            illegalState("Command " + txnId + " that is being loaded is not owned by this shard on route " + route);
+        Invariants.require(redundant.none(NOT_OWNED),"Command " + txnId + " that is being loaded is not owned by this shard on route " + route);
 
-        switch (redundant)
+        if (redundant.none(LOCALLY_REDUNDANT))
+            return NO;
+
+        Cleanup ifUndecided = cleanupIfUndecidedOrDefunctWithFullRoute(input, txnId, saveStatus, redundant, redundant.all(TRUNCATE_BEFORE) ? null : NO);
+        if (ifUndecided != null)
+            return ifUndecided;
+
+        if (input == FULL)
         {
-            default: throw new UnhandledEnum(redundant);
-            case WAS_OWNED:
-            case WAS_OWNED_CLOSED:
-            case LIVE:
-            case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
-            case PRE_BOOTSTRAP_OR_STALE:
-            case LOCALLY_REDUNDANT:
-            case PARTIALLY_LOCALLY_REDUNDANT:
-            case PARTIALLY_SHARD_REDUNDANT:
-                return NO;
-
-            case WAS_OWNED_PARTIALLY_RETIRED:
-                // all keys are no longer owned, and at least one key is locally redundant
-                if (txnId.is(ExclusiveSyncPoint))
-                    return NO;
-
-            case WAS_OWNED_RETIRED:
-                return vestigial();
-
-            case SHARD_REDUNDANT_AND_PRE_BOOTSTRAP_OR_STALE:
-                return truncate(saveStatus);
-
-            case SHARD_REDUNDANT:
-            case PARTIALLY_SHARD_FULLY_LOCALLY_REDUNDANT:
-                if (!saveStatus.hasBeen(PreCommitted))
-                    return input == FULL ? invalidate() : NO;
-                return NO;
-
-            case GC_BEFORE:
-            case TRUNCATE_BEFORE:
-                if (!saveStatus.hasBeen(PreCommitted))
-                    return input == FULL ? invalidate() : NO;
-
-                if (input == FULL)
-                {
-                    Participants<?> executes = participants.stillExecutes();
-                    if (!saveStatus.hasBeen(Applied) && (executes == null || (!executes.isEmpty() && redundantBefore.preBootstrapOrStale(txnId, executes) != FULLY)))
-                    {
-                        // if we should execute this transaction locally, and we have not done so by the time we reach a GC point, something has gone wrong
-                        agent.onViolation(String.format("Loading %s command %s with status %s (that should have been Applied). Expected to be witnessed and executed by %s.", redundant, txnId, saveStatus, redundantBefore.max(participants.route(), e -> e.shardAppliedOrInvalidatedBefore)));
-                        return truncate(saveStatus);
-                    }
-                }
-
-                Durability test = Durability.max(durability, durableBefore.min(txnId, participants.route()));
-                switch (test)
-                {
-                    default: throw new UnhandledEnum(durability);
-                    case Local:
-                    case NotDurable:
-                    case ShardUniversal:
-                        return truncateWithOutcome();
-
-                    case MajorityOrInvalidated:
-                    case Majority:
-                        return truncate();
-
-                    case UniversalOrInvalidated:
-                    case Universal:
-                        if (redundant == TRUNCATE_BEFORE)
-                            return truncate();
-                        return erase();
-                }
+            Participants<?> executes = participants.stillExecutes();
+            if (!saveStatus.hasBeen(Applied) && (executes == null || (!executes.isEmpty() && redundantBefore.preBootstrapOrStale(txnId, executes) != ALL)))
+            {
+                // if we should execute this transaction locally, and we have not done so by the time we reach a GC point, something has gone wrong
+                TxnId supersededBy = redundantBefore.max(participants.route(), e -> e.shardAppliedBefore);
+                Participants<?> on = executes.slice(redundantBefore.foldl(participants.route(), (e, r, s) -> s.equals(e.shardAppliedBefore) ? r.with(Ranges.of(e.range)) : r, Ranges.EMPTY, supersededBy), Minimal);
+                String message = "Loading " + redundant + " command " + txnId + " with status " + saveStatus + " (that should have been Applied). Expected to be witnessed and executed by " + supersededBy + ".";
+                agent.onViolation(message, on, txnId, executeAt, supersededBy, supersededBy);
+                return truncate(txnId);
+            }
         }
+
+        Durability test = Durability.max(durability, durableBefore.min(txnId, participants.route()));
+        switch (test)
+        {
+            default: throw new UnhandledEnum(durability);
+            case Local:
+            case NotDurable:
+            case ShardUniversal:
+                return truncateWithOutcome();
+
+            case MajorityOrInvalidated:
+            case Majority:
+                return truncate(txnId);
+
+            case UniversalOrInvalidated:
+            case Universal:
+                if (redundant.get(GC_BEFORE) == ALL)
+                    return erase();
+                return truncate(txnId);
+        }
+    }
+
+    private static Cleanup cleanupWithoutFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    {
+        // TODO (expected): consider if we can truncate more aggressively partial records, although we cannot infer anything from the fact they're undecided
+        if (input == PARTIAL || saveStatus.hasBeen(Truncated))
+            return NO;
+
+        Invariants.require(!saveStatus.hasBeen(PreCommitted));
+        if (participants.owns().isEmpty())
+        {
+            // we don't want to erase something that we only don't own because it hasn't been initialised
+            if (saveStatus == Uninitialised)
+                return NO;
+
+            if (txnId.compareTo(redundantBefore.minShardRedundantBefore()) >= 0)
+                return NO;
+
+            return vestigial(txnId);
+        }
+
+        RedundantStatus redundant = redundantBefore.status(txnId, null, participants.owns());
+        return cleanupUndecided(txnId, redundant);
+    }
+
+    private static Cleanup cleanupIfUndecidedOrDefunctWithFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, RedundantStatus redundantStatus, Cleanup ifDecided)
+    {
+        if (saveStatus.hasBeen(PreCommitted))
+        {
+            // TODO (required): consider more the invariants we're guaranteeing here, particularly with respect to other shards
+            //  also consider whether we interfere with stronger cleanup that would run after in cleanupWithFullRoute
+            if (input != PARTIAL && redundantStatus.all(SHARD_APPLIED_ONLY) && !redundantStatus.any(LOCALLY_APPLIED) && redundantStatus.all(LOCALLY_DEFUNCT))
+                return truncate(txnId);
+            return ifDecided;
+        }
+
+        if (input == PARTIAL)
+            return NO;
+
+        return cleanupUndecided(txnId, redundantStatus);
+    }
+
+    private static Cleanup cleanupUndecided(TxnId txnId, RedundantStatus redundantStatus)
+    {
+        if (redundantStatus.any(LOCALLY_APPLIED))
+            return invalidate(txnId);
+
+        if (redundantStatus.all(SHARD_APPLIED_AND_LOCALLY_REDUNDANT))
+            return vestigial(txnId);
+
+        return NO;
     }
 
     private static boolean expunge(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        // since we cannot guarantee to witness participants for all records, we must use the global durableBefore bounds
-        // TODO (expected): introduce a single-key flag, as this would facilitate faster cleanup of common transactions
-        if (durableBefore.min(txnId) != UniversalOrInvalidated)
+        if (txnId.is(Any) && durableBefore.min(txnId) != UniversalOrInvalidated)
             return false;
 
-        // TODO (desired): we should perhaps weaken this to separately account whether remotely and locally redundant?
-        //  i.e., if we know that the shard is remotely durable and we know we don't need it locally (e.g. due to bootstrap)
-        //  then we can safely erase. Revisit as part of rationalising RedundantBefore registers.
-
+        // since we cannot guarantee to witness participants for all records, we must use the global durableBefore bounds
         TxnId minGcBefore = redundantBefore.minGcBefore();
         if (minGcBefore.compareTo(txnId) <= 0)
             return false;
@@ -299,14 +285,19 @@ public enum Cleanup
     }
 
     // convenient for debugging
-    private static Cleanup invalidate() { return INVALIDATE; }
-    private static Cleanup truncate(SaveStatus saveStatus)
+    private static Cleanup invalidate(TxnId txnId)
     {
-        return saveStatus.known.is(ApplyAtKnown) ? truncate() : vestigial();
+        return INVALIDATE;
     }
     private static Cleanup truncateWithOutcome() { return TRUNCATE_WITH_OUTCOME; }
-    private static Cleanup truncate() { return TRUNCATE; }
-    private static Cleanup vestigial() { return VESTIGIAL; }
+    private static Cleanup truncate(TxnId txnId)
+    {
+        return TRUNCATE;
+    }
+    private static Cleanup vestigial(TxnId txnId)
+    {
+        return VESTIGIAL;
+    }
     private static Cleanup erase() { return ERASE; }
     private static Cleanup expunge() { return EXPUNGE; }
 }

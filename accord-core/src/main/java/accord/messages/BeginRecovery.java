@@ -64,8 +64,7 @@ import static accord.primitives.Status.PreAccepted;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
-import static accord.utils.Invariants.illegalState;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 
 public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.RecoverReply>
 {
@@ -86,7 +85,6 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     public BeginRecovery(Id to, Topologies topologies, TxnId txnId, @Nullable Timestamp executeAt, Txn txn, FullRoute<?> route, Ballot ballot)
     {
         super(to, topologies, txnId, route);
-        // TODO (expected): only scope.contains(route.homeKey); this affects state eviction and is low priority given size in C*
         this.partialTxn = txn.intersecting(scope, true);
         this.ballot = ballot;
         this.route = route;
@@ -117,18 +115,11 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         Commands.AcceptOutcome outcome = Commands.recover(safeStore, safeCommand, participants, txnId, partialTxn, route, ballot);
         switch (outcome)
         {
-            default: throw illegalState("Unhandled Outcome: " + outcome);
-            case Redundant: throw illegalState("Invaid Outcome: " + outcome);
-
-            case Truncated:
-                return new RecoverNack(Truncated, null);
-
-            case Retired:
-                return new RecoverNack(Retired, null);
-
-            case RejectedBallot:
-                return new RecoverNack(Reject, safeCommand.current().promised());
-
+            default:             throw UnhandledEnum.unknown(outcome);
+            case Redundant:      throw UnhandledEnum.invalid(outcome);
+            case Truncated:    return new RecoverNack(Truncated, null);
+            case Retired:        return new RecoverNack(Retired, null);
+            case RejectedBallot: return new RecoverNack(Reject, safeCommand.current().promised());
             case Success:
         }
 
@@ -164,7 +155,6 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         }
         else
         {
-            // TODO (expected): modify the mapReduce API to perform this check in a single pass
             try (Visitor visitor = new Visitor())
             {
                 safeStore.visit(participants.owns(), txnId, txnId.witnessedBy(), ANY, txnId, EITHER, visitor);
@@ -341,9 +331,10 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                             case PREACCEPTED:
                             case NOTACCEPTED:
                                 // no need to wait for potential medium path transactions started before us, only after
-                                // however, both privileged coordinator optimisations require waiting for an earlier potential fast path to decide itself
-                                // TODO (desired): compute against shard whether this is necessary - for most quorum configurations it doesn't
-                                if (testTxnId.hasPrivilegedCoordinator())
+                                // however, both privileged coordinator optimisations require waiting for the earlier potential fast path to decide itself
+                                // (that is, if either transaction use the optimisation, we must wait for the earlier transaction)
+                                // TODO (desired): compute against shard whether this is a necessary wait condition - for many quorum configurations it isn't
+                                if (testTxnId.hasPrivilegedCoordinator() || txnId.hasPrivilegedCoordinator())
                                     ensureEarlierWait().add(keyOrRange, testTxnId);
                         }
                 }
@@ -373,7 +364,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                         break;
 
                     case IS_NOT_COORD_DEP:
-                        Invariants.requireArgument(testTxnId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
+                        Invariants.requireArgument(testTxnId.is(PrivilegedCoordinatorWithDeps));
                         ensureLaterCoordRejects().add(keyOrRange, testTxnId);
                 }
             }
@@ -425,7 +416,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
 
     public static abstract class RecoverReply implements Reply
     {
-        // TODO (expected): recover should gracefully handle partial truncation (currently expected to be handled by MaybeRecover)
+        // TODO (required): recover should gracefully handle partial truncation (currently expected to be handled by MaybeRecover)
         public enum Kind { Ok, Retired, Truncated, Reject }
 
         @Override

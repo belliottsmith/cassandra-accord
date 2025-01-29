@@ -36,6 +36,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
 import accord.utils.SortedListMap;
 import accord.utils.WrappableException;
 
@@ -49,12 +50,10 @@ import static accord.primitives.Timestamp.mergeMaxAndFlags;
  * If we are preempted by a recovery coordinator, we abort and let them complete (and notify us about the execution result)
  *
  * TODO (desired, testing): dedicated burn test to validate outcomes
- * TODO (expected):
  */
 abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, PreAcceptReply>
 {
     final PreAcceptTracker<?> tracker;
-    // TODO (expected): this can be cleared after preaccept
     private final SortedListMap<Id, PreAcceptOk> oks;
     final Txn txn;
     boolean fastPathEnabled = true;
@@ -148,10 +147,10 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     @Override
     void onPreAccepted(Topologies topologies)
     {
-        // TODO (expected): we do not have to take max here if we have enough fast path votes (this may unnecessarily force us onto the slow path)
         Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
         node.withEpoch(executeAt.epoch(), this, t -> WrappableException.wrap(t), () -> {
             onPreAccepted(topologies, executeAt, oks);
+            if (!Invariants.debug()) oks.clear();
         });
     }
 

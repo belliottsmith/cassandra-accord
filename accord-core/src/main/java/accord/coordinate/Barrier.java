@@ -57,6 +57,7 @@ import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
 import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.local.CommandSummaries.TestStartedAt.STARTED_AFTER;
 import static accord.primitives.Txn.Kind.AnyGloballyVisible;
+import static accord.primitives.TxnId.Cardinality.cardinality;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -149,7 +150,7 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
     private static BiFunction<Node, FullRoute<?>, AsyncSyncPoint> wrap(TriFunction<Node, TxnId, FullRoute<?>, AsyncResult<? extends SyncPoint<?>>> syncPointFactory)
     {
         return (node, route) -> {
-            TxnId txnId = node.nextTxnId(Txn.Kind.SyncPoint, route.domain());
+            TxnId txnId = node.nextTxnId(Txn.Kind.SyncPoint, route.domain(), cardinality(route));
             return new AsyncSyncPoint(txnId, syncPointFactory.apply(node, txnId, route));
         };
     }
@@ -186,11 +187,10 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
         coordinateSyncPoint = async.async;
         if (barrierType.async)
         {
-            Invariants.require(barrierType.async);
             TxnId txnId = async.txnId;
             long epoch = txnId.epoch();
             RoutingKey homeKey = route.homeKey();
-            node.commandStores().ifLocal(txnId, homeKey, epoch, epoch, safeStore -> register(safeStore, txnId, homeKey))
+            node.withEpoch(epoch, () -> node.commandStores().ifLocal(txnId, homeKey, epoch, epoch, safeStore -> register(safeStore, txnId, homeKey)))
                 .begin(node.agent());
         }
 
@@ -278,7 +278,7 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
         @Override
         public BarrierTxn apply(SafeCommandStore safeStore)
         {
-            // TODO (required): consider these semantics carefully
+            // TODO (required): it isn't probably safe to use a Read here; but, we can and should implement Barriers via writes
             // Barriers are trying to establish that committed transactions are applied before the barrier (or in this case just minEpoch)
             // so all existing transaction types should ensure that at this point. An earlier txnid may have an executeAt that is after
             // this barrier or the transaction we listen on and that is fine
@@ -289,8 +289,9 @@ public class Barrier extends AsyncResults.AbstractResult<TxnId>
                 //noinspection SillyAssignment,ConstantConditions
                 safeStore = safeStore; // prevent use in lambda
                 safeStore.commandStore()
-                         .execute(found.txnId, safeStoreWithTxn -> register(safeStoreWithTxn, found.txnId, found.key))
-                         .begin(node.agent());
+                         .execute(found.txnId, safeStoreWithTxn -> {
+                             register(safeStoreWithTxn, found.txnId, found.key);
+                         }, node.agent());
             }
             return found;
         }

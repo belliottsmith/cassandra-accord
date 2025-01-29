@@ -84,7 +84,7 @@ import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedMedium;
-import static accord.primitives.TxnId.FastPath.PRIVILEGED_COORDINATOR_WITH_DEPS;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FLOOR;
@@ -208,7 +208,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     }
 
     @Override
-    public synchronized void onSuccess(Id from, RecoverReply reply)
+    public void onSuccess(Id from, RecoverReply reply)
     {
         if (isDone || isBallotPromised)
             return;
@@ -219,7 +219,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             default: throw new AssertionError("Unhandled RecoverReply.Kind: " + reply.kind());
             case Reject:
             case Truncated:
-                // TODO (expected): handle partial truncation
+                // TODO (required): handle partial truncations (both within a shard e.g. pre-bootstrap, and for some shards)
                 accept(null, new Preempted(txnId, route.homeKey()));
                 return;
 
@@ -595,7 +595,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
             {
                 TxnId awaitId = waitOn.txnId(i);
-                Invariants.require(awaitId.is(PRIVILEGED_COORDINATOR_WITH_DEPS));
+                Invariants.require(awaitId.is(PrivilegedCoordinatorWithDeps));
                 Invariants.require(awaitId.compareTo(recoverId) > 0);
                 Participants<?> participants = waitOn.participants(awaitId)
                                                      .intersecting(reliesOnAwaitIdCoordVote, Minimal);

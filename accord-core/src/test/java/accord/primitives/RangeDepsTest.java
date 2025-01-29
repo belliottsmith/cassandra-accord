@@ -195,7 +195,7 @@ public class RangeDepsTest
 
     private static final boolean EXHAUSTIVE = false;
 
-    // TODO (expected, testing): generate ranges of different sizes at different ratios
+    // TODO (testing): generate ranges of different sizes at different ratios
     private static Validate generate(Random random, GenerateRanges generate, int txnIdCount, int rangeCount)
     {
         Map<TxnId, Ranges> map = new TreeMap<>();

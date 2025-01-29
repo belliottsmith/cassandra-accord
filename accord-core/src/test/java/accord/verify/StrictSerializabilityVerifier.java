@@ -477,7 +477,7 @@ public class StrictSerializabilityVerifier implements Verifier
         }
     }
 
-    // TODO (expected, testing): rethink this concept - should it be a Step? Does it provide any value? If not, it's more confusing.
+    // TODO (testing): rethink this concept - should it be a Step? Does it provide any value? If not, it's more confusing.
     class FutureWrites extends Step
     {
         /**
@@ -540,7 +540,7 @@ public class StrictSerializabilityVerifier implements Verifier
         @Override
         boolean updatePredecessorsOfWrite(int[][] reads, int[] writes, StrictSerializabilityVerifier verifier)
         {
-            // TODO (required): this evidently wasn't carefully considered at the time, and removing it improves things
+            // TODO (testing): this evidently wasn't carefully considered at the time, and removing it improves things
             //                  but what if anything this trying to achieve?
             //                  probably we DO want to update the predecessors of any NEW step. perhaps we also want
             //                  and we probably want some additional unit tests around blind writes

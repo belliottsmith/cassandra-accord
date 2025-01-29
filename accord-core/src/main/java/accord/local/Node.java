@@ -75,6 +75,7 @@ import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.TxnId.Cardinality;
 import accord.primitives.Unseekables;
 import accord.topology.Shard;
 import accord.topology.Topology;
@@ -98,7 +99,10 @@ import net.nicoulaj.compilecommand.annotations.Inline;
 import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
 import static accord.api.ProtocolModifiers.Toggles.defaultMediumPath;
 import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
-import static accord.primitives.TxnId.FastPath.UNOPTIMISED;
+import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.TxnId.Cardinality.Any;
+import static accord.primitives.TxnId.Cardinality.cardinality;
+import static accord.primitives.TxnId.FastPath.Unoptimised;
 import static accord.utils.Invariants.illegalState;
 import static java.lang.String.format;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -171,7 +175,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private final RandomSource random;
     private final LocalConfig localConfig;
 
-    // TODO (expected, consider): this really needs to be thought through some more, as it needs to be per-instance in some cases, and per-node in others
     private final Scheduler scheduler;
     private final DurabilityScheduling durabilityScheduling;
 
@@ -682,16 +685,27 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public TxnId nextTxnId(Txn.Kind rw, Domain domain)
     {
-        return nextTxnId(rw, domain, defaultMediumPath().bits);
+        return nextTxnId(rw, domain, Any, defaultMediumPath().bit());
+    }
+
+    public TxnId nextTxnId(Txn.Kind rw, Domain domain, Cardinality cardinality)
+    {
+        return nextTxnId(rw, domain, cardinality, defaultMediumPath().bit());
+    }
+
+    public TxnId nextTxnId(Txn.Kind rw, Domain domain, int flags)
+    {
+        return nextTxnId(rw, domain, Any, flags);
     }
 
     /**
      * TODO (required): Make sure we cannot re-issue the same txnid on startup
+     * TODO (required): Don't use a new epoch for the TxnId at least until we know its definition
      */
-    public TxnId nextTxnId(Txn.Kind rw, Domain domain, int flags)
+    public TxnId nextTxnId(Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
     {
-        Invariants.require(domain == Domain.Key || rw != Txn.Kind.Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
-        TxnId txnId = new TxnId(uniqueNow(), flags, rw, domain);
+        Invariants.require(domain == Key || rw != Txn.Kind.Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
+        TxnId txnId = new TxnId(uniqueNow(), flags, rw, domain, cardinality);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
@@ -701,12 +715,13 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         Seekables<?, ?> keys = txn.keys();
         Txn.Kind kind = txn.kind();
         Domain domain = keys.domain();
+        Cardinality cardinality = cardinality(domain, keys);
         if (!usePrivilegedCoordinator())
-            return nextTxnId(kind, domain);
+            return nextTxnId(kind, domain, cardinality);
 
         Timestamp now = uniqueNow();
         int flags = computeBestDefaultTxnIdFlags(keys, now.epoch());
-        TxnId txnId = new TxnId(now, flags, kind, domain);
+        TxnId txnId = new TxnId(now, flags, kind, domain, cardinality);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
@@ -714,10 +729,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private int computeBestDefaultTxnIdFlags(Routables<?> keys, long epoch)
     {
         if (!topology.hasEpoch(epoch) || !usePrivilegedCoordinator())
-            return defaultMediumPath().bits;
+            return defaultMediumPath().bit();
 
         TxnId.FastPath fastPath = ensurePermitted(topology().selectFastPath(keys, epoch));
-        return fastPath.bits | defaultMediumPath().bits;
+        return fastPath.bits | defaultMediumPath().bit();
     }
 
     public TxnId nextTxnId(Txn txn, TxnId.FastPath fastPath, TxnId.MediumPath mediumPath)
@@ -728,10 +743,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
         Timestamp now = uniqueNow();
         fastPath = ensurePermitted(fastPath);
-        if (fastPath != UNOPTIMISED && (!topology.hasEpoch(now.epoch()) || !topology.supportsPrivilegedFastPath(keys, now.epoch())))
-            fastPath = UNOPTIMISED;
+        if (fastPath != Unoptimised && (!topology.hasEpoch(now.epoch()) || !topology.supportsPrivilegedFastPath(keys, now.epoch())))
+            fastPath = Unoptimised;
 
-        return nextTxnId(kind, domain, fastPath.bits | mediumPath.bits);
+        Cardinality cardinality = cardinality(domain, keys);
+        return nextTxnId(kind, domain, cardinality, fastPath.bits | mediumPath.bit());
     }
 
     public AsyncResult<Result> coordinate(Txn txn)
@@ -748,9 +764,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     // TODO (required): plumb deadlineNanos in (perhaps on integration side, but maybe introduce some context we can pass through for the MessageSink)
     public AsyncResult<Result> coordinate(TxnId txnId, Txn txn, long minEpoch, long deadlineNanos)
     {
-        // TODO (desirable, consider): The combination of updating the epoch of the next timestamp with epochs we don't have topologies for,
-        //  and requiring preaccept to talk to its topology epoch means that learning of a new epoch via timestamp
-        //  (ie not via config service) will halt any new txns from a node until it receives this topology
         AsyncResult<Result> result = withEpoch(Math.max(txnId.epoch(), minEpoch), () -> initiateCoordination(txnId, txn)).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
         result.addCallback((success, fail) -> coordinating.remove(txnId, result));

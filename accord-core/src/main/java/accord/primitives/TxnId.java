@@ -33,17 +33,18 @@ import accord.utils.TinyEnumSet;
 
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.primitives.TxnId.Cardinality.Any;
+import static accord.primitives.TxnId.MediumPath.NoMediumPath;
 import static accord.utils.Invariants.illegalArgument;
 
 public class TxnId extends Timestamp implements PreLoadContext
 {
     public enum FastPath
     {
-        UNOPTIMISED,
-        PRIVILEGED_COORDINATOR_WITHOUT_DEPS,
-        PRIVILEGED_COORDINATOR_WITH_DEPS;
+        Unoptimised,
+        PrivilegedCoordinatorWithoutDeps,
+        PrivilegedCoordinatorWithDeps;
 
-        private static final FastPaths IS_PRIVILEGED = new FastPaths(PRIVILEGED_COORDINATOR_WITH_DEPS, PRIVILEGED_COORDINATOR_WITHOUT_DEPS);
         private static final FastPath[] VALUES = values();
 
         public final int bits;
@@ -53,26 +54,46 @@ public class TxnId extends Timestamp implements PreLoadContext
             this.bits = ordinal() << 4;
         }
 
+        final boolean is(int flagsUnmasked)
+        {
+            return is(flagsUnmasked, this);
+        }
+
+        private static boolean is(int flagsUnmasked, FastPath test)
+        {
+            return ((flagsUnmasked >>> 4) & 3) == test.ordinal();
+        }
+
+        private static FastPath forFlags(int flagsUnmasked)
+        {
+            return forOrdinal(ordinalFromFlags(flagsUnmasked));
+        }
+
+        private static int ordinalFromFlags(int flagsUnmasked)
+        {
+            return (flagsUnmasked >>> 4) & 3;
+        }
+
         public static FastPath forOrdinal(int ordinal)
         {
             return VALUES[ordinal];
         }
 
-        static boolean hasPrivilegedCoordinator(int ordinal)
+        static boolean hasPrivilegedCoordinator(int flagsUnmasked)
         {
-            return IS_PRIVILEGED.contains(ordinal);
+            return 0 != ordinalFromFlags(flagsUnmasked);
         }
 
         public FastPath toPermitted(FastPaths permitted)
         {
             if (permitted.contains(this))
                 return this;
-            if (this == UNOPTIMISED)
+            if (this == Unoptimised)
                 return this;
-            FastPath alt = this == PRIVILEGED_COORDINATOR_WITH_DEPS ? PRIVILEGED_COORDINATOR_WITHOUT_DEPS : PRIVILEGED_COORDINATOR_WITH_DEPS;
+            FastPath alt = this == PrivilegedCoordinatorWithDeps ? PrivilegedCoordinatorWithoutDeps : PrivilegedCoordinatorWithDeps;
             if (permitted.contains(alt))
                 return alt;
-            return UNOPTIMISED;
+            return Unoptimised;
         }
     }
 
@@ -85,26 +106,71 @@ public class TxnId extends Timestamp implements PreLoadContext
 
     public enum MediumPath
     {
-        NONE(0),
-        TRACK_STABLE(1);
+        NoMediumPath, TrackStable;
 
-        private static final MediumPath[] VALUES = values();
+        private static final int SHIFT = 6;
+        public final int bit() { return ordinal() << SHIFT; }
 
-        public final int bits;
-
-        MediumPath(int bits)
+        final boolean is(int flagsUnmasked)
         {
-            this.bits = bits << 6;
+            return is(flagsUnmasked, this);
         }
 
-        public static boolean any(int bits)
+        private static boolean is(int flagsUnmasked, MediumPath test)
         {
-            return bits != 0;
+            return ((flagsUnmasked >>> SHIFT) & 1) == test.ordinal();
+        }
+
+        public static MediumPath forFlags(int flagsUnmasked)
+        {
+            return (flagsUnmasked & (1 << SHIFT)) == 0 ? NoMediumPath : TrackStable;
         }
 
         public static MediumPath forOrdinal(int ordinal)
         {
-            return VALUES[ordinal];
+            return ordinal == 0 ? NoMediumPath : TrackStable;
+        }
+    }
+
+    public enum Cardinality
+    {
+        SingleKey,
+        Any;
+
+        private static final int SHIFT = 7;
+        public final int bit()
+        {
+            return ordinal() << SHIFT;
+        }
+
+        final boolean is(int flagsUnmasked)
+        {
+            return is(flagsUnmasked, this);
+        }
+
+        public static Cardinality cardinality(Routables<?> routables)
+        {
+            return routables.size() == 1 && routables.domain() == Domain.Key ? SingleKey : Any;
+        }
+
+        public static Cardinality cardinality(Domain domain, Routables<?> routables)
+        {
+            return domain == Domain.Key && routables.size() == 1 ? SingleKey : Any;
+        }
+
+        private static boolean is(int flagsUnmasked, Cardinality test)
+        {
+            return ((flagsUnmasked >>> SHIFT) & 1) == test.ordinal();
+        }
+
+        private static Cardinality forFlags(int flagsUnmasked)
+        {
+            return (flagsUnmasked & (1 << SHIFT)) == 0 ? SingleKey : Any;
+        }
+
+        public static Cardinality forOrdinal(int ordinal)
+        {
+            return ordinal == 0 ? SingleKey : Any;
         }
     }
 
@@ -136,12 +202,17 @@ public class TxnId extends Timestamp implements PreLoadContext
 
     public TxnId(Timestamp timestamp, Kind rw, Domain domain)
     {
-        this(timestamp, 0, rw, domain);
+        this(timestamp, rw, domain, Any);
     }
 
-    public TxnId(Timestamp timestamp, int flags, Kind rw, Domain domain)
+    public TxnId(Timestamp timestamp, Kind rw, Domain domain, Cardinality cardinality)
     {
-        super(timestamp, flags(flags, rw, domain));
+        this(timestamp, 0, rw, domain, cardinality);
+    }
+
+    public TxnId(Timestamp timestamp, int flags, Kind rw, Domain domain, Cardinality cardinality)
+    {
+        super(timestamp, flags(flags, rw, domain, cardinality));
     }
 
     public TxnId(TxnId copy)
@@ -151,12 +222,22 @@ public class TxnId extends Timestamp implements PreLoadContext
 
     public TxnId(long epoch, long hlc, Kind rw, Domain domain, Id node)
     {
-        this(epoch, hlc, 0, rw, domain, node);
+        this(epoch, hlc, rw, domain, Any, node);
+    }
+
+    public TxnId(long epoch, long hlc, Kind rw, Domain domain, Cardinality cardinality, Id node)
+    {
+        this(epoch, hlc, 0, rw, domain, cardinality, node);
     }
 
     public TxnId(long epoch, long hlc, int flags, Kind rw, Domain domain, Id node)
     {
-        this(epoch, hlc, flags(flags, rw, domain), node);
+        this(epoch, hlc, flags, rw, domain, Any, node);
+    }
+
+    public TxnId(long epoch, long hlc, int flags, Kind rw, Domain domain, Cardinality cardinality, Id node)
+    {
+        this(epoch, hlc, flags(flags, rw, domain, cardinality), node);
     }
 
     private TxnId(long epoch, long hlc, int flags, Id node)
@@ -169,107 +250,112 @@ public class TxnId extends Timestamp implements PreLoadContext
         super(msb, lsb, node);
     }
 
-    public boolean isWrite()
+    public final boolean isWrite()
     {
         return is(Write);
     }
 
-    public boolean isRead()
+    public final boolean isRead()
     {
         return is(Read);
     }
 
-    public Kind kind()
+    public final Kind kind()
     {
         return kind(flagsUnmasked());
     }
 
-    public boolean is(Kinds kinds)
+    public final boolean is(Kinds kinds)
     {
         return kinds.testOrdinal(kindOrdinal(flagsUnmasked()));
     }
 
-    public boolean is(Kind kind)
+    public final boolean is(Kind kind)
     {
         return kindOrdinal(flagsUnmasked()) == kind.ordinal();
     }
 
-    public boolean is(FastPath fastPath)
+    public final boolean is(FastPath fastPath)
     {
-        return 0 != (flagsUnmasked() & fastPath.bits);
+        return fastPath.is(flagsUnmasked());
     }
 
-    public boolean is(MediumPath mediumPath)
+    public final boolean is(MediumPath mediumPath)
     {
-        return 0 != (flagsUnmasked() & mediumPath.bits);
+        return mediumPath.is(flagsUnmasked());
     }
 
-    public TxnId withoutNonIdentityFlags()
+    public final boolean is(Cardinality cardinality)
+    {
+        return cardinality.is(flagsUnmasked());
+    }
+
+    public final TxnId withoutNonIdentityFlags()
     {
         return (flags() & ~IDENTITY_FLAGS) == 0 ? this : new TxnId(msb, lsb & IDENTITY_LSB, node);
     }
 
-    public boolean hasPrivilegedCoordinator()
+    public final boolean hasPrivilegedCoordinator()
     {
-        return FastPath.hasPrivilegedCoordinator(fastPathOrdinal(flagsUnmasked()));
+        return FastPath.hasPrivilegedCoordinator(flagsUnmasked());
     }
 
-    public boolean hasMediumPath()
+    public final boolean hasMediumPath()
     {
-        return MediumPath.any(mediumPathOrdinal(flagsUnmasked()));
+        return !MediumPath.is(flagsUnmasked(), NoMediumPath);
     }
 
-    public boolean isVisible()
+    public final boolean isVisible()
     {
         return Kind.isVisible(kindOrdinal(flagsUnmasked()));
     }
 
-    public boolean isSyncPoint()
+    public final boolean isSyncPoint()
     {
         return Kind.isSyncPoint(kindOrdinal(flagsUnmasked()));
     }
 
-    public boolean isSystemTxn()
+    public final boolean isSystemTxn()
     {
         return Kind.isSystemTxn(kindOrdinal(flagsUnmasked()));
     }
 
-    public boolean awaitsOnlyDeps()
+    public final boolean awaitsOnlyDeps()
     {
         return Kind.awaitsOnlyDeps(kindOrdinal(flagsUnmasked()));
     }
 
-    public boolean awaitsPreviouslyOwned()
+    public final boolean awaitsPreviouslyOwned()
     {
         return Kind.awaitsPreviouslyOwned(kindOrdinal(flagsUnmasked()));
     }
 
-    public boolean is(Domain domain)
+    public final boolean is(Domain domain)
     {
         return domainOrdinal(flagsUnmasked()) == domain.ordinal();
     }
 
-    public Kinds witnesses()
+    public final Kinds witnesses()
     {
         return kind().witnesses();
     }
 
-    public boolean witnesses(TxnId txnId)
+    public final boolean witnesses(TxnId txnId)
     {
         return Kind.witnesses(kindOrdinal(flagsUnmasked()), kindOrdinal(txnId.flagsUnmasked()));
     }
 
-    public boolean witnessedBy(TxnId txnId)
+    public final boolean witnessedBy(TxnId txnId)
     {
         return txnId.witnesses(this);
     }
 
-    public Kinds witnessedBy()
+    public final Kinds witnessedBy()
     {
         return kind().witnessedBy();
     }
 
-    public Domain domain()
+    public final Domain domain()
     {
         return domain(flagsUnmasked());
     }
@@ -286,7 +372,7 @@ public class TxnId extends Timestamp implements PreLoadContext
 
     public TxnId as(Kind kind, Domain domain)
     {
-        return new TxnId(epoch(), hlc(), flagsWithoutDomainAndKind(), kind, domain, node);
+        return new TxnId(epoch(), hlc(), flagsWithoutDomainAndKind(), kind, domain, cardinality(), node);
     }
 
     private int flagsWithoutDomainAndKind()
@@ -334,11 +420,12 @@ public class TxnId extends Timestamp implements PreLoadContext
         return "[" + epoch() + ',' + hlc() + ',' + flags() + '(' + domain().shortName() + kind().shortName() + ')' + ',' + node + ']';
     }
 
-    private static int flags(int flags, Kind rw, Domain domain)
+    private static int flags(int flags, Kind rw, Domain domain, Cardinality cardinality)
     {
-        int domainAndKindFlags = flags(rw) | flags(domain);
-        Invariants.require((flags & domainAndKindFlags) == 0);
-        return domainAndKindFlags | flags;
+        Invariants.require(cardinality == Any || domain == Domain.Key);
+        int paramFlags = flags(rw) | flags(domain) | cardinality.bit();
+        Invariants.require((flags & paramFlags) == 0);
+        return paramFlags | flags;
     }
 
     private static int flags(Kind rw)
@@ -368,17 +455,17 @@ public class TxnId extends Timestamp implements PreLoadContext
 
     public FastPath fastPath()
     {
-        return FastPath.forOrdinal(fastPathOrdinal(flagsUnmasked()));
+        return FastPath.forFlags(flagsUnmasked());
     }
 
-    public static int fastPathOrdinal(int flags)
+    public MediumPath mediumPath()
     {
-        return (flags >>> 4) & 3;
+        return MediumPath.forFlags(flagsUnmasked());
     }
 
-    public static int mediumPathOrdinal(int flags)
+    public Cardinality cardinality()
     {
-        return (flags >>> 6) & 1;
+        return Cardinality.forFlags(flagsUnmasked());
     }
 
     public boolean hasOnlyIdentityFlags()
@@ -386,7 +473,7 @@ public class TxnId extends Timestamp implements PreLoadContext
         return (flags() & ~IDENTITY_FLAGS) == 0;
     }
 
-    private static int domainOrdinal(int flags)
+    public static int domainOrdinal(int flags)
     {
         return flags & 1;
     }

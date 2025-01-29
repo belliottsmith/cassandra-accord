@@ -337,7 +337,7 @@ public class ListStore implements DataStore
     {
         if (!allowedReads.contains(key))
         {
-            // TODO (expected): improve this validation logic
+            // TODO (testing): improve this validation logic
             // but in the meantime, whitelist valid things, e.g. ephemeral reads can access data that has been retired
             if (executeAt instanceof TxnId && ((TxnId) executeAt).awaitsOnlyDeps()
                 && removedAts.stream().anyMatch(r -> r.ranges.contains(key) && r.epoch > executeAt.epoch()))
@@ -370,7 +370,7 @@ public class ListStore implements DataStore
         Ranges singleRanges = Ranges.of(range);
         if (!allowedReads.containsAll(singleRanges))
         {
-            // TODO (required): it is actually safe for a node on an old epoch to still be executing a transaction that has been executed in a later epoch,
+            // TODO (testing): it is actually safe for a node on an old epoch to still be executing a transaction that has been executed in a later epoch,
             //   making this check over-enthusiastic.
             illegalState(String.format("Attempted to access range %s on node %s, which is not in the range %s;\nexecuteAt = %s\n%s",
                                        range, node, allowedReads, executeAt, history(singleRanges)));
@@ -585,7 +585,7 @@ public class ListStore implements DataStore
                 if (!previousTopology.ranges().intersects(range))
                 {
                     // A range was added that globally didn't exist before; there is nothing to bootstrap here!
-                    // TODO (now): document this history change
+                    // TODO (testing): document this history change
                     allowedReads = allowedReads.with(Ranges.of(range));
                 }
             }
@@ -623,9 +623,8 @@ public class ListStore implements DataStore
 
     private void removeLocalWhenReady(Node node, long epoch, Ranges removed)
     {
-        // TODO (now): can this migrate to a listener as bootstrap will do a SyncPoint which will propgate this knowlege?
-
-        // TODO (duplication): there is overlap with durability scheduling, but that logic has a few issues which make it hard to use here:
+        // TODO (testing): can this migrate to a listener as bootstrap will do a SyncPoint which will propgate this knowlege?
+        // TODO (testing): there is overlap with durability scheduling, but that logic has a few issues which make it hard to use here:
         // * always works off latest topology, so the removed ranges won't actually get marked durable!
         // * api is range -> TxnId, so we still need a TxnId to be referenced off... so we need to create a TxnId to know when we are in-sync!
         // * if we have a sync point, we really only care if the sync point is applied globally...

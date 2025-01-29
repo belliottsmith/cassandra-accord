@@ -201,10 +201,4 @@ public class ListAgent implements Agent
     {
         return timeoutSupplier.expiresAt();
     }
-
-    public boolean collectMaxApplied()
-    {
-        // TODO (expected): randomise this to exercise both code paths
-        return false;
-    }
 }

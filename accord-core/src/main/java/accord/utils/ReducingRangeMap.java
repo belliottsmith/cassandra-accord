@@ -52,9 +52,9 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         super(inclusiveEnds, starts, values);
     }
 
-    public V foldl(Routables<?> routables, BiFunction<V, V, V> fold, V accumulator)
+    public <V2> V2 foldl(Routables<?> routables, BiFunction<V, V2, V2> fold, V2 accumulator)
     {
-        return foldl(routables, (a, b, f, ignore) -> f.apply(a, b), accumulator, fold, null, ignore -> false);
+        return foldl(routables, fold, accumulator, ignore -> false);
     }
 
     public <V2> V2 foldl(Routables<?> routables, BiFunction<V, V2, V2> fold, V2 accumulator, Predicate<V2> terminate)
@@ -80,6 +80,11 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return foldl(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], self.starts[k+1], i, j), accumulator, fold, this, terminate);
     }
 
+    public <V2, P1> V2 foldl(Routables<?> routables, TriFunction<V, V2, P1, V2> fold, V2 accumulator, P1 p1)
+    {
+        return foldl(routables, fold, accumulator, p1, ignore -> false);
+    }
+
     public <V2, P1> V2 foldl(Routables<?> routables, TriFunction<V, V2, P1, V2> fold, V2 accumulator, P1 p1, Predicate<V2> terminate)
     {
         return foldl(routables, (a, b, f, p) -> f.apply(a, b, p), accumulator, fold, p1, terminate);
@@ -88,6 +93,11 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
     public <V2, P1> V2 foldlWithKey(Routables<?> routables, IndexedTriFunction<V, V2, P1, V2> fold, V2 accumulator, P1 p1, Predicate<V2> terminate)
     {
         return foldl(routables, (v, v2, f, p, i, j, k) -> f.apply(v, v2, p, i), accumulator, fold, p1, terminate);
+    }
+
+    public <V2, P1, P2> V2 foldl(Routables<?> routables, QuadFunction<V, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2)
+    {
+        return foldl(routables, fold, accumulator, p1, p2, ignore -> false);
     }
 
     public <V2, P1, P2> V2 foldl(Routables<?> routables, QuadFunction<V, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)

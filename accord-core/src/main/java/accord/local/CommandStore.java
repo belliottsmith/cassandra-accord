@@ -46,6 +46,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -155,9 +156,6 @@ public abstract class CommandStore implements AgentExecutor
      * We also update safeToRead when we go stale, to remove ranges we may have bootstrapped but that are now known to
      * be incomplete. In this case we permit transactions to execute in any order for the unsafe key ranges.
      * But they may still be ordered for other key ranges they participate in.
-     *
-     * TODO (expected): merge with redundantBefore
-     * TODO (required): if we ever actually erase data on disk (after losing ownership), make sure to mark the range unsafe to read
      */
     private NavigableMap<Timestamp, Ranges> safeToRead = emptySafeToRead();
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
@@ -264,9 +262,29 @@ public abstract class CommandStore implements AgentExecutor
         else           execute(task);
     }
 
-    public abstract AsyncChain<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
+    public abstract AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
+    public abstract <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
 
-    public abstract <T> AsyncChain<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
+    public void execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
+    {
+        build(context, consumer).begin(callback);
+    }
+
+    public AsyncResult<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+    {
+        return build(context, consumer).beginAsResult();
+    }
+
+    public <T> void submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply, BiConsumer<? super T, Throwable> callback)
+    {
+        build(context, apply).begin(callback);
+    }
+
+    public <T> AsyncResult<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply)
+    {
+        return build(context, apply).beginAsResult();
+    }
+
     public abstract void shutdown();
 
     protected abstract void registerTransitive(SafeCommandStore safeStore, RangeDeps deps);
@@ -447,7 +465,6 @@ public abstract class CommandStore implements AgentExecutor
         if (isExpired)
             return node.uniqueNow(txnId).asRejected();
 
-        // TODO (expected): we should (perhaps) separate conflicts for reads and writes
         Timestamp min = TxnId.mergeMax(txnId, maxConflicts.get(keys));
         if (permitFastPath && txnId == min && txnId.epoch() >= node.epoch())
             return txnId;
@@ -547,7 +564,7 @@ public abstract class CommandStore implements AgentExecutor
                 bootstraps.add(bootstrap);
                 bootstrap.start(safeStore);
                 return new EpochReady(epoch, null, null, bootstrap.data, bootstrap.reads);
-            }).beginAsResult();
+            });
 
             AsyncResult<Void> readyToCoordinate = readyToCoordinate(newRanges, epoch);
             return new EpochReady(epoch, metadata.<Void>map(ignore -> null).beginAsResult(),
@@ -584,7 +601,7 @@ public abstract class CommandStore implements AgentExecutor
     Supplier<EpochReady> unbootstrap(long epoch, Ranges removedRanges)
     {
         return () -> {
-            AsyncResult<Void> done = this.<Void>submit(empty(), safeStore -> {
+            AsyncResult<Void> done = submit(empty(), safeStore -> {
                 for (Bootstrap prev : bootstraps)
                 {
                     Ranges abort = prev.allValid.slice(removedRanges, Minimal);
@@ -592,7 +609,7 @@ public abstract class CommandStore implements AgentExecutor
                         prev.invalidate(abort);
                 }
                 return null;
-            }).beginAsResult();
+            });
 
             return new EpochReady(epoch, done, done, done, done);
         };
@@ -616,7 +633,7 @@ public abstract class CommandStore implements AgentExecutor
     public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges)
     {
         final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
-        TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, e -> e.locallyAppliedOrInvalidatedBefore);
+        TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, e -> e.locallyAppliedBefore);
         RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, TxnId.NONE, globalSyncId, TxnId.NONE, TxnId.NONE);
         safeStore.upsertRedundantBefore(addShardRedundant);
         updatedRedundantBefore(safeStore, globalSyncId, slicedRanges);
@@ -646,7 +663,7 @@ public abstract class CommandStore implements AgentExecutor
                 execute(PreLoadContext.empty(), safeStore0 -> {
                     RedundantBefore addGc = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, globalSyncId, globalSyncId, globalSyncId, TxnId.NONE);
                     safeStore0.upsertRedundantBefore(addGc);
-                }).begin(agent());
+                }, agent());
             });
         }
     }
@@ -694,9 +711,6 @@ public abstract class CommandStore implements AgentExecutor
             remove.forEach(waitingOnSync::remove);
     }
 
-    // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
-    // TODO (required): integrate validation of staleness with implementation (e.g. C* should know it has been marked stale)
-    //      also: we no longer expect epochs that are losing a range to be marked stale, make sure logic reflects this
     public void markShardStale(SafeCommandStore safeStore, Timestamp staleSince, Ranges ranges, boolean isSincePrecise)
     {
         Timestamp staleUntilAtLeast = staleSince;
@@ -736,7 +750,7 @@ public abstract class CommandStore implements AgentExecutor
                 if (!newBootstrapRanges.isEmpty())
                     safeStore.setBootstrapBeganAt(bootstrap(TxnId.NONE, newBootstrapRanges, bootstrapBeganAt));
                 safeStore.setSafeToRead(purgeAndInsert(safeToRead, TxnId.NONE, ranges));
-            }).beginAsResult();
+            });
 
             return new EpochReady(epoch, done, done, done, done);
         };
@@ -783,7 +797,7 @@ public abstract class CommandStore implements AgentExecutor
         {
             execute(empty(), safeStore -> {
                 safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
-            }).beginAsResult();
+            }, agent);
         }
     }
 
@@ -794,7 +808,7 @@ public abstract class CommandStore implements AgentExecutor
             Ranges validatedSafeToRead = redundantBefore.validateSafeToRead(forBootstrapAt, ranges);
             safeStore.setSafeToRead(purgeAndInsert(safeToRead, at, validatedSafeToRead));
             updateMaxConflicts(ranges, at);
-        }).beginAsResult();
+        }, agent);
     }
 
     public static ImmutableSortedMap<TxnId, Ranges> bootstrap(TxnId at, Ranges ranges, NavigableMap<TxnId, Ranges> bootstrappedAt)

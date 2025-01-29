@@ -108,7 +108,7 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     @Override
     public Cancellable submit()
     {
-        // TODO (expected, efficiency): do not load from disk to perform this update
+        // TODO (expected): do not load from disk to perform this update, just write a delta to any journal
         return node.mapReduceConsumeLocal(txnId, scope, minEpoch, maxEpoch, this);
     }
 

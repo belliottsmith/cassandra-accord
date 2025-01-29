@@ -101,7 +101,6 @@ public class BitUtils
         writeMostSignificantBytes(register << ((8 - bytes)*8), bytes, out);
     }
 
-    // TODO (expected): this is probably endian-sensitive
     public static void writeMostSignificantBytes(long register, int bytes, ByteBuffer out)
     {
         int position = out.position();

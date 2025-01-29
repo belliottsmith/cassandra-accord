@@ -105,12 +105,9 @@ public enum SaveStatus
     // similar to Truncated, but doesn't imply we have any global knowledge about application
     Applied                         (Status.Applied,                                                                                                 LocalExecution.Applied),
     // TruncatedApplyWithDeps is a state never adopted within a single replica; it is however a useful state we may enter by combining state from multiple replicas
-    // TODO (expected): TruncatedApplyWithDeps should be redundant now we have migrated away from SaveStatus in CheckStatusOk to Known; remove in isolated commit once stable
-    //   however: we may want to retain it for the case where we want to truncate its payload but need to be able to answer recovery decisions
-    TruncatedApplyWithDeps          (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsKnown,          Apply,   CleaningUp),
     TruncatedApplyWithOutcome       (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         Apply,   CleaningUp),
-//    TruncatedApplyWithRoute         (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
     TruncatedApply                  (Status.Truncated,              MaybeRoute, DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
+    TruncatedUnapplied              (Status.Truncated,              MaybeRoute, DefinitionErased,   ExecuteAtKnown,     DepsErased,         WasApply,CleaningUp),
     // Vestigial means the command cannot be completed and is either pre-bootstrap, did not commit, or did not participate in this shard's epoch
     Vestigial                       (Status.Truncated,              MaybeRoute, DefinitionUnknown,  ExecuteAtUnknown,   DepsUnknown,        Unknown, CleaningUp),
     // NOTE: Erased should ONLY be adopted on a replica that knows EVERY shard has successfully applied the transaction at all healthy replicas (or else that it is durably invalidated)
@@ -260,8 +257,7 @@ public enum SaveStatus
         }
     }
 
-    // TODO (expected): merge Known only, and ensure 1:1 mapping so can reconstruct composite
-    // TODO (expected, testing): exhaustive testing, particularly around PreCommitted
+    // TODO (testing): exhaustive testing, particularly around PreCommitted
     public static SaveStatus get(Status status, Known known)
     {
         if (known.isInvalidated())
@@ -379,6 +375,10 @@ public enum SaveStatus
                         if (!known.outcome().isOrWasApply() || !known.is(ExecuteAtKnown))
                             return Erased;
 
+                    case TruncatedUnapplied:
+                        if (!known.is(ApplyAtKnown))
+                            return TruncatedUnapplied;
+
                     case TruncatedApply:
                         if (known.outcome() != Apply)
                             return TruncatedApply;
@@ -386,10 +386,6 @@ public enum SaveStatus
                     case TruncatedApplyWithOutcome:
                         if (known.deps() != DepsKnown)
                             return TruncatedApplyWithOutcome;
-
-                    case TruncatedApplyWithDeps:
-                        if (!known.isDefinitionKnown())
-                            return TruncatedApplyWithDeps;
 
                         return Applied;
                 }

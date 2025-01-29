@@ -537,7 +537,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         if (bi == bs.length)
             return constructor.construct(param1, param2, (as == left.ranges ? left : right).ranges);
 
-        // TODO (expected, efficiency): ArrayBuffers caching
+        // TODO (expected): use ArrayBuffers caching
         Range[] result = new Range[as.length + (bs.length - bi)];
         int resultCount;
         switch (mode)

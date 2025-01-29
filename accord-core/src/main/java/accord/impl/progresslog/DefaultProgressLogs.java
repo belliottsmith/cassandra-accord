@@ -26,6 +26,8 @@ import accord.api.ProgressLog;
 import accord.local.CommandStore;
 import accord.local.Node;
 
+import static accord.local.PreLoadContext.empty;
+
 // TODO (desired, consider): consider propagating invalidations in the same way as we do applied
 // TODO (expected): report transactions not making progress
 // TODO (expected): evict to disk
@@ -54,7 +56,7 @@ public class DefaultProgressLogs implements ProgressLog.Factory
             return false;
 
         if (!paused.containsKey(progressLog))
-            paused.putIfAbsent(progressLog, () -> progressLog.commandStore.execute(progressLog));
+            paused.putIfAbsent(progressLog, () -> progressLog.commandStore.execute(empty(), progressLog, progressLog.commandStore.agent()));
         return true;
     }
 

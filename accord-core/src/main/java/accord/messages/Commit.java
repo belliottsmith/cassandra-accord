@@ -275,7 +275,6 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         return node.mapReduceConsumeLocal(this, minEpoch, executeAt.epoch(), this);
     }
 
-    // TODO (expected, efficiency, clarity): do not guard with synchronized; let mapReduceLocal decide how to enforce mutual exclusivity
     @Override
     public synchronized CommitOrReadNack apply(SafeCommandStore safeStore)
     {
