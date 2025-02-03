@@ -45,6 +45,8 @@ import static java.lang.Integer.MAX_VALUE;
 import static java.lang.Integer.MIN_VALUE;
 
 // TODO (desired): test start inclusive ranges
+// TODO (required): better test mergeMax behaviour - burn test discovered a rare seed where this caused a fault,
+//  and minimal changes to this test class did not detect it
 public class BTreeReducingRangeMapTest
 {
     static final BTreeReducingRangeMap<Timestamp> EMPTY = new BTreeReducingRangeMap<>();
@@ -70,7 +72,7 @@ public class BTreeReducingRangeMapTest
         return null;
     }
 
-    private static Timestamp ts(int b)
+    private static Timestamp ts(int e, int b)
     {
         return Timestamp.fromValues(1, b, 0, new Node.Id(1));
     }
@@ -95,9 +97,9 @@ public class BTreeReducingRangeMapTest
         return r(rk(l), rk(r));
     }
 
-    private static Pair<RoutingKey, Timestamp> pt(int t, int b)
+    private static Pair<RoutingKey, Timestamp> pt(int t, int e, int b)
     {
-        return Pair.create(rk(t), ts(b));
+        return Pair.create(rk(t), ts(e, b));
     }
 
     private static Pair<RoutingKey, Timestamp> pt(int t, Timestamp b)
@@ -105,9 +107,9 @@ public class BTreeReducingRangeMapTest
         return Pair.create(rk(t), b);
     }
 
-    private static Pair<RoutingKey, Timestamp> pt(RoutingKey t, int b)
+    private static Pair<RoutingKey, Timestamp> pt(RoutingKey t, int e, int b)
     {
-        return Pair.create(t, ts(b));
+        return Pair.create(t, ts(e, b));
     }
 
     private static BTreeReducingRangeMap<Timestamp> h(Pair<RoutingKey, Timestamp>... points)
@@ -124,7 +126,7 @@ public class BTreeReducingRangeMapTest
     static
     {
         assert rk(100).equals(rk(100));
-        assert ts(111).equals(ts(111));
+        assert ts(1, 111).equals(ts(1, 111));
     }
 
     private static class Builder
@@ -237,13 +239,13 @@ public class BTreeReducingRangeMapTest
 
         void merge(RandomMap other)
         {
-            test = BTreeReducingRangeMap.merge(test, other.test, Timestamp::max);
+            test = BTreeReducingRangeMap.merge(test, other.test, Timestamp::mergeMax);
         }
 
         void addOneRandom(Random random, int maxRangeCount, float maxCoverage, float minChance)
         {
             int count = maxRangeCount == 1 ? 1 : 1 + random.nextInt(maxRangeCount - 1);
-            Timestamp timestamp = ts(random.nextInt(MAX_VALUE));
+            Timestamp timestamp = ts(random.nextInt(128), random.nextInt(MAX_VALUE));
             List<Range> ranges = new ArrayList<>();
             while (count-- > 0)
             {
@@ -298,7 +300,7 @@ public class BTreeReducingRangeMapTest
         {
             RandomWithCanonical result = new RandomWithCanonical();
             result.test = random.nextBoolean()
-                          ? BTreeReducingRangeMap.merge(test, other.test, Timestamp::max)
+                          ? BTreeReducingRangeMap.merge(test, other.test, Timestamp::mergeMax)
                           : BTreeReducingIntervalMap.mergeIntervals(test, other.test, IntervalBuilder::new);
             result.canonical = new TreeMap<>();
             result.canonical.putAll(canonical);
@@ -327,7 +329,7 @@ public class BTreeReducingRangeMapTest
             @Override
             protected Timestamp reduce(Timestamp a, Timestamp b)
             {
-                return Timestamp.max(a, b);
+                return Timestamp.mergeMax(a, b);
             }
 
             @Override

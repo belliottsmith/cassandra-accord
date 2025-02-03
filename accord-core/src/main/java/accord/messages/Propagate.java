@@ -390,7 +390,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             return null;
 
         // TODO (expected): if the above last ditch doesn't work, see if only the stale ranges can't apply and so some shenanigans to apply partially and move on
-        if (ProtocolModifiers.Toggles.markStaleIfCannotExecute(txnId.kind()))
+        if (ProtocolModifiers.Toggles.markStaleIfCannotExecute(txnId))
         {
             safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown == null ? txnId : executeAtIfKnown, stale.toRanges(), true);
             if (!stale.containsAll(stillTouches) || !stale.containsAll(stillOwnsOrMayExecute))

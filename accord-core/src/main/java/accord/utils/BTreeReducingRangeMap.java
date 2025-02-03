@@ -350,7 +350,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
                         if (isRangeOpen)
                             acc.remove(entry.start());
                         else
-                            acc.add(entry.start(), value);
+                            acc.add(entry.start(), supersedes);
                     }
                     isRangeOpen = supersedes != null;
                 }

@@ -495,7 +495,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j++];
-                newById[count] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count] = TxnInfo.createTransitive(txnId, boundsInfo, plainTxnId);
                 ++missingCount;
             }
             else
@@ -512,7 +512,7 @@ class Updating
                 while (count < targetInsertPos)
                 {
                     TxnId txnId = additions[j++];
-                    newById[count++] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                    newById[count++] = TxnInfo.createTransitive(txnId, boundsInfo, plainTxnId);
                 }
                 newById[targetInsertPos] = newInfo;
                 count = targetInsertPos + 1;
@@ -520,7 +520,7 @@ class Updating
             while (j < additionCount)
             {
                 TxnId txnId = additions[j++];
-                newById[count++] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newById[count++] = TxnInfo.createTransitive(txnId, boundsInfo, plainTxnId);
             }
         }
         else if (count == targetInsertPos)
@@ -532,7 +532,7 @@ class Updating
     /**
      * Similar to insertOrUpdateWithAdditions, but when we only need to insert some additions (i.e. when calling registerUnmanaged)
      */
-    static TxnInfo[] insertAdditionsOnly(TxnInfo[] byId, TxnInfo[] committedByExecuteAt, TxnInfo[] newInfos, TxnId[] additions, int additionCount, RedundantBefore.Entry boundsInfo)
+    static TxnInfo[] insertAdditionsOnly(TxnInfo[] byId, TxnInfo[] committedByExecuteAt, TxnInfo[] newInfos, TxnId[] additions, int additionCount, RedundantBefore.Entry boundsInfo, TxnId witnessedBy)
     {
         // the most recently constructed pure insert missing array, so that it may be reused if possible
         int minByExecuteAtSearchIndex = 0;
@@ -585,7 +585,7 @@ class Updating
             else if (c > 0)
             {
                 TxnId txnId = additions[j];
-                newInfos[count] = TxnInfo.create(txnId, TRANSITIVE_VISIBLE, mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+                newInfos[count] = TxnInfo.createTransitive(txnId, boundsInfo, witnessedBy);
                 ++j;
                 ++missingCount;
             }
@@ -970,7 +970,7 @@ class Updating
                         TxnId minUndecidedMissing = minUndecidedMissingIndex == missingCount ? null : missing[minUndecidedMissingIndex];
                         TxnId minUndecided = TxnId.nonNullOrMin(minUndecidedMissing, cfk.minUndecided());
                         newById = new TxnInfo[byId.length + missingCount];
-                        newCommittedByExecuteAt = insertAdditionsOnly(byId, cfk.committedByExecuteAt, newById, missing, missingCount, cfk.boundsInfo);
+                        newCommittedByExecuteAt = insertAdditionsOnly(byId, cfk.committedByExecuteAt, newById, missing, missingCount, cfk.boundsInfo, waitingTxnId);
                         // we can safely use missing[prunedIndex] here because we only fill missing with transactions for which we manage execution
                         if (minUndecided != null)
                             newMinUndecidedById = Arrays.binarySearch(newById, minUndecided);

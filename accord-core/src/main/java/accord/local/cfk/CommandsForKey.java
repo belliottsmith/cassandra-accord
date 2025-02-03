@@ -20,6 +20,7 @@ package accord.local.cfk;
 
 import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.Iterator;
 import java.util.Objects;
 import java.util.function.Predicate;
 import javax.annotation.Nonnull;
@@ -61,6 +62,8 @@ import accord.utils.btree.BTree;
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
+import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
+import static accord.api.ProtocolModifiers.Toggles.shouldVisitMaybePruned;
 import static accord.local.CommandSummaries.IsDep.IS_COORD_DEP;
 import static accord.local.CommandSummaries.IsDep.IS_STABLE_DEP;
 import static accord.local.CommandSummaries.IsDep.IS_NOT_COORD_DEP;
@@ -77,6 +80,7 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TO_SUMMARY_STATUS;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE;
+import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE_VISIBLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.from;
 import static accord.local.cfk.CommandsForKey.InternalStatus.prunedFrom;
 import static accord.local.cfk.PostProcess.notifyManagedPreBootstrap;
@@ -366,6 +370,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
             if (!status.hasBallot || (ballot = command.acceptedOrCommitted()).equals(Ballot.ZERO))
                 return new TxnInfo(txnId, encodedStatus, executeAt);
             return new TxnInfoExtra(txnId, encodedStatus, executeAt, NO_TXNIDS, ballot);
+        }
+
+        public static TxnInfo createTransitive(@Nonnull TxnId txnId, RedundantBefore.Entry boundsInfo, @Nonnull TxnId witnessedBy)
+        {
+            return create(txnId, isTransitiveDependencyVisible(witnessedBy) ? TRANSITIVE_VISIBLE : TRANSITIVE, CommandsForKey.mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
         }
 
         public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean mayExecute, @Nonnull Timestamp executeAt, @Nonnull Ballot ballot)
@@ -1359,12 +1368,33 @@ public class CommandsForKey extends CommandsForKeyUpdate
             maxCommittedWriteBefore = i < 0 ? null : committedByExecuteAt[i];
         }
 
+        // TODO (expected): consider whether this is strictly needed - if we've applied a transaction after the pruned
+        //  point can we guarantee we have witnessed all earlier TxnId? If no RX has yet run, but the new epoch is
+        //  applying transactions then maybe not...? But seems edge casey and may not exist.
+        //  Reason this case out more fully, but in the meantime we'll make sure to return them.
+        Iterator<LoadingPruned> loadingPruned = null;
+        LoadingPruned nextPruned = null;
+        if (shouldVisitMaybePruned() && !BTree.isEmpty(this.loadingPruned))
+        {
+            loadingPruned = BTree.iterator(this.loadingPruned);
+            nextPruned = loadingPruned.next();
+        }
+
         TxnInfo maxCommittedWriteForEpoch = null;
         for (int i = 0; i < end ; ++i)
         {
             TxnInfo txn = byId[i];
             if (!txn.is(testKind)) continue;
             if (!txn.isManaged()) continue;
+
+            while (nextPruned != null && nextPruned.compareTo(txn) < 0)
+            {
+                if (nextPruned.isVisible && nextPruned.is(testKind))
+                    visitor.visit(p1, p2, key, nextPruned.plainTxnId());
+
+                if (loadingPruned.hasNext()) nextPruned = loadingPruned.next();
+                else nextPruned = null;
+            }
 
             switch (txn.status())
             {
@@ -1547,11 +1577,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
         boolean isOutOfRange = !mayExecute && newStatus.compareTo(APPLIED) <= 0 && manages(txnId)
                                && !updated.participants().stillTouches(key);
 
-        if (isOutOfRange && newStatus.compareTo(COMMITTED) < 0)
-            return this;
-
         TxnId[] loadingAsPrunedFor = loadingPrunedFor(loadingPruned, txnId, null); // we default to null to distinguish between no match, and a match with NO_TXNIDS
         boolean wasPruned = loadingAsPrunedFor != null;
+
+        if (!wasPruned && isOutOfRange && newStatus.compareTo(COMMITTED) < 0)
+            return this;
 
         int pos = Arrays.binarySearch(byId, txnId);
         CommandsForKeyUpdate result;
@@ -2176,7 +2206,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
                     for (TxnInfo txn : committedByExecuteAt)
                         Invariants.require(txn.kind() != Kind.Write || txn.status().compareTo(APPLIED) < 0 && mayExecute(txn));
                 }
-                Invariants.require(BTree.size(loadingPruned) == 0 || redundantBefore().compareTo(BTree.findByIndex(loadingPruned, 0)) <= 0);
+                LoadingPruned minLoadingPruned = BTree.isEmpty(loadingPruned) ? null : BTree.findByIndex(loadingPruned, 0);
+                Invariants.require(minLoadingPruned == null|| redundantBefore().compareTo(BTree.findByIndex(loadingPruned, 0)) <= 0);
                 for (Unmanaged unmanaged : unmanageds)
                     Invariants.require(unmanaged.waitingUntil.epoch() < boundsInfo.endOwnershipEpoch);
             }

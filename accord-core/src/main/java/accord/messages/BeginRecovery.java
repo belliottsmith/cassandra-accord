@@ -284,10 +284,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                         case COMMITTED:
                         case ACCEPTED:
                             if (testExecuteAt.is(HLC_BOUND))
-                            {
-                                supersedingRejects = true;
-                                return false;
-                            }
+                                return markSupersedingRejects();
                             if (status != ACCEPTED)
                                 break;
                         case PREACCEPTED:
@@ -312,8 +309,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                          * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
                          * has not witnessed us we can safely invalidate.
                          */
-                        supersedingRejects = true;
-                        return false;
+                        return markSupersedingRejects();
 
                     case NOT_ELIGIBLE:
                         switch (status)
@@ -351,8 +347,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                          * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
                          * has not witnessed us we can safely invalidate (us).
                          */
-                        supersedingRejects = true;
-                        return false;
+                        return markSupersedingRejects();
 
                     case NOT_ELIGIBLE:
                         // the command doesn't have any coordinator deps; or we are its coordinator and cannot commit on the privileged fast path
@@ -370,6 +365,12 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
             }
 
             return true;
+        }
+
+        private boolean markSupersedingRejects()
+        {
+            this.supersedingRejects = true;
+            return false;
         }
 
         private Deps.Builder ensureEarlierNoWait()

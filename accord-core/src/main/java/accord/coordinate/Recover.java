@@ -372,8 +372,10 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             }
             case Accept:
             {
-                propose(SLOW, txnId, recoverOkList);
-                return;
+                // we still have to wait for earlier transactions to decide themselves so we don't accidentally include
+                // a non-fastpath transaction in our dependencies and permit it to conclude it is safe to execute.
+                // So, we fall-through to Unknown condition - though we don't in principle need to wait for any future transactions
+                
             }
             case Unknown:
             {

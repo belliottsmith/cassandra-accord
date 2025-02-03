@@ -34,6 +34,7 @@ import accord.utils.btree.BulkIterator;
 import accord.utils.btree.UpdateFunction;
 import org.agrona.collections.Long2ObjectHashMap;
 
+import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
@@ -73,13 +74,14 @@ public class Pruning
             private final TxnId[] witnessedBy;
             private TxnId[] witnessedByUnstable;
             private final List<TxnId> inserted;
+            private final boolean isVisible;
 
-            Merge(TxnId[] witnessedBy, List<TxnId> inserted)
+            Merge(TxnId[] witnessedBy, List<TxnId> inserted, boolean isVisible)
             {
+                this.isVisible = isVisible;
                 this.witnessedBy = witnessedBy;
                 this.inserted = inserted;
             }
-
 
             @Override
             public LoadingPruned insert(TxnId insert)
@@ -94,13 +96,13 @@ public class Pruning
                     witnessedBy = witnessedByUnstable;
                 }
                 inserted.add(insert);
-                return new LoadingPruned(insert, witnessedBy);
+                return new LoadingPruned(insert, witnessedBy, isVisible);
             }
 
             @Override
             public LoadingPruned merge(LoadingPruned replacing, TxnId update)
             {
-                return new LoadingPruned(update, SortedArrays.linearUnion(replacing.witnessedBy, witnessedBy, cachedTxnIds()));
+                return new LoadingPruned(update, SortedArrays.linearUnion(replacing.witnessedBy, witnessedBy, cachedTxnIds()), replacing.isVisible | isVisible);
             }
         }
 
@@ -108,16 +110,23 @@ public class Pruning
          * Transactions that had witnessed this pre-pruned TxnId and are therefore waiting for the load to complete
          */
         final TxnId[] witnessedBy;
+        final boolean isVisible;
 
-        public LoadingPruned(TxnId copy, TxnId[] witnessedBy)
+        public LoadingPruned(TxnId copy, TxnId[] witnessedBy, boolean isVisible)
         {
             super(copy);
             this.witnessedBy = witnessedBy;
+            this.isVisible = isVisible;
         }
 
         LoadingPruned merge(LoadingPruned that)
         {
-            return new LoadingPruned(this, SortedArrays.linearUnion(witnessedBy, that.witnessedBy, cachedTxnIds()));
+            return new LoadingPruned(this, SortedArrays.linearUnion(witnessedBy, that.witnessedBy, cachedTxnIds()), this.isVisible | that.isVisible);
+        }
+
+        TxnId plainTxnId()
+        {
+            return new TxnId(this);
         }
 
         static Object[] empty()
@@ -131,13 +140,13 @@ public class Pruning
      */
     static Object[] loadPruned(Object[] loadingPruned, TxnId[] toLoad, TxnId witnessedBy, List<TxnId> inserted)
     {
-        return loadPruned(loadingPruned, toLoad, new TxnId[]{ witnessedBy }, inserted);
+        return loadPruned(loadingPruned, toLoad, new TxnId[]{ witnessedBy }, inserted, isTransitiveDependencyVisible(witnessedBy));
     }
 
-    static Object[] loadPruned(Object[] loadingPruned, TxnId[] toLoad, TxnId[] witnessedBy, List<TxnId> inserted)
+    private static Object[] loadPruned(Object[] loadingPruned, TxnId[] toLoad, TxnId[] witnessedBy, List<TxnId> inserted, boolean isVisible)
     {
         Object[] toLoadAsTree = BTree.build(BulkIterator.of(toLoad), toLoad.length, UpdateFunction.noOp());
-        return BTree.update(loadingPruned, toLoadAsTree, TxnId::compareTo, new LoadingPruned.Merge(witnessedBy, inserted));
+        return BTree.update(loadingPruned, toLoadAsTree, TxnId::compareTo, new LoadingPruned.Merge(witnessedBy, inserted, isVisible));
     }
 
     /**

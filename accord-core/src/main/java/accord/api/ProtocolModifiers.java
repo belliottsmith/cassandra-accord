@@ -205,6 +205,7 @@ public class ProtocolModifiers
         public static void setRequiresUniqueHlcs(boolean newRequiresUniqueHlcs) { requiresUniqueHlcs = newRequiresUniqueHlcs; }
 
         private static int markStaleIfCannotExecute = TinyEnumSet.encode(Txn.Kind.Write);
+        public static boolean markStaleIfCannotExecute(TxnId txnId) { return TinyEnumSet.contains(markStaleIfCannotExecute, txnId.kindOrdinal()); }
         public static boolean markStaleIfCannotExecute(Txn.Kind kind) { return TinyEnumSet.contains(markStaleIfCannotExecute, kind); }
         public static void setMarkStaleIfCannotExecute(Txn.Kind ... kinds)
         {
@@ -213,10 +214,24 @@ public class ProtocolModifiers
             markStaleIfCannotExecute = newMarkStaleIfCannotExecute;
         }
 
+        private static int transitiveDependenciesAreVisible = TinyEnumSet.encode(Txn.Kind.ExclusiveSyncPoint);
+        public static boolean isTransitiveDependencyVisible(TxnId txnId) { return TinyEnumSet.contains(transitiveDependenciesAreVisible, txnId.kindOrdinal()); }
+        public static boolean isTransitiveDependencyVisible(Txn.Kind kind) { return TinyEnumSet.contains(transitiveDependenciesAreVisible, kind); }
+        public static void setTransitiveDependenciesAreVisible(Txn.Kind ... kinds)
+        {
+            int newTransitiveDependenciesAreVisible = TinyEnumSet.encode(kinds);
+            Invariants.require(TinyEnumSet.contains(newTransitiveDependenciesAreVisible, Txn.Kind.ExclusiveSyncPoint));
+            transitiveDependenciesAreVisible = newTransitiveDependenciesAreVisible;
+        }
+
         public enum DependencyElision { OFF, ON, IF_DURABLE }
         private static DependencyElision dependencyElision = IF_DURABLE;
         public static DependencyElision dependencyElision() { return dependencyElision; }
         public static void setDependencyElision(DependencyElision newDependencyElision) { dependencyElision = newDependencyElision; }
+
+        private static boolean visitMaybePruned = true;
+        public static boolean shouldVisitMaybePruned() { return visitMaybePruned; }
+        public static void setVisitMaybePruned(boolean newVisitMaybePruned) { visitMaybePruned = newVisitMaybePruned; }
 
         public enum InformOfDurability { HOME, ALL }
         private static InformOfDurability informOfDurability = ALL;

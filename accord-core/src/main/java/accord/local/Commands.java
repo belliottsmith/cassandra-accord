@@ -722,7 +722,7 @@ public class Commands
                     Invariants.require(dependency.executeAt().compareTo(waitingExecuteAt) < 0
                                        || waitingId.awaitsOnlyDeps()
                                        || waiting.participants().stillExecutes().isEmpty()
-                                       || !markStaleIfCannotExecute(dependencyId.kind())
+                                       || !markStaleIfCannotExecute(dependencyId)
                                        || safeStore.redundantBefore().status(dependencyId, null,
                                                  waiting.partialDeps().participants(dependencyId)).all(LOCALLY_DEFUNCT)
                     );

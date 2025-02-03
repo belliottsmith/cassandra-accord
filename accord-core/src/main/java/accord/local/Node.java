@@ -704,8 +704,13 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
      */
     public TxnId nextTxnId(Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
     {
+        return nextTxnId(uniqueNow(), rw, domain, cardinality, flags);
+    }
+
+    private static TxnId nextTxnId(Timestamp now, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
+    {
         Invariants.require(domain == Key || rw != Txn.Kind.Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
-        TxnId txnId = new TxnId(uniqueNow(), flags, rw, domain, cardinality);
+        TxnId txnId = new TxnId(now, flags, rw, domain, cardinality);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
@@ -747,7 +752,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             fastPath = Unoptimised;
 
         Cardinality cardinality = cardinality(domain, keys);
-        return nextTxnId(kind, domain, cardinality, fastPath.bits | mediumPath.bit());
+        return nextTxnId(now, kind, domain, cardinality, fastPath.bits | mediumPath.bit());
     }
 
     public AsyncResult<Result> coordinate(Txn txn)

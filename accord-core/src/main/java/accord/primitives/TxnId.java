@@ -45,13 +45,14 @@ public class TxnId extends Timestamp implements PreLoadContext
         PrivilegedCoordinatorWithoutDeps,
         PrivilegedCoordinatorWithDeps;
 
+        private static final int SHIFT = 5;
         private static final FastPath[] VALUES = values();
 
         public final int bits;
 
         FastPath()
         {
-            this.bits = ordinal() << 4;
+            this.bits = ordinal() << SHIFT;
         }
 
         final boolean is(int flagsUnmasked)
@@ -61,7 +62,7 @@ public class TxnId extends Timestamp implements PreLoadContext
 
         private static boolean is(int flagsUnmasked, FastPath test)
         {
-            return ((flagsUnmasked >>> 4) & 3) == test.ordinal();
+            return ((flagsUnmasked >>> SHIFT) & 3) == test.ordinal();
         }
 
         private static FastPath forFlags(int flagsUnmasked)
@@ -71,7 +72,7 @@ public class TxnId extends Timestamp implements PreLoadContext
 
         private static int ordinalFromFlags(int flagsUnmasked)
         {
-            return (flagsUnmasked >>> 4) & 3;
+            return (flagsUnmasked >>> SHIFT) & 3;
         }
 
         public static FastPath forOrdinal(int ordinal)
@@ -106,9 +107,10 @@ public class TxnId extends Timestamp implements PreLoadContext
 
     public enum MediumPath
     {
-        NoMediumPath, TrackStable;
+        NoMediumPath,
+        TrackStable;
 
-        private static final int SHIFT = 6;
+        private static final int SHIFT = 7;
         public final int bit() { return ordinal() << SHIFT; }
 
         final boolean is(int flagsUnmasked)
@@ -137,7 +139,7 @@ public class TxnId extends Timestamp implements PreLoadContext
         SingleKey,
         Any;
 
-        private static final int SHIFT = 7;
+        private static final int SHIFT = 4;
         public final int bit()
         {
             return ordinal() << SHIFT;
@@ -174,7 +176,7 @@ public class TxnId extends Timestamp implements PreLoadContext
         }
     }
 
-    private static final int DOMAIN_AND_KIND_MASK = 0xf;
+    private static final int DOMAIN_AND_KIND_AND_CARDINALITY_MASK = 0x1f;
     public static final TxnId[] NO_TXNIDS = new TxnId[0];
 
     public static final TxnId NONE = new TxnId(0, 0, Id.NONE);
@@ -372,12 +374,12 @@ public class TxnId extends Timestamp implements PreLoadContext
 
     public TxnId as(Kind kind, Domain domain)
     {
-        return new TxnId(epoch(), hlc(), flagsWithoutDomainAndKind(), kind, domain, cardinality(), node);
+        return new TxnId(epoch(), hlc(), flagsWithoutDomainOrKindOrCardinality(), kind, domain, cardinality(), node);
     }
 
-    private int flagsWithoutDomainAndKind()
+    private int flagsWithoutDomainOrKindOrCardinality()
     {
-        return flags() & ~DOMAIN_AND_KIND_MASK;
+        return flags() & ~DOMAIN_AND_KIND_AND_CARDINALITY_MASK;
     }
 
     public TxnId addFlags(int flags)
@@ -451,6 +453,11 @@ public class TxnId extends Timestamp implements PreLoadContext
     public static int kindOrdinal(int flags)
     {
         return (flags >> 1) & 7;
+    }
+
+    public final int kindOrdinal()
+    {
+        return kindOrdinal(flagsUnmasked());
     }
 
     public FastPath fastPath()
