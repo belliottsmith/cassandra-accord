@@ -25,7 +25,6 @@ import accord.primitives.TxnId.FastPath;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
-import accord.utils.UnhandledEnum;
 
 import com.google.common.annotations.VisibleForTesting;
 
@@ -34,9 +33,6 @@ import javax.annotation.Nonnull;
 import java.util.function.BiFunction;
 
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.*;
-import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
-import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
-import static accord.primitives.TxnId.FastPath.Unoptimised;
 
 // TODO (desired, efficiency): if any shard *cannot* take the fast path, and all shards have accepted, terminate
 public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathShardTracker>
@@ -194,7 +190,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
     int waitingOnMediumPathSuccess; // if we reach zero, we have succeeded on the medium path for every shard
     public FastPathTracker(Topologies topologies, TxnId txnId)
     {
-        super(topologies, FastPathShardTracker[]::new, factory(txnId));
+        super(topologies, FastPathShardTracker[]::new, txnId.fastPath(), FastPathTracker::create);
         this.waitingOnFastPathSuccess = this.waitingOnMediumPathSuccess = super.waitingOnShards;
     }
 
@@ -239,17 +235,6 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
     public boolean hasReachedQuorum()
     {
         return all(FastPathShardTracker::hasReachedQuorum);
-    }
-
-    private static ShardFactory<FastPathShardTracker> factory(TxnId txnId)
-    {
-        switch (txnId.fastPath())
-        {
-            default: throw new UnhandledEnum(txnId.fastPath());
-            case Unoptimised: return (i, s) -> create(Unoptimised, i, s);
-            case PrivilegedCoordinatorWithoutDeps: return (i, s) -> create(PrivilegedCoordinatorWithoutDeps, i, s);
-            case PrivilegedCoordinatorWithDeps: return (i, s) -> create(PrivilegedCoordinatorWithDeps, i, s);
-        }
     }
 
     private static FastPathShardTracker create(FastPath fastPath, int index, Shard shard)

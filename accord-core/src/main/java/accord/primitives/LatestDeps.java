@@ -152,7 +152,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         }
         else
         {
-            Ballot ballot = new Ballot(node.uniqueNow());
+            Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
             CollectLatestDeps.withLatestDeps(node, txnId, route, require, ballot, executeAt, (extraDeps, fail) -> {
                 if (fail != null)
                 {
@@ -251,16 +251,14 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             if (deps == null) return null;
             KeyDeps keyDeps = deps.keyDeps;
             RangeDeps rangeDeps = deps.rangeDeps;
-            KeyDeps directKeyDeps = deps.directKeyDeps;
             RoutingKeys keys = deps.keyDeps.keys;
 
             boolean slice = keys.indexOf(start) != -1 || keys.indexOf(end) != -1 - keys.size();
-            if (!slice) slice = directKeyDeps.keys.indexOf(start) != -1 || directKeyDeps.keys.indexOf(end) != -1 - keys.size();
             if (!slice) slice = rangeDeps.indexOfStart(start) != -1 || rangeDeps.indexOfStart(end) != -1 - rangeDeps.rangeCount();
             if (!slice) return deps;
 
             Ranges ranges = Ranges.of(start.rangeFactory().newRange(start, end));
-            return new Deps(keyDeps.slice(ranges), rangeDeps.slice(ranges), directKeyDeps.slice(ranges));
+            return new Deps(keyDeps.slice(ranges), rangeDeps.slice(ranges));
         }
 
         public String toString()
@@ -311,7 +309,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         if (deps == null)
             return null;
 
-        return new Deps(deps.keyDeps.slice(ranges), deps.rangeDeps.slice(ranges), deps.directKeyDeps.slice(ranges));
+        return new Deps(deps.keyDeps.slice(ranges), deps.rangeDeps.slice(ranges));
     }
 
     static class Builder extends AbstractIntervalBuilder<RoutingKey, LatestEntry, LatestDeps>
@@ -432,9 +430,8 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                 return Deps.NONE;
 
             KeyDeps keyDeps =  KeyDeps.merge(stream(intersecting, Merge::forProposal, (d, r) -> slice(d.keyDeps, r, intersecting)));
-            KeyDeps directKeyDeps =  KeyDeps.merge(stream(intersecting, Merge::forProposal, (d, r) -> slice(d.directKeyDeps, r, intersecting)));
             RangeDeps rangeDeps =  RangeDeps.merge(stream(intersecting, Merge::forProposal, (d, r) -> slice(d.rangeDeps, r, intersecting)));
-            return new Deps(keyDeps, rangeDeps, directKeyDeps);
+            return new Deps(keyDeps, rangeDeps);
         }
 
         MergedCommitResult mergeCommitOrStable(@Nullable Participants<?> intersecting, KnownDeps atLeast)
@@ -450,9 +447,8 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
             SuccessCollector sufficientFor = new SuccessCollector(true);
             KeyDeps keyDeps =  KeyDeps.merge(stream(intersecting, forCommitOrStable(atLeast, sufficientFor), (d, r) -> slice(d.keyDeps, r, intersecting)));
-            KeyDeps directKeyDeps = KeyDeps.merge(stream(intersecting, forCommitOrStable(atLeast, sufficientFor), (d, r) -> slice(d.directKeyDeps, r, intersecting)));
             RangeDeps rangeDeps = RangeDeps.merge(stream(intersecting, forCommitOrStable(atLeast, sufficientFor), (d, r) -> slice(d.rangeDeps, r, intersecting)));
-            return new MergedCommitResult(new Deps(keyDeps, rangeDeps, directKeyDeps), Ranges.of(sufficientFor.toArray(new Range[0])));
+            return new MergedCommitResult(new Deps(keyDeps, rangeDeps), Ranges.of(sufficientFor.toArray(new Range[0])));
         }
 
         private static KeyDeps slice(KeyDeps keyDeps, Ranges ranges, @Nullable Participants<?> intersecting)

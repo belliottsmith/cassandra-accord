@@ -93,7 +93,7 @@ public class Invalidate implements Callback<InvalidateReply>
 
     public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        Ballot ballot = new Ballot(node.uniqueNow());
+        Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
         Invalidate invalidate = new Invalidate(node, ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportLowEpoch, reportHighEpoch, callback);
         invalidate.start();
         return invalidate;

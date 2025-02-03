@@ -31,6 +31,7 @@ import accord.primitives.Txn.Kind.Kinds;
 import accord.utils.Invariants;
 import accord.utils.TinyEnumSet;
 
+import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.Any;
@@ -257,9 +258,9 @@ public class TxnId extends Timestamp implements PreLoadContext
         return is(Write);
     }
 
-    public final boolean isRead()
+    public final boolean isSomeRead()
     {
-        return is(Read);
+        return is(Read) || is(EphemeralRead);
     }
 
     public final Kind kind()
@@ -501,6 +502,14 @@ public class TxnId extends Timestamp implements PreLoadContext
         Matcher m = PARSE.matcher(txnIdString);
         if (!m.matches())
             throw illegalArgument("Invalid TxnId string: " + txnIdString);
+        return fromValues(Long.parseLong(m.group("epoch")), Long.parseLong(m.group("hlc")), Integer.parseInt(m.group("flags")), new Id(Integer.parseInt(m.group("node"))));
+    }
+
+    public static TxnId tryParse(String txnIdString)
+    {
+        Matcher m = PARSE.matcher(txnIdString);
+        if (!m.matches())
+            return null;
         return fromValues(Long.parseLong(m.group("epoch")), Long.parseLong(m.group("hlc")), Integer.parseInt(m.group("flags")), new Id(Integer.parseInt(m.group("node"))));
     }
 }

@@ -20,6 +20,8 @@ package accord.api;
 
 import java.util.concurrent.TimeUnit;
 
+import accord.utils.async.Cancellable;
+
 /**
  * A simple task execution interface
  */
@@ -66,7 +68,7 @@ public interface Scheduler
         }
     };
 
-    interface Scheduled
+    interface Scheduled extends Cancellable
     {
         void cancel();
         boolean isDone();

@@ -371,6 +371,10 @@ public class BurnTestBase
     public static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency, PendingQueue pendingQueue, BiFunction<Id, Agent, Journal> journalFactory)
     {
         List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+        Thread.currentThread().setUncaughtExceptionHandler((th, fail) -> {
+            failures.add(fail);
+            logger.error("Uncaught exception", fail);
+        });
         AtomicLong progress = new AtomicLong();
         MonitoredPendingQueue queue = new MonitoredPendingQueue(failures, progress, 5L, TimeUnit.MINUTES, pendingQueue);
         long startNanos = System.nanoTime();

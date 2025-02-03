@@ -43,6 +43,8 @@ public interface ShardDistributor
      */
     @Nullable Range splitRange(Range range, int from, int to, int totalSplits);
 
+    Ranges selectFirstSubRanges(Range range, Ranges subRanges, int totalSplits);
+
     int numberOfSplitsPossible(Range range);
 
     class EvenSplit<T> implements ShardDistributor
@@ -117,6 +119,38 @@ public interface ShardDistributor
         }
 
         @Override
+        public Ranges selectFirstSubRanges(Range range, Ranges subRanges, int numSplits)
+        {
+            Splitter<T> splitter = this.splitter.apply(Ranges.of(range));
+            T totalSize = splitter.sizeOf(range);
+            T splitSize = splitter.divide(totalSize, numSplits);
+
+            T runningTotal = splitter.zero();
+            int i = 0;
+            while (i < subRanges.size())
+            {
+                Range next = subRanges.get(i);
+                T sizeOfNext = splitter.sizeOf(next);
+                T totalWithNext = splitter.add(sizeOfNext, runningTotal);
+                if (splitter.compare(totalWithNext, splitSize) >= 0)
+                    break;
+                runningTotal = totalWithNext;
+                ++i;
+            }
+
+            if (i == subRanges.size())
+                return subRanges;
+
+            Range next = subRanges.get(i);
+            next = splitter.subRange(next, splitter.zero(), splitter.subtract(splitSize, runningTotal));
+            if (i == 0)
+                return Ranges.of(next);
+
+            Ranges ranges = subRanges.slice(0, i);
+            return ranges.with(Ranges.of(next));
+        }
+
+        @Override
         public List<Ranges> split(Ranges ranges)
         {
             if (ranges.isEmpty())
@@ -130,16 +164,16 @@ public interface ShardDistributor
             if (splitter.compare(totalSize, splitter.zero()) <= 0)
                 throw new IllegalStateException();
 
-            int numberOfShards = splitter.min(totalSize, this.numberOfShards);
-            T shardSize = splitter.divide(totalSize, numberOfShards);
+            int numberOfSplits = splitter.min(totalSize, this.numberOfShards);
+            T shardSize = splitter.divide(totalSize, numberOfSplits);
             List<Range> buffer = new ArrayList<>(ranges.size());
-            List<Ranges> result = new ArrayList<>(numberOfShards);
+            List<Ranges> result = new ArrayList<>(numberOfSplits);
             int ri = 0;
             T rOffset = splitter.zero();
             T rSize = splitter.sizeOf(ranges.get(0));
-            while (result.size() < numberOfShards)
+            while (result.size() < numberOfSplits)
             {
-                T required = result.size() < numberOfShards - 1 ? shardSize : splitter.subtract(totalSize, splitter.multiply(shardSize, (numberOfShards - 1)));
+                T required = result.size() < numberOfSplits - 1 ? shardSize : splitter.subtract(totalSize, splitter.multiply(shardSize, (numberOfSplits - 1)));
                 while (true)
                 {
                     if (splitter.compare(splitter.subtract(rSize, rOffset), required) >= 0)

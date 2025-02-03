@@ -38,6 +38,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
+import static accord.messages.MessageType.StandardMessage.STABLE_THEN_READ_REQ;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 
 /**
@@ -123,7 +124,7 @@ public class StableThenRead extends ReadData
     @Override
     public MessageType type()
     {
-        return MessageType.STABLE_THEN_READ_REQ;
+        return STABLE_THEN_READ_REQ;
     }
 
     @Override

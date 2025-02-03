@@ -38,6 +38,7 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 
+import static accord.messages.MessageType.StandardMessage.APPLY_THEN_WAIT_UNTIL_APPLIED_REQ;
 import static accord.messages.TxnRequest.computeScope;
 import static accord.utils.Invariants.illegalState;
 
@@ -135,7 +136,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     @Override
     public MessageType type()
     {
-        return MessageType.APPLY_THEN_WAIT_UNTIL_APPLIED_REQ;
+        return APPLY_THEN_WAIT_UNTIL_APPLIED_REQ;
     }
 
     @Override

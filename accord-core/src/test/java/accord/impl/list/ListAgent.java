@@ -48,6 +48,10 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
 
 import static accord.local.Node.Id.NONE;
 import static com.google.common.base.Functions.identity;
@@ -107,7 +111,7 @@ public class ListAgent implements Agent
     }
 
     @Override
-    public void onFailedBootstrap(String phase, Ranges ranges, Runnable retry, Throwable failure)
+    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
     {
         retryBootstrap.accept(retry);
     }
@@ -134,9 +138,9 @@ public class ListAgent implements Agent
     }
 
     @Override
-    public long preAcceptTimeout()
+    public boolean rejectPreAccept(TimeService time, TxnId txnId)
     {
-        return timeout;
+        return this.time.now() - txnId.hlc() > SECONDS.toMicros(10);
     }
 
     @Override
@@ -170,23 +174,41 @@ public class ListAgent implements Agent
     }
 
     @Override
-    public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
+    public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
     {
         // TODO (required): meta randomise
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
     @Override
-    public long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
     @Override
-    public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         int retryDelay = Math.min(16, 1 << retryCount);
         return units.convert(retryDelay, SECONDS);
+    }
+
+    @Override
+    public long retrySyncPointDelay(Node node, int attempt, TimeUnit units)
+    {
+        return units.convert(rnd.nextInt(30, 300), SECONDS);
+    }
+
+    @Override
+    public long retryDurabilityDelay(Node node, int attempt, TimeUnit units)
+    {
+        return units.convert(rnd.nextInt(30, 300), SECONDS);
+    }
+
+    @Override
+    public long expireEpochWait(TimeUnit units)
+    {
+        return units.convert(rnd.nextInt(10, 60), SECONDS);
     }
 
     @Override
@@ -200,13 +222,31 @@ public class ListAgent implements Agent
     }
 
     @Override
-    public long localSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean isRequested)
+    {
+        // TODO (expected): metarandomise
+        long lag = rnd.nextBoolean() ? rnd.nextInt(100, 1000) : rnd.nextInt(1000, 10000);
+        long wait = staleId.hlc() + lag - node.now();
+        if (wait <= 0)
+            return AsyncChains.success(staleId);
+        AsyncResult.Settable<TxnId> result = AsyncResults.settable();
+        node.scheduler().selfRecurring(() -> result.setSuccess(staleId), wait, MILLISECONDS);
+        return result;
+    }
+
+    public long minStaleHlc(Node node, boolean isRequested)
+    {
+        return node.now() - SECONDS.toMillis(rnd.nextBoolean() ? 1 : 10);
+    }
+
+    @Override
+    public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
         return unit.convert(timeoutSupplier.slowAt(), MICROSECONDS);
     }
 
     @Override
-    public long localExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
         return unit.convert(timeoutSupplier.expiresAt(), MICROSECONDS);
     }

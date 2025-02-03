@@ -25,12 +25,13 @@ import java.util.Map;
 import java.util.NavigableSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+
+import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
@@ -42,7 +43,6 @@ import accord.api.ConfigurationService;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.DataStore;
 import accord.api.Journal;
-import accord.api.LocalConfig;
 import accord.api.LocalListeners;
 import accord.api.MessageSink;
 import accord.api.ProgressLog;
@@ -59,7 +59,7 @@ import accord.coordinate.CoordinationAdapter.Factory.Kind;
 import accord.coordinate.Infer.InvalidIf;
 import accord.coordinate.Outcome;
 import accord.coordinate.RecoverWithRoute;
-import accord.impl.DurabilityScheduling;
+import accord.local.durability.DurabilityService;
 import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
@@ -100,6 +100,7 @@ import static accord.api.ProtocolModifiers.Toggles.defaultMediumPath;
 import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
 import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
 import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.TxnId.Cardinality.Any;
 import static accord.primitives.TxnId.Cardinality.cardinality;
 import static accord.primitives.TxnId.FastPath.Unoptimised;
@@ -170,13 +171,12 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private final CoordinationAdapter.Factory coordinationAdapters;
 
     private final TimeService time;
-    private final AtomicReference<Timestamp> now;
+    private final UniqueTimeService uniqueTime;
     private final Agent agent;
     private final RandomSource random;
-    private final LocalConfig localConfig;
 
     private final Scheduler scheduler;
-    private final DurabilityScheduling durabilityScheduling;
+    private final DurabilityService durabilityService;
 
     // TODO (expected, liveness): monitor the contents of this collection for stalled coordination, and excise them
     private final Map<TxnId, AsyncResult<? extends Outcome>> coordinating = new ConcurrentHashMap<>();
@@ -186,40 +186,32 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private final PersistentField<DurableBefore, DurableBefore> persistDurableBefore;
 
     public Node(Id id, MessageSink messageSink,
-                ConfigurationService configService, TimeService time,
+                ConfigurationService configService, TimeService time, UniqueTimeService uniqueTime,
                 Supplier<DataStore> dataSupplier, ShardDistributor shardDistributor, Agent agent, RandomSource random, Scheduler scheduler, TopologySorter.Supplier topologySorter,
                 Function<Node, RemoteListeners> remoteListenersFactory, Function<Node, Timeouts> requestTimeoutsFactory, Function<Node, ProgressLog.Factory> progressLogFactory,
                 Function<Node, LocalListeners.Factory> localListenersFactory, CommandStores.Factory factory, CoordinationAdapter.Factory coordinationAdapters,
                 Persister<DurableBefore, DurableBefore> durableBeforePersister,
-                LocalConfig localConfig, Journal journal)
+                Journal journal)
     {
         this.id = id;
         this.scheduler = scheduler; // we set scheduler first so that e.g. requestTimeoutsFactory and progressLogFactory can take references to it
-        this.localConfig = localConfig;
         this.messageSink = messageSink;
         this.configService = configService;
         this.coordinationAdapters = coordinationAdapters;
-        this.topology = new TopologyManager(topologySorter, agent, id, scheduler, time, localConfig);
-        topology.scheduleTopologyUpdateWatchdog();
-        this.listeners = remoteListenersFactory.apply(this);
-        this.timeouts = requestTimeoutsFactory.apply(this);
         this.time = time;
-        this.now = new AtomicReference<>(Timestamp.fromValues(topology.epoch(), time.now(), id));
+        this.uniqueTime = uniqueTime;
+        this.timeouts = requestTimeoutsFactory.apply(this);
+        this.topology = new TopologyManager(topologySorter, agent, id, time, timeouts);
+        this.listeners = remoteListenersFactory.apply(this);
         this.agent = agent;
         this.random = random;
         this.persistDurableBefore = new PersistentField<>(() -> durableBefore, DurableBefore::merge, safeDurableBeforePersister(durableBeforePersister), this::setPersistedDurableBefore);
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
-        this.durabilityScheduling = new DurabilityScheduling(this);
+        this.durabilityService = new DurabilityService(this);
         // TODO (desired): make frequency configurable
         scheduler.recurring(() -> commandStores.forEachCommandStore(store -> store.progressLog.maybeNotify()), 1, SECONDS);
         scheduler.recurring(timeouts::maybeNotify, 100, MILLISECONDS);
         configService.registerListener(this);
-        configService.registerListener(durabilityScheduling);
-    }
-
-    public LocalConfig localConfig()
-    {
-        return localConfig;
     }
 
     public Map<TxnId, AsyncResult<? extends Outcome>> coordinating()
@@ -232,9 +224,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         persistDurableBefore.load();
     }
 
-    public DurabilityScheduling durabilityScheduling()
+    public DurabilityService durability()
     {
-        return durabilityScheduling;
+        return durabilityService;
     }
 
     /**
@@ -246,7 +238,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public AsyncResult<Void> unsafeStart()
     {
         EpochReady ready = onTopologyUpdateInternal(configService.currentTopology(), false);
-        durabilityScheduling.updateTopology();
         ready.coordinate.addCallback(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
         configService.acknowledgeEpoch(ready, false);
         return ready.metadata;
@@ -377,12 +368,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     @Override
-    public void onRemoveNode(long epoch, Id removed)
-    {
-        topology.onRemoveNode(epoch, removed);
-    }
-
-    @Override
     public void truncateTopologyUntil(long epoch)
     {
         topology.truncateTopologyUntil(epoch);
@@ -401,6 +386,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     // TODO (required): audit error handling, as the refactor to provide epoch timeouts appears to have broken a number of coordination
+    // TODO (expected): provide a deadline
     public void withEpoch(EpochSupplier epochSupplier, BiConsumer<Void, Throwable> callback)
     {
         if (epochSupplier == null)
@@ -477,55 +463,23 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public void shutdown()
     {
         commandStores.shutdown();
-        topology.shutdown();
     }
 
-    public Timestamp uniqueNow()
+    public long uniqueNow()
     {
-        while (true)
-        {
-            Timestamp cur = now.get();
-            Timestamp next = cur.withNextHlc(time.now())
-                                .withEpochAtLeast(topology.epoch());
-
-            if (now.compareAndSet(cur, next))
-                return next;
-        }
+        return uniqueTime.uniqueNow();
     }
 
     @Override
-    public Timestamp uniqueNow(Timestamp atLeast)
+    public long uniqueNow(long greaterThan)
     {
-        Timestamp cur = now.get();
-        if (cur.compareSimultaneousEpochAndHlc(atLeast) <= 0)
-        {
-            long topologyEpoch = topology.epoch();
-            if (atLeast.epoch() > topologyEpoch)
-                configService.fetchTopologyForEpoch(atLeast.epoch());
-            now.accumulateAndGet(atLeast, Node::nowAtLeast);
-        }
-        return uniqueNow();
+        return uniqueTime.uniqueNow(greaterThan);
     }
 
-    private static Timestamp nowAtLeast(Timestamp current, Timestamp proposed)
+    @Override
+    public long uniqueStale(long greaterThan)
     {
-        long currentEpoch = current.epoch(), proposedEpoch = proposed.epoch();
-        long maxEpoch = Math.max(currentEpoch, proposedEpoch);
-
-        long currentHlc = current.hlc(), proposedHlc = proposed.hlc();
-        if (currentHlc == proposedHlc)
-        {
-            // we want to produce a zero Hlc
-            int currentFlags = current.flags(), proposedFlags = proposed.flags();
-            if (proposedFlags > currentFlags) ++proposedHlc;
-            else if (proposedFlags == currentFlags && proposed.node.id > current.node.id) ++proposedHlc;
-        }
-        long maxHlc = Math.max(currentHlc, proposedHlc);
-
-        if (maxEpoch == currentEpoch && maxHlc == currentHlc)
-            return current;
-
-        return Timestamp.fromValues(maxEpoch, maxHlc, current.flags(), current.node);
+        return uniqueTime.uniqueStale(greaterThan);
     }
 
     @Override
@@ -661,17 +615,21 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     // send to a specific node
-    public <T> void send(Id to, Request send, AgentExecutor executor, Callback<T> callback)
+    public <T> void send(Id to, Request send, @Nullable AgentExecutor executor, Callback<T> callback)
     {
-        checkStore(executor);
+        if (executor == null) executor = CommandStore.current();
+        else checkStore(executor);
         messageSink.send(to, send, executor, callback);
     }
 
     private void checkStore(AsyncExecutor executor)
     {
-        CommandStore current = CommandStore.maybeCurrent();
-        if (current != null && current != executor)
-            throw illegalState(format("Used wrong CommandStore %s; current is %s", executor, current));
+        if (executor instanceof CommandStore)
+        {
+            CommandStore current = CommandStore.maybeCurrent();
+            if (current != null && current != executor)
+                throw illegalState(format("Used wrong CommandStore %s; current is %s", executor, current));
+        }
     }
 
     // send to a specific node
@@ -704,14 +662,34 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return nextTxnId(rw, domain, Any, defaultMediumPath().bit());
     }
 
+    public TxnId nextTxnId(Timestamp min, Txn.Kind rw, Domain domain)
+    {
+        return nextTxnId(min, rw, domain, Any, defaultMediumPath().bit());
+    }
+
+    public TxnId nextStaleTxnId(long minEpoch, long minHlc, Txn.Kind rw, Domain domain)
+    {
+        return nextStaleTxnId(minEpoch, minHlc, rw, domain, Any, defaultMediumPath().bit());
+    }
+
     public TxnId nextTxnId(Txn.Kind rw, Domain domain, Cardinality cardinality)
     {
         return nextTxnId(rw, domain, cardinality, defaultMediumPath().bit());
     }
 
+    public TxnId nextTxnId(Timestamp min, Txn.Kind rw, Domain domain, Cardinality cardinality)
+    {
+        return nextTxnId(min, rw, domain, cardinality, defaultMediumPath().bit());
+    }
+
     public TxnId nextTxnId(Txn.Kind rw, Domain domain, int flags)
     {
         return nextTxnId(rw, domain, Any, flags);
+    }
+
+    public TxnId nextTxnId(Timestamp min, Txn.Kind rw, Domain domain, int flags)
+    {
+        return nextTxnId(min, rw, domain, Any, flags);
     }
 
     /**
@@ -720,13 +698,28 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
      */
     public TxnId nextTxnId(Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
     {
-        return nextTxnId(uniqueNow(), rw, domain, cardinality, flags);
+        return newTxnId(epoch(), uniqueNow(), rw, domain, cardinality, flags, id);
     }
 
-    private static TxnId nextTxnId(Timestamp now, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
+    public TxnId nextTxnId(Timestamp min, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
+    {
+        long epoch = min == null ? epoch() : Math.max(min.epoch(), epoch());
+        long hlc = uniqueNow(min == null ? 0 : min.hlc());
+        return newTxnId(epoch, hlc, rw, domain, cardinality, flags, id);
+    }
+
+    public TxnId nextStaleTxnId(long minEpoch, long minHlc, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
+    {
+        long epoch = Math.max(minEpoch, epoch());
+        long hlc = uniqueStale(minHlc);
+        return newTxnId(epoch, hlc, rw, domain, cardinality, flags, id);
+    }
+
+    private static TxnId newTxnId(long epoch, long now, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags, Node.Id node)
     {
         Invariants.require(domain == Key || rw != Txn.Kind.Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
-        TxnId txnId = new TxnId(now, flags, rw, domain, cardinality);
+        Invariants.require(domain == Range || rw != Txn.Kind.ExclusiveSyncPoint, "Key ExclusiveSyncPoint not supported without improvements to CommandsForKey for managing execution");
+        TxnId txnId = new TxnId(epoch, now, flags, rw, domain, cardinality, node);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
@@ -740,9 +733,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         if (!usePrivilegedCoordinator())
             return nextTxnId(kind, domain, cardinality);
 
-        Timestamp now = uniqueNow();
-        int flags = computeBestDefaultTxnIdFlags(keys, now.epoch());
-        TxnId txnId = new TxnId(now, flags, kind, domain, cardinality);
+        long epoch = epoch();
+        long now = uniqueNow();
+        int flags = computeBestDefaultTxnIdFlags(keys, epoch);
+        TxnId txnId = new TxnId(epoch, now, flags, kind, domain, cardinality, id);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
@@ -762,13 +756,14 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         Txn.Kind kind = txn.kind();
         Domain domain = keys.domain();
 
-        Timestamp now = uniqueNow();
+        long epoch = epoch();
+        long now = uniqueNow();
         fastPath = ensurePermitted(fastPath);
-        if (fastPath != Unoptimised && (!topology.hasEpoch(now.epoch()) || !topology.supportsPrivilegedFastPath(keys, now.epoch())))
+        if (fastPath != Unoptimised && (!topology.hasEpoch(epoch) || !topology.supportsPrivilegedFastPath(keys, epoch)))
             fastPath = Unoptimised;
 
         Cardinality cardinality = cardinality(domain, keys);
-        return nextTxnId(now, kind, domain, cardinality, fastPath.bits | mediumPath.bit());
+        return newTxnId(epoch, now, kind, domain, cardinality, fastPath.bits | mediumPath.bit(), id);
     }
 
     public AsyncResult<Result> coordinate(Txn txn)

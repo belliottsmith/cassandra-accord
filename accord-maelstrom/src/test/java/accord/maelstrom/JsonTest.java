@@ -86,8 +86,7 @@ class JsonTest
     static Gen<Deps> depsGen()
     {
         return AccordGens.deps(AccordGens.keyDeps(keyGen().map(RoutableKey::toUnseekable)),
-                               rangeDepsGen(),
-                               AccordGens.directKeyDeps(keyGen().map(RoutableKey::toUnseekable)));
+                               rangeDepsGen());
     }
 
 }

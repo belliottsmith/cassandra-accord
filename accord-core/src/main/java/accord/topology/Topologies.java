@@ -97,6 +97,8 @@ public interface Topologies extends TopologySorter
 
     int maxShardsPerEpoch();
 
+    Topologies select(SortedArrayList<Node.Id> nodes);
+
     Topologies selectSince(Participants<?> participants, long sinceEpoch, SelectNodeOwnership selectNodeOwnership);
 
     Topologies selectEpoch(Participants<?> participants, long epoch, SelectNodeOwnership selectNodeOwnership);
@@ -269,6 +271,13 @@ public interface Topologies extends TopologySorter
         public int maxShardsPerEpoch()
         {
             return topology.size();
+        }
+
+        @Override
+        public Topologies select(SortedArrayList<Id> nodes)
+        {
+            Topology subset = topology.select(nodes);
+            return subset == topology ? this : new Single(sorter, topology);
         }
 
         @Override
@@ -490,6 +499,28 @@ public interface Topologies extends TopologySorter
         public boolean isFaulty(Id node)
         {
             return sorter.isFaulty(node);
+        }
+
+        @Override
+        public Topologies select(SortedArrayList<Id> nodes)
+        {
+            Topology[] subsets = null;
+            for (int i = 0 ; i < size() ; ++i)
+            {
+                Topology superset = topologies[i];
+                Topology subset = superset.select(nodes);
+                if (subset != superset && subsets == null)
+                {
+                    subsets = new Topology[size()];
+                    System.arraycopy(topologies, 0, subsets, 0, i);
+                }
+                if (subsets != null)
+                    subsets[i] = subset;
+            }
+
+            if (subsets == null)
+                return this;
+            return new Multi(supplier, subsets);
         }
 
         @Override

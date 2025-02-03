@@ -116,6 +116,15 @@ public class SortedArrays
             return isSubset(Comparable::compareTo, test.array, 0, test.array.length, array, 0, array.length);
         }
 
+        @Override
+        public boolean equals(Object o)
+        {
+            if (o instanceof SortedArrayList<?>)
+                return Arrays.equals(array, ((SortedArrayList<?>)o).array);
+
+            return super.equals(o);
+        }
+
         public List<T> reverse()
         {
             return new AbstractList<T>()
@@ -161,8 +170,14 @@ public class SortedArrays
 
         public SortedArrayList<T> with(SortedArrayList<T> with)
         {
-            T[] array = (T[])SortedArrays.linearUnion(this.array, this.array.length, with.array, with.array.length, Comparable::compareTo, ArrayBuffers.uncached(this.array));
-            return array == this.array ? this : new SortedArrayList<>(array);
+            T[] array = SortedArrays.linearUnion(this.array, this.array.length, with.array, with.array.length, Comparable::compareTo, ArrayBuffers.uncached(this.array));
+            return array == this.array ? this : array == with.array ? with : new SortedArrayList<>(array);
+        }
+
+        public SortedArrayList<T> intersecting(SortedArrayList<T> with)
+        {
+            T[] array = SortedArrays.linearIntersection(this.array, this.array.length, with.array, with.array.length, Comparable::compareTo, ArrayBuffers.uncached(this.array));
+            return array == this.array ? this : array == with.array ? with : new SortedArrayList<>(array);
         }
 
         public SortedArrayList<T> without(Predicate<T> remove)

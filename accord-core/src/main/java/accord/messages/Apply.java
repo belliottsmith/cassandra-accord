@@ -43,6 +43,8 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
+import static accord.messages.MessageType.StandardMessage.APPLY_REQ;
+import static accord.messages.MessageType.StandardMessage.APPLY_RSP;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class Apply extends TxnRequest<ApplyReply>
@@ -164,12 +166,7 @@ public class Apply extends TxnRequest<ApplyReply>
     @Override
     public MessageType type()
     {
-        switch (kind)
-        {
-            case Minimal: return MessageType.APPLY_MINIMAL_REQ;
-            case Maximal: return MessageType.APPLY_MAXIMAL_REQ;
-            default: throw new IllegalStateException();
-        }
+        return APPLY_REQ;
     }
 
     public enum ApplyReply implements Reply
@@ -179,7 +176,7 @@ public class Apply extends TxnRequest<ApplyReply>
         @Override
         public MessageType type()
         {
-            return MessageType.APPLY_RSP;
+            return APPLY_RSP;
         }
 
         @Override

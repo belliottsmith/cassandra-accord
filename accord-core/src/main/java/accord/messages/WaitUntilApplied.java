@@ -27,6 +27,7 @@ import accord.primitives.Ranges;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
+import static accord.messages.MessageType.StandardMessage.WAIT_UNTIL_APPLIED_REQ;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.Vestigial;
 
@@ -97,7 +98,7 @@ public class WaitUntilApplied extends ReadData
     @Override
     public MessageType type()
     {
-        return MessageType.WAIT_UNTIL_APPLIED_REQ;
+        return WAIT_UNTIL_APPLIED_REQ;
     }
 
     @Override

@@ -29,6 +29,7 @@ import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.Txn.Kind.Kinds;
@@ -40,6 +41,7 @@ import accord.utils.UnhandledEnum;
 
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Txn.Kind.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Nothing;
@@ -255,7 +257,10 @@ public interface CommandSummaries
 
     interface AllCommandVisitor
     {
-        boolean visit(Unseekable keyOrRange, TxnId txnId, Timestamp executeAt, SummaryStatus status, @Nullable IsDep dep);
+        /**
+         * Note: Durability is not guaranteed to return anything besides NotDurable; implementation is free to return more information if easily available.
+         */
+        boolean visit(Unseekable keyOrRange, TxnId txnId, Timestamp executeAt, SummaryStatus status, @Nullable IsDep dep, Status.Durability minDurability);
     }
 
     boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, TestStartedAt testStartedAt, Timestamp testStartAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit);
@@ -308,7 +313,7 @@ public interface CommandSummaries
                     IsDep dep = value.dep;
                     for (Unseekable participant : intersecting)
                     {
-                        if (!visit.visit(participant, txnId, executeAt, status, dep))
+                        if (!visit.visit(participant, txnId, executeAt, status, dep, NotDurable))
                             return false;
                     }
                 }

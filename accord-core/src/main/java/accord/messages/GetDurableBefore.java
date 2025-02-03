@@ -25,12 +25,13 @@ import accord.local.PreLoadContext;
 import accord.local.DurableBefore;
 import accord.primitives.TxnId;
 
-public class QueryDurableBefore implements Request, PreLoadContext
+import static accord.messages.MessageType.StandardMessage.GET_DURABLE_BEFORE_REQ;
+import static accord.messages.MessageType.StandardMessage.GET_DURABLE_BEFORE_RSP;
+
+public class GetDurableBefore implements Request, PreLoadContext
 {
-    final long epoch;
-    public QueryDurableBefore(long epoch)
+    public GetDurableBefore()
     {
-        this.epoch = epoch;
     }
 
     @Override
@@ -42,19 +43,13 @@ public class QueryDurableBefore implements Request, PreLoadContext
     @Override
     public String toString()
     {
-        return "QueryDurableBefore{" + epoch + '}';
+        return "QueryDurableBefore";
     }
 
     @Override
     public MessageType type()
     {
-        return MessageType.QUERY_DURABLE_BEFORE_REQ;
-    }
-
-    @Override
-    public long waitForEpoch()
-    {
-        return epoch;
+        return GET_DURABLE_BEFORE_REQ;
     }
 
     @Nullable
@@ -76,7 +71,7 @@ public class QueryDurableBefore implements Request, PreLoadContext
         @Override
         public MessageType type()
         {
-            return MessageType.QUERY_DURABLE_BEFORE_RSP;
+            return GET_DURABLE_BEFORE_RSP;
         }
     }
 }

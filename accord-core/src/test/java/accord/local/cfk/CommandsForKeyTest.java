@@ -61,6 +61,7 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.local.TimeService;
 import accord.primitives.RangeDeps;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -97,6 +98,7 @@ import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Durability.NotDurable;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.Any;
 import static accord.primitives.TxnId.Cardinality.SingleKey;
@@ -137,7 +139,7 @@ public class CommandsForKeyTest
         private static final TxnId MIN = new TxnId(1, 1, 0, Txn.Kind.Read, Key, SingleKey, new Node.Id(1));
 
         // TODO (testing): randomise ratios
-        static final Txn.Kind[] KINDS = new Txn.Kind[] { Txn.Kind.Read, Write, Txn.Kind.EphemeralRead, Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint };
+        static final Txn.Kind[] KINDS = new Txn.Kind[] { Txn.Kind.Read, Write, Txn.Kind.EphemeralRead, Txn.Kind.ExclusiveSyncPoint };
         final RandomSource rnd;
         final Node.Id[] nodeIds;
         final Domain[] domains;
@@ -202,7 +204,7 @@ public class CommandsForKeyTest
 
                 Command.Committed committed = command.asCommitted();
                 Command.WaitingOn waitingOn = committed.waitingOn;
-                if (waitingOn.isWaitingOn(waitingId))
+                if (waitingId.isVisible() && waitingOn.isWaitingOn(waitingId))
                 {
                     Command.WaitingOn.Update update = new Command.WaitingOn.Update(waitingOn);
                     update.removeWaitingOn(waitingId);
@@ -457,7 +459,17 @@ public class CommandsForKeyTest
 
             Domain domain;
             if (hlc == min.hlc() && min.domain() == Domain.Range) domain = Domain.Range;
-            else if (hlc == max.hlc() && max.domain() == Key) domain = Key;
+            else if (hlc == max.hlc() && max.domain() == Key)
+            {
+                if (kind != ExclusiveSyncPoint) domain = Key;
+                else
+                {
+                    if (min.hlc() < hlc)
+                        --hlc;
+                    domain = Domain.Range;
+                }
+            }
+            else if (kind == ExclusiveSyncPoint) domain = Domain.Range;
             else domain = rnd.nextBoolean() ? Key : Domain.Range;
 
             TxnId.Cardinality cardinality = domain == Domain.Range || rnd.nextBoolean() ? Any : SingleKey;
@@ -1031,7 +1043,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void onFailedBootstrap(String phase, Ranges ranges, Runnable retry, Throwable failure)
+        public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
         {
             throw new UnsupportedOperationException();
         }
@@ -1055,7 +1067,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public long preAcceptTimeout()
+        public boolean rejectPreAccept(TimeService time, TxnId txnId)
         {
             throw new UnsupportedOperationException();
         }
@@ -1091,37 +1103,67 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
+        public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
         {
             return 0;
         }
 
         @Override
-        public long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units)
+        public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units)
         {
             return 0;
         }
 
         @Override
-        public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
+        public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
         {
             return 0;
         }
 
         @Override
-        public long localSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+        public long retrySyncPointDelay(Node node, int attempt, TimeUnit units)
         {
             return 0;
         }
 
         @Override
-        public long localExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+        public long retryDurabilityDelay(Node node, int attempt, TimeUnit units)
+        {
+            return 0;
+        }
+
+        @Override
+        public long expireEpochWait(TimeUnit units)
+        {
+            return 0;
+        }
+
+        @Override
+        public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+        {
+            return 0;
+        }
+
+        @Override
+        public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
         {
             return 0;
         }
 
         @Override
         public long expiresAt(ReplyContext replyContext, TimeUnit unit)
+        {
+            return 0;
+        }
+
+        @Override
+        public AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean isRequested)
+        {
+            return null;
+        }
+
+        @Override
+        public long minStaleHlc(Node node, boolean requested)
         {
             return 0;
         }

@@ -1035,7 +1035,7 @@ class Updating
             }
 
             waitingToExecuteAt = updateExecuteAtLeast(waitingToExecuteAt, effectiveExecutesAt, safeCommand);
-            if (!readyToApply || missingCount > 0)
+            if (!readyToApply || missingCount > 0 || newById != null)
             {
                 if (newById == null) newById = byId;
                 TxnInfo[] newCommittedByExecuteAt = cfk.committedByExecuteAt;

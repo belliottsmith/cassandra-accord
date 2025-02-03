@@ -51,6 +51,8 @@ import org.agrona.collections.IntHashSet;
 
 import static accord.messages.Commit.Kind.CommitWithTxn;
 import static accord.messages.Commit.Kind.StableFastPath;
+import static accord.messages.MessageType.StandardMessage.COMMIT_INVALIDATE_REQ;
+import static accord.messages.MessageType.StandardMessage.COMMIT_REQ;
 import static accord.primitives.SaveStatus.Committed;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
 import static accord.messages.Commit.WithDeps.HasDeps;
@@ -299,15 +301,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     @Override
     public MessageType type()
     {
-        switch (kind)
-        {
-            case CommitSlowPath: return MessageType.COMMIT_SLOW_PATH_REQ;
-            case CommitWithTxn: return MessageType.COMMIT_MAXIMAL_REQ;
-            case StableFastPath: return MessageType.STABLE_FAST_PATH_REQ;
-            case StableSlowPath: return MessageType.STABLE_SLOW_PATH_REQ;
-            case StableWithTxnAndDeps: return MessageType.STABLE_MAXIMAL_REQ;
-            default: throw new IllegalStateException();
-        }
+        return COMMIT_REQ;
     }
 
     @Override
@@ -398,7 +392,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         @Override
         public MessageType type()
         {
-            return MessageType.COMMIT_INVALIDATE_REQ;
+            return COMMIT_INVALIDATE_REQ;
         }
 
         @Override

@@ -27,10 +27,8 @@ import javax.annotation.Nullable;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
-import accord.local.cfk.CommandsForKey;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
-import accord.primitives.KeyDeps;
 import accord.primitives.Known;
 import accord.primitives.Known.Outcome;
 import accord.primitives.PartialDeps;
@@ -866,8 +864,8 @@ public abstract class Command implements ICommand
 
     public static class WaitingOn
     {
-        private static final WaitingOn EMPTY_FOR_KEY = new WaitingOn(RoutingKeys.EMPTY, RangeDeps.NONE, KeyDeps.NONE, ImmutableBitSet.EMPTY, null);
-        private static final WaitingOn EMPTY_FOR_RANGE = new WaitingOn(RoutingKeys.EMPTY, RangeDeps.NONE, KeyDeps.NONE, ImmutableBitSet.EMPTY, ImmutableBitSet.EMPTY);
+        private static final WaitingOn EMPTY_FOR_KEY = new WaitingOn(RoutingKeys.EMPTY, RangeDeps.NONE, ImmutableBitSet.EMPTY, null);
+        private static final WaitingOn EMPTY_FOR_RANGE = new WaitingOn(RoutingKeys.EMPTY, RangeDeps.NONE, ImmutableBitSet.EMPTY, ImmutableBitSet.EMPTY);
 
         public static WaitingOn empty(Routable.Domain domain)
         {
@@ -878,28 +876,26 @@ public abstract class Command implements ICommand
 
         public final RoutingKeys keys;
         public final RangeDeps directRangeDeps;
-        public final KeyDeps directKeyDeps;
         // waitingOn ONLY encodes both txnIds and keys
         public final ImmutableBitSet waitingOn;
         public final @Nullable ImmutableBitSet appliedOrInvalidated;
 
         public WaitingOn(WaitingOn copy)
         {
-            this(copy.keys, copy.directRangeDeps, copy.directKeyDeps, copy.waitingOn, copy.appliedOrInvalidated);
+            this(copy.keys, copy.directRangeDeps, copy.waitingOn, copy.appliedOrInvalidated);
         }
 
-        public WaitingOn(RoutingKeys keys, RangeDeps directRangeDeps, KeyDeps directKeyDeps, ImmutableBitSet waitingOn, ImmutableBitSet appliedOrInvalidated)
+        public WaitingOn(RoutingKeys keys, RangeDeps directRangeDeps, ImmutableBitSet waitingOn, ImmutableBitSet appliedOrInvalidated)
         {
             this.keys = keys;
             this.directRangeDeps = directRangeDeps;
-            this.directKeyDeps = directKeyDeps;
             this.waitingOn = waitingOn;
             this.appliedOrInvalidated = appliedOrInvalidated;
         }
 
         public int txnIdCount()
         {
-            return directRangeDeps.txnIdCount() + directKeyDeps.txnIdCount();
+            return directRangeDeps.txnIdCount();
         }
 
         public TxnId txnId(int i)
@@ -907,9 +903,6 @@ public abstract class Command implements ICommand
             int ki = i - directRangeDeps.txnIdCount();
             if (ki < 0)
                 return directRangeDeps.txnId(i);
-
-            if (ki < directKeyDeps.txnIdCount())
-                return directKeyDeps.txnId(ki);
 
             throw new IndexOutOfBoundsException(i + " >= " + txnIdCount());
         }
@@ -919,14 +912,7 @@ public abstract class Command implements ICommand
             if (txnId.domain() == Range)
                 return directRangeDeps.indexOf(txnId);
 
-            if (!CommandsForKey.managesExecution(txnId))
-            {
-                int i = directKeyDeps.indexOf(txnId);
-                int offset = directRangeDeps.txnIdCount();
-                return i < 0 ? i - offset : i + offset;
-            }
-
-            throw new IllegalArgumentException("WaitingOn does not track this kind of TxnId: " + txnId);
+            throw illegalArgument("WaitingOn does not track this kind of TxnId: %s", txnId);
         }
 
         public Timestamp executeAtLeast()
@@ -941,8 +927,8 @@ public abstract class Command implements ICommand
 
         public static WaitingOn none(Routable.Domain domain, Deps deps)
         {
-            return new WaitingOn(deps.keyDeps.keys(), deps.rangeDeps, deps.directKeyDeps,
-                                 new ImmutableBitSet(deps.directKeyDeps.txnIdCount() + deps.keyDeps.keys().size()),
+            return new WaitingOn(deps.keyDeps.keys(), deps.rangeDeps,
+                                 new ImmutableBitSet(deps.keyDeps.keys().size()),
                                  domain == Range ? new ImmutableBitSet(deps.rangeDeps.txnIdCount()) : null);
         }
 
@@ -1004,19 +990,7 @@ public abstract class Command implements ICommand
         private int nextWaitingOnIndex()
         {
             int directRangeTxnIdCount = directRangeDeps.txnIdCount();
-            int nextWaitingOnDirectRangeIndex = waitingOn.prevSetBit(directRangeTxnIdCount);
-            if (directKeyDeps == KeyDeps.NONE)
-                return nextWaitingOnDirectRangeIndex;
-
-            int directKeyTxnIdCount = directKeyDeps.txnIdCount();
-            int txnIdCount = directKeyTxnIdCount + directRangeTxnIdCount;
-            int nextWaitingOnDirectKeyIndex = waitingOn.prevSetBitNotBefore(txnIdCount, directRangeTxnIdCount);
-            if (nextWaitingOnDirectKeyIndex < 0)
-                return nextWaitingOnDirectRangeIndex;
-            if (nextWaitingOnDirectRangeIndex < 0)
-                return nextWaitingOnDirectKeyIndex;
-            int c = directRangeDeps.txnId(nextWaitingOnDirectRangeIndex).compareTo(directKeyDeps.txnId(nextWaitingOnDirectKeyIndex - directRangeDeps.txnIdCount()));
-            return c > 0 ? nextWaitingOnDirectRangeIndex : nextWaitingOnDirectKeyIndex;
+            return waitingOn.prevSetBit(directRangeTxnIdCount);
         }
 
         @Override
@@ -1046,7 +1020,6 @@ public abstract class Command implements ICommand
         boolean equals(WaitingOn other)
         {
             return this.keys.equals(other.keys)
-                && directKeyDeps.equals(other.directKeyDeps)
                 && directRangeDeps.equals(other.directRangeDeps)
                 && this.waitingOn.equals(other.waitingOn)
                 && Objects.equals(this.appliedOrInvalidated, other.appliedOrInvalidated);
@@ -1061,7 +1034,7 @@ public abstract class Command implements ICommand
 
             private Initialise(TxnId txnId, StoreParticipants participants, Timestamp executeAt, PartialDeps deps)
             {
-                super(txnId, deps.keyDeps.keys(), deps.rangeDeps, deps.directKeyDeps);
+                super(txnId, deps.keyDeps.keys(), deps.rangeDeps);
                 this.txnId = txnId;
                 this.participants = participants;
                 this.executeAt = executeAt;
@@ -1085,7 +1058,6 @@ public abstract class Command implements ICommand
         {
             final RoutingKeys keys;
             final RangeDeps directRangeDeps;
-            final KeyDeps directKeyDeps;
             private SimpleBitSet waitingOn;
             private @Nullable SimpleBitSet appliedOrInvalidated;
             private Timestamp executeAtLeast;
@@ -1096,7 +1068,6 @@ public abstract class Command implements ICommand
             {
                 this.keys = waitingOn.keys;
                 this.directRangeDeps = waitingOn.directRangeDeps;
-                this.directKeyDeps = waitingOn.directKeyDeps;
                 this.waitingOn = waitingOn.waitingOn;
                 this.appliedOrInvalidated = waitingOn.appliedOrInvalidated;
                 if (waitingOn.getClass() == WaitingOnWithExecuteAt.class)
@@ -1110,11 +1081,10 @@ public abstract class Command implements ICommand
                 this(committed.waitingOn);
             }
 
-            private Update(TxnId txnId, RoutingKeys keys, RangeDeps directRangeDeps, KeyDeps directKeyDeps)
+            private Update(TxnId txnId, RoutingKeys keys, RangeDeps directRangeDeps)
             {
                 this.keys = keys;
                 this.directRangeDeps = directRangeDeps;
-                this.directKeyDeps = directKeyDeps;
                 this.waitingOn = new SimpleBitSet(txnIdCount() + keys.size(), false);
                 this.appliedOrInvalidated = txnId.is(Key) ? null : new SimpleBitSet(txnIdCount(), false);
             }
@@ -1142,11 +1112,6 @@ public abstract class Command implements ICommand
                                     initialise.initialise(idx);
                             });
                             int lbound = deps.rangeDeps.txnIdCount();
-                            deps.directKeyDeps.forEach(ranges, 0, deps.directKeyDeps.txnIdCount(), initialise, deps.rangeDeps, (upd, rdeps, idx) -> {
-                                TxnId id = upd.txnId(idx + lbound);
-                                if (id.epoch() >= epoch && id.epoch() < maxEpoch)
-                                    initialise.initialise(idx + lbound);
-                            });// TODO (expected): do same loop as above for keys, but mark the key if we find any matching id
                             deps.keyDeps.keys().forEach(ranges, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
                         }
                         prevEpoch = epoch;
@@ -1158,7 +1123,6 @@ public abstract class Command implements ICommand
                     Ranges executeRanges = participants.executeRanges(safeStore, txnId, executeAt);
                     // TODO (expected): refactor this to operate only on participants, not ranges
                     deps.rangeDeps.forEach(participants.stillWaitsOn(), initialise, Update::initialise);
-                    deps.directKeyDeps.forEach(executeRanges, 0, deps.directKeyDeps.txnIdCount(), initialise, deps.rangeDeps, (upd, rdeps, index) -> upd.initialise(index + rdeps.txnIdCount()));
                     deps.keyDeps.keys().forEach(executeRanges, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
                     return initialise;
                 }
@@ -1168,10 +1132,9 @@ public abstract class Command implements ICommand
             public static Update unsafeInitialise(TxnId txnId, Ranges executeRanges, Route<?> route, Deps deps)
             {
                 Unseekables<?> executionParticipants = route.slice(executeRanges, Slice.Minimal);
-                Update update = new Update(txnId, deps.keyDeps.keys(), deps.rangeDeps, deps.directKeyDeps);
+                Update update = new Update(txnId, deps.keyDeps.keys(), deps.rangeDeps);
                 // TODO (expected): refactor this to operate only on participants, not ranges
                 deps.rangeDeps.forEach(executionParticipants, update, Update::initialise);
-                deps.directKeyDeps.forEach(executeRanges, 0, deps.directKeyDeps.txnIdCount(), update, deps.rangeDeps, (upd, rdeps, index) -> upd.initialise(index + rdeps.txnIdCount()));
                 deps.keyDeps.keys().forEach(executeRanges, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), update);
                 return update;
             }
@@ -1193,8 +1156,6 @@ public abstract class Command implements ICommand
                 int ki = i - directRangeDeps.txnIdCount();
                 if (ki < 0)
                     return directRangeDeps.txnId(i);
-                if (ki < directKeyDeps.txnIdCount())
-                    return directKeyDeps.txnId(ki);
                 throw new IndexOutOfBoundsException(i + " >= " + txnIdCount());
             }
 
@@ -1202,14 +1163,12 @@ public abstract class Command implements ICommand
             {
                 if (txnId.domain() == Range)
                     return directRangeDeps.indexOf(txnId);
-                if (!CommandsForKey.managesExecution(txnId))
-                    return directRangeDeps.txnIdCount() + directKeyDeps.indexOf(txnId);
                 throw illegalArgument("WaitingOn does not track this kind of TxnId: " + txnId);
             }
 
             public int txnIdCount()
             {
-                return directRangeDeps.txnIdCount() + directKeyDeps.txnIdCount();
+                return directRangeDeps.txnIdCount();
             }
 
             public boolean removeWaitingOn(TxnId txnId)
@@ -1270,31 +1229,13 @@ public abstract class Command implements ICommand
             public int minWaitingOnTxnIdx()
             {
                 int directRangeTxnIdCount = directRangeDeps.txnIdCount();
-                int minWaitingOnDirectRangeIndex = waitingOn.nextSetBitBefore(0, directRangeTxnIdCount);
-                if (directKeyDeps == KeyDeps.NONE)
-                    return minWaitingOnDirectRangeIndex;
-
-                int directKeyTxnIdCount = directKeyDeps.txnIdCount();
-                int txnIdCount = directKeyTxnIdCount + directRangeTxnIdCount;
-                int minWaitingOnDirectKeyIndex = waitingOn.nextSetBitBefore(directRangeTxnIdCount, txnIdCount);
-                if (minWaitingOnDirectKeyIndex < 0)
-                    return minWaitingOnDirectRangeIndex;
-                if (minWaitingOnDirectRangeIndex < 0)
-                    return minWaitingOnDirectKeyIndex;
-                int c = directRangeDeps.txnId(minWaitingOnDirectRangeIndex).compareTo(directKeyDeps.txnId(minWaitingOnDirectKeyIndex - directRangeDeps.txnIdCount()));
-                return c < 0 ? minWaitingOnDirectRangeIndex : minWaitingOnDirectKeyIndex;
+                return waitingOn.nextSetBitBefore(0, directRangeTxnIdCount);
             }
 
             public boolean isWaitingOnDirectRangeTxnIdx(int idx)
             {
                 Invariants.requireIndex(idx, directRangeDeps.txnIdCount());
                 return waitingOn.get(idx);
-            }
-
-            public boolean isWaitingOnDirectKeyTxnIdx(int idx)
-            {
-                Invariants.requireIndex(idx, directKeyDeps.txnIdCount());
-                return waitingOn.get(idx + directRangeDeps.txnIdCount());
             }
 
             public void updateExecuteAtLeast(TxnId txnId, Timestamp executeAtLeast)
@@ -1323,12 +1264,6 @@ public abstract class Command implements ICommand
             {
                 Invariants.requireIndex(i, directRangeDeps.txnIdCount());
                 return removeWaitingOn(i);
-            }
-
-            boolean removeWaitingOnDirectKeyTxnId(int i)
-            {
-                Invariants.requireIndex(i, directKeyDeps.txnIdCount());
-                return removeWaitingOn(i + directRangeDeps.txnIdCount());
             }
 
             boolean removeWaitingOnKey(int i)
@@ -1370,11 +1305,6 @@ public abstract class Command implements ICommand
                 return setAppliedOrInvalidated(i);
             }
 
-            private boolean setAppliedOrInvalidatedDirectKeyTxn(int i)
-            {
-                Invariants.requireIndex(i, directKeyDeps.txnIdCount());
-                return setAppliedOrInvalidated(i + directRangeDeps.txnIdCount());
-            }
 
             private boolean setAppliedOrInvalidated(int i)
             {
@@ -1405,15 +1335,6 @@ public abstract class Command implements ICommand
                                             if (from.get(i1))
                                                 to.setAppliedOrInvalidatedDirectRangeTxn(i2);
                                         }, propagate.appliedOrInvalidated, this, null);
-
-                    if (propagate.directKeyDeps != KeyDeps.NONE)
-                    {
-                        forEachIntersection(propagate.directKeyDeps.txnIdsWithFlags(), directKeyDeps.txnIdsWithFlags(),
-                                            (from, to, ignore, i1, i2) -> {
-                                                if (from.get(i1))
-                                                    to.setAppliedOrInvalidatedDirectKeyTxn(i2);
-                                            }, propagate.appliedOrInvalidated, this, null);
-                    }
                 }
 
                 return true;
@@ -1431,7 +1352,7 @@ public abstract class Command implements ICommand
 
             public WaitingOn build()
             {
-                WaitingOn result = new WaitingOn(keys, directRangeDeps, directKeyDeps, ensureImmutable(waitingOn), ensureImmutable(appliedOrInvalidated));
+                WaitingOn result = new WaitingOn(keys, directRangeDeps, ensureImmutable(waitingOn), ensureImmutable(appliedOrInvalidated));
                 if (executeAtLeast == null && uniqueHlc == 0)
                     return result;
                 if (executeAtLeast == null)

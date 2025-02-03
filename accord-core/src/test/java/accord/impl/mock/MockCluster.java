@@ -36,7 +36,6 @@ import accord.NetworkFilter;
 import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.MessageSink;
-import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.DefaultTimeouts;
 import accord.impl.InMemoryCommandStores;
@@ -53,6 +52,7 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.ShardDistributor;
 import accord.local.TimeService;
+import accord.local.UniqueTimeService;
 import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.Request;
@@ -132,18 +132,18 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         MockStore store = new MockStore();
         MessageSink messageSink = messageSinkFactory.apply(id, this);
         MockConfigurationService configurationService = new MockConfigurationService(messageSink, onFetchTopology, topology);
-        LocalConfig localConfig = LocalConfig.DEFAULT;
         Agent agent = new TestAgent();
         Journal journal = new InMemoryJournal(id, agent);
+        ThreadPoolScheduler scheduler = new ThreadPoolScheduler();
         Node node = new Node(id,
                              messageSink,
                              configurationService,
-                             time,
+                             time, new UniqueTimeService.AtomicUniqueTime(time),
                              () -> store,
                              new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()),
                              agent,
                              random.fork(),
-                             new ThreadPoolScheduler(),
+                             scheduler,
                              SizeOfIntersectionSorter.SUPPLIER,
                              DefaultRemoteListeners::new,
                              DefaultTimeouts::new,
@@ -152,7 +152,6 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                              InMemoryCommandStores.SingleThread::new,
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
-                             localConfig,
                              journal);
         awaitUninterruptibly(node.unsafeStart());
         node.onTopologyUpdate(topology, false, true);

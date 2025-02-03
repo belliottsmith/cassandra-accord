@@ -467,18 +467,26 @@ public abstract class CommandStore implements AgentExecutor
     {
         NodeCommandStoreService node = safeStore.node();
 
-        boolean isExpired = node.now() - txnId.hlc() >= safeStore.agent().preAcceptTimeout() && !txnId.isSyncPoint();
+        boolean isExpired = safeStore.agent().rejectPreAccept(safeStore.node(), txnId) && !txnId.isSyncPoint();
         if (rejectBefore != null && !isExpired)
             isExpired = rejectBefore.rejects(txnId, keys);
 
         if (isExpired)
-            return node.uniqueNow(txnId).asRejected();
+            return node.uniqueTimestamp(txnId).asRejected();
 
         Timestamp min = TxnId.mergeMax(txnId, maxConflicts.get(keys));
         if (permitFastPath && txnId == min && txnId.epoch() >= node.epoch())
             return txnId;
 
-        return node.uniqueNow(min);
+        return node.uniqueTimestamp(min);
+    }
+
+    /**
+     * We expect keys to be sliced to those owned by the replica in the coordination epoch
+     */
+    public final Timestamp maxConflict(Routables<?> keys)
+    {
+        return maxConflicts.get(keys);
     }
 
     protected void unsafeRunIn(Runnable fn)
@@ -602,8 +610,11 @@ public abstract class CommandStore implements AgentExecutor
         if (redundantBefore.min(ranges, Bounds::locallyWitnessedBefore).epoch() >= epoch)
             return DONE;
 
+        TxnId minForEpoch = TxnId.minForEpoch(epoch);
+        ranges = redundantBefore.removeWitnessed(minForEpoch, ranges);
         AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
         waitingOnSync.put(epoch, new WaitingOnSync(whenDone, ranges));
+        node.durability().close("[" + this + " Epoch " + epoch + ']', minForEpoch, ranges);
         return whenDone;
     }
 
@@ -702,18 +713,22 @@ public abstract class CommandStore implements AgentExecutor
 
             Ranges remaining = e.getValue().ranges;
             Ranges synced = remaining.slice(ranges, Minimal);
-            e.getValue().ranges = remaining = remaining.without(ranges);
-            if (e.getValue().ranges.isEmpty())
+            boolean intersects = remaining.intersects(ranges);
+            if (intersects)
             {
-                logger.debug("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), syncId);
-                e.getValue().whenDone.trySuccess(null);
-                if (remove == null)
-                    remove = new LongHashSet();
-                remove.add(e.getKey());
-            }
-            else
-            {
-                logger.debug("Completed partial sync for {} on epoch {} using {}; {} still to sync", synced, e.getKey(), syncId, remaining);
+                e.getValue().ranges = remaining = remaining.without(ranges);
+                if (e.getValue().ranges.isEmpty())
+                {
+                    logger.debug("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), syncId);
+                    e.getValue().whenDone.trySuccess(null);
+                    if (remove == null)
+                        remove = new LongHashSet();
+                    remove.add(e.getKey());
+                }
+                else
+                {
+                    logger.debug("Completed partial sync for {} on epoch {} using {}; {} still to sync", synced, e.getKey(), syncId, remaining);
+                }
             }
         }
         if (remove != null)

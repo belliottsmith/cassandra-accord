@@ -26,6 +26,7 @@ import accord.api.Result;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.local.TimeService;
 import accord.messages.ReplyContext;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
@@ -35,8 +36,11 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class MaelstromAgent implements Agent
@@ -65,7 +69,7 @@ public class MaelstromAgent implements Agent
     }
 
     @Override
-    public void onFailedBootstrap(String phase, Ranges ranges, Runnable retry, Throwable failure)
+    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
     {
         throw new AssertionError();
     }
@@ -83,12 +87,6 @@ public class MaelstromAgent implements Agent
     @Override
     public void onCaughtException(Throwable t, String context)
     {
-    }
-
-    @Override
-    public long preAcceptTimeout()
-    {
-        return MICROSECONDS.convert(10, SECONDS);
     }
 
     @Override
@@ -122,37 +120,73 @@ public class MaelstromAgent implements Agent
     }
 
     @Override
+    public boolean rejectPreAccept(TimeService time, TxnId txnId)
+    {
+        return false;
+    }
+
+    @Override
     public long expiresAt(ReplyContext replyContext, TimeUnit units)
     {
         return -1;
     }
 
     @Override
-    public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
+    public AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean isRequested)
+    {
+        return AsyncChains.success(staleId);
+    }
+
+    @Override
+    public long minStaleHlc(Node node, boolean requested)
+    {
+        return node.now() - SECONDS.toMillis(1);
+    }
+
+    @Override
+    public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long localSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long retrySyncPointDelay(Node node, int attempt, TimeUnit units)
+    {
+        return units.convert(1L, MINUTES);
+    }
+
+    @Override
+    public long retryDurabilityDelay(Node node, int attempt, TimeUnit units)
+    {
+        return units.convert(1L, MINUTES);
+    }
+
+    @Override
+    public long expireEpochWait(TimeUnit units)
+    {
+        return units.convert(1L, MINUTES);
+    }
+
+    @Override
+    public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
         return unit.convert(100L, MICROSECONDS);
     }
 
     @Override
-    public long localExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
         return unit.convert(1L, SECONDS);
     }

@@ -18,10 +18,12 @@
 
 package accord.coordinate;
 
+import java.util.Collection;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
+import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.primitives.TxnId;
 
@@ -62,9 +64,13 @@ public class FailureAccumulator
 
     public static CoordinationFailed createFailure(@Nullable Throwable current, TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges unavailable)
     {
-        if (current == null) return new Exhausted(txnId, homeKey, unavailable);
+        return createFailure(current, txnId, homeKey, unavailable, null);
+    }
+    public static CoordinationFailed createFailure(@Nullable Throwable current, TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges unavailable, @Nullable Collection<Node.Id> failed)
+    {
+        if (current == null) return new Exhausted(txnId, homeKey, unavailable, failed);
         if (isTimeout(current)) return new Timeout(txnId, homeKey);
-        Exhausted e = new Exhausted(txnId, homeKey, unavailable);
+        Exhausted e = new Exhausted(txnId, homeKey, unavailable, failed);
         e.initCause(current);
         return e;
     }

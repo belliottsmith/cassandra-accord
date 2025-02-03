@@ -31,6 +31,8 @@ import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.Objects;
 
+import static accord.messages.MessageType.StandardMessage.BEGIN_INVALIDATE_REQ;
+import static accord.messages.MessageType.StandardMessage.BEGIN_INVALIDATE_RSP;
 import static accord.primitives.Route.castToFullRoute;
 import static accord.primitives.Route.isFullRoute;
 import static accord.utils.Functions.mapReduceNonNull;
@@ -110,7 +112,7 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
     @Override
     public MessageType type()
     {
-        return MessageType.BEGIN_INVALIDATE_REQ;
+        return BEGIN_INVALIDATE_REQ;
     }
 
     @Override
@@ -202,7 +204,7 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
         @Override
         public MessageType type()
         {
-            return MessageType.BEGIN_INVALIDATE_RSP;
+            return BEGIN_INVALIDATE_RSP;
         }
 
         public static FullRoute<?> findRoute(InvalidateReply[] invalidateOks)

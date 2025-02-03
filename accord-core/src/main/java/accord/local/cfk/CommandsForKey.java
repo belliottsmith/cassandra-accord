@@ -97,9 +97,13 @@ import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.local.cfk.Updating.maybeUpdateMaxAppliedPreBootstrapWriteById;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.Status.Durability.Majority;
+import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.AnyGloballyVisible;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
+import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -107,7 +111,6 @@ import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.Paranoia.NONE;
 import static accord.utils.Invariants.Paranoia.SUPERLINEAR;
 import static accord.utils.Invariants.ParanoiaCostFactor.LOW;
-import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.isParanoid;
 import static accord.utils.Invariants.testParanoia;
 import static accord.utils.SortedArrays.Search.FAST;
@@ -1325,7 +1328,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 }
             }
 
-            if (!visitor.visit(key, txn.plainTxnId(), executeAt, summaryStatus, dep))
+            if (!visitor.visit(key, txn.plainTxnId(), executeAt, summaryStatus, dep, txn.isDurable() ? Majority : NotDurable))
                 return false;
         }
 
@@ -1866,10 +1869,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
             if (txn.is(APPLIED))
                 continue;
 
-            Kind kind = txn.kind();
             if (txn.mayExecute() && !txn.hasNotifiedReady())
             {
-                if (i >= mayNotExecuteBeforeIndex && (kinds.test(kind) || i == mayExecuteAny) && !isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
+                if (i >= mayNotExecuteBeforeIndex && (kinds.test(txn) || i == mayExecuteAny) && !isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
                 {
                     switch (txn.status())
                     {
@@ -1897,11 +1899,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
                                 {
                                     TxnInfo backfillTxn = byId[undecidedIndex++];
                                     if (backfillTxn.compareTo(InternalStatus.COMMITTED) >= 0 || !mayExecute(backfillTxn)) continue;
-                                    unappliedCounters += unappliedCountersDelta(backfillTxn.kind());
+                                    unappliedCounters += unappliedCountersDelta(backfillTxn.kindOrdinal());
                                 }
                             }
 
-                            int expectMissingCount = unappliedCount(unappliedCounters, kind);
+                            int expectMissingCount = unappliedCount(unappliedCounters, txn.kindOrdinal());
 
                             // We remove committed transactions from the missing set, since they no longer need them there
                             // So the missing collection represents only those uncommitted transaction ids that a transaction
@@ -1941,54 +1943,27 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 }
             }
 
-            unappliedCounters += unappliedCountersDelta(kind);
-            if (kind == Kind.Write)
+            unappliedCounters += unappliedCountersDelta(txn.kindOrdinal());
+            if (txn.is(Kind.Write))
                 return; // the minimum execute index occurs after the next write, so nothing to do yet
         }
     }
 
-    private void updateCommittedByExecuteAtInSitu(int committedIndex, TxnInfo newInfo)
+    private static final long WRITE_COUNTERS_DELTA = (1L << 32) + 1L;
+    private static final int WRITE_COUNTERS_DELTA_SHIFT = (63 << (ExclusiveSyncPoint.ordinal() * 8)) | (32 << (Read.ordinal() * 8));
+    static
     {
-        committedByExecuteAt[committedIndex] = newInfo;
-        byId[Arrays.binarySearch(byId, newInfo)] = newInfo;
+        // check if we need to update WRITE_COUNTERS_DELTA_SHIFT
+        Invariants.require(Kind.values().length == 4);
+    }
+    private static long unappliedCountersDelta(int kindOrdinal)
+    {
+        return WRITE_COUNTERS_DELTA >>> ((WRITE_COUNTERS_DELTA_SHIFT >>> (kindOrdinal * 8)) & 63);
     }
 
-    private static long unappliedCountersDelta(Kind kind)
+    private static int unappliedCount(long unappliedCounters, int kindOrdinal)
     {
-        switch (kind)
-        {
-            default: throw new UnhandledEnum(kind);
-            case EphemeralRead:
-                throw illegalState("Invalid Txn.Kind for CommandsForKey: " + kind);
-
-            case ExclusiveSyncPoint:
-            case SyncPoint:
-                return 0L;
-
-            case Write:
-                return (1L << 32) + 1L;
-
-            case Read:
-                return 1L;
-        }
-    }
-
-    private static int unappliedCount(long unappliedCounters, Kind kind)
-    {
-        switch (kind)
-        {
-            default: throw new UnhandledEnum(kind);
-            case EphemeralRead:
-            case ExclusiveSyncPoint:
-                throw illegalState("Invalid Txn.Kind for CommandsForKey: " + kind);
-
-            case SyncPoint:
-            case Write:
-                return (int)unappliedCounters;
-
-            case Read:
-                return (int) (unappliedCounters >>> 32);
-        }
+        return (int) (unappliedCounters >>> ((WRITE_COUNTERS_DELTA_SHIFT >>> (kindOrdinal * 8)) & 63));
     }
 
     public CommandsForKeyUpdate withRedundantBeforeAtLeast(QuickBounds newBounds)

@@ -51,12 +51,12 @@ public class Ballot extends Timestamp
         super(from);
     }
 
-    Ballot(long epoch, long hlc, int flags, Id node)
+    private Ballot(long epoch, long hlc, int flags, Id node)
     {
         super(epoch, hlc, flags, node);
     }
 
-    Ballot(long msb, long lsb, Id node)
+    private Ballot(long msb, long lsb, Id node)
     {
         super(msb, lsb, node);
     }

@@ -26,6 +26,7 @@ import java.util.function.Function;
 import accord.api.MessageSink;
 import accord.impl.basic.Cluster.Link;
 import accord.local.AgentExecutor;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Callback;
@@ -74,9 +75,10 @@ public class NodeSink implements MessageSink
     }
 
     @Override
-    public void send(Id to, Request send, AgentExecutor executor, Callback callback)
+    public void send(Id to, Request send, int attempt, AgentExecutor executor, Callback callback)
     {
         long messageId = nextMessageId++;
+        if (executor == null) executor = CommandStore.current();
         SafeCallback sc = new SafeCallback(executor, callback);
         callbacks.put(messageId, sc);
         TimeUnit units = timeouts.units();

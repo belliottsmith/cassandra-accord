@@ -23,7 +23,8 @@ import accord.primitives.Deps;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
-public interface EventsListener
+// TODO (required): revisit the call-sites, and boundary with C*
+public interface EventListener
 {
     default void onCommitted(Command cmd)
     {
@@ -77,7 +78,7 @@ public interface EventsListener
     {
     }
 
-    EventsListener NOOP = new EventsListener()
+    EventListener NOOP = new EventListener()
     {
     };
 }

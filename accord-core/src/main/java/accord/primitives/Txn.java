@@ -60,6 +60,11 @@ public interface Txn
          * A pseudo-transaction whose deps represent the complete set of transactions that may execute before it,
          * without interfering with their execution.
          *
+         * Any transaction with a lower TxnId that is not witnessed by this transaction will not be executed,
+         * i.e. earlier TxnId that had not reached consensus before it did must be retried with a higher TxnId,
+         * so that replicas that are bootstrapping may ignore lower TxnId and still be sure they have a complete
+         * representation of the reified transaction log.
+         *
          * A SyncPoint is unique in that it does not agree an executeAt, but instead agrees a precise collection of
          * dependencies that represent a superset of the transactions that have reached consensus to execute before
          * their txnId. This set of dependencies will be made durable in the Accept round, and re-proposed by recovery
@@ -71,23 +76,7 @@ public interface Txn
          * dependencies permit saying that we are "after" its point in the log, not that we are *at* that point.
          * This permits us to use the dependencies from the PreAccept round.
          *
-         * Note, it would be possible to do a three-round operation that achieved this with a precise "at" position
-         * in the log, with a second round between PreAccept and Accept to collect deps < executeAt, if executeAt &gt; txnId,
-         * but we do not need this property here.
-         *
          * This all ensures the effect of this transaction on invalidation of earlier transactions is durable.
-         * This is most useful for ExclusiveSyncPoint.
-         *
-         * Invisible to other transactions.
-         * TODO (required): remove and use Write instead
-         */
-        SyncPoint('S', true, true, true, false),
-
-        /**
-         * A {@link #SyncPoint} that invalidates transactions with lower TxnId that it does not witness, i.e. it ensures
-         * that earlier TxnId that had not reached consensus before it did must be retried with a higher TxnId,
-         * so that replicas that are bootstrapping may ignore lower TxnId and still be sure they have a complete
-         * representation of the reified transaction log.
          *
          * Other transactions do not typically take a dependency upon an ExclusiveSyncPoint as part of coordination,
          * however during execution on a bootstrapping replica the sync point may be inserted as a dependency until
@@ -137,9 +126,9 @@ public interface Txn
         public static final Kinds Nothing = new Kinds();
         public static final Kinds Ws = new Kinds(Write);
         public static final Kinds RsOrWs = new Kinds(Write, Read);
-        public static final Kinds WsOrSyncPoints = new Kinds(Write, SyncPoint, ExclusiveSyncPoint);
+        public static final Kinds WsOrSyncPoints = new Kinds(Write, ExclusiveSyncPoint);
         public static final Kinds ExclusiveSyncPoints = new Kinds(ExclusiveSyncPoint);
-        public static final Kinds AnyGloballyVisible = new Kinds(Write, Read, SyncPoint, ExclusiveSyncPoint);
+        public static final Kinds AnyGloballyVisible = new Kinds(Write, Read, ExclusiveSyncPoint);
 
         static
         {
@@ -258,7 +247,6 @@ public interface Txn
                 case Read:
                     return Ws;
                 case Write:
-                case SyncPoint:
                     return RsOrWs;
                 case ExclusiveSyncPoint:
                     return AnyGloballyVisible;
@@ -296,7 +284,6 @@ public interface Txn
                     return WsOrSyncPoints;
                 case Write:
                     return AnyGloballyVisible;
-                case SyncPoint:
                 case ExclusiveSyncPoint:
                     return ExclusiveSyncPoints;
             }
@@ -318,20 +305,12 @@ public interface Txn
 
         public InMemory(@Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nonnull Query query)
         {
-            this.kind = Kind.Read;
-            this.keys = keys;
-            this.read = read;
-            this.query = query;
-            this.update = null;
+            this(Kind.Read, keys, read, query, null);
         }
 
         public InMemory(@Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nonnull Query query, @Nullable Update update)
         {
-            this.kind = Kind.Write;
-            this.keys = keys;
-            this.read = read;
-            this.update = update;
-            this.query = query;
+            this(Kind.Write, keys, read, query, update);
         }
 
         public InMemory(@Nonnull Kind kind, @Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nullable Query query, @Nullable Update update)
@@ -341,6 +320,7 @@ public interface Txn
             this.read = read;
             this.update = update;
             this.query = query;
+            Invariants.require(kind != Kind.ExclusiveSyncPoint || keys.domain() == Routable.Domain.Range);
         }
 
         @Override

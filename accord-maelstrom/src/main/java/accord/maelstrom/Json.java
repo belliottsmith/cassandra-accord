@@ -340,16 +340,6 @@ public class Json
                 out.endArray();
             }
             out.endArray();
-            out.name("directKeyDeps");
-            out.beginArray();
-            for (Map.Entry<RoutingKey, TxnId> e : value.directKeyDeps)
-            {
-                out.beginArray();
-                ((MaelstromKey.Routing)e.getKey()).datum.write(out);
-                GSON.toJson(e.getValue(), TxnId.class, out);
-                out.endArray();
-            }
-            out.endArray();
             out.endObject();
         }
 
@@ -424,7 +414,7 @@ public class Json
                 }
             }
             in.endObject();
-            return new Deps(keyDeps, rangeDeps, directKeyDeps);
+            return new Deps(keyDeps, rangeDeps);
         }
     };
 

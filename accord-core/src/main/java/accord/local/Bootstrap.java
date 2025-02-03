@@ -102,10 +102,12 @@ class Bootstrap
         boolean completed; // we have finished fetching all the data we are able to, but we may still have in-flight fetches
         Throwable fetchOutcome;
         TxnId globalSyncId;
+        final int attempt;
 
-        Attempt(Ranges ranges)
+        Attempt(Ranges ranges, int attempt)
         {
             this.valid = ranges;
+            this.attempt = attempt;
         }
 
         void start(SafeCommandStore safeStore)
@@ -137,7 +139,7 @@ class Bootstrap
             safeStore.commandStore()
                      .build(empty(), safeStore0 -> {
                          store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
-                         return CoordinateSyncPoint.exclusiveSyncPoint(node, globalSyncId, commitRanges);
+                         return CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges);
                      })
                      .flatMap(i -> i)
                      .flatMap(syncPoint -> node.withEpoch(epoch, () -> store.build(empty(), safeStore1 -> {
@@ -269,8 +271,8 @@ class Bootstrap
             if (hasFailed)
                 accept(null, failure);
 
-            store.agent().onFailedBootstrap("PartialFetch", newFailures, () -> {
-                store.execute(empty(), safeStore -> restart(safeStore, newFailures.slice(allValid)), store.agent());
+            store.agent().onFailedBootstrap(attempt, "PartialFetch", newFailures, () -> {
+                store.execute(empty(), safeStore -> restart(safeStore, newFailures.slice(allValid), attempt + 1), store.agent());
             }, failure);
             Invariants.require(!newFailures.intersects(fetchedAndSafeToRead));
         }
@@ -343,8 +345,8 @@ class Bootstrap
             complete(this);
             if (!retry.isEmpty())
             {
-                store.agent().onFailedBootstrap("Fetch", retry, () -> {
-                    store.execute(empty(), safeStore -> restart(safeStore, retry), node.agent());
+                store.agent().onFailedBootstrap(attempt, "Fetch", retry, () -> {
+                    store.execute(empty(), safeStore -> restart(safeStore, retry, attempt + 1), node.agent());
                 }, fetchOutcome);
             }
         }
@@ -372,10 +374,10 @@ class Bootstrap
 
     void start(SafeCommandStore safeStore0)
     {
-        restart(safeStore0, allValid);
+        restart(safeStore0, allValid, 0);
     }
 
-    private synchronized void restart(SafeCommandStore safeStore, Ranges ranges)
+    private synchronized void restart(SafeCommandStore safeStore, Ranges ranges, int count)
     {
         ranges = ranges.slice(allValid);
         if (ranges.isEmpty())
@@ -384,7 +386,7 @@ class Bootstrap
         for (Attempt attempt : inProgress)
             Invariants.requireArgument(!ranges.intersects(attempt.valid));
 
-        Attempt attempt = new Attempt(ranges);
+        Attempt attempt = new Attempt(ranges, count);
         inProgress.add(attempt);
         attempt.start(safeStore);
     }

@@ -98,8 +98,8 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
         // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
         safeStore.visit(touches, executeAt, txnId.witnesses(), this, executeAt.equals(txnId) ? null : txnId, null);
         Deps result = super.build();
-        result = new Deps(result.keyDeps, result.rangeDeps.with(redundant), result.directKeyDeps);
-        Invariants.require(!result.contains(txnId));
+        result = new Deps(result.keyDeps, result.rangeDeps.with(redundant));
+        Invariants.require(!txnId.isVisible() || !result.contains(txnId));
         return result;
     }
 

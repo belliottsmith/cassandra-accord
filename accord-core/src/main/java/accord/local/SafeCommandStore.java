@@ -461,6 +461,15 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
     }
 
+    private static TxnId maxTxnId(KeyDeps keyDeps, RoutingKey key)
+    {
+        int i = keyDeps.keys().indexOf(key);
+        if (i < 0)
+            return TxnId.NONE;
+        SortedList<TxnId> txnIdsForKey = keyDeps.txnIdsForKeyIndex(i);
+        return txnIdsForKey.get(txnIdsForKey.size() - 1);
+    }
+
     private static void updateUnmanagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, TxnId txnId, UpdateUnmanagedMode mode)
     {
         SafeCommand safeCommand = safeStore.get(txnId);

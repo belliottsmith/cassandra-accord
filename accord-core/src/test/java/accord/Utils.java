@@ -32,9 +32,7 @@ import com.google.common.collect.Sets;
 
 import accord.api.Agent;
 import accord.api.Key;
-import accord.api.LocalConfig;
 import accord.api.MessageSink;
-import accord.api.Scheduler;
 import accord.api.TopologySorter;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.DefaultLocalListeners;
@@ -56,6 +54,8 @@ import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.ShardDistributor;
+import accord.local.TimeService;
+import accord.local.UniqueTimeService;
 import accord.primitives.Keys;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -181,12 +181,11 @@ public class Utils
     public static Node createNode(Node.Id nodeId, Topology topology, MessageSink messageSink, MockCluster.Clock clock, Agent agent)
     {
         MockStore store = new MockStore();
-        Scheduler scheduler = new ThreadPoolScheduler();
-        LocalConfig localConfig = LocalConfig.DEFAULT;
+        ThreadPoolScheduler scheduler = new ThreadPoolScheduler();
         Node node = new Node(nodeId,
                              messageSink,
                              new MockConfigurationService(messageSink, EpochFunction.noop(), topology),
-                             clock,
+                             clock, new UniqueTimeService.AtomicUniqueTime(clock),
                              () -> store,
                              new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()),
                              agent,
@@ -200,7 +199,6 @@ public class Utils
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
-                             localConfig,
                              new InMemoryJournal(nodeId, agent));
         awaitUninterruptibly(node.unsafeStart());
         return node;
@@ -208,7 +206,8 @@ public class Utils
 
     public static TopologyManager testTopologyManager(TopologySorter.Supplier sorter, Id node)
     {
-        return new TopologyManager(sorter, new TestAgent.RethrowAgent(), node, Scheduler.NEVER_RUN_SCHEDULED, new MockCluster.Clock(0), LocalConfig.DEFAULT);
+        TimeService time = new MockCluster.Clock(0);
+        return new TopologyManager(sorter, new TestAgent.RethrowAgent(), node, time, new DefaultTimeouts(time));
     }
 
     public static void spinUntilSuccess(ThrowingRunnable runnable)

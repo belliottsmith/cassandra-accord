@@ -63,7 +63,7 @@ public class RecordingMessageSink extends SimpleMessageSink
     }
 
     @Override
-    public void send(Node.Id to, Request request, AgentExecutor executor, Callback callback)
+    public void send(Node.Id to, Request request, int attempt, AgentExecutor executor, Callback callback)
     {
         requests.add(new Envelope<>(to, request, callback));
         super.send(to, request, executor, callback);

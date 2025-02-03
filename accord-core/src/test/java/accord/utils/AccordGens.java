@@ -298,7 +298,7 @@ public class AccordGens
 
     public static Gen<KeyDeps> directKeyDeps(Gen<? extends RoutingKey> keyGen)
     {
-        Gen<Txn.Kind> kinds = Gens.pick(Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint);
+        Gen<Txn.Kind> kinds = Gens.pick(Txn.Kind.ExclusiveSyncPoint);
         return keyDeps(keyGen, txnIds(kinds, ignore -> Domain.Key));
     }
 
@@ -542,7 +542,7 @@ public class AccordGens
 
     public static Gen<RangeDeps> rangeDeps(Gen<? extends Range> rangeGen)
     {
-        Gen<Txn.Kind> kinds = Gens.pick(Txn.Kind.Write, Txn.Kind.Read, Txn.Kind.SyncPoint, Txn.Kind.ExclusiveSyncPoint);
+        Gen<Txn.Kind> kinds = Gens.pick(Txn.Kind.Write, Txn.Kind.Read, Txn.Kind.ExclusiveSyncPoint);
         return rangeDeps(rangeGen, txnIds(kinds, ignore -> Domain.Range));
     }
 
@@ -563,14 +563,14 @@ public class AccordGens
         };
     }
 
-    public static Gen<Deps> deps(Gen<KeyDeps> keyDepsGen, Gen<RangeDeps> rangeDepsGen, Gen<KeyDeps> directKeyDepsGen)
+    public static Gen<Deps> deps(Gen<KeyDeps> keyDepsGen, Gen<RangeDeps> rangeDepsGen)
     {
-        return rs -> new Deps(keyDepsGen.next(rs), rangeDepsGen.next(rs), directKeyDepsGen.next(rs));
+        return rs -> new Deps(keyDepsGen.next(rs), rangeDepsGen.next(rs));
     }
 
     public static Gen<Deps> depsFromKey(Gen<? extends RoutingKey> keyGen, Gen<? extends Range> rangeGen, Gen<? extends RoutingKey> directKeyGen)
     {
-        return deps(keyDeps(keyGen), rangeDeps(rangeGen), directKeyDeps(directKeyGen));
+        return deps(keyDeps(keyGen), rangeDeps(rangeGen));
     }
 
     public static Gen<Deps> depsFromKey(Gen<? extends RoutingKey> keyGen, Gen<? extends Range> rangeGen)
@@ -600,7 +600,6 @@ public class AccordGens
             }
             break;
             case ExclusiveSyncPoint:
-            case SyncPoint:
                 //TODO (coverage, now):
                 keyDepsGen = i -> KeyDeps.NONE;
                 rangeDepsGen = i -> RangeDeps.NONE;
@@ -608,7 +607,7 @@ public class AccordGens
                 break;
             default:throw new UnsupportedOperationException(txn.kind().name());
         }
-        return AccordGens.deps(keyDepsGen, rangeDepsGen, directKeyDepsGen);
+        return AccordGens.deps(keyDepsGen, rangeDepsGen);
     }
 
     public static Gen<Command.WaitingOn> waitingOn(Gen<Deps> depsGen, Gen<Boolean> emptyGen,
@@ -619,18 +618,15 @@ public class AccordGens
         return rs -> {
             Deps deps = depsGen.next(rs);
             if (deps.isEmpty()) return Command.WaitingOn.empty(Domain.Key);
-            int size = deps.rangeDeps.txnIdCount() + deps.directKeyDeps.txnIdCount() + deps.keyDeps.keys().size();
+            int size = deps.rangeDeps.txnIdCount() + deps.keyDeps.keys().size();
             SimpleBitSet set = new SimpleBitSet(size);
-            int directKeyOffset = deps.rangeDeps.txnIdCount();
-            int keysOffset = directKeyOffset + deps.directKeyDeps.txnIdCount();
+            int keyOffset = deps.rangeDeps.txnIdCount();
             for (int i = 0; i < size; i++)
             {
-                Gen<Boolean> gen = i < directKeyOffset ? rangeSetGen :
-                                   i < keysOffset ? directKeySetGen :
-                                   keySetGen;
+                Gen<Boolean> gen = i < keyOffset ? rangeSetGen : keySetGen;
                 if (gen.next(rs)) set.set(i);
             }
-            return new Command.WaitingOn(deps.keyDeps.keys(), deps.rangeDeps, deps.directKeyDeps, new ImmutableBitSet(set), null);
+            return new Command.WaitingOn(deps.keyDeps.keys(), deps.rangeDeps, new ImmutableBitSet(set), null);
         };
     }
 

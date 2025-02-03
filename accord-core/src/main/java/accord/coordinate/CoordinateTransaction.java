@@ -110,13 +110,13 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
             // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
             executeAdapter().execute(node, topologies, route, FAST, executeFlags, txnId, txn, txnId, deps, deps, settingCallback());
-            node.agent().metricsEventsListener().onFastPathTaken(txnId, deps);
+            node.agent().eventListener().onFastPathTaken(txnId, deps);
         }
         else if (tracker.hasMediumPathAccepted() && txnId.hasMediumPath())
         {
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             proposeAdapter().propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, this);
-            node.agent().metricsEventsListener().onMediumPathTaken(txnId, deps);
+            node.agent().eventListener().onMediumPathTaken(txnId, deps);
         }
         else
         {
@@ -124,24 +124,16 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             //                                  but by sending accept we rule out hybrid fast-path
             // TODO (low priority, efficiency): if we receive an expired response, perhaps defer to permit at least one other
             //                                  node to respond before invalidating
-            if (executeAt.is(REJECTED) || executeAt.hlc() - txnId.hlc() >= node.agent().preAcceptTimeout())
+            if (executeAt.is(REJECTED))
             {
                 proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt,this);
-                node.agent().metricsEventsListener().onRejected(txnId);
+                node.agent().eventListener().onRejected(txnId);
             }
             else
             {
-                if (PreAccept.rejectExecuteAt(txnId, topologies))
-                {
-                    proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, this);
-                    node.agent().metricsEventsListener().onRejected(txnId);
-                }
-                else
-                {
-                    Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
-                    proposeAdapter().propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, this);
-                    node.agent().metricsEventsListener().onSlowPathTaken(txnId, deps);
-                }
+                Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
+                proposeAdapter().propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, this);
+                node.agent().eventListener().onSlowPathTaken(txnId, deps);
             }
         }
     }
@@ -166,7 +158,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         void start()
         {
             Cancellable cancel = node.mapReduceConsumeLocal(this, route, topologies.oldestEpoch(), topologies.currentEpoch(), this);
-            long expiresAt = node.agent().localExpiresAt(txnId, Status.Phase.PreAccept, MICROSECONDS);
+            long expiresAt = node.agent().selfExpiresAt(txnId, Status.Phase.PreAccept, MICROSECONDS);
             RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
             synchronized (this)
             {

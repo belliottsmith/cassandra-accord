@@ -143,7 +143,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         if (failure == null)
         {
             callback.accept(ProgressToken.APPLIED, null);
-            node.agent().metricsEventsListener().onRecover(txnId, ballot);
+            node.agent().eventListener().onRecover(txnId, ballot);
         }
         else if (failure instanceof Redundant)
         {
@@ -153,11 +153,11 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         {
             callback.accept(null, WrappableException.wrap(failure));
             if (failure instanceof Preempted)
-                node.agent().metricsEventsListener().onPreempted(txnId);
+                node.agent().eventListener().onPreempted(txnId);
             else if (failure instanceof Timeout)
-                node.agent().metricsEventsListener().onTimeout(txnId);
+                node.agent().eventListener().onTimeout(txnId);
             else if (failure instanceof Invalidated) // TODO (expected): should we tick this counter? we haven't invalidated anything
-                node.agent().metricsEventsListener().onInvalidated(txnId);
+                node.agent().eventListener().onInvalidated(txnId);
         }
 
         node.agent().onRecover(node, result, failure);
@@ -170,7 +170,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     public static Recover recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        Ballot ballot = new Ballot(node.uniqueNow());
+        Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
         return recover(node, ballot, txnId, txn, route, reportLowEpoch, reportHighEpoch, callback);
     }
 
@@ -377,7 +377,6 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 // we still have to wait for earlier transactions to decide themselves so we don't accidentally include
                 // a non-fastpath transaction in our dependencies and permit it to conclude it is safe to execute.
                 // So, we fall-through to Unknown condition - though we don't in principle need to wait for any future transactions
-                
             }
             case Unknown:
             {
@@ -436,7 +435,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         // we CAN encounter both Reject AND Accept in the event we are a stale recovery attempt, and a "later" recovery
         // has already invalidated us, due to witnessing a different quorum
         // (e.g. witnessing the privileged coordinator so knew we did not take fast path, even if we could have done).
-        // So, we just take the Reject unless both are A
+        // So, we just take the Reject unless both are Accept
         return a == b ? a : Reject;
     }
 
@@ -523,7 +522,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         Topologies topologies = tracker.topologies();
         if (executeAt != null && executeAt.epoch() != (this.committedExecuteAt == null ? txnId : this.committedExecuteAt).epoch())
             topologies = node.topology().select(route, txnId, executeAt, SHARE, QuorumEpochIntersections.recover);
-        Recover.recover(node, topologies, new Ballot(node.uniqueNow()), txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
+        Recover.recover(node, topologies, node.uniqueTimestamp(Ballot::fromValues), txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
     }
 
     AsyncResult<InferredFastPath> awaitEarlier(Node node, Deps waitOn, BlockedUntil blockedUntil)

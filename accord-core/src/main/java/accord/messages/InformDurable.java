@@ -40,6 +40,7 @@ import accord.utils.async.Cancellable;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
 import static accord.api.ProtocolModifiers.Toggles.informOfDurability;
+import static accord.messages.MessageType.StandardMessage.INFORM_DURABLE_REQ;
 import static accord.messages.SimpleReply.Ok;
 
 public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
@@ -147,6 +148,6 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     @Override
     public MessageType type()
     {
-        return MessageType.INFORM_DURABLE_REQ;
+        return INFORM_DURABLE_REQ;
     }
 }

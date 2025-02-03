@@ -29,5 +29,5 @@ public interface Callback<T>
     default void onSlowResponse(Id from) {}
     void onFailure(Id from, Throwable failure);
     // return true if the failure was handled/propagated
-    boolean onCallbackFailure(Id from, Throwable failure);
+    default boolean onCallbackFailure(Id from, Throwable failure) { return false; }
 }

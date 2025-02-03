@@ -301,6 +301,43 @@ public class Topology
         return forSubset(subsetFor(select, permitMissing), selectNodeOwnership);
     }
 
+    public Topology select(SortedArrayList<Id> nodes)
+    {
+        SortedArrayList<Id> keepIds = this.nodeIds.intersecting(nodes);
+        if (keepIds == this.nodeIds)
+            return this;
+
+        Int2ObjectHashMap<NodeInfo> nodeLookup = new Int2ObjectHashMap<>(keepIds.size(), 0.8f);
+        SimpleBitSet shards = new SimpleBitSet(supersetIndexes.length);
+        for (Id id : keepIds)
+        {
+            NodeInfo info = this.nodeLookup.get(id.id);
+            nodeLookup.putIfAbsent(id.id, info);
+            for (int index : info.supersetIndexes)
+            {
+                int i = Arrays.binarySearch(supersetIndexes, index);
+                if (i >= 0) shards.set(i);
+            }
+        }
+
+        int[] supersetIndexes = this.supersetIndexes;
+        Ranges subsetOfRanges = this.subsetOfRanges;
+        if (shards.getSetBitCount() < supersetIndexes.length)
+        {
+            int count = 0;
+            supersetIndexes = new int[shards.getSetBitCount()];
+            Range[] ranges = new Range[supersetIndexes.length];
+            for (int i = shards.firstSetBit() ; i >= 0 ; i = shards.nextSetBit(i + 1, -1))
+            {
+                supersetIndexes[count] = this.supersetIndexes[i];
+                ranges[count] = this.shards[this.supersetIndexes[i]].range;
+            }
+            subsetOfRanges = Ranges.ofSortedAndDeoverlapped(ranges);
+        }
+
+        return new Topology(global(), epoch, this.shards, this.ranges, staleNodes, keepIds, nodeLookup, subsetOfRanges, supersetIndexes);
+    }
+
     @VisibleForTesting
     Topology forSubset(int[] newSubset, SelectNodeOwnership selectNodeOwnership)
     {

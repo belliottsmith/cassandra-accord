@@ -100,7 +100,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
                     }
 
                     @Override
-                    public void onExpire()
+                    public void onExpire(long nowMicros)
                     {
                         safeInvoke(RegisteredCallback::unsafeOnSlow, null);
                     }
@@ -108,7 +108,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             }
 
             @Override
-            public void onExpire()
+            public void onExpire(long nowMicros)
             {
                 safeInvoke(RegisteredCallback::unsafeOnFailure, new accord.coordinate.Timeout(null, null));
             }

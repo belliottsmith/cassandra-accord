@@ -357,7 +357,7 @@ public class Commands
         {
             WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, executeAt, participants, partialDeps);
             committed = safeCommand.stable(safeStore, participants, ballot, executeAt, partialTxn, partialDeps, waitingOn);
-            safeStore.agent().metricsEventsListener().onStable(committed);
+            safeStore.agent().eventListener().onStable(committed);
             maybeExecute(safeStore, safeCommand, true, true);
         }
         else
@@ -365,7 +365,7 @@ public class Commands
             Invariants.requireArgument(command.acceptedOrCommitted().compareTo(ballot) <= 0);
             committed = safeCommand.commit(safeStore, participants, ballot, executeAt, partialTxn, partialDeps);
             safeStore.notifyListeners(safeCommand, committed);
-            safeStore.agent().metricsEventsListener().onCommitted(committed);
+            safeStore.agent().eventListener().onCommitted(committed);
         }
 
         return CommitOutcome.Success;
@@ -512,7 +512,7 @@ public class Commands
 
         // must signal preapplied first, else we may be applied (and have cleared progress log state) already before maybeExecute exits
         maybeExecute(safeStore, safeCommand, true, true);
-        safeStore.agent().metricsEventsListener().onExecuted(command);
+        safeStore.agent().eventListener().onExecuted(command);
 
         return ApplyOutcome.Success;
     }
@@ -564,7 +564,7 @@ public class Commands
 
         safeCommand.applied(safeStore);
         safeStore.notifyListeners(safeCommand, command);
-        if (t0 >= 0) safeStore.agent().metricsEventsListener().onApplied(command, t0);
+        if (t0 >= 0) safeStore.agent().eventListener().onApplied(command, t0);
     }
 
     /**

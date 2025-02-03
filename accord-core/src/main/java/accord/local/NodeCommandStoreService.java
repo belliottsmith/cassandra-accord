@@ -19,16 +19,40 @@
 package accord.local;
 
 import accord.api.Timeouts;
+import accord.local.durability.DurabilityService;
 import accord.primitives.Timestamp;
 import accord.topology.TopologyManager;
 
-public interface NodeCommandStoreService extends TimeService
+public interface NodeCommandStoreService extends TimeService, UniqueTimeService
 {
     long epoch();
     Node.Id id();
     Timeouts timeouts();
     DurableBefore durableBefore();
-    Timestamp uniqueNow();
-    Timestamp uniqueNow(Timestamp atLeast);
+    DurabilityService durability();
     TopologyManager topology();
+
+    default Timestamp uniqueTimestamp()
+    {
+        return uniqueTimestamp(Timestamp::fromValues);
+    }
+
+    default Timestamp uniqueTimestamp(Timestamp greaterThan)
+    {
+        return uniqueTimestamp(greaterThan, Timestamp::fromValues);
+    }
+
+    default <T extends Timestamp> T uniqueTimestamp(Timestamp.ValueFactory<T> factory)
+    {
+        long epoch = epoch();
+        long now = uniqueNow();
+        return factory.create(epoch, now, id());
+    }
+
+    default <T extends Timestamp> T uniqueTimestamp(Timestamp greaterThan, Timestamp.ValueFactory<T> factory)
+    {
+        long epoch = Math.max(epoch(), greaterThan.epoch());
+        long now = uniqueNow(greaterThan.hlc());
+        return factory.create(epoch, now, id());
+    }
 }

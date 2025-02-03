@@ -158,7 +158,7 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
     private boolean rejectsFastPath;
     public InvalidationTracker(Topologies topologies, TxnId txnId)
     {
-        super(topologies, InvalidationShardTracker[]::new, factory(txnId));
+        super(topologies, InvalidationShardTracker[]::new, null, factory(txnId));
     }
 
     public Shard promisedShard()
@@ -192,14 +192,14 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
         return recordResponse(this, from, InvalidationShardTracker::onFailure, from);
     }
 
-    private static ShardFactory<InvalidationShardTracker> factory(TxnId txnId)
+    private static ShardFactory<Object, InvalidationShardTracker> factory(TxnId txnId)
     {
         switch (txnId.fastPath())
         {
             default: throw new UnhandledEnum(txnId.fastPath());
-            case Unoptimised: return (i, s) -> new InvalidationShardTracker(Unoptimised, s);
-            case PrivilegedCoordinatorWithoutDeps: return (i, s) -> new InvalidationShardTracker(PrivilegedCoordinatorWithoutDeps, s);
-            case PrivilegedCoordinatorWithDeps: return (i, s) -> new InvalidationShardTracker(PrivilegedCoordinatorWithDeps, s);
+            case Unoptimised: return (p, i, s) -> new InvalidationShardTracker(Unoptimised, s);
+            case PrivilegedCoordinatorWithoutDeps: return (p, i, s) -> new InvalidationShardTracker(PrivilegedCoordinatorWithoutDeps, s);
+            case PrivilegedCoordinatorWithDeps: return (p, i, s) -> new InvalidationShardTracker(PrivilegedCoordinatorWithDeps, s);
         }
     }
 }

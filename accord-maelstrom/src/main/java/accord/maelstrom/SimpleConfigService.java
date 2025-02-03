@@ -66,7 +66,7 @@ public class SimpleConfigService implements ConfigurationService
     }
 
     @Override
-    public void reportEpochRedundant(Ranges ranges, long epoch)
+    public void reportEpochRetired(Ranges ranges, long epoch)
     {
     }
 }

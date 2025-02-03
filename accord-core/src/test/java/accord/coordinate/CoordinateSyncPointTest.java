@@ -21,11 +21,11 @@ package accord.coordinate;
 import accord.Utils;
 import accord.api.MessageSink;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
-import accord.coordinate.tracking.AllTracker;
 import accord.impl.IntKey;
 import accord.impl.TestAgent;
 import accord.impl.mock.MockCluster;
 import accord.local.AgentExecutor;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.messages.Accept;
 import accord.messages.Apply;
@@ -51,6 +51,8 @@ import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 
 import java.util.function.Function;
+
+import static java.util.Collections.emptySet;
 
 class CoordinateSyncPointTest
 {
@@ -99,17 +101,17 @@ class CoordinateSyncPointTest
 
     private static SyncPoint<Range> awaitApplied(Node node, Range removed)
     {
-        var await = CoordinateSyncPoint.exclusiveSyncPoint(node, new TxnId(1, node.now(), 0, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, node.id()), Ranges.single(removed))
+        var await = CoordinateSyncPoint.exclusive(node, new TxnId(1, node.now(), 0, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, node.id()), Ranges.single(removed))
                                        .flatMap(syncPoint ->
                                                         // the test uses an executor that runs everything right away, so this gets called outside the CommandStore
                                                         node.commandStores().forId(0).build(() -> {
-                                                            ExecuteSyncPoint.ExecuteExclusive execute = new ExecuteSyncPoint.ExecuteExclusive(node, syncPoint, AllTracker::new);
+                                                            ExecuteSyncPoint execute = new ExecuteSyncPoint(node, syncPoint, emptySet(), null, 1);
                                                             execute.start();
                                                             return execute;
                                                         })
-                                               ).flatMap(Function.identity());
+                                               ).flatMap(Function.identity()).beginAsResult();
 
-        return AsyncChains.getUnchecked(await);
+        return AsyncChains.getUnchecked(await).syncPoint;
     }
 
     private static MessageSink happyPathMessaging()
@@ -152,6 +154,7 @@ class CoordinateSyncPointTest
     {
         Node.Id to = args.getArgument(0);
         AgentExecutor executor = args.getArgument(2);
+        if (executor == null) executor = CommandStore.current();
         Callback<T> cb = args.getArgument(3);
         executor.execute(() -> cb.onSuccess(to, reply));
     }

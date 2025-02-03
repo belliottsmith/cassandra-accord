@@ -103,7 +103,7 @@ public class TopologyUpdates
         });
     }
 
-    public synchronized void epochRedundant(Node originator, Collection<Node.Id> cluster, Ranges ranges, long epoch)
+    public synchronized void epochRetired(Node originator, Collection<Node.Id> cluster, Ranges ranges, long epoch)
     {
         executors.apply(originator.id()).execute(() -> {
             MessageTask.begin(originator, cluster, executors.apply(originator.id()), "EpochComplete:" + epoch, (node, from, onDone) -> {

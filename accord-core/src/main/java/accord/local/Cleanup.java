@@ -244,6 +244,7 @@ public enum Cleanup
         {
             // TODO (required): consider more the invariants we're guaranteeing here, particularly with respect to other shards
             //  also consider whether we interfere with stronger cleanup that would run after in cleanupWithFullRoute
+            // This branch may primarily exist for complying with invariants that could also be weakened
             if (input != PARTIAL && redundantStatus.all(SHARD_ONLY_APPLIED) && !redundantStatus.any(LOCALLY_APPLIED) && redundantStatus.all(LOCALLY_DEFUNCT))
                 return truncate(txnId);
             return ifDecided;

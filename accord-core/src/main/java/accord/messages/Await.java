@@ -47,6 +47,9 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 
+import static accord.messages.MessageType.StandardMessage.ASYNC_AWAIT_COMPLETE_REQ;
+import static accord.messages.MessageType.StandardMessage.AWAIT_REQ;
+import static accord.messages.MessageType.StandardMessage.AWAIT_RSP;
 import static accord.messages.TxnRequest.computeScope;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -109,7 +112,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this(to, topologies, txnId, participants, blockedUntil, SYNCHRONOUS_CALLBACKID, notifyProgressLog);
     }
 
-    Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
+    public Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
     {
         this.txnId = txnId;
         this.scope = scope;
@@ -181,13 +184,13 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         if (failure != null)
         {
             cancel();
-            node.reply(replyTo, replyContext, null, failure);
+            reply(null, failure);
         }
         else if (callbackId >= 0)
         {
             RemoteListeners.Registration asyncRegistration = this.asyncRegistration;
             AwaitOk reply = asyncRegistration == null || 0 == asyncRegistration.done() ? AwaitOk.Ready : AwaitOk.NotReady;
-            node.reply(replyTo, replyContext, reply, null);
+            reply(reply, null);
         }
         else
         {
@@ -207,6 +210,11 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
                 onSynchronousAwaitComplete();
             }
         }
+    }
+
+    protected void reply(AwaitOk reply, Throwable failure)
+    {
+        node.reply(replyTo, replyContext, reply, failure);
     }
 
     public void timeout()
@@ -242,7 +250,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     @Override
     public MessageType type()
     {
-        return MessageType.AWAIT_REQ;
+        return AWAIT_REQ;
     }
 
     public enum AwaitOk implements Reply
@@ -252,7 +260,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         @Override
         public MessageType type()
         {
-            return MessageType.AWAIT_RSP;
+            return AWAIT_RSP;
         }
     }
 
@@ -316,7 +324,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         @Override
         public MessageType type()
         {
-            return MessageType.ASYNC_AWAIT_COMPLETE_REQ;
+            return ASYNC_AWAIT_COMPLETE_REQ;
         }
 
         @Override

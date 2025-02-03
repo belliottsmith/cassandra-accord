@@ -18,7 +18,6 @@
 
 package accord.messages;
 
-import java.util.List;
 import java.util.Objects;
 import javax.annotation.Nullable;
 
@@ -44,12 +43,13 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
+import static accord.messages.MessageType.StandardMessage.PRE_ACCEPT_REQ;
+import static accord.messages.MessageType.StandardMessage.PRE_ACCEPT_RSP;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 
 public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
@@ -160,7 +160,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     @Override
     public MessageType type()
     {
-        return MessageType.PRE_ACCEPT_REQ;
+        return PRE_ACCEPT_REQ;
     }
 
     public static abstract class PreAcceptReply implements Reply
@@ -168,7 +168,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         @Override
         public MessageType type()
         {
-            return MessageType.PRE_ACCEPT_RSP;
+            return PRE_ACCEPT_RSP;
         }
 
         public abstract boolean isOk();
@@ -256,76 +256,6 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         {
             return "PreAcceptNack{}";
         }
-    }
-
-    /**
-     * To simplify the implementation of bootstrap/range movements, we have coordinators abort transactions
-     * that span too many topology changes for any given shard. This means that we can always daisy-chain a replica
-     * that can inform a new/joining/bootstrapping replica of the data table state and relevant transaction
-     * history without peeking into the future.
-     *
-     * This is necessary because when we create an ExclusiveSyncPoint there may be some transactions that
-     * are captured by it as necessary to witness the result of, but that will execute after it at some arbitrary
-     * future point. For simplicity, we wait for these transactions to execute on the source replicas
-     * before streaming the table state to the target replicas. But if these execute in a future topology,
-     * there may not be a replica that is able to wait for and execute the transaction.
-     * So, we simply prohibit them from doing so.
-     *
-     * TODO (desired): it would be nice if this were enforced by some register on replicas that inform coordinators
-     * of the maximum permitted executeAt. But this would make ExclusiveSyncPoint more complicated to coordinate.
-     */
-    public static boolean rejectExecuteAt(TxnId txnId, Topologies topologies)
-    {
-        // for each superseding shard, mark any nodes removed in a long bitmap; once the number of removals
-        // is greater than the minimum maxFailures for any shard, we reject the executeAt.
-        // Note, this over-estimates the number of removals by counting removals from _any_ superseding shard
-        // (rather than counting each superseding shard separately)
-        int originalIndex = topologies.indexForEpoch(txnId.epoch());
-        if (originalIndex == 0)
-            return false;
-
-        List<Shard> originalShards = topologies.get(originalIndex).shards();
-        if (originalShards.stream().anyMatch(s -> s.nodes.size() > 64))
-            return true;
-
-        long[] removals = new long[originalShards.size()];
-        int minMaxFailures = originalShards.stream().mapToInt(s -> s.maxFailures).min().getAsInt();
-        for (int i = originalIndex - 1 ; i >= 0 ; --i)
-        {
-            List<Shard> newShards = topologies.get(i).shards();
-            minMaxFailures = Math.min(minMaxFailures, newShards.stream().mapToInt(s -> s.maxFailures).min().getAsInt());
-            int n = 0, o = 0;
-            while (n < newShards.size() && o < originalShards.size())
-            {
-                Shard nv = newShards.get(n);
-                Shard ov = originalShards.get(o);
-                {
-                    int c = nv.range.compareIntersecting(ov.range);
-                    if (c < 0) { ++n; continue; }
-                    else if (c > 0) { ++o; continue; }
-                }
-                int nvi = 0, ovi = 0;
-                while (nvi < nv.nodes.size() && ovi < ov.nodes.size())
-                {
-                    int c = nv.nodes.get(nvi).compareTo(ov.nodes.get(ovi));
-                    if (c < 0) ++nvi;
-                    else if (c == 0) { ++nvi; ++ovi; }
-                    // TODO (required): consider if this needs to be >=
-                    //    consider case where one (or more) of the original nodes is bootstrapping from other original nodes
-                    else if (Long.bitCount(removals[o] |= 1L << ovi++) > minMaxFailures)
-                        return true;
-                }
-                while (ovi < ov.nodes.size())
-                {
-                    if (Long.bitCount(removals[o] |= 1L << ovi++) > minMaxFailures)
-                        return true;
-                }
-                int c = nv.range.end().compareTo(ov.range.end());
-                if (c <= 0) ++n;
-                if (c >= 0) ++o;
-            }
-        }
-        return false;
     }
 
     @Override

@@ -111,7 +111,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
     {
         if (permitLocalExecution() && tryIfUniversal(node.id()))
         {
-            new LocalExecute(txnId).process(node, node.agent().localExpiresAt(txnId, Execute, MICROSECONDS));
+            new LocalExecute(txnId).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
         {
@@ -195,7 +195,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
             case Waiting:
                 if (from.id == node.id().id)
                 {
-                    long slowAt = node.agent().localSlowAt(txnId, Execute, MICROSECONDS);
+                    long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
                     // TODO (expected): better abstractions for this
                     CommandStore invokeOn = CommandStore.current();
                     localTimeout = node.timeouts().registerAt(new Timeouts.Timeout()

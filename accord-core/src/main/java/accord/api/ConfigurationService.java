@@ -196,5 +196,5 @@ public interface ConfigurationService
 
     void reportEpochClosed(Ranges ranges, long epoch);
 
-    void reportEpochRedundant(Ranges ranges, long epoch);
+    void reportEpochRetired(Ranges ranges, long epoch);
 }

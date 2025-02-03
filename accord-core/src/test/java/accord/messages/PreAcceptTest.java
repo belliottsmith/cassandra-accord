@@ -114,7 +114,7 @@ public class PreAcceptTest
 
             messageSink.assertHistorySizes(0, 1);
             Assertions.assertEquals(ID2, messageSink.responses.get(0).to);
-            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE);
             Assertions.assertEquals(new PreAccept.PreAcceptOk(txnId, txnId, expectedDeps, ExecuteFlags.none()),
                                     messageSink.responses.get(0).payload);
         }
@@ -209,7 +209,7 @@ public class PreAcceptTest
 
             messageSink.assertHistorySizes(0, 1);
             Assertions.assertEquals(ID3, messageSink.responses.get(0).to);
-            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE);
             Timestamp expectedTs = Timestamp.fromValues(1, 110, ID1);
             Assertions.assertEquals(new PreAccept.PreAcceptOk(txnId2, expectedTs, expectedDeps, ExecuteFlags.none()),
                                     messageSink.responses.get(0).payload);
@@ -241,7 +241,7 @@ public class PreAcceptTest
 
             messageSink.assertHistorySizes(0, 1);
             Assertions.assertEquals(ID2, messageSink.responses.get(0).to);
-            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE);
             Assertions.assertEquals(new PreAccept.PreAcceptOk(txnId, txnId, expectedDeps, ExecuteFlags.none()),
                                     messageSink.responses.get(0).payload);
         }
@@ -283,7 +283,7 @@ public class PreAcceptTest
 
             messageSink.assertHistorySizes(0, 1);
             Assertions.assertEquals(ID2, messageSink.responses.get(0).to);
-            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+            Deps expectedDeps = new Deps(KeyDeps.NONE, RangeDeps.NONE);
             Assertions.assertEquals(new PreAccept.PreAcceptOk(txnId, Timestamp.fromValues(2, 110, ID1), expectedDeps, ExecuteFlags.none()),
                                     messageSink.responses.get(0).payload);
         }

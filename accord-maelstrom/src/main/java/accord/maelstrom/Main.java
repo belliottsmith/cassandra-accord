@@ -33,7 +33,6 @@ import java.util.function.Supplier;
 import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
-import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.coordinate.Timeout;
 import accord.impl.DefaultTimeouts;
@@ -48,6 +47,7 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.ShardDistributor;
 import accord.local.TimeService;
+import accord.local.UniqueTimeService;
 import accord.maelstrom.Packet.Type;
 import accord.messages.Callback;
 import accord.messages.Reply;
@@ -124,7 +124,7 @@ public class Main
         }
 
         @Override
-        public void send(Id to, Request send, AgentExecutor ignored, Callback callback)
+        public void send(Id to, Request send, int attempt, AgentExecutor ignored, Callback callback)
         {
             // Executor is ignored due to the fact callbacks are applied in a single thread already
             long messageId = nextMessageId.incrementAndGet();
@@ -179,15 +179,15 @@ public class Main
             MaelstromInit init = (MaelstromInit) packet.body;
             topology = topologyFactory.toTopology(init.cluster);
             sink = new StdoutSink(System::currentTimeMillis, scheduler, start, init.self, out, err);
-            LocalConfig localConfig = LocalConfig.DEFAULT;
             Journal journal = new Cluster.NoOpJournal();
+            TimeService time = TimeService.ofNonMonotonic(System::currentTimeMillis, TimeUnit.MILLISECONDS);
             on = new Node(init.self, sink, new SimpleConfigService(topology),
-                          TimeService.ofNonMonotonic(System::currentTimeMillis, TimeUnit.MILLISECONDS),
+                          time, new UniqueTimeService.AtomicUniqueTime(time),
                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                           MaelstromAgent.INSTANCE, new DefaultRandom(), scheduler, SizeOfIntersectionSorter.SUPPLIER,
                           DefaultRemoteListeners::new, DefaultTimeouts::new, DefaultProgressLogs::new, DefaultLocalListeners.Factory::new,
                           InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
-                          DurableBefore.NOOP_PERSISTER, localConfig, journal);
+                          DurableBefore.NOOP_PERSISTER, journal);
             awaitUninterruptibly(on.unsafeStart());
             err.println("Initialized node " + init.self);
             err.flush();

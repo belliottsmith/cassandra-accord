@@ -26,15 +26,18 @@ import accord.api.ProgressLog.BlockedUntil;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.local.TimeService;
 import accord.messages.ReplyContext;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
-import accord.primitives.Routable;
+import accord.primitives.Routable.Domain;
 import accord.primitives.Status.Phase;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
+import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.utils.async.AsyncChain;
 
 import static accord.utils.Invariants.illegalState;
 
@@ -64,18 +67,13 @@ public interface Agent extends UncaughtExceptionListener
      */
     void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next);
 
-    void onFailedBootstrap(String phase, Ranges ranges, Runnable retry, Throwable failure);
+    void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure);
 
     void onStale(Timestamp staleSince, Ranges ranges);
 
     @Override
     void onUncaughtException(Throwable t);
     void onCaughtException(Throwable t, String context);
-
-    /**
-     * @return PreAccept timeout with implementation-defined resolution of the hybrid logical clock
-     */
-    long preAcceptTimeout();
 
     /**
      * Controls pruning of CommandsForKey
@@ -113,11 +111,11 @@ public interface Agent extends UncaughtExceptionListener
     /**
      * Create an empty transaction that Accord can use for its own internal transactions.
      */
-    Txn emptySystemTxn(Txn.Kind kind, Routable.Domain domain);
+    Txn emptySystemTxn(Kind kind, Domain domain);
 
-    default EventsListener metricsEventsListener()
+    default EventListener eventListener()
     {
-        return EventsListener.NOOP;
+        return EventListener.NOOP;
     }
 
     /**
@@ -129,12 +127,17 @@ public interface Agent extends UncaughtExceptionListener
     default Topologies selectPreferred(Node.Id from, Topologies to) { return to; }
 
     /**
+     * @return true if the txnId is too old, and should be rejected
+     */
+    boolean rejectPreAccept(TimeService time, TxnId txnId);
+
+    /**
      *  This method permits implementations to configure the time at which a local home shard will attempt
      *  to coordinate a transaction to completion.
      *
      *  This should aim to prevent two home replicas from attempting to initiate coordination at the same time.
      */
-    long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount);
+    long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount);
 
     /**
      *  This method permits implementations to configure a delay for waiting to attempt to progress the local
@@ -143,7 +146,7 @@ public interface Agent extends UncaughtExceptionListener
      *  This method should only attempt to minimise wasted work that would anyway be achieved by the transaction's
      *  coordinator, while ensuring prompt when the coordinator considers the transaction to be durable.
      */
-    long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units);
+    long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units);
 
     /**
      * When a peer is queries for a local state, asynchronous callbacks may be registered.
@@ -151,11 +154,18 @@ public interface Agent extends UncaughtExceptionListener
      * This method configures a retry timeout on the node querying its peer to renew any callback registrations
      * and re-query the local state.
      */
-    long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units);
+    long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units);
+    long retrySyncPointDelay(Node node, int attempt, TimeUnit units);
+    long retryDurabilityDelay(Node node, int attempt, TimeUnit units);
+    long expireEpochWait(TimeUnit units);
 
-    long localSlowAt(TxnId txnId, Phase phase, TimeUnit unit);
-    long localExpiresAt(TxnId txnId, Phase phase, TimeUnit unit);
     long expiresAt(ReplyContext replyContext, TimeUnit unit);
+    long selfSlowAt(TxnId txnId, Phase phase, TimeUnit unit);
+    long selfExpiresAt(TxnId txnId, Phase phase, TimeUnit unit);
+
+    // make sure the staleId is sufficiently stale
+    AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean requested);
+    long minStaleHlc(Node node, boolean requested);
 
     default void onViolation(String message, Participants<?> participants, @Nullable TxnId notWitnessed, @Nullable Timestamp notWitnessedExecuteAt, @Nullable TxnId by, @Nullable Timestamp byEexecuteAt) { throw illegalState(message); }
 }

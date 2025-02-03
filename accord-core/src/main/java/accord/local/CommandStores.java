@@ -32,6 +32,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -894,6 +895,18 @@ public abstract class CommandStores
     {
         ShardHolder[] shards = current.shards;
         if (shards.length == 0) throw illegalState("Unable to get CommandStore; non defined");
+        return shards[supplier.random.nextInt(shards.length)].store;
+    }
+
+    public @Nullable AgentExecutor someExecutor()
+    {
+        CommandStore inStore = CommandStore.maybeCurrent();
+        if (inStore != null)
+            return inStore;
+
+        ShardHolder[] shards = current.shards;
+        if (shards.length == 0)
+            return null;
         return shards[supplier.random.nextInt(shards.length)].store;
     }
 

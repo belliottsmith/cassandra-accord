@@ -100,7 +100,7 @@ public class MockConfigurationService implements TestableConfigurationService
     }
 
     @Override
-    public void reportEpochRedundant(Ranges ranges, long epoch)
+    public void reportEpochRetired(Ranges ranges, long epoch)
     {
     }
 

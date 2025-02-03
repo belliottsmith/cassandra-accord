@@ -512,94 +512,95 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     /**
      * @return the union of {@code left} and {@code right}, returning one of the two inputs if possible
      */
-    static <P1, P2, RS> RS union(UnionMode mode, AbstractRanges left, AbstractRanges right, P1 param1, P2 param2, UnionConstructor<P1, P2, RS> constructor)
+    static <P1, P2, RS> RS union(UnionMode mode, AbstractRanges left, AbstractRanges right, P1 p1, P2 p2, UnionConstructor<P1, P2, RS> constructor)
     {
-        if (left == right || right.isEmpty()) return constructor.construct(param1, param2, left.ranges);
-        if (left.isEmpty()) return constructor.construct(param1, param2, right.ranges);
-
-        Range[] as = left.ranges, bs = right.ranges;
-        {
-            // make sure as/ai represent the ranges right might fully contain the other
-            int c = as[0].start().compareTo(bs[0].start());
-            if (c > 0 || c == 0 && as[as.length - 1].end().compareTo(bs[bs.length - 1].end()) < 0)
-            {
-                Range[] tmp = as; as = bs; bs = tmp;
-            }
-        }
-
-        int ai, bi; {
-            long tmp = supersetLinearMerge(as, bs);
-            ai = (int)(tmp >>> 32);
-            bi = (int)tmp;
-        }
-
-        if (bi == bs.length)
-            return constructor.construct(param1, param2, (as == left.ranges ? left : right).ranges);
-
-        // TODO (expected): use ArrayBuffers caching
-        Range[] result = new Range[as.length + (bs.length - bi)];
-        int resultCount;
         switch (mode)
         {
-            default: throw new AssertionError();
+            default: throw new UnhandledEnum(mode);
             case MERGE_ADJACENT:
-                resultCount = copyAndMergeTouching(as, 0, result, 0, ai);
-                break;
+            {
+                if (left == right || right.isEmpty()) return mergeTouching(left.ranges, p1, p2, constructor);
+                if (left.isEmpty()) return mergeTouching(right.ranges, p1, p2, constructor);
+
+                return unionInternal(left.ranges, right.ranges, 0, 0, -1, p1, p2, constructor);
+            }
             case MERGE_OVERLAPPING:
-                System.arraycopy(as, 0, result, 0, ai);
-                resultCount = ai;
+            {
+                if (left == right || right.isEmpty()) return constructor.construct(p1, p2, left.ranges);
+                if (left.isEmpty()) return constructor.construct(p1, p2, right.ranges);
+                Range[] as = left.ranges, bs = right.ranges;
+                int c = as[0].start().compareTo(bs[0].start());
+                if (c > 0 || c == 0 && as[as.length - 1].end().compareTo(bs[bs.length - 1].end()) < 0)
+                {
+                    Range[] tmp = as; as = bs; bs = tmp;
+                }
+
+                int ai, bi; {
+                    long tmp = supersetLinearMerge(as, bs);
+                    ai = (int)(tmp >>> 32);
+                    bi = (int)tmp;
+                }
+
+                if (bi == bs.length)
+                    return constructor.construct(p1, p2, (as == left.ranges ? left : right).ranges);
+
+                return unionInternal(as, bs, ai, bi, 0, p1, p2, constructor);
+            }
         }
+    }
 
-        while (ai < as.length && bi < bs.length)
+    /**
+     * @return the union of {@code left} and {@code right}, returning one of the two inputs if possible
+     */
+    private static <P1, P2, RS> RS unionInternal(Range[] as, Range[] bs, int ai, int bi, int cmp, P1 p1, P2 p2, UnionConstructor<P1, P2, RS> constructor)
+    {
+        Range[] result = cachedRanges().get(as.length + bs.length - bi);
+        int resultCount = 0;
+        if (ai > 0)
         {
-            Range a = as[ai];
-            Range b = bs[bi];
-
-            int c = a.compareIntersecting(b);
-            if (c < 0)
-            {
-                result[resultCount++] = a;
-                ai++;
-            }
-            else if (c > 0)
-            {
-                result[resultCount++] = b;
-                bi++;
-            }
+            if (ai >= as.length)
+                --ai;
+            System.arraycopy(as, 0, result, 0, resultCount = ai);
+        }
+        Range prev = as[ai].start().compareTo(bs[bi].start()) <= 0 ? as[ai++] : bs[bi++];
+        while (ai < as.length || bi < bs.length)
+        {
+            Range next;
+            if (ai == as.length) next = bs[bi++];
+            else if (bi == bs.length) next = as[ai++];
             else
             {
-                // TODO (desired, efficiency/semantics): we don't seem to currently merge adjacent (but non-overlapping)
-                RoutingKey start = a.start().compareTo(b.start()) <= 0 ? a.start() : b.start();
-                RoutingKey end = a.end().compareTo(b.end()) >= 0 ? a.end() : b.end();
-                ai++;
-                bi++;
-                while (ai < as.length || bi < bs.length)
-                {
-                    Range min;
-                    if (ai == as.length) min = bs[bi];
-                    else if (bi == bs.length) min = a = as[ai];
-                    else min = as[ai].start().compareTo(bs[bi].start()) < 0 ? a = as[ai] : bs[bi];
-                    if (min.start().compareTo(end) > 0)
-                        break;
-                    if (min.end().compareTo(end) > 0)
-                        end = min.end();
-                    if (a == min) ai++;
-                    else bi++;
-                }
-                result[resultCount++] = a.newRange(start, end);
+                int c = as[ai].start().compareTo(bs[bi].start());
+                if (c < 0) next = as[ai++];
+                else if (c > 0) next = bs[bi++];
+                else if (as[ai].end().compareTo(bs[bi].end()) >= 0) next = as[ai++];
+                else next = bs[bi++];
+            }
+
+            if (prev.end().compareTo(next.start()) <= cmp)
+            {
+                result[resultCount++] = prev;
+                prev = next;
+            }
+            else if (next.end().compareTo(prev.end()) > 0)
+            {
+                prev = prev.newRange(prev.start(), next.end());
             }
         }
+        result[resultCount++] = prev;
 
-        while (ai < as.length)
-            result[resultCount++] = as[ai++];
-
-        while (bi < bs.length)
-            result[resultCount++] = bs[bi++];
-
-        if (resultCount < result.length)
-            result = Arrays.copyOf(result, resultCount);
-
-        return constructor.construct(param1, param2, result);
+        if (resultCount == as.length && Arrays.equals(as, 0, as.length, result, 0, resultCount))
+        {
+            cachedRanges().forceDiscard(result, resultCount);
+            return constructor.construct(p1, p2, as);
+        }
+        if (resultCount == bs.length && Arrays.equals(bs, 0, bs.length, result, 0, resultCount))
+        {
+            cachedRanges().forceDiscard(result, resultCount);
+            return constructor.construct(p1, p2, bs);
+        }
+        result = cachedRanges().completeAndDiscard(result, resultCount);
+        return constructor.construct(p1, p2, result);
     }
 
     @Override
@@ -655,9 +656,13 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
 
     static <RS extends AbstractRanges> RS mergeTouching(RS input, Function<Range[], RS> constructor)
     {
-        Range[] ranges = input.ranges;
+        return mergeTouching(input.ranges, input, constructor, (in, c, out) -> out == in.ranges ? in : c.apply(out));
+    }
+
+    static <RS, P1, P2> RS mergeTouching(Range[] ranges, P1 p1, P2 p2, UnionConstructor<P1, P2, RS> constructor)
+    {
         if (ranges.length == 0)
-            return input;
+            return constructor.construct(p1, p2, ranges);
 
         ObjectBuffers<Range> cachedRanges = cachedRanges();
         Range[] buffer = cachedRanges.get(ranges.length);
@@ -665,10 +670,9 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         {
             int count = copyAndMergeTouching(ranges, 0, buffer, 0, ranges.length);
             if (count == ranges.length)
-                return input;
-            Range[] result = cachedRanges.complete(buffer, count);
-            cachedRanges.discard(buffer, count);
-            return constructor.apply(result);
+                return constructor.construct(p1, p2, ranges);
+            Range[] result = cachedRanges.completeAndDiscard(buffer, count);
+            return constructor.construct(p1, p2, result);
         }
         catch (Throwable t)
         {
@@ -807,6 +811,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
 
     static <RS extends AbstractRanges> RS ofSortedAndDeoverlapped(Function<Range[], RS> constructor, Range... ranges)
     {
+        Invariants.requireArgument(ranges.length == 0 || ranges[0] != null);
         for (int i = 1 ; i < ranges.length ; ++i)
         {
             if (ranges[i - 1].end().compareTo(ranges[i].start()) > 0)

@@ -36,6 +36,7 @@ import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
+import accord.primitives.Status.Durability;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -54,6 +55,8 @@ import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Retired;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Truncated;
+import static accord.messages.MessageType.StandardMessage.BEGIN_RECOVER_REQ;
+import static accord.messages.MessageType.StandardMessage.BEGIN_RECOVER_RSP;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.Phase;
@@ -113,7 +116,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         {
             default:             throw UnhandledEnum.unknown(outcome);
             case Redundant:      throw UnhandledEnum.invalid(outcome);
-            case Truncated:    return new RecoverNack(Truncated, null);
+            case Truncated:      return new RecoverNack(Truncated, null);
             case Retired:        return new RecoverNack(Retired, null);
             case RejectedBallot: return new RecoverNack(Reject, safeCommand.current().promised());
             case Success:
@@ -227,7 +230,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     @Override
     public MessageType type()
     {
-        return MessageType.BEGIN_RECOVER_REQ;
+        return BEGIN_RECOVER_REQ;
     }
 
     @Override
@@ -247,7 +250,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         boolean supersedingRejects;
 
         @Override
-        public boolean visit(Unseekable keyOrRange, TxnId testTxnId, Timestamp testExecuteAt, SummaryStatus status, IsDep dep)
+        public boolean visit(Unseekable keyOrRange, TxnId testTxnId, Timestamp testExecuteAt, SummaryStatus status, IsDep dep, Durability minDurability)
         {
             if (status == NOT_DIRECTLY_WITNESSED || !txnId.witnessedBy(testTxnId))
                 return true;
@@ -260,6 +263,13 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
             {
                 if (testTxnId.is(ExclusiveSyncPoint) && testTxnId.hlc() > txnId.hlc() && txnId.is(Write))
                 {
+                    // TODO (required): define our invariants and make sure they're enforce elsewhere.
+                    //   Specifically, consider whether truncation/GC can lead to erroneous answers here.
+                    //   We're relying on a TxnId that sorts earlier but has a higher HLC to reject a higher
+                    //   TxnId with lower HLC.
+                    //  Note that right now we are requiring that any sync point is >= any prior syncpoint on
+                    //  both HLC and epoch, which likely makes this safe. Let's confirm this works and
+                    //  make sure this is properly enforced.
                     switch (status)
                     {
                         default: throw new UnhandledEnum(status);
@@ -407,7 +417,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         @Override
         public MessageType type()
         {
-            return MessageType.BEGIN_RECOVER_RSP;
+            return BEGIN_RECOVER_RSP;
         }
 
         public abstract Kind kind();

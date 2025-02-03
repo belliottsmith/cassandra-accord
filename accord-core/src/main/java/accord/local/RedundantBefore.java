@@ -42,20 +42,17 @@ import accord.local.RedundantStatus.Property;
 import accord.primitives.AbstractRanges;
 import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
-import accord.primitives.KeyDeps;
 import accord.primitives.Participants;
 import accord.primitives.Range;
 import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
-import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
-import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.RedundantStatus.Coverage.ALL;
@@ -578,6 +575,17 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return notGarbage;
         }
 
+        static Ranges withoutWitnessed(Bounds entry, @Nonnull Ranges notWitnessed, TxnId txnId)
+        {
+            if (entry == null || entry.outOfBounds(txnId))
+                return notWitnessed;
+
+            if (txnId.compareTo(entry.locallyWitnessedBefore()) < 0)
+                return notWitnessed.without(Ranges.of(entry.range));
+
+            return notWitnessed;
+        }
+
         static Ranges withoutAnyRetired(Bounds bounds, @Nonnull Ranges notRetired)
         {
             if (bounds == null || bounds.endEpoch > bounds.maxBound(SHARD_ONLY_APPLIED).epoch())
@@ -910,6 +918,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     }
 
     /**
+     * Subtract any ranges that are before a GC point
+     */
+    @VisibleForImplementation
+    public Ranges removeWitnessed(TxnId txnId, Ranges ranges)
+    {
+        return foldl(ranges, Bounds::withoutWitnessed, ranges, txnId);
+    }
+
+    /**
      * Subtract any ranges we consider stale or pre-bootstrap
      */
     public Ranges removeRetired(Ranges ranges)
@@ -1094,63 +1111,6 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         // Note: we do not need to track the bootstraps we implicitly depend upon, because we will not serve any read requests until this has completed
         //  and since we are a timestamp store, and we write only this will sort itself out naturally
         // TODO (required): make sure we have no races on HLC around SyncPoint else this resolution may not work (we need to know the micros equivalent timestamp of the snapshot)
-        class KeyState
-        {
-            Int2ObjectHashMap<RoutingKeys> partiallyBootstrapping;
-
-            /**
-             * Are the participating ranges for the txn fully covered by bootstrapping ranges for this command store
-             */
-            boolean isFullyBootstrapping(Command.WaitingOn.Update builder, Range range, int txnIdx)
-            {
-                if (builder.directKeyDeps.foldEachKey(txnIdx, range, true, (r0, k, p) -> p && r0.contains(k)))
-                    return true;
-
-                if (partiallyBootstrapping == null)
-                    partiallyBootstrapping = new Int2ObjectHashMap<>();
-                RoutingKeys prev = partiallyBootstrapping.get(txnIdx);
-                RoutingKeys remaining = prev;
-                if (remaining == null) remaining = builder.directKeyDeps.participants(txnIdx);
-                else Invariants.require(!remaining.isEmpty());
-                remaining = remaining.without(range);
-                if (prev == null) Invariants.require(!remaining.isEmpty());
-                partiallyBootstrapping.put(txnIdx, remaining);
-                return remaining.isEmpty();
-            }
-        }
-
-        KeyDeps directKeyDeps = builder.directKeyDeps;
-        if (!directKeyDeps.isEmpty())
-        {
-            foldl(directKeyDeps.keys(), (e, s, d, b) -> {
-                // TODO (desired, efficiency): foldlInt so we can track the lower rangeidx bound and not revisit unnecessarily
-                // find the txnIdx below which we are known to be fully redundant locally due to having been applied or invalidated
-                int bootstrapIdx = d.txnIdsWithFlags().find(e.maxBootstrappedAt());
-                if (bootstrapIdx < 0) bootstrapIdx = -1 - bootstrapIdx;
-                int appliedIdx = d.txnIdsWithFlags().find(e.maxLocallyAppliedBefore());
-                if (appliedIdx < 0) appliedIdx = -1 - appliedIdx;
-
-                // remove intersecting transactions with known redundant txnId
-                // note that we must exclude all transactions that are pre-bootstrap, and perform the more complicated dance below,
-                // as these transactions may be only partially applied, and we may need to wait for them on another key.
-                if (appliedIdx > bootstrapIdx)
-                {
-                    d.forEach(e.range, bootstrapIdx, appliedIdx, b, s, (b0, s0, txnIdx) -> {
-                        b0.removeWaitingOnDirectKeyTxnId(txnIdx);
-                    });
-                }
-
-                if (bootstrapIdx > 0)
-                {
-                    d.forEach(e.range, 0, bootstrapIdx, b, s, e.range, (b0, s0, r, txnIdx) -> {
-                        if (b0.isWaitingOnDirectKeyTxnIdx(txnIdx) && s0.isFullyBootstrapping(b0, r, txnIdx))
-                            b0.removeWaitingOnDirectKeyTxnId(txnIdx);
-                    });
-                }
-                return s;
-            }, new KeyState(), directKeyDeps, builder);
-        }
-
         /**
          * If we have to handle bootstrapping ranges for range transactions, these may only partially cover the
          * transaction, in which case we should not remove the transaction as a dependency. But if it is fully

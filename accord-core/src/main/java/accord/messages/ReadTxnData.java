@@ -23,6 +23,7 @@ import accord.primitives.Participants;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
+import static accord.messages.MessageType.StandardMessage.READ_REQ;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 
 public class ReadTxnData extends ReadData
@@ -62,6 +63,6 @@ public class ReadTxnData extends ReadData
     @Override
     public MessageType type()
     {
-        return MessageType.READ_REQ;
+        return READ_REQ;
     }
 }

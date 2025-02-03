@@ -40,6 +40,9 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
+import static accord.messages.MessageType.StandardMessage.GET_LATEST_DEPS_REQ;
+import static accord.messages.MessageType.StandardMessage.GET_LATEST_DEPS_RSP;
+
 public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLatestDepsReply>
 {
     public static final class SerializationSupport
@@ -107,7 +110,7 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
     @Override
     public MessageType type()
     {
-        return MessageType.GET_LATEST_DEPS_REQ;
+        return GET_LATEST_DEPS_REQ;
     }
 
     @Override
@@ -145,7 +148,7 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
         @Override
         public MessageType type()
         {
-            return MessageType.GET_LATEST_DEPS_RSP;
+            return GET_LATEST_DEPS_RSP;
         }
     }
 
@@ -167,7 +170,7 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
         @Override
         public MessageType type()
         {
-            return MessageType.GET_LATEST_DEPS_RSP;
+            return GET_LATEST_DEPS_RSP;
         }
 
         @Override

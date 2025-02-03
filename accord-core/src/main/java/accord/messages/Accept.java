@@ -51,6 +51,9 @@ import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
 import static accord.local.KeyHistory.SYNC;
+import static accord.messages.MessageType.StandardMessage.ACCEPT_REQ;
+import static accord.messages.MessageType.StandardMessage.ACCEPT_RSP;
+import static accord.messages.MessageType.StandardMessage.NOT_ACCEPT_REQ;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 
 // TODO (low priority, efficiency): use different objects for send and receive, so can be more efficient
@@ -199,7 +202,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     @Override
     public MessageType type()
     {
-        return MessageType.ACCEPT_REQ;
+        return ACCEPT_REQ;
     }
 
     public String toString() {
@@ -319,7 +322,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         @Override
         public MessageType type()
         {
-            return MessageType.ACCEPT_RSP;
+            return ACCEPT_RSP;
         }
 
         public boolean isOk()
@@ -397,7 +400,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         @Override
         public MessageType type()
         {
-            return MessageType.NOT_ACCEPT_REQ;
+            return NOT_ACCEPT_REQ;
         }
 
         @Override

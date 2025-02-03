@@ -53,9 +53,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
-import accord.api.BarrierType;
 import accord.api.Journal;
-import accord.api.LocalConfig;
 import accord.api.MessageSink;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
@@ -63,17 +61,10 @@ import accord.api.Scheduler.Scheduled;
 import accord.burn.BurnTestConfigurationService;
 import accord.burn.TopologyUpdates;
 import accord.burn.random.FrequentLargeRange;
-import accord.coordinate.Barrier;
 import accord.coordinate.CoordinationAdapter;
-import accord.coordinate.Exhausted;
-import accord.coordinate.Invalidated;
-import accord.coordinate.Preempted;
-import accord.coordinate.Timeout;
-import accord.coordinate.Truncated;
 import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.DefaultTimeouts;
-import accord.impl.DurabilityScheduling;
 import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemoryCommandStore.GlobalCommand;
 import accord.impl.MessageListener;
@@ -96,20 +87,19 @@ import accord.local.RedundantBefore;
 import accord.local.ShardDistributor;
 import accord.local.StoreParticipants;
 import accord.local.TimeService;
+import accord.local.UniqueTimeService.AtomicUniqueTimeWithStaleReservation;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.Serialize;
+import accord.local.durability.DurabilityService;
 import accord.messages.Message;
 import accord.messages.MessageType;
 import accord.messages.Reply;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
-import accord.primitives.FullRoute;
-import accord.primitives.Keys;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.SaveStatus;
-import accord.primitives.Seekables;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -137,9 +127,6 @@ import static accord.local.Cleanup.INVALIDATE;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.StoreParticipants.Filter.LOAD;
-import static accord.utils.AccordGens.keysInsideRanges;
-import static accord.utils.AccordGens.rangeInsideRange;
-import static accord.utils.Gens.mixedDistribution;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 import static java.util.Collections.emptyMap;
@@ -639,6 +626,9 @@ public class Cluster
         {
             RandomSource random = randomSupplier.get();
             Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, nodeMap::get, journalMap::get, () -> topologyFactory.rf, responseSink);
+            for (Node node : nodeMap.values())
+                node.configService().registerListener((ListStore)node.commandStores().dataStore());
+
             TopologyUpdates topologyUpdates = new TopologyUpdates(executorMap::get);
             TopologyRandomizer.Listener schemaApply = t -> {
                 for (Node node : nodeMap.values())
@@ -677,14 +667,13 @@ public class Cluster
                 @Override public TimeUnit units() { return MILLISECONDS; }
             };
             TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, prefixes, topology, topologyUpdates, nodeMap::get, schemaApply);
-            List<DurabilityScheduling> durabilityScheduling = new ArrayList<>();
+            List<DurabilityService> durabilityService = new ArrayList<>();
             List<Service> services = new ArrayList<>();
             for (Id id : nodes)
             {
                 ClusterScheduler scheduler = sinks.new ClusterScheduler(id.id);
                 MessageSink messageSink = sinks.create(id, timeouts);
                 TimeService timeService = timeServiceSupplier.get();
-                LocalConfig localConfig = LocalConfig.DEFAULT;
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
                 AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale, timeouts);
                 executorMap.put(id, nodeExecutor);
@@ -692,20 +681,19 @@ public class Cluster
                 journalMap.put(id, journal);
                 BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
                 DelayedCommandStores.CacheLoading cacheLoading = new RandomLoader(random).newLoader(journal);
-                Node node = new Node(id, messageSink, configService, timeService,
+                Node node = new Node(id, messageSink, configService, timeService, new AtomicUniqueTimeWithStaleReservation(timeService),
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      nodeExecutor.agent(),
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
                                      DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
-                                     DurableBefore.NOOP_PERSISTER, localConfig, journal);
-                DurabilityScheduling durability = node.durabilityScheduling();
+                                     DurableBefore.NOOP_PERSISTER, journal);
+                DurabilityService durability = node.durability();
                 // TODO (desired): randomise
-                durability.setShardCycleTime(30, SECONDS);
-                durability.setGlobalCycleTime(180, SECONDS);
-                durabilityScheduling.add(durability);
+                durability.shards().setShardCycleTime(30, SECONDS);
+                durability.global().setGlobalCycleTime(180, SECONDS);
+                durabilityService.add(durability);
                 nodeMap.put(id, node);
-                durabilityScheduling.add(new DurabilityScheduling(node));
-                services.add(new BarrierService(node, randomSupplier.get()));
+                durabilityService.add(new DurabilityService(node));
             }
 
             Runnable updateDurabilityRate;
@@ -717,10 +705,10 @@ public class Cluster
                     int c = targetSplits.getAsInt();
                     int s = shardCycleTimeSeconds.getAsInt() * topologyFactory.rf;
                     int g = globalCycleTimeSeconds.getAsInt();
-                    durabilityScheduling.forEach(d -> {
-                        d.setTargetShardSplits(c);
-                        d.setShardCycleTime(s, SECONDS);
-                        d.setGlobalCycleTime(g, SECONDS);
+                    durabilityService.forEach(d -> {
+                        d.shards().setTargetShardSplits(c);
+                        d.shards().setShardCycleTime(s, SECONDS);
+                        d.global().setGlobalCycleTime(g, SECONDS);
                     });
                 };
             }
@@ -796,12 +784,12 @@ public class Cluster
                 trace.debug("Done with replay.");
             }, () -> random.nextInt(10, 30), SECONDS);
 
-            durabilityScheduling.forEach(DurabilityScheduling::start);
+            durabilityService.forEach(DurabilityService::start);
             services.forEach(Service::start);
 
             Runnable stop = () -> {
                 reconfigure.cancel();
-                durabilityScheduling.forEach(DurabilityScheduling::stop);
+                durabilityService.forEach(DurabilityService::stop);
                 purge.cancel();
                 restart.cancel();
                 services.forEach(Service::close);
@@ -1080,62 +1068,6 @@ public class Cluster
                 scheduled.cancel();
                 scheduled = null;
             }
-        }
-    }
-
-    private static class BarrierService extends AbstractService
-    {
-        private final Supplier<BarrierType> typeSupplier;
-        private final Supplier<Boolean> includeRangeSupplier;
-        private final Supplier<Boolean> wholeOrPartialSupplier;
-
-        private BarrierService(Node node, RandomSource rs)
-        {
-            super(node, rs);
-            this.typeSupplier = mixedDistribution(BarrierType.values()).next(rs).asSupplier(rs);
-            this.includeRangeSupplier = Gens.bools().mixedDistribution().next(rs).asSupplier(rs);
-            this.wholeOrPartialSupplier = Gens.bools().mixedDistribution().next(rs).asSupplier(rs);
-        }
-
-        @Override
-        public void doRun()
-        {
-            Topology current = node.topology().current();
-            Ranges ranges = current.rangesForNode(node.id());
-            if (ranges.isEmpty())
-                return;
-            BarrierType type = typeSupplier.get();
-            if (type == BarrierType.local)
-            {
-                Keys keys = Keys.of(keysInsideRanges(ranges).next(rs));
-                run(node, keys, node.computeRoute(current.epoch(), keys), current.epoch(), type);
-            }
-            else
-            {
-                List<Range> subset = new ArrayList<>();
-                for (Range range : ranges)
-                {
-                    if (includeRangeSupplier.get())
-                        subset.add(wholeOrPartialSupplier.get() ? range : rangeInsideRange(range).next(rs));
-                }
-                if (subset.isEmpty())
-                    return;
-                Ranges rs = Ranges.of(subset.toArray(Range[]::new));
-                run(node, rs, node.computeRoute(current.epoch(), rs), current.epoch(), type);
-            }
-        }
-
-        private void run(Node node, Seekables<?, ?> keysOrRanges, FullRoute<?> route, long epoch, BarrierType type)
-        {
-            Barrier.barrier(node, keysOrRanges, route, epoch, type).begin((s, f) -> {
-                if (f != null)
-                {
-                    // ignore specific errors
-                    if (f instanceof Invalidated || f instanceof Timeout || f instanceof Preempted || f instanceof Exhausted || f instanceof Truncated)
-                        return;
-                    node.agent().onUncaughtException(f);
-                }
-            });
         }
     }
 

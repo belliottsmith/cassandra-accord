@@ -56,6 +56,8 @@ import accord.utils.async.AsyncResults;
 
 import javax.annotation.Nullable;
 
+import static accord.messages.MessageType.StandardMessage.FETCH_DATA_REQ;
+import static accord.messages.MessageType.StandardMessage.FETCH_DATA_RSP;
 import static accord.messages.ReadData.CommitOrReadNack.Redundant;
 import static accord.messages.ReadEphemeralTxnData.retryInLaterEpoch;
 import static accord.primitives.SaveStatus.Applied;
@@ -193,14 +195,6 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                 inflight.remove(key).cancel();
                 fail(from, failure);
             }
-
-            @Override
-            public boolean onCallbackFailure(Node.Id from, Throwable failure)
-            {
-                // TODO (required): improve this
-                logger.error("Fetch coordination failure from " + from, failure);
-                return true;
-            }
         });
     }
 
@@ -312,7 +306,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         @Override
         public MessageType type()
         {
-            return MessageType.FETCH_DATA_REQ;
+            return FETCH_DATA_REQ;
         }
     }
 
@@ -331,7 +325,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         @Override
         public MessageType type()
         {
-            return MessageType.FETCH_DATA_RSP;
+            return FETCH_DATA_RSP;
         }
     }
 }

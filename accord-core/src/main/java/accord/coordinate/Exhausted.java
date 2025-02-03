@@ -18,9 +18,11 @@
 
 package accord.coordinate;
 
+import java.util.Collection;
 import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
+import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -30,25 +32,45 @@ import accord.utils.Invariants;
  */
 public class Exhausted extends CoordinationFailed
 {
-    final Ranges unavailable;
+    final @Nullable Ranges failedRanges;
+    final @Nullable Collection<Node.Id> failedNodes;
 
-    public Exhausted(TxnId txnId, @Nullable RoutingKey homeKey, Ranges unavailable)
+    public Exhausted(TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges failedRanges)
     {
-        super(txnId, homeKey, getMessage(txnId, unavailable));
-        this.unavailable = unavailable;
+        this(txnId, homeKey, failedRanges, null);
     }
 
-    Exhausted(TxnId txnId, @Nullable RoutingKey homeKey, Ranges unavailable, Exhausted cause)
+    public Exhausted(TxnId txnId, @Nullable RoutingKey homeKey, Ranges failedRanges, @Nullable Collection<Node.Id> failedNodes)
+    {
+        super(txnId, homeKey, getMessage(txnId, failedRanges, failedNodes));
+        this.failedRanges = failedRanges;
+        this.failedNodes = failedNodes;
+    }
+
+    Exhausted(TxnId txnId, @Nullable RoutingKey homeKey, Ranges failedRanges, @Nullable Collection<Node.Id> failedNodes, Exhausted cause)
     {
         super(txnId, homeKey, cause);
-        this.unavailable = unavailable;
+        this.failedRanges = failedRanges;
+        this.failedNodes = failedNodes;
     }
 
-    private static String getMessage(TxnId txnId, @Nullable Ranges unavailable)
+    public @Nullable Collection<Node.Id> failedNodes()
+    {
+        return failedNodes;
+    }
+
+    public @Nullable Ranges failedRanges()
+    {
+        return failedRanges;
+    }
+
+    private static String getMessage(TxnId txnId, @Nullable Ranges unavailable, @Nullable Collection<Node.Id> failed)
     {
         String msg = "No more nodes to try for " + txnId;
         if (unavailable != null)
-            msg += ": " + unavailable;
+            msg += " for ranges " + unavailable;
+        if (failed != null)
+            msg += ". Failed to contact: " + failed;
         return msg;
     }
 
@@ -56,6 +78,6 @@ public class Exhausted extends CoordinationFailed
     public Exhausted wrap()
     {
         Invariants.require(this.getClass() == Exhausted.class);
-        return new Exhausted(txnId(), homeKey(), unavailable, this);
+        return new Exhausted(txnId(), homeKey(), failedRanges, failedNodes, this);
     }
 }

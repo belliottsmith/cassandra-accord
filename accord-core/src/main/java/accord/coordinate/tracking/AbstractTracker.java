@@ -79,9 +79,9 @@ public abstract class AbstractTracker<ST extends ShardTracker>
         }
     }
 
-    public interface ShardFactory<ST extends ShardTracker>
+    public interface ShardFactory<P, ST extends ShardTracker>
     {
-        ST apply(int epochIndex, Shard shard);
+        ST apply(P param, int epochIndex, Shard shard);
     }
 
     protected final Topologies topologies;
@@ -91,10 +91,10 @@ public abstract class AbstractTracker<ST extends ShardTracker>
 
     public AbstractTracker(Topologies topologies, IntFunction<ST[]> arrayFactory, Function<Shard, ST> trackerFactory)
     {
-        this(topologies, arrayFactory, (ignore, shard) -> trackerFactory.apply(shard));
+        this(topologies, arrayFactory, null, (i1, i2, shard) -> trackerFactory.apply(shard));
     }
 
-    public <P> AbstractTracker(Topologies topologies, IntFunction<ST[]> arrayFactory, ShardFactory<ST> trackerFactory)
+    public <P> AbstractTracker(Topologies topologies, IntFunction<ST[]> arrayFactory, P param, ShardFactory<P, ST> trackerFactory)
     {
         Invariants.requireArgument(topologies.totalShards() > 0);
         int topologyCount = topologies.size();
@@ -113,7 +113,7 @@ public abstract class AbstractTracker<ST extends ShardTracker>
             Topology topology = topologies.get(i);
             int size = topology.size();
             for (int j = 0; j < size; ++j)
-                trackers[i * maxShardsPerEpoch + j] = trackerFactory.apply(i, topology.get(j));
+                trackers[i * maxShardsPerEpoch + j] = trackerFactory.apply(param, i, topology.get(j));
         }
         this.maxShardsPerEpoch = maxShardsPerEpoch;
         this.waitingOnShards = shardCount;

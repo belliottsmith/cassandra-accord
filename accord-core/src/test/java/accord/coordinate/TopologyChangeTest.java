@@ -221,7 +221,7 @@ public class TopologyChangeTest
             catch (ExecutionException e)
             {
                 Throwable cause = e.getCause();
-                Assertions.assertTrue(cause instanceof Invalidated, "Expected failure to be txn invalidation");
+                Assertions.assertTrue(cause instanceof Invalidated || cause instanceof Preempted, "Expected failure to be txn invalidation");
             }
         }
     }

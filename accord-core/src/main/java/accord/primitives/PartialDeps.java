@@ -29,7 +29,7 @@ import static accord.utils.Invariants.illegalArgument;
 
 public class PartialDeps extends Deps
 {
-    public static final PartialDeps NONE = new PartialDeps(Ranges.EMPTY, KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+    public static final PartialDeps NONE = new PartialDeps(Ranges.EMPTY, KeyDeps.NONE, RangeDeps.NONE);
 
     public static Builder builder(Participants<?> covering, boolean buildRangeByTxnId)
     {
@@ -47,17 +47,14 @@ public class PartialDeps extends Deps
         @Override
         public PartialDeps build()
         {
-            return new PartialDeps(covering,
-                                   keyBuilder.build(),
-                                   rangeBuilder == null ? RangeDeps.NONE : rangeBuilder.build(),
-                                   directKeyBuilder == null ? KeyDeps.NONE : directKeyBuilder.build());
+            return new PartialDeps(covering, keyBuilder.build(), rangeBuilder.build());
         }
     }
 
     public final Participants<?> covering; // set only if this is a range transaction, containing the minimal ranges of the original transaction that we cover
-    public PartialDeps(Participants<?> covering, KeyDeps keyDeps, RangeDeps rangeDeps, KeyDeps directKeyDeps)
+    public PartialDeps(Participants<?> covering, KeyDeps keyDeps, RangeDeps rangeDeps)
     {
-        super(keyDeps, rangeDeps, directKeyDeps);
+        super(keyDeps, rangeDeps);
         this.covering = covering;
     }
 
@@ -90,8 +87,7 @@ public class PartialDeps extends Deps
         return new PartialDeps(
             this.covering.with((Participants)that.covering),
             this.keyDeps.with(that.keyDeps),
-            this.rangeDeps.with(that.rangeDeps),
-            this.directKeyDeps.with(that.directKeyDeps)
+            this.rangeDeps.with(that.rangeDeps)
         );
     }
 
@@ -108,19 +104,19 @@ public class PartialDeps extends Deps
     {
         if (!covers(participants))
             throw illegalArgument("This PartialDeps does not cover the requested participants");
-        return new PartialDeps(this.covering.intersecting(participants, Minimal), keyDeps.intersecting(participants), rangeDeps.intersecting(participants), directKeyDeps.intersecting(participants));
+        return new PartialDeps(this.covering.intersecting(participants, Minimal), keyDeps.intersecting(participants), rangeDeps.intersecting(participants));
     }
 
     public Deps asFullUnsafe()
     {
-        return new Deps(keyDeps, rangeDeps, directKeyDeps);
+        return new Deps(keyDeps, rangeDeps);
     }
 
     public Deps reconstitute(FullRoute<?> route)
     {
         if (!covers(route.participants()))
             throw illegalArgument(covering + " does not cover " + route);
-        return new Deps(keyDeps, rangeDeps, directKeyDeps);
+        return new Deps(keyDeps, rangeDeps);
     }
 
     // covering might cover a wider set of ranges, some of which may have no involved keys

@@ -26,6 +26,7 @@ import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.Cancellable;
 
+import static accord.messages.MessageType.StandardMessage.SET_SHARD_DURABLE_REQ;
 import static accord.messages.SimpleReply.Ok;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 
@@ -84,7 +85,7 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
     @Override
     public MessageType type()
     {
-        return MessageType.SET_SHARD_DURABLE_REQ;
+        return SET_SHARD_DURABLE_REQ;
     }
 
     @Override

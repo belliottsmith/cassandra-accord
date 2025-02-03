@@ -30,12 +30,14 @@ import accord.utils.LogGroupTimers;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
+// TODO (expected): make it easier for consumers to ignore the locking of this object, at least on callbacks
+//  e.g. by having a concurrent Queue of pending cancellations if the lock cannot be taken
 public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Timeouts
 {
     protected interface Expiring
     {
         Expiring prepareToExpire();
-        void onExpire();
+        void onExpire(long nowMicros);
     }
 
     protected static class Stripe implements Runnable, Function<Stripe.AbstractRegistered, Runnable>
@@ -69,7 +71,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
 
 
             @Override
-            public void onExpire()
+            public void onExpire(long nowMicros)
             {
                 timeout.timeout();
             }
@@ -132,7 +134,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
             return lock.tryLock();
         }
 
-        protected void unlock(long now)
+        protected void unlock(long nowMicros)
         {
             int i = 0;
             BufferList<Expiring> expire = null;
@@ -140,11 +142,11 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
             {
                 try
                 {
-                    if (!timeouts.shouldWake(now))
+                    if (!timeouts.shouldWake(nowMicros))
                         return;
 
                     expire = new BufferList<>();
-                    timeouts.advance(now, expire, BufferList::add);
+                    timeouts.advance(nowMicros, expire, BufferList::add);
 
                     // prepare expiration while we hold the lock - this is to permit expiring objects to
                     // reschedule themselves while returning some immediate expiry work to do
@@ -163,7 +165,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
 
                 // we want to process these without the lock
                 while (i < expire.size())
-                    expire.get(i++).onExpire();
+                    expire.get(i++).onExpire(nowMicros);
             }
             catch (Throwable t)
             {
@@ -173,7 +175,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
                     {
                         try
                         {
-                            expire.get(i++).onExpire();
+                            expire.get(i++).onExpire(nowMicros);
                         }
                         catch (Throwable t2)
                         {

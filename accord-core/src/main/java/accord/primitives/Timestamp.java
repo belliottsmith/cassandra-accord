@@ -44,6 +44,11 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     public static final Timestamp MAX = new Timestamp(Long.MAX_VALUE, Long.MAX_VALUE, Id.MAX);
     public static final Timestamp NONE = new Timestamp(0, 0, 0, Id.NONE);
 
+    public interface ValueFactory<T extends Timestamp>
+    {
+        T create(long epoch, long hlc, Id id);
+    }
+
     interface Factory<T extends Timestamp>
     {
         T create(long msb, long lsb, Id id);

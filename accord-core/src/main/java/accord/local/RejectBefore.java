@@ -60,7 +60,7 @@ public class RejectBefore extends ReducingRangeMap<TxnId>
 
     private static boolean rejects(TxnId rejectIfBefore, TxnId test)
     {
-        return rejectIfBefore.compareTo(test) > 0;
+        return rejectIfBefore.compareSimultaneousEpochAndHlc(test) >= 0;
     }
 
     public static RejectBefore merge(RejectBefore historyLeft, RejectBefore historyRight)

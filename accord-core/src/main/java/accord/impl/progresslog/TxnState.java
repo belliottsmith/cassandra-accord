@@ -53,16 +53,16 @@ final class TxnState extends HomeState
                 {
                     default: throw new UnhandledEnum(updated);
                     case Waiting:
-                        newDelay = instance.commandStore.agent().seekProgressDelay(instance.node, safeStore, txnId, waitingRetryCounter(), blockedUntil, MICROSECONDS);
+                        newDelay = instance.commandStore.agent().slowReplicaDelay(instance.node, safeStore, txnId, 1 + waitingRetryCounter(), blockedUntil, MICROSECONDS);
                         break;
                     case Home:
-                        newDelay = instance.commandStore.agent().attemptCoordinationDelay(instance.node, safeStore, txnId, MICROSECONDS, homeRetryCounter());
+                        newDelay = instance.commandStore.agent().slowCoordinatorDelay(instance.node, safeStore, txnId, MICROSECONDS, 1 + homeRetryCounter());
                 }
                 Invariants.require(newDelay > 0);
                 break;
             case Awaiting:
                 int retries = updated == TxnStateKind.Home ? homeRetryCounter() : waitingRetryCounter();
-                newDelay = instance.commandStore.agent().retryAwaitTimeout(instance.node, safeStore, txnId, retries, blockedUntil, MICROSECONDS);
+                newDelay = instance.commandStore.agent().slowAwaitDelay(instance.node, safeStore, txnId, 1 + retries, blockedUntil, MICROSECONDS);
                 Invariants.require(newDelay > 0);
                 break;
         }

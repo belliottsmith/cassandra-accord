@@ -31,20 +31,10 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import accord.api.ConfigurationService;
 import accord.api.DataStore;
 import accord.api.Key;
 import accord.api.Scheduler;
-import accord.coordinate.CoordinateSyncPoint;
-import accord.coordinate.ExecuteSyncPoint;
-import accord.coordinate.ExecuteSyncPoint.SyncPointErased;
-import accord.coordinate.Exhausted;
-import accord.coordinate.Invalidated;
-import accord.coordinate.Preempted;
-import accord.coordinate.Timeout;
-import accord.coordinate.TopologyMismatch;
-import accord.coordinate.Truncated;
-import accord.coordinate.tracking.AllTracker;
-import accord.impl.basic.SimulatedFault;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.Node;
@@ -60,26 +50,27 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.Timestamped;
-import accord.utils.async.AsyncChain;
-import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.LongArrayList;
 
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 
-public class ListStore implements DataStore
+public class ListStore implements DataStore, ConfigurationService.Listener
 {
     private static class ChangeAt
     {
         private final long epoch;
         private final Ranges ranges;
+        private Ranges pending;
 
         private ChangeAt(long epoch, Ranges ranges)
         {
             this.epoch = epoch;
             this.ranges = ranges;
+            this.pending = ranges;
         }
 
         @Override
@@ -118,13 +109,11 @@ public class ListStore implements DataStore
 
     private static class PurgeAt
     {
-        private final SyncPoint syncPoint;
         private final long epoch;
         private final Ranges ranges;
 
-        private PurgeAt(SyncPoint syncPoint, long epoch, Ranges ranges)
+        private PurgeAt(long epoch, Ranges ranges)
         {
-            this.syncPoint = Invariants.nonNull(syncPoint);
             this.epoch = epoch;
             this.ranges = ranges;
         }
@@ -133,7 +122,6 @@ public class ListStore implements DataStore
         public String toString()
         {
             return "PurgeAt{" +
-                   "syncPoint=(" + syncPoint.syncId + ", " + syncPoint.route + ")" +
                    ", epoch=" + epoch +
                    ", ranges=" + ranges +
                    '}';
@@ -146,8 +134,8 @@ public class ListStore implements DataStore
 
     static final Timestamped<int[]> EMPTY = new Timestamped<>(Timestamp.NONE, new int[0], Arrays::toString);
     final NavigableMap<RoutableKey, Timestamped<int[]>> data = new TreeMap<>();
-    final Scheduler scheduler;
     final RandomSource random;
+    final Scheduler scheduler;
 
     private final List<ChangeAt> addedAts = new ArrayList<>();
     private final List<ChangeAt> removedAts = new ArrayList<>();
@@ -158,8 +146,6 @@ public class ListStore implements DataStore
     private Topology previousTopology = null;
     // used to make sure removes are applied in epoch order and not in the order sync points complete in
     private final LongArrayList pendingRemoves = new LongArrayList();
-    // when out of order epochs are detected, this holds the callbacks to try again
-    private final List<Runnable> onRemovalDone = new ArrayList<>();
 
     private static final class Snapshot
     {
@@ -289,8 +275,8 @@ public class ListStore implements DataStore
 
     public ListStore(Scheduler scheduler, RandomSource random, Node.Id node)
     {
-        this.scheduler = scheduler;
         this.random = random;
+        this.scheduler = scheduler;
         this.node = node;
     }
 
@@ -410,10 +396,8 @@ public class ListStore implements DataStore
         {
             PurgeAt purge = purgedAts.get(i);
             if (test.test(purge.ranges))
-                sb.append(String.format("Purged in %s for epoch %d; waiting-for %s",
-                                        format(purge.syncPoint),
-                                        purge.epoch,
-                                        purge.syncPoint.waitFor.txnIds())).append('\n');
+                sb.append(String.format("Purged %s in epoch %d",
+                                        key, purge.epoch)).append('\n');
         }
         if (sb.length() == 0)
             sb.append(String.format("Attempted to access %s %s, this node never owned that", type, key));
@@ -597,131 +581,47 @@ public class ListStore implements DataStore
         {
             pendingRemoves.add(epoch);
             removedAts.add(new ChangeAt(epoch, removed));
-            // There are 2 different types of remove
-            // 1) node no longer covers, but the range exists in the cluster
-            // 2) the range no longer exists in the cluster
-            // Given this, we need 2 different solutions for the purge logic as sync points are not safe when running in older epoch.
-            Ranges localRemove = Ranges.EMPTY;
-            Ranges globalRemove = Ranges.EMPTY;
-            for (Range range : removed)
-            {
-                if (topology.ranges().intersects(range)) localRemove = localRemove.with(Ranges.of(range));
-                else                                     globalRemove = globalRemove.with(Ranges.of(range));
-            }
-            if (!localRemove.isEmpty())
-            {
-                Ranges finalLocalRemove = localRemove;
-                runWhenReady(node, epoch, () -> removeLocalWhenReady(node, epoch, finalLocalRemove));
-            }
-            // TODO (correctness, coverage): add cleanup logic for global ranges removed. This must be solved in CASSANDRA-18675
         }
         previousTopology = topology;
     }
 
-    private void runWhenReady(Node node, long epoch, Runnable whenKnown)
+    @Override
+    public AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync)
     {
-        if (node.topology().epoch() >= epoch) whenKnown.run();
-        else                                  node.scheduler().selfRecurring(() -> runWhenReady(node, epoch, whenKnown), 10, TimeUnit.SECONDS);
+        return AsyncResults.success(null);
     }
 
-    private void removeLocalWhenReady(Node node, long epoch, Ranges removed)
+    @Override
+    public void onRemoteSyncComplete(Node.Id node, long epoch)
     {
-        // TODO (testing): can this migrate to a listener as bootstrap will do a SyncPoint which will propgate this knowlege?
-        // TODO (testing): there is overlap with durability scheduling, but that logic has a few issues which make it hard to use here:
-        // * always works off latest topology, so the removed ranges won't actually get marked durable!
-        // * api is range -> TxnId, so we still need a TxnId to be referenced off... so we need to create a TxnId to know when we are in-sync!
-        // * if we have a sync point, we really only care if the sync point is applied globally...
-        // * even though CoordinateDurabilityScheduling is part of BurnTest, it was seen that shard/global syncs were only happening in around 1/5 of the tests (mostly due to timeouts/invalidates), which would mean purge was called infrequently.
-        node.scheduler().selfRecurring(() -> {
-            currentSyncPoint(node, removed).flatMap(sp -> awaitSyncPoint(node, sp)).begin((s, f) -> {
-                if (f != null)
+    }
+
+    @Override
+    public void truncateTopologyUntil(long epoch)
+    {
+    }
+
+    @Override
+    public void onEpochClosed(Ranges ranges, long epoch)
+    {
+    }
+
+    @Override
+    public void onEpochRetired(Ranges ranges, long epoch)
+    {
+        if (pendingRemoves.containsLong(epoch))
+        {
+            for (ChangeAt change : removedAts)
+            {
+                if (change.epoch == epoch && ranges.intersects(change.pending))
                 {
-                    node.agent().onUncaughtException(f);
-                    return;
+                    purgedAts.add(new PurgeAt(epoch, ranges.slice(change.pending, Minimal)));
+                    change.pending = change.pending.without(ranges);
+                    if (change.pending.isEmpty())
+                        pendingRemoves.removeLong(epoch);
+                    break;
                 }
-                if (s != null)
-                    performRemoval(epoch, removed, s);
-            });
-        }, 0, TimeUnit.MILLISECONDS);
-    }
-
-    private synchronized void performRemoval(long epoch, Ranges removed, SyncPoint s)
-    {
-        // TODO (effeciency, correctness): remove the delayed removal logic.
-        // This logic was added to make sure the sequence of events made sense but doesn't handle everything perfectly; I (David C) believe that this code
-        // will suffer from the ABA problem; if a range is removed, then added back it is not likley to be handled correctly (the add will no-op as it wasn't removed, then the remove will remove it!)
-        if (pendingRemoves.isEmpty()) return;
-        if (pendingRemoves.get(0) != epoch)
-        {
-            onRemovalDone.add(() -> performRemoval(epoch, removed, s));
-            return;
-        }
-        pendingRemoves.remove(epoch);
-        this.allowedReads = this.allowedReads.without(removed);
-        this.allowedWrites = this.allowedWrites.without(removed);
-        purgedAts.add(new PurgeAt(s, epoch, removed));
-        // C* encodes keyspace/table within a Range, so Ranges being added/removed to the cluster are expected behaviors and not just local range movements.
-        // however, there is no reason to erase old data as it being used should be detected as a violation due to being stale,
-        // and clearing data unnecessarily complicates journal replay
-
-        List<Runnable> callbacks = new ArrayList<>(onRemovalDone);
-        onRemovalDone.clear();
-        callbacks.forEach(Runnable::run);
-    }
-
-    private static AsyncChain<SyncPoint<Range>> currentSyncPoint(Node node, Ranges removed)
-    {
-        return CoordinateSyncPoint.exclusiveSyncPoint(node, removed)
-                                  .recover(t -> {
-                                      // TODO (api, effeciency): retry with backoff.
-                                      // TODO (effeciency): if Preempted, can we keep block waiting?
-                                      if (t instanceof Invalidated || t instanceof Timeout || t instanceof Preempted || t instanceof Truncated)
-                                          return currentSyncPoint(node, removed);
-                                      if (t instanceof TopologyMismatch)
-                                      {
-                                          // If the home key was randomly selected and no longer valid, can just retry to get a new home key,
-                                          // but if the actual range is no longer valid then ExclusiveSyncPoints are broken and can not be used.
-                                          if (!((TopologyMismatch) t).hasReason(TopologyMismatch.Reason.KEYS_OR_RANGES))
-                                              return currentSyncPoint(node, removed);
-                                          // TODO (correctness): handle this case
-                                          node.agent().onUncaughtException(t);
-                                      }
-                                      return null;
-                                  });
-    }
-
-    private static AsyncChain<SyncPoint<Range>> awaitSyncPoint(Node node, SyncPoint<Range> exclusiveSyncPoint)
-    {
-        Await e = new Await(node, exclusiveSyncPoint);
-        e.addCallback(() -> node.configService().reportEpochRedundant(exclusiveSyncPoint.route.toRanges(), exclusiveSyncPoint.syncId.epoch() - 1));
-        e.start();
-        return e.recover(t -> {
-            if (t.getClass() == SyncPointErased.class)
-                return AsyncChains.success(null);
-            if (t instanceof Timeout ||
-                // TODO (expected): why are we not simply handling Insufficient properly?
-                t instanceof RuntimeException && "Insufficient".equals(t.getMessage()) ||
-                t instanceof SimulatedFault ||
-                t instanceof Exhausted)
-                return awaitSyncPoint(node, exclusiveSyncPoint);
-            // cannot loop indefinitely
-            if (t instanceof RuntimeException && "Redundant".equals(t.getMessage()))
-                return AsyncChains.success(null);
-            return null;
-        });
-    }
-
-    private static class Await extends ExecuteSyncPoint.ExecuteExclusive
-    {
-        public Await(Node node, SyncPoint<Range> syncPoint)
-        {
-            super(node, syncPoint, AllTracker::new);
-        }
-
-        @Override
-        public void start()
-        {
-            super.start();
+            }
         }
     }
 }

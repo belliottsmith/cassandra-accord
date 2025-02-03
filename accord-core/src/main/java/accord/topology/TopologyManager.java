@@ -18,14 +18,13 @@
 
 package accord.topology;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.TimeUnit;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
@@ -38,9 +37,9 @@ import accord.api.Agent;
 import accord.api.ConfigurationService;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.ProtocolModifiers.QuorumEpochIntersections.Include;
-import accord.api.Scheduler;
+import accord.api.Timeouts;
+import accord.api.Timeouts.RegisteredTimeout;
 import accord.api.TopologySorter;
-import accord.api.LocalConfig;
 import accord.coordinate.EpochTimeout;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.CommandStore;
@@ -71,6 +70,7 @@ import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.primitives.TxnId.FastPath.Unoptimised;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 /**
  * Manages topology state changes and update bookkeeping
@@ -91,8 +91,8 @@ public class TopologyManager
 
     static
     {
-        SUCCESS = new FutureEpoch(-1L, Long.MAX_VALUE);
-        SUCCESS.future.trySuccess(null);
+        SUCCESS = new FutureEpoch(-1L, null);
+        SUCCESS.setDone();
     }
 
     static class EpochState
@@ -174,6 +174,7 @@ public class TopologyManager
             if (closed.containsAll(ranges))
                 return false;
             closed = closed.union(MERGE_ADJACENT, ranges);
+            Invariants.require(closed.mergeTouching() == closed);
             return true;
         }
 
@@ -183,6 +184,8 @@ public class TopologyManager
                 return false;
             closed = closed.union(MERGE_ADJACENT, ranges);
             retired = retired.union(MERGE_ADJACENT, ranges);
+            Invariants.require(closed.mergeTouching() == closed);
+            Invariants.require(retired.mergeTouching() == retired);
             return true;
         }
 
@@ -266,21 +269,17 @@ public class TopologyManager
             this(epochs, new ArrayList<>(), new ArrayList<>());
         }
 
-        private FutureEpoch awaitEpoch(long epoch, Agent agent, TimeService time, LocalConfig localConfig)
+        private FutureEpoch awaitEpoch(long epoch, TopologyManager manager)
         {
             if (epoch <= currentEpoch)
                 return SUCCESS;
 
-            long now = time.elapsed(TimeUnit.MILLISECONDS);
-            long deadline = now + localConfig.epochFetchInitialTimeout().toMillis();
             int expectedIndex = (int) (epoch - (1 + currentEpoch));
             while (futureEpochs.size() <= expectedIndex)
             {
                 long addEpoch = currentEpoch + futureEpochs.size() + 1;
-                FutureEpoch futureEpoch = new FutureEpoch(addEpoch, deadline);
+                FutureEpoch futureEpoch = new FutureEpoch(addEpoch, manager);
                 futureEpochs.add(futureEpoch);
-                // Always make a topology timeout visible
-                futureEpoch.future.addCallback(agent);
             }
 
             return futureEpochs.get(expectedIndex);
@@ -421,37 +420,85 @@ public class TopologyManager
         }
     }
 
-    private static class FutureEpoch
+    static class WaitingForEpoch extends AsyncResults.SettableResult<Void>
+    {
+        final long deadlineMicros;
+        WaitingForEpoch(long deadlineMicros)
+        {
+            this.deadlineMicros = deadlineMicros;
+        }
+    }
+
+    private static class FutureEpoch implements Timeouts.Timeout
     {
         private final long epoch;
-        private volatile AsyncResult.Settable<Void> future;
-        private long deadlineMillis;
+        private final TopologyManager manager;
+        private boolean isDone;
+        private final ArrayDeque<WaitingForEpoch> waiting = new ArrayDeque<>();
+        private RegisteredTimeout timeout;
 
-        public FutureEpoch(long epoch, long deadlineMillis)
+        public FutureEpoch(long epoch, TopologyManager manager)
         {
             this.epoch = epoch;
-            this.future = AsyncResults.settable();
-            this.deadlineMillis = deadlineMillis;
+            this.manager = manager;
         }
 
-        /*
-         * Notify any listeners that are waiting for the epoch that is has been a long time since
-         * we started waiting for the epoch. We may still eventually get the epoch so also create
-         * a new future so subsequent operations may have a chance at seeing the epoch if it ever appears.
-         *
-         * Subsequent waiters may get a timeout notification far sooner (WATCHDOG_INTERVAL_MILLISS)
-         * instead of EPOCH_INITIAL_TIMEOUT_MILLIS
-         */
-        @GuardedBy("TopologyManager.this")
-        private void timeOutCurrentListeners(long newDeadline, Agent agent)
+        // TODO (expected): pass through request deadline
+        AsyncResult<Void> waiting()
         {
-            deadlineMillis = newDeadline;
-            AsyncResult.Settable<Void> oldFuture = future;
-            if (oldFuture.isDone())
-                return;
-            future = AsyncResults.settable();
-            future.addCallback(agent);
-            oldFuture.tryFailure(new EpochTimeout(epoch));
+            WaitingForEpoch result, last;
+            synchronized (this)
+            {
+                if (isDone)
+                    return AsyncResults.success(null);
+
+                long timeoutMicros = manager.agent.expireEpochWait(MICROSECONDS);
+                long deadlineMicros = manager.time.elapsed(MICROSECONDS) + timeoutMicros;
+                result = last = waiting.peekLast();
+                if (last == null || last.deadlineMicros < deadlineMicros)
+                    waiting.add(result = new WaitingForEpoch(deadlineMicros + (timeoutMicros / 10)));
+            }
+            if (last == null)
+                timeout = manager.timeouts.registerAt(this, result.deadlineMicros, MICROSECONDS);
+            return result;
+        }
+
+        private void setDone()
+        {
+            synchronized (this)
+            {
+                isDone = true;
+                WaitingForEpoch next;
+                while (null != (next = waiting.poll()))
+                    next.trySuccess(null);
+            }
+            RegisteredTimeout cancel = timeout;
+            if (cancel != null)
+                cancel.cancel();
+        }
+
+        @Override
+        public void timeout()
+        {
+            long nextDeadlineMicros = 0;
+            synchronized (this)
+            {
+                if (isDone)
+                    return;
+
+                long nowMicros = manager.time.elapsed(MICROSECONDS);
+                WaitingForEpoch next;
+                while (null != (next = waiting.peek()) && (nextDeadlineMicros = next.deadlineMicros) <= nowMicros)
+                    waiting.poll().tryFailure(new EpochTimeout(epoch));
+            }
+            if (nextDeadlineMicros > 0)
+                timeout = manager.timeouts.registerAt(this, nextDeadlineMicros, MICROSECONDS);
+        }
+
+        @Override
+        public int stripe()
+        {
+            return (int) epoch;
         }
     }
 
@@ -536,31 +583,25 @@ public class TopologyManager
 
     private final TopologySorter.Supplier sorter;
     private final TopologiesCollectors collector;
-    private final TopologiesCollectors selectNodeOwnershipCollector;
     private final BestFastPath bestFastPath;
     private final SupportsPrivilegedFastPath supportsPrivilegedFastPath;
     private final Agent agent;
     private final Id self;
-    private final Scheduler scheduler;
     private final TimeService time;
+    private final Timeouts timeouts;
     private volatile Epochs epochs;
-    private Scheduler.Scheduled topologyUpdateWatchdog;
 
-    private final LocalConfig localConfig;
-
-    public TopologyManager(TopologySorter.Supplier sorter, Agent agent, Id self, Scheduler scheduler, TimeService time, LocalConfig localConfig)
+    public TopologyManager(TopologySorter.Supplier sorter, Agent agent, Id self, TimeService time, Timeouts timeouts)
     {
         this.sorter = sorter;
         this.collector = new TopologiesCollectors(sorter, SelectNodeOwnership.SHARE);
-        this.selectNodeOwnershipCollector = new TopologiesCollectors(sorter, SelectNodeOwnership.SLICE);
         this.bestFastPath = new BestFastPath(self);
         this.supportsPrivilegedFastPath = new SupportsPrivilegedFastPath(self);
         this.agent = agent;
         this.self = self;
-        this.scheduler = scheduler;
         this.time = time;
+        this.timeouts = timeouts;
         this.epochs = Epochs.EMPTY;
-        this.localConfig = localConfig;
     }
 
     public EpochsSnapshot epochsSnapshot()
@@ -592,71 +633,47 @@ public class TopologyManager
         return new EpochsSnapshot(builder.build());
     }
 
-    public void shutdown()
+    public EpochReady onTopologyUpdate(Topology topology, Supplier<EpochReady> bootstrap)
     {
-        topologyUpdateWatchdog.cancel();
-    }
+        FutureEpoch notifyDone;
+        EpochReady ready;
+        synchronized (this)
+        {
+            Epochs current = epochs;
+            Invariants.requireArgument(topology.epoch == current.nextEpoch() || epochs == Epochs.EMPTY,
+                                       "Expected topology update %d to be %d", topology.epoch, current.nextEpoch());
+            EpochState[] nextEpochs = new EpochState[current.epochs.length + 1];
+            List<Epochs.Notifications> pending = new ArrayList<>(current.pending);
+            Epochs.Notifications notifications = pending.isEmpty() ? new Epochs.Notifications() : pending.remove(0);
 
-    public void scheduleTopologyUpdateWatchdog()
-    {
-        topologyUpdateWatchdog = scheduler.recurring(() -> {
-            synchronized (TopologyManager.this)
-            {
-                Epochs current = epochs;
-                if (current.futureEpochs.isEmpty())
-                    return;
+            System.arraycopy(current.epochs, 0, nextEpochs, 1, current.epochs.length);
 
-                long now = time.elapsed(TimeUnit.MILLISECONDS);
-                if (now > current.futureEpochs.get(0).deadlineMillis)
-                {
-                    for (int i = 0; i < current.futureEpochs.size(); i++)
-                    {
-                        FutureEpoch futureEpoch = current.futureEpochs.get(i);
-                        if (now <= futureEpoch.deadlineMillis)
-                            break;
-                        else
-                            futureEpoch.timeOutCurrentListeners(now + localConfig.epochFetchInitialTimeout().toMillis(), agent);
-                    }
-                }
-            }
-        }, localConfig.epochFetchWatchdogInterval().toMillis(), TimeUnit.MILLISECONDS);
-    }
+            Ranges prevAll = current.epochs.length == 0 ? Ranges.EMPTY : current.epochs[0].global.ranges;
+            nextEpochs[0] = new EpochState(self, topology, sorter.get(topology), prevAll);
+            notifications.syncComplete.forEach(nextEpochs[0]::recordSyncComplete);
+            nextEpochs[0].recordClosed(notifications.closed);
+            nextEpochs[0].recordRetired(notifications.retired);
 
-    public synchronized EpochReady onTopologyUpdate(Topology topology, Supplier<EpochReady> bootstrap)
-    {
-        Epochs current = epochs;
-        Invariants.requireArgument(topology.epoch == current.nextEpoch() || epochs == Epochs.EMPTY,
-                                   "Expected topology update %d to be %d", topology.epoch, current.nextEpoch());
-        EpochState[] nextEpochs = new EpochState[current.epochs.length + 1];
-        List<Epochs.Notifications> pending = new ArrayList<>(current.pending);
-        Epochs.Notifications notifications = pending.isEmpty() ? new Epochs.Notifications() : pending.remove(0);
+            List<FutureEpoch> futureEpochs = new ArrayList<>(current.futureEpochs);
+            notifyDone = !futureEpochs.isEmpty() ? futureEpochs.remove(0) : null;
+            epochs = new Epochs(nextEpochs, pending, futureEpochs);
+            ready = nextEpochs[0].ready = bootstrap.get();
+        }
 
-        System.arraycopy(current.epochs, 0, nextEpochs, 1, current.epochs.length);
+        if (notifyDone != null)
+            notifyDone.setDone();
 
-        Ranges prevAll = current.epochs.length == 0 ? Ranges.EMPTY : current.epochs[0].global.ranges;
-        nextEpochs[0] = new EpochState(self, topology, sorter.get(topology), prevAll);
-        notifications.syncComplete.forEach(nextEpochs[0]::recordSyncComplete);
-        nextEpochs[0].recordClosed(notifications.closed);
-        nextEpochs[0].recordRetired(notifications.retired);
-
-        List<FutureEpoch> futureEpochs = new ArrayList<>(current.futureEpochs);
-        FutureEpoch toComplete = !futureEpochs.isEmpty() ? futureEpochs.remove(0) : null;
-        epochs = new Epochs(nextEpochs, pending, futureEpochs);
-        //TODO (performance): this can trigger many callbacks leading to effectivally unbounded work holding a critical lock!
-        // should look into moving this outside of the lock
-        if (toComplete != null)
-            toComplete.future.trySuccess(null);
-
-        return nextEpochs[0].ready = bootstrap.get();
+        return ready;
     }
 
     public AsyncChain<Void> awaitEpoch(long epoch)
     {
-        AsyncResult<Void> result;
+        FutureEpoch futureEpoch;
         synchronized (this)
         {
-            result = epochs.awaitEpoch(epoch, agent, time, localConfig).future;
+            futureEpoch = epochs.awaitEpoch(epoch, this);
         }
+        AsyncResult<Void> result = futureEpoch.waiting();
         CommandStore current = CommandStore.maybeCurrent();
         return current == null || result.isDone() ? result : result.withExecutor(current);
     }
@@ -684,17 +701,6 @@ public class TopologyManager
     public synchronized void onEpochSyncComplete(Id node, long epoch)
     {
         epochs.syncComplete(node, epoch);
-    }
-
-    // TODO (nrequired): this is incorrect, we should not mark removed node as complete in the quorum as they may not be unresponsive
-    public synchronized void onRemoveNode(long removedIn, Id removed)
-    {
-        for (long epoch = removedIn, min = minEpoch(); epoch >= min; epoch--)
-        {
-            EpochState state = epochs.get(epoch);
-            if (state == null || state.hasReachedQuorum()) continue;
-            epochs.syncComplete(removed, epoch);
-        }
     }
 
     @VisibleForTesting
@@ -842,7 +848,7 @@ public class TopologyManager
         return withSufficientEpochsAtMost(select,
                                           min == null ? Long.MIN_VALUE : min.epoch(),
                                           max == null ? Long.MAX_VALUE : max.epoch(),
-                                          (prev, cur) -> prev.closed);
+                                          prev -> prev.closed);
     }
 
     public Topologies withUncompletedEpochs(Unseekables<?> select, @Nullable EpochSupplier min, EpochSupplier max)
@@ -925,12 +931,12 @@ public class TopologyManager
         return collectors.multi(collector);
     }
 
-    private Topologies withSufficientEpochsAtMost(Routables<?> select, long minEpoch, long maxEpoch, BiFunction<EpochState, EpochState, Ranges> isSufficientFor)
+    private Topologies withSufficientEpochsAtMost(Routables<?> select, long minEpoch, long maxEpoch, Function<EpochState, Ranges> isSufficientFor)
     {
         return atMost(select, minEpoch, maxEpoch, isSufficientFor, collector);
     }
 
-    private <C, K extends Routables<?>, T> T atMost(K select, long minEpoch, long maxEpoch, BiFunction<EpochState, EpochState, Ranges> isSufficientFor,
+    private <C, K extends Routables<?>, T> T atMost(K select, long minEpoch, long maxEpoch, Function<EpochState, Ranges> isSufficientFor,
                                                     Collectors<C, K, T> collectors)
     {
         Invariants.requireArgument(minEpoch <= maxEpoch);
@@ -942,8 +948,8 @@ public class TopologyManager
         EpochState cur = nonNull(snapshot.get(maxEpoch));
         if (minEpoch == maxEpoch)
         {
-            EpochState prev = minEpoch == snapshot.minEpoch() ? null : nonNull(snapshot.get(minEpoch - 1));
-            if (prev == null || isSufficientFor.apply(prev, cur).containsAll(select))
+            // TODO (required): why are we testing isSufficientFor here? minEpoch == maxEpoch, we should always return.
+            if (isSufficientFor.apply(cur).containsAll(select))
                 return collectors.one(cur, select, true);
         }
 
@@ -954,14 +960,13 @@ public class TopologyManager
         while (!select.isEmpty())
         {
             collector = collectors.update(collector, cur, select, true);
-            select = (K)select.without(cur.addedRanges);
+            select = (K)select.without(cur.addedRanges)
+                              .without(isSufficientFor.apply(cur));
 
             if (++i == maxi)
                 break;
 
-            EpochState prev = snapshot.epochs[i];
-            select = (K)select.without(isSufficientFor.apply(prev, cur));
-            cur = prev;
+            cur = snapshot.epochs[i];
         }
 
         return collectors.multi(collector);
@@ -1076,18 +1081,12 @@ public class TopologyManager
 
     public boolean hasEpoch(long epoch)
     {
-        synchronized (this)
-        {
-            return epochs.get(epoch) != null;
-        }
+        return epochs.get(epoch) != null;
     }
 
     public boolean hasAtLeastEpoch(long epoch)
     {
-        synchronized (this)
-        {
-            return epochs.currentEpoch >= epoch;
-        }
+        return epochs.currentEpoch >= epoch;
     }
 
     public Topology localForEpoch(long epoch)

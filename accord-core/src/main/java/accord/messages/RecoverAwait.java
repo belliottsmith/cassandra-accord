@@ -34,6 +34,8 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
 import static accord.api.ProgressLog.BlockedUntil.CommittedOrNotFastPathCommit;
+import static accord.messages.MessageType.StandardMessage.RECOVER_AWAIT_REQ;
+import static accord.messages.MessageType.StandardMessage.RECOVER_AWAIT_RSP;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 
@@ -105,7 +107,7 @@ public class RecoverAwait extends Await
     @Override
     public MessageType type()
     {
-        return MessageType.RECOVER_AWAIT_REQ;
+        return RECOVER_AWAIT_REQ;
     }
 
     public enum RecoverAwaitOk implements Reply
@@ -135,7 +137,7 @@ public class RecoverAwait extends Await
         @Override
         public MessageType type()
         {
-            return MessageType.RECOVER_AWAIT_RSP;
+            return RECOVER_AWAIT_RSP;
         }
     }
 }

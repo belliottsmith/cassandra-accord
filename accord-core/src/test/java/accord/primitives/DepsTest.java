@@ -49,7 +49,7 @@ class DepsTest
     private static void validateEquals(Deps deps)
     {
         assertThat(deps).isNotEqualTo(null);
-        Deps clone = new Deps(deps.keyDeps, deps.rangeDeps, deps.directKeyDeps);
+        Deps clone = new Deps(deps.keyDeps, deps.rangeDeps);
         assertThat(clone).isEqualTo(deps);
         assertThat(deps).isEqualTo(clone);
     }
@@ -57,8 +57,6 @@ class DepsTest
     private static void validateContains(Deps deps)
     {
         for (TxnId id : deps.keyDeps.txnIdsWithFlags())
-            assertThat(deps.contains(id)).isTrue();
-        for (TxnId id : deps.directKeyDeps.txnIdsWithFlags())
             assertThat(deps.contains(id)).isTrue();
         for (TxnId id : deps.rangeDeps.txnIdsWithFlags())
             assertThat(deps.contains(id)).isTrue();
@@ -72,16 +70,10 @@ class DepsTest
     private static void validateIndexes(Deps deps)
     {
         int index = 0;
-        List<TxnId> ids = new ArrayList<>(deps.keyDeps.txnIdCount() + deps.directKeyDeps.txnIdCount() + deps.rangeDeps.txnIdCount());
+        List<TxnId> ids = new ArrayList<>(deps.keyDeps.txnIdCount() + deps.rangeDeps.txnIdCount());
         for (TxnId id : deps.keyDeps.txnIdsWithFlags())
         {
             assertThat(deps.txnId(index)).describedAs("Expected key deps txn at index %d", index).isEqualTo(id);
-            ids.add(id);
-            index++;
-        }
-        for (TxnId id : deps.directKeyDeps.txnIdsWithFlags())
-        {
-            assertThat(deps.txnId(index)).describedAs("Expected direct key deps txn at index %d", index).isEqualTo(id);
             ids.add(id);
             index++;
         }
@@ -109,8 +101,6 @@ class DepsTest
     {
         List<Range> ranges = new ArrayList<>();
         for (RoutingKey key : deps.keyDeps.keys)
-            ranges.add(key.asRange());
-        for (RoutingKey key : deps.directKeyDeps.keys)
             ranges.add(key.asRange());
         for (Range range : deps.rangeDeps.ranges)
             ranges.add(range);

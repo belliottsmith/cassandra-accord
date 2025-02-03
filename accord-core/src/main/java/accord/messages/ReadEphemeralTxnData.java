@@ -43,6 +43,7 @@ import accord.utils.Invariants;
 import org.agrona.collections.IntHashSet;
 
 import static accord.local.Commands.eraseEphemeralRead;
+import static accord.messages.MessageType.StandardMessage.READ_EPHEMERAL_REQ;
 import static accord.messages.TxnRequest.computeScope;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 
@@ -202,6 +203,6 @@ public class ReadEphemeralTxnData extends ReadData
     @Override
     public MessageType type()
     {
-        return MessageType.READ_EPHEMERAL_REQ;
+        return READ_EPHEMERAL_REQ;
     }
 }

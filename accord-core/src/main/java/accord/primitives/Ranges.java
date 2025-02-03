@@ -69,6 +69,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
 
     public static Ranges single(Range range)
     {
+        Invariants.require(range != null);
         return new Ranges(new Range[]{range});
     }
 
@@ -101,6 +102,8 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
     @Override
     public final Ranges slice(int from, int to)
     {
+        Invariants.requireArgument(from <= to);
+        Invariants.requireArgument(to <= ranges.length);
         if (from == 0 && to == size())
             return this;
         return Ranges.ofSortedAndDeoverlapped(Arrays.copyOfRange(ranges, from, to));

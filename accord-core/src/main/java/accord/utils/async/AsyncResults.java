@@ -18,44 +18,40 @@
 
 package accord.utils.async;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.VisibleForImplementation;
 import accord.utils.Invariants;
 
 import static accord.utils.Invariants.createIllegalState;
-import static accord.utils.Invariants.illegalState;
 
 public class AsyncResults
 {
+    private static final Logger logger = LoggerFactory.getLogger(AsyncResults.class);
     public static final AsyncResult SUCCESS_NULL = new Immediate<>(null);
 
     private AsyncResults() {}
-
-    private static class Result<V>
-    {
-        final V value;
-        final Throwable failure;
-
-        public Result(V value, Throwable failure)
-        {
-            this.value = value;
-            this.failure = failure;
-        }
-    }
 
     public static class AbstractResult<V> implements AsyncResult<V>
     {
         private static final AtomicReferenceFieldUpdater<AbstractResult, Object> STATE = AtomicReferenceFieldUpdater.newUpdater(AbstractResult.class, Object.class, "state");
 
-        private volatile Object state;
+        static final class FailureHolder
+        {
+            final Throwable cause;
+            FailureHolder(Throwable cause)
+            {
+                this.cause = cause;
+            }
+        }
 
-        private static class Listener<V>
+        private static final class Listener<V>
         {
             final BiConsumer<? super V, Throwable> callback;
             Listener<V> next;
@@ -66,11 +62,14 @@ public class AsyncResults
             }
         }
 
-        private void notify(Listener<V> listener, Result<V> result)
+        private static final Object INIT = new Listener<>(null);
+        private volatile Object state = INIT;
+
+        private void notify(Listener<V> listener, V success, Throwable failure)
         {
             Listener<V> reversed = null;
             Listener<V> tmp;
-            while (listener != null)
+            while (listener != INIT)
             {
                 tmp = listener;
                 listener = listener.next;
@@ -79,54 +78,52 @@ public class AsyncResults
             }
             listener = reversed;
 
-            List<Throwable> failures = null;
             while (listener != null)
             {
                 try
                 {
-                    listener.callback.accept(result.value, result.failure);
+                    listener.callback.accept(success, failure);
                 }
                 catch (Throwable t)
                 {
-                    if (failures == null)
-                        failures = new ArrayList<>();
-                    failures.add(t);
+                    try
+                    {
+                        Thread thread = Thread.currentThread();
+                        thread.getUncaughtExceptionHandler().uncaughtException(thread, t);
+                    }
+                    catch (Throwable t2)
+                    {
+                        t2.addSuppressed(t);
+                        logger.error("Unexpected exception thrown by UncaughtExceptionHandler", t2);
+                    }
                 }
                 listener = listener.next;
             }
-            if (failures != null)
-            {
-                IllegalStateException f = createIllegalState("Callbacks threw");
-                failures.forEach(f::addSuppressed);
-                throw f;
-            }
         }
 
-        boolean trySetResult(Result<V> result)
+        protected final boolean trySetResult(V success, Throwable failure)
         {
+            Invariants.require(failure == null || success == null);
+            Object result = failure == null ? success : new FailureHolder(failure);
             while (true)
             {
                 Object current = state;
-                if (current instanceof Result)
+                if (!(current instanceof Listener))
                     return false;
                 Listener<V> listener = (Listener<V>) current;
                 if (STATE.compareAndSet(this, current, result))
                 {
-                    notify(listener, result);
+                    notify(listener, success, failure);
                     return true;
                 }
             }
-        }
-
-        protected boolean trySetResult(V result, Throwable failure)
-        {
-            return trySetResult(new Result<>(result, failure));
         }
 
         protected boolean trySuccess(V value)
         {
             return trySetResult(value, null);
         }
+
         protected boolean tryFailure(Throwable throwable)
         {
             return trySetResult(null, throwable);
@@ -134,7 +131,7 @@ public class AsyncResults
 
         private AsyncChain<V> newChain()
         {
-            return new AsyncChains.Head<V>()
+            return new AsyncChains.Head<>()
             {
                 @Override
                 protected Cancellable start(BiConsumer<? super V, Throwable> callback)
@@ -181,12 +178,14 @@ public class AsyncResults
             while (true)
             {
                 Object current = state;
-                if (current instanceof Result)
+                if (!(current instanceof Listener<?>))
                 {
-                    Result<V> result = (Result<V>) current;
-                    callback.accept(result.value, result.failure);
+                    V success = current instanceof FailureHolder ? null : (V)current;
+                    Throwable failure = current instanceof FailureHolder ? ((FailureHolder)current).cause : null;
+                    callback.accept(success, failure);
                     return this;
                 }
+
                 if (listener == null)
                     listener = new Listener<>(callback);
 
@@ -199,37 +198,32 @@ public class AsyncResults
         @Override
         public boolean isDone()
         {
-            return state instanceof Result;
+            return !(state instanceof Listener);
         }
 
         @Override
         public boolean isSuccess()
         {
             Object current = state;
-            return current instanceof Result && ((Result) current).failure == null;
-        }
-
-        private Result<V> getResult()
-        {
-            Object current = state;
-            Invariants.require(current instanceof Result);
-            return (Result<V>) current;
+            return !(current instanceof Listener)  && !(current instanceof FailureHolder);
         }
 
         public V result()
         {
-            Result<V> result = getResult();
-            if (result.failure != null)
-                throw new IllegalStateException("Result failed", result.failure);
-            return result.value;
+            Object current = state;
+            if (current instanceof FailureHolder)
+            {
+                FailureHolder failure = (FailureHolder) current;
+                throw new IllegalStateException("Result was failure, or not yet finished", failure.cause);
+            }
+            return (V)current;
         }
 
         public Throwable failure()
         {
-            Result<V> result = getResult();
-            if (result.failure == null)
-                illegalState("Result succeeded");
-            return result.failure;
+            Object current = state;
+            Invariants.require(current instanceof FailureHolder, "Result was not failure");
+            return ((FailureHolder)current).cause;
         }
 
         @Override
@@ -259,6 +253,16 @@ public class AsyncResults
         public boolean tryFailure(Throwable throwable)
         {
             return super.tryFailure(throwable);
+        }
+    }
+
+    public static class SettableByCallback<V> extends SettableResult<V> implements BiConsumer<V, Throwable>
+    {
+        @Override
+        public void accept(V v, Throwable throwable)
+        {
+            if (throwable == null) trySuccess(v);
+            else tryFailure(throwable);
         }
     }
 

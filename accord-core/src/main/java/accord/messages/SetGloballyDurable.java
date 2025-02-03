@@ -25,6 +25,7 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.primitives.TxnId;
 
+import static accord.messages.MessageType.StandardMessage.SET_GLOBALLY_DURABLE_REQ;
 import static accord.messages.SimpleReply.Ok;
 
 public class SetGloballyDurable implements Request, PreLoadContext
@@ -53,7 +54,7 @@ public class SetGloballyDurable implements Request, PreLoadContext
     @Override
     public MessageType type()
     {
-        return MessageType.SET_GLOBALLY_DURABLE_REQ;
+        return SET_GLOBALLY_DURABLE_REQ;
     }
 
     @Nullable

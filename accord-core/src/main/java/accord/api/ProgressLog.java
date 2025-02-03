@@ -120,7 +120,12 @@ public interface ProgressLog
          * Wait for the transaction to have enough information to apply.
          * It does not need to be ready to apply yet.
          */
-        CanApply(HOME, SHARD, SaveStatus.PreApplied, Majority);
+        CanApply(HOME, SHARD, SaveStatus.PreApplied, Majority),
+
+        /**
+         * Wait for the transaction to be applied.
+         */
+        IsApplied(SHARD, SHARD, SaveStatus.Applied, NotDurable);
 
         public enum Query { HOME, SHARD }
 

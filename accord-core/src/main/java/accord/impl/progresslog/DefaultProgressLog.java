@@ -148,7 +148,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (result == null)
         {
             Invariants.require(debugDeleted == null || !debugDeleted.containsKey(txnId));
-            node.agent().metricsEventsListener().onProgressLogSizeChange(txnId, 1);
+            node.agent().eventListener().onProgressLogSizeChange(txnId, 1);
             stateMap = BTree.update(stateMap, BTree.singleton(result = new TxnState(txnId)), TxnState::compareTo);
         }
         return result;
@@ -157,7 +157,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private TxnState insert(TxnId txnId)
     {
         Invariants.require(debugDeleted == null || !debugDeleted.containsKey(txnId));
-        node.agent().metricsEventsListener().onProgressLogSizeChange(txnId, 1);
+        node.agent().eventListener().onProgressLogSizeChange(txnId, 1);
         TxnState result = new TxnState(txnId);
         stateMap = BTree.update(stateMap, BTree.singleton(result), TxnState::compareTo);
         return result;
@@ -369,7 +369,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     {
         Object[] newStateMap = BTreeRemoval.<TxnId, TxnState>remove(stateMap, (id, s) -> id.compareTo(s.txnId), txnId);
         if (stateMap != newStateMap)
-            node.agent().metricsEventsListener().onProgressLogSizeChange(txnId, -1);
+            node.agent().eventListener().onProgressLogSizeChange(txnId, -1);
         stateMap = newStateMap;
         if (debugDeleted != null)
             debugDeleted.put(txnId, Thread.currentThread().getStackTrace());

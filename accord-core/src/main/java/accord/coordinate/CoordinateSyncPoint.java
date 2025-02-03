@@ -79,49 +79,29 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         this.adapter = adapter;
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusiveSyncPoint(Node node, Unseekables<U> keysOrRanges)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusive(Node node, Unseekables<U> keysOrRanges)
     {
         return coordinate(node, ExclusiveSyncPoint, keysOrRanges, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusiveSyncPoint(Node node, TxnId txnId, Unseekables<U> keysOrRanges)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusive(Node node, TxnId txnId, Unseekables<U> keysOrRanges)
     {
         return coordinate(node, txnId, keysOrRanges, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusiveSyncPoint(Node node, TxnId txnId, FullRoute<U> route)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusive(Node node, TxnId txnId, FullRoute<U> route)
     {
         return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> inclusive(Node node, Unseekables<U> keysOrRanges)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> executeAtQuorum(Node node, Unseekables<U> keysOrRanges)
     {
-        return coordinate(node, Kind.SyncPoint, keysOrRanges, Adapters.inclusiveSyncPoint());
+        return coordinate(node, ExclusiveSyncPoint, keysOrRanges, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> inclusive(Node node, FullRoute<U> route)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> executeAtQuorum(Node node, TxnId txnId, FullRoute<U> route)
     {
-        return coordinate(node, Kind.SyncPoint, route, Adapters.inclusiveSyncPoint());
-    }
-
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> inclusive(Node node, TxnId txnId, FullRoute<U> route)
-    {
-        return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, route, Adapters.inclusiveSyncPoint())).beginAsResult();
-    }
-
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> inclusiveAndAwaitQuorum(Node node, Unseekables<U> keysOrRanges)
-    {
-        return coordinate(node, Kind.SyncPoint, keysOrRanges, Adapters.inclusiveSyncPointBlocking());
-    }
-
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> inclusiveAndAwaitQuorum(Node node, FullRoute<U> route)
-    {
-        return coordinate(node, Kind.SyncPoint, route, Adapters.inclusiveSyncPointBlocking());
-    }
-
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> inclusiveAndAwaitQuorum(Node node, TxnId txnId, FullRoute<U> route)
-    {
-        return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, route, Adapters.inclusiveSyncPointBlocking())).beginAsResult();
+        return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
     }
 
     public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
@@ -148,9 +128,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     private static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, TxnId txnId, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(txnId.isSyncPoint());
-        TopologyMismatch mismatch = txnId.kind() == ExclusiveSyncPoint
-                                    ? TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route)
-                                    : TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
+        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
         CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter);

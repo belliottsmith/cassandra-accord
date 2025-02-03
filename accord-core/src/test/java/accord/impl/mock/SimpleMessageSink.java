@@ -46,7 +46,7 @@ public class SimpleMessageSink implements MessageSink
     }
 
     @Override
-    public void send(Node.Id to, Request request, AgentExecutor executor, Callback callback)
+    public void send(Node.Id to, Request request, int attempt, AgentExecutor executor, Callback callback)
     {
         network.send(node, to, request, executor, callback);
     }

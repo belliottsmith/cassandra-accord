@@ -20,9 +20,11 @@ package accord.messages;
 
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.TxnId;
 
 public interface Request extends Message
 {
     default long waitForEpoch() { return 0; }
     void process(Node on, Id from, ReplyContext replyContext);
+    default TxnId primaryTxnId() { return null; }
 }

@@ -53,7 +53,6 @@ class WaitingOnTest
     private static void validateWaitingOn(WaitingOn waitingOn)
     {
         validateIndexOf(waitingOn);
-        validateDirectKeyTxnReachable(waitingOn);
         validateWaitingOnKey(waitingOn);
         validateNextWaitingOn(waitingOn);
     }
@@ -77,22 +76,11 @@ class WaitingOnTest
         }
     }
 
-    private static void validateDirectKeyTxnReachable(WaitingOn waitingOn)
-    {
-        // property: direct key txn are reachable
-        for (TxnId expected : waitingOn.directKeyDeps.txnIdsWithFlags())
-        {
-            Assertions.assertThat(waitingOn.indexOf(expected))
-                      .describedAs("Txn %s came from directKeyDeps but indexOf does not match", expected)
-                      .isEqualTo(waitingOn.directRangeDeps.txnIdCount() + waitingOn.directKeyDeps.indexOf(expected));
-        }
-    }
-
     private static void validateWaitingOnKey(WaitingOn waitingOn)
     {
         // property: isWaitingOnKey(key_index) == is_set(key_offset + key_index)
         RoutingKeys keys = waitingOn.keys;
-        int offset = waitingOn.directRangeDeps.txnIdCount() + waitingOn.directKeyDeps.txnIdCount();
+        int offset = waitingOn.directRangeDeps.txnIdCount();
         boolean hasKeyWaiting = false;
         for (int i = 0; i < keys.size(); i++)
         {

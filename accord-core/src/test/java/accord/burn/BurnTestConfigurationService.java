@@ -212,15 +212,16 @@ public class BurnTestConfigurationService extends AbstractConfigurationService.M
     @Override
     public void reportEpochClosed(Ranges ranges, long epoch)
     {
-        Topology topology = lookup.apply(localId).topology().globalForEpoch(epoch);
-        topologyUpdates.epochClosed(lookup.apply(localId), topology.nodes(), ranges, epoch);
+        Topology topology = lookup.apply(localId).topology().maybeGlobalForEpoch(epoch);
+        if (topology != null)
+            topologyUpdates.epochClosed(lookup.apply(localId), topology.nodes(), ranges, epoch);
     }
 
     @Override
-    public void reportEpochRedundant(Ranges ranges, long epoch)
+    public void reportEpochRetired(Ranges ranges, long epoch)
     {
         Topology topology = lookup.apply(localId).topology().maybeGlobalForEpoch(epoch);
         if (topology != null)
-            topologyUpdates.epochRedundant(lookup.apply(localId), topology.nodes(), ranges, epoch);
+            topologyUpdates.epochRetired(lookup.apply(localId), topology.nodes(), ranges, epoch);
     }
 }

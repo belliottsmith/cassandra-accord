@@ -57,6 +57,8 @@ import static accord.coordinate.Infer.InvalidIf.IfUncommitted;
 import static accord.coordinate.Infer.InvalidIf.IsInvalid;
 import static accord.coordinate.Infer.InvalidIf.IsNotInvalid;
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
+import static accord.messages.MessageType.StandardMessage.CHECK_STATUS_REQ;
+import static accord.messages.MessageType.StandardMessage.CHECK_STATUS_RSP;
 import static accord.primitives.Known.Definition.DefinitionKnown;
 import static accord.primitives.Known.Definition.DefinitionUnknown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
@@ -409,8 +411,8 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         {
             return "CheckStatusOk{" +
                    "map:" + map +
-                   "maxNotTruncatedSaveStatus:" + maxKnowledgeSaveStatus +
-                   "maxSaveStatus:" + maxSaveStatus +
+                   ", maxNotTruncatedSaveStatus:" + maxKnowledgeSaveStatus +
+                   ", maxSaveStatus:" + maxSaveStatus +
                    ", promised:" + maxPromised +
                    ", accepted:" + maxAcceptedOrCommitted +
                    ", executeAt:" + executeAt +
@@ -494,7 +496,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         @Override
         public MessageType type()
         {
-            return MessageType.CHECK_STATUS_RSP;
+            return CHECK_STATUS_RSP;
         }
     }
 
@@ -653,7 +655,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         @Override
         public MessageType type()
         {
-            return MessageType.CHECK_STATUS_RSP;
+            return CHECK_STATUS_RSP;
         }
 
         @Override
@@ -680,7 +682,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     @Override
     public MessageType type()
     {
-        return MessageType.CHECK_STATUS_REQ;
+        return CHECK_STATUS_REQ;
     }
 
     @Override

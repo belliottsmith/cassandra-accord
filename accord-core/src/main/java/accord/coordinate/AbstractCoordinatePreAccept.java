@@ -120,11 +120,11 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         {
             ((CoordinationFailed) failure).set(txnId, route.homeKey());
             if (failure instanceof Timeout)
-                node.agent().metricsEventsListener().onTimeout(txnId);
+                node.agent().eventListener().onTimeout(txnId);
             else if (failure instanceof Preempted)
-                node.agent().metricsEventsListener().onPreempted(txnId);
+                node.agent().eventListener().onPreempted(txnId);
             else if (failure instanceof Invalidated)
-                node.agent().metricsEventsListener().onInvalidated(txnId);
+                node.agent().eventListener().onInvalidated(txnId);
         }
     }
 

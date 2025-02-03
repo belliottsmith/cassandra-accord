@@ -20,7 +20,7 @@ package accord.messages;
 
 import javax.annotation.Nonnull;
 
-import static accord.messages.MessageType.FAILURE_RSP;
+import static accord.messages.MessageType.StandardMessage.FAILURE_RSP;
 
 public interface Reply extends Message
 {

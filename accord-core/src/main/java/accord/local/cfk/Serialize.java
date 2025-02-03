@@ -95,8 +95,7 @@ public class Serialize
      *   bit 0 is set if there are any missing ids;
      *   bit 1 is set if there are any executeAt specified
      *   bit 2 is set if there are any ballots specified
-     *   bit 3 is set if there are any non-standard TxnId.Kind present
-     *   bit 4 is set if there are any queries with override flags
+     *   bit 3 is set if there are any queries with override flags
      *   bits 6-7 number of header bytes to read for each command
      *   bits 8-9: level 0 extra hlc bytes to read
      *   bits 10-11: level 1 extra hlc bytes to read (+ 1 + level 0)
@@ -108,7 +107,7 @@ public class Serialize
      * 1 optional bit: if any command has override flags; 2 bits more to read if this bit is set
      * 1 optional bit: if the status encodes an executeAt, indicating if the executeAt is not the TxnId
      * 1 optional bit: if the status encodes any dependencies and there are non-zero missing ids, indicating if there are any missing for this command
-     * 2 or 3 bits for the kind of the TxnId
+     * 3 bits encoding the position of the TxnId flags in our flagHistory, or the number of bytes to read if not present
      * 1 bit encoding if the epoch has changed
      * 2 optional bits: if the prior bit is set, indicating how many bits should be read for the epoch increment: 0=none (increment by 1); 1=4, 2=8, 3=32
      * 4 option bits: if prior bits=01, epoch delta
@@ -116,7 +115,7 @@ public class Serialize
      * 2 bits indicating how many more payload bytes should be read, with mapping written in header
      * all remaining bits are interpreted as a delta from the prior HLC
      *
-     * if txnId kind flag is 3, read an additional 2 bytes for TxnId flag
+     * if txnId kind flag bits represent 0 or 1, read 1 or 2 bytes respectively for the TxnId flag;
      * if epoch increment flag is 2 or 3, read additional 1 or 4 bytes for epoch delta
      * if executeAt is expected, read vint32 for epoch, vint32 for delta from txnId hlc, and ceil(N/8) bytes for node id
      *
@@ -595,6 +594,7 @@ public class Serialize
                 int bitsPerCommandId =  numberOfBitsToRepresent(commandCount);
                 int bitsPerMissingId = 1 + bitsPerCommandId;
                 int bitsPerExecuteAt = bitsPerExecuteAtEpoch + bitsPerExecuteAtHlc + bitsPerExecuteAtFlags + bitsPerNodeId;
+                if (bitsPerBallotFlags == 15) bitsPerBallotFlags = 16;
                 int bitsPerBallot = bitsPerBallotEpoch + bitsPerBallotHlc + bitsPerBallotFlags + bitsPerNodeId;
                 Invariants.require(bitsPerExecuteAtEpoch < 64);
                 Invariants.require(bitsPerExecuteAtHlc <= 64);

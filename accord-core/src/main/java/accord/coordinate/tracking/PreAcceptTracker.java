@@ -32,9 +32,9 @@ public abstract class PreAcceptTracker<ST extends ShardTracker> extends Abstract
         super(topologies, arrayFactory, trackerFactory);
     }
 
-    public PreAcceptTracker(Topologies topologies, IntFunction<ST[]> arrayFactory, ShardFactory<ST> trackerFactory)
+    public <P> PreAcceptTracker(Topologies topologies, IntFunction<ST[]> arrayFactory, P param, ShardFactory<P, ST> trackerFactory)
     {
-        super(topologies, arrayFactory, trackerFactory);
+        super(topologies, arrayFactory, param, trackerFactory);
     }
 
     public abstract RequestStatus recordSuccess(Node.Id from, boolean withFastPathTimestamp);

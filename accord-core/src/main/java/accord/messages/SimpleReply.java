@@ -30,6 +30,6 @@ public enum SimpleReply implements Reply
     @Override
     public MessageType type()
     {
-        return MessageType.SIMPLE_RSP;
+        return MessageType.StandardMessage.SIMPLE_RSP;
     }
 }

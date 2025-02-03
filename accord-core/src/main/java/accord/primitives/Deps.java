@@ -70,7 +70,7 @@ import static accord.utils.Invariants.illegalState;
  */
 public class Deps
 {
-    public static final Deps NONE = new Deps(KeyDeps.NONE, RangeDeps.NONE, KeyDeps.NONE);
+    public static final Deps NONE = new Deps(KeyDeps.NONE, RangeDeps.NONE);
 
     public interface DepList extends SortedList<TxnId> { }
 
@@ -96,7 +96,6 @@ public class Deps
     {
         final KeyDeps.Builder keyBuilder;
         final RangeDeps.AbstractRangeBuilder<?, ?> rangeBuilder;
-        KeyDeps.Builder directKeyBuilder;
 
         AbstractBuilder(boolean buildRangesByTxnId)
         {
@@ -119,16 +118,8 @@ public class Deps
             {
                 default: throw new AssertionError();
                 case Key:
-                    if (managesExecution(txnId))
-                    {
-                        keyBuilder.add(keyOrRange.asRoutingKey(), txnId);
-                    }
-                    else
-                    {
-                        if (directKeyBuilder == null)
-                            directKeyBuilder = KeyDeps.builder();
-                        directKeyBuilder.add(keyOrRange.asRoutingKey(), txnId);
-                    }
+                    Invariants.require(managesExecution(txnId));
+                    keyBuilder.add(keyOrRange.asRoutingKey(), txnId);
                     break;
 
                 case Range:
@@ -146,8 +137,6 @@ public class Deps
             keyBuilder.close();
             if (rangeBuilder != null)
                 rangeBuilder.close();
-            if (directKeyBuilder != null)
-                directKeyBuilder.close();
         }
     }
 
@@ -161,7 +150,7 @@ public class Deps
         @Override
         public Deps build()
         {
-            return new Deps(keyBuilder.build(), rangeBuilder.build(), directKeyBuilder == null ? KeyDeps.NONE : directKeyBuilder.build());
+            return new Deps(keyBuilder.build(), rangeBuilder.build());
         }
     }
 
@@ -179,23 +168,15 @@ public class Deps
      */
     public final RangeDeps rangeDeps;
 
-    /**
-     * key dependencies where the execution will be managed by direct dependency relationships, so {@link accord.local.Command.WaitingOn} will wait on the {@code TxnId} directly
-     * i.e. where {@code !CommandsForKey.managesExecution}
-     */
-    public final KeyDeps directKeyDeps;
-
     public Deps(Deps copy)
     {
         this.keyDeps = copy.keyDeps;
-        this.directKeyDeps = copy.directKeyDeps;
         this.rangeDeps = copy.rangeDeps;
     }
 
-    public Deps(KeyDeps keyDeps, RangeDeps rangeDeps, KeyDeps directKeyDeps)
+    public Deps(KeyDeps keyDeps, RangeDeps rangeDeps)
     {
         this.keyDeps = keyDeps;
-        this.directKeyDeps = directKeyDeps;
         this.rangeDeps = rangeDeps;
     }
 
@@ -213,22 +194,19 @@ public class Deps
     {
         DepList keyDeps = this.keyDeps.txnIdsWithFlags(key);
         DepList rangeDeps = this.rangeDeps.computeTxnIdsWithFlags(key);
-        DepList directKeyDeps = this.directKeyDeps.txnIdsWithFlags(key);
-        int count = Math.min(1, keyDeps.size()) + Math.min(1, directKeyDeps.size()) + Math.min(1, rangeDeps.size());
+        int count = Math.min(1, keyDeps.size()) + Math.min(1, rangeDeps.size());
         MergeFewDisjointSortedListsCursor<TxnId, DepList> cursor = new MergeFewDisjointSortedListsCursor<>(count);
         if (keyDeps.size() > 0)
             cursor.add(keyDeps);
         if (rangeDeps.size() > 0)
             cursor.add(rangeDeps);
-        if (directKeyDeps.size() > 0)
-            cursor.add(directKeyDeps);
         cursor.init();
         return cursor;
     }
 
     public Deps with(Deps that)
     {
-        return select(this, that,this.keyDeps.with(that.keyDeps), this.rangeDeps.with(that.rangeDeps), this.directKeyDeps.with(that.directKeyDeps));
+        return select(this, that,this.keyDeps.with(that.keyDeps), this.rangeDeps.with(that.rangeDeps));
     }
 
     public Deps with(Predicate<TxnId> include)
@@ -238,31 +216,31 @@ public class Deps
 
     public Deps without(Predicate<TxnId> remove)
     {
-        return select(this.keyDeps.without(remove), this.rangeDeps.without(remove), this.directKeyDeps.without(remove));
+        return select(this.keyDeps.without(remove), this.rangeDeps.without(remove));
     }
 
     public Deps without(Deps that)
     {
-        return select(this.keyDeps.without(that.keyDeps), this.rangeDeps.without(that.rangeDeps), this.directKeyDeps.without(that.directKeyDeps));
+        return select(this.keyDeps.without(that.keyDeps), this.rangeDeps.without(that.rangeDeps));
     }
 
-    private Deps select(KeyDeps newKeyDeps, RangeDeps newRangeDeps, KeyDeps newDirectKeyDeps)
+    private Deps select(KeyDeps newKeyDeps, RangeDeps newRangeDeps)
     {
-        return select(this, null, newKeyDeps, newRangeDeps, newDirectKeyDeps);
+        return select(this, null, newKeyDeps, newRangeDeps);
     }
 
-    private static Deps select(Deps v1, Deps v2, KeyDeps newKeyDeps, RangeDeps newRangeDeps, KeyDeps newDirectKeyDeps)
+    private static Deps select(Deps v1, Deps v2, KeyDeps newKeyDeps, RangeDeps newRangeDeps)
     {
-        if (newKeyDeps == v1.keyDeps && newRangeDeps == v1.rangeDeps && newDirectKeyDeps == v1.directKeyDeps)
+        if (newKeyDeps == v1.keyDeps && newRangeDeps == v1.rangeDeps)
             return v1;
-        if (v2 != null && newKeyDeps == v2.keyDeps && newRangeDeps == v2.rangeDeps && newDirectKeyDeps == v2.directKeyDeps)
+        if (v2 != null && newKeyDeps == v2.keyDeps && newRangeDeps == v2.rangeDeps)
             return v2;
-        return new Deps(newKeyDeps, newRangeDeps, newDirectKeyDeps);
+        return new Deps(newKeyDeps, newRangeDeps);
     }
 
     public PartialDeps intersecting(Participants<?> participants)
     {
-        return new PartialDeps(participants, keyDeps.intersecting(participants), rangeDeps.intersecting(participants), directKeyDeps.intersecting(participants));
+        return new PartialDeps(participants, keyDeps.intersecting(participants), rangeDeps.intersecting(participants));
     }
 
     public boolean covers(Unseekables<?> participants)
@@ -277,12 +255,12 @@ public class Deps
 
     public boolean isEmpty()
     {
-        return keyDeps.isEmpty() && rangeDeps.isEmpty() && directKeyDeps.isEmpty();
+        return keyDeps.isEmpty() && rangeDeps.isEmpty();
     }
 
     public int txnIdCount()
     {
-        return keyDeps.txnIdCount() + rangeDeps.txnIdCount() + directKeyDeps.txnIdCount();
+        return keyDeps.txnIdCount() + rangeDeps.txnIdCount();
     }
 
     public TxnId txnId(int index)
@@ -311,15 +289,13 @@ public class Deps
             default: throw new UnhandledEnum(txnId.domain());
             case Key:
             {
-                if (managesExecution(txnId))
-                    return keyDeps.indexOf(txnId);
-                int index = directKeyDeps.indexOf(txnId);
-                return index < 0 ? -1 : keyDeps.txnIdCount() + index;
+                Invariants.require(managesExecution(txnId));
+                return keyDeps.indexOf(txnId);
             }
             case Range:
             {
                 int index = rangeDeps.indexOf(txnId);
-                return index < 0 ? -1 : keyDeps.txnIdCount() + directKeyDeps.txnIdCount() + index;
+                return index < 0 ? -1 : keyDeps.txnIdCount() + index;
             }
         }
     }
@@ -346,11 +322,6 @@ public class Deps
             return apply.apply(keyDeps, index);
         index -= keyDepsLimit;
 
-        int directKeyDepsLimit = directKeyDeps.txnIdCount();
-        if (index < directKeyDepsLimit)
-            return apply.apply(directKeyDeps, index);
-        index -= directKeyDepsLimit;
-
         return apply.apply(rangeDeps, index);
     }
 
@@ -365,9 +336,8 @@ public class Deps
         {
             default: throw new UnhandledEnum(txnId.domain());
             case Key:
-                if (managesExecution(txnId))
-                    return apply.apply(keyDeps, txnId, p);
-                return apply.apply(directKeyDeps, txnId, p);
+                Invariants.require(managesExecution(txnId));
+                return apply.apply(keyDeps, txnId, p);
             case Range:
                 return apply.apply(rangeDeps, txnId, p);
         }
@@ -376,7 +346,6 @@ public class Deps
     public Participants<?> intersecting(Participants<?> participants, Predicate<TxnId> txnIds)
     {
         RoutingKeys selectKeys = keyDeps.participants(txnIds);
-        selectKeys = selectKeys.with(directKeyDeps.participants(txnIds));
         Ranges selectRanges = rangeDeps.participants(txnIds);
         return participants.intersecting(selectKeys, Minimal)
                            .with((Participants) participants.intersecting((Unseekables<?>) selectRanges, Minimal));
@@ -386,21 +355,19 @@ public class Deps
     public void forEachUniqueTxnId(Ranges ranges, Consumer<TxnId> forEach)
     {
         keyDeps.forEachUniqueTxnId(ranges, forEach);
-        directKeyDeps.forEachUniqueTxnId(ranges, forEach);
         rangeDeps.forEachUniqueTxnId(ranges, forEach);
     }
 
     public static <C, T1> Deps merge(C collection, int size, IndexedFunction<C, T1> getter1, Function<T1, Deps> getter2)
     {
         return new Deps(KeyDeps.merge(collection, size, getter1, getter2, deps -> deps.keyDeps),
-                        RangeDeps.merge(collection, size, getter1, getter2, deps -> deps.rangeDeps),
-                        KeyDeps.merge(collection, size, getter1, getter2, deps -> deps.directKeyDeps));
+                        RangeDeps.merge(collection, size, getter1, getter2, deps -> deps.rangeDeps));
     }
 
     @Override
     public String toString()
     {
-        return keyDeps + ", " + rangeDeps + ", " + directKeyDeps;
+        return keyDeps + ", " + rangeDeps;
     }
 
     @Override
@@ -411,15 +378,14 @@ public class Deps
 
     public boolean equals(Deps that)
     {
-        return that != null && this.keyDeps.equals(that.keyDeps) && this.rangeDeps.equals(that.rangeDeps) && this.directKeyDeps.equals(that.directKeyDeps);
+        return that != null && this.keyDeps.equals(that.keyDeps) && this.rangeDeps.equals(that.rangeDeps);
     }
 
     public @Nullable TxnId maxTxnId()
     {
         TxnId maxKeyDep = keyDeps.isEmpty() ? null : keyDeps.txnId(keyDeps.txnIdCount() - 1);
         TxnId maxRangeDep = rangeDeps.isEmpty() ? null : rangeDeps.txnId(rangeDeps.txnIdCount() - 1);
-        TxnId maxDirectKeyDep = directKeyDeps.isEmpty() ? null : directKeyDeps.txnId(directKeyDeps.txnIdCount() - 1);
-        return TxnId.nonNullOrMax(TxnId.nonNullOrMax(maxKeyDep, maxRangeDep), maxDirectKeyDep);
+        return TxnId.nonNullOrMax(maxKeyDep, maxRangeDep);
     }
 
     public TxnId maxTxnId(TxnId orElse)
@@ -431,8 +397,7 @@ public class Deps
     {
         TxnId minKeyDep = keyDeps.isEmpty() ? null : keyDeps.txnId(0);
         TxnId minRangeDep = rangeDeps.isEmpty() ? null : rangeDeps.txnId(0);
-        TxnId minDirectKeyDep = directKeyDeps.isEmpty() ? null : directKeyDeps.txnId(0);
-        return TxnId.nonNullOrMin(TxnId.nonNullOrMin(minKeyDep, minRangeDep), minDirectKeyDep);
+        return TxnId.nonNullOrMin(minKeyDep, minRangeDep);
     }
 
     public TxnId minTxnId(TxnId orElse)
@@ -447,8 +412,7 @@ public class Deps
 
         KeyDeps keyDeps = this.keyDeps.markUnstableBefore(txnId);
         RangeDeps rangeDeps = this.rangeDeps.markUnstableBefore(txnId);
-        KeyDeps directKeyDeps = this.directKeyDeps.markUnstableBefore(txnId);
-        return new Deps(keyDeps, rangeDeps, directKeyDeps);
+        return new Deps(keyDeps, rangeDeps);
     }
 
     @Override

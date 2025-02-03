@@ -44,7 +44,6 @@ import java.util.function.Supplier;
 import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
-import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.DefaultTimeouts;
 import accord.impl.InMemoryCommandStores;
@@ -61,6 +60,7 @@ import accord.local.Node.Id;
 import accord.local.RedundantBefore;
 import accord.local.ShardDistributor;
 import accord.local.TimeService;
+import accord.local.UniqueTimeService;
 import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.Reply.FailureReply;
@@ -120,7 +120,7 @@ public class Cluster implements Scheduler
         }
 
         @Override
-        public void send(Id to, Request send, AgentExecutor executor, Callback callback)
+        public void send(Id to, Request send, int attempt, AgentExecutor executor, Callback callback)
         {
             long messageId = nextMessageId++;
             SafeCallback sc = new SafeCallback(executor, callback);
@@ -350,14 +350,14 @@ public class Cluster implements Scheduler
             {
                 MessageSink messageSink = sinks.create(node, randomSupplier.get());
                 LongSupplier nowSupplier = nowSupplierSupplier.get();
-                LocalConfig localConfig = LocalConfig.DEFAULT;
+                TimeService time = TimeService.of(nowSupplier, elapsedWrapperFromNonMonotonicSource(TimeUnit.MICROSECONDS, nowSupplier));
                 lookup.put(node, new Node(node, messageSink, new SimpleConfigService(topology),
-                                          TimeService.of(nowSupplier, elapsedWrapperFromNonMonotonicSource(TimeUnit.MICROSECONDS, nowSupplier)),
+                                          time, new UniqueTimeService.AtomicUniqueTime(time),
                                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                                           MaelstromAgent.INSTANCE,
                                           randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
                                           DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
-                                          DurableBefore.NOOP_PERSISTER, localConfig,
+                                          DurableBefore.NOOP_PERSISTER,
                                           new NoOpJournal()));
             }
 

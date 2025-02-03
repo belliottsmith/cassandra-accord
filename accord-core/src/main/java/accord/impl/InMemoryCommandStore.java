@@ -92,6 +92,7 @@ import static accord.local.KeyHistory.ASYNC;
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
+import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applying;
@@ -107,7 +108,6 @@ import static accord.primitives.Status.Truncated;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Read;
-import static accord.primitives.Txn.Kind.SyncPoint;
 import static accord.utils.Invariants.illegalState;
 import static java.lang.String.format;
 
@@ -747,7 +747,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     summaries.put(summary.txnId, summary);
             }
 
-            final Kinds kinds = new Kinds(Read, ExclusiveSyncPoint, SyncPoint);
+            final Kinds kinds = new Kinds(Read, ExclusiveSyncPoint);
             return commandsForRanges = new ByTxnIdSnapshot()
             {
                 @Override public boolean mayContainAny(Txn.Kind kind) { return kinds.test(kind); }
@@ -803,6 +803,29 @@ public abstract class InMemoryCommandStore extends CommandStore
                 Participants<?> intersecting = (txnId.is(ExclusiveSyncPoint) ? command.participants().owns(): command.participants().stillWaitsOn()).intersecting(covering, Minimal);
                 if (intersecting.isEmpty()) continue;
                 if (commandStore().unsafeGetRedundantBefore().preBootstrapOrStale(command.txnId(), intersecting) == ALL) continue;
+                if (txnId.is(Key))
+                {
+                    // TODO (required): document our invariants around this scenario, where a transaction with a higher txnId
+                    //  but lower executeAt than a transaction that is pre-bootstrap is ignore by the CFK (but cannot be validated to be pre-bootstrap independently).
+                    //  This invariant requires a timestamp store for correctness at least (as do other protocol assumptions).
+                    //  Make sure these invariants are validated in all relevant locations in the burn test.
+                    boolean isShadowedByPreBootstrap = true;
+                    for (RoutingKey key : (AbstractUnseekableKeys)command.participants().executes())
+                    {
+                        SafeCommandsForKey safeCfk = commandsForKey.get(key);
+                        CommandsForKey cfk = safeCfk.current();
+                        int i = cfk.indexOf(cfk.bootstrappedAt());
+                        if (i < 0) i = -1 - i;
+                        while (--i >= 0)
+                        {
+                            CommandsForKey.TxnInfo txn = cfk.get(i);
+                            if (txn.isCommittedToExecute() && txn.executeAt.compareTo(cfk.bootstrappedAt()) > 0)
+                                break;
+                        }
+                        isShadowedByPreBootstrap &= i >= 0;
+                    }
+                    if (isShadowedByPreBootstrap) continue;
+                }
                 illegalState();
             }
         }

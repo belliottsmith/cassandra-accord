@@ -30,6 +30,7 @@ import accord.impl.mock.MockStore;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.local.TimeService;
 import accord.messages.ReplyContext;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
@@ -38,8 +39,11 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class TestAgent implements Agent
@@ -57,7 +61,7 @@ public class TestAgent implements Agent
 
 
         @Override
-        public void onFailedBootstrap(String phase, Ranges ranges, Runnable retry, Throwable failure)
+        public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
         {
             if (failure != null)
                 throw new AssertionError("Unexpected exception", failure);
@@ -91,7 +95,7 @@ public class TestAgent implements Agent
     }
 
     @Override
-    public void onFailedBootstrap(String phase, Ranges ranges, Runnable retry, Throwable failure)
+    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
     {
         retry.run();
     }
@@ -114,9 +118,9 @@ public class TestAgent implements Agent
     }
 
     @Override
-    public long preAcceptTimeout()
+    public boolean rejectPreAccept(TimeService time, TxnId txnId)
     {
-        return MICROSECONDS.convert(10, SECONDS);
+        return false;
     }
 
     @Override
@@ -150,31 +154,49 @@ public class TestAgent implements Agent
     }
 
     @Override
-    public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
+    public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long localSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long retrySyncPointDelay(Node node, int attempt, TimeUnit units)
+    {
+        return units.convert(1L, MINUTES);
+    }
+
+    @Override
+    public long retryDurabilityDelay(Node node, int attempt, TimeUnit units)
+    {
+        return units.convert(1L, MINUTES);
+    }
+
+    @Override
+    public long expireEpochWait(TimeUnit units)
+    {
+        return units.convert(10, SECONDS);
+    }
+
+    @Override
+    public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
         return unit.convert(100L, MICROSECONDS);
     }
 
     @Override
-    public long localExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
         return unit.convert(1L, SECONDS);
     }
@@ -183,5 +205,17 @@ public class TestAgent implements Agent
     public long expiresAt(ReplyContext replyContext, TimeUnit unit)
     {
         return 0;
+    }
+
+    @Override
+    public AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean isRequested)
+    {
+        return AsyncChains.success(staleId);
+    }
+
+    @Override
+    public long minStaleHlc(Node node, boolean requested)
+    {
+        return node.now() - SECONDS.toMillis(1);
     }
 }
