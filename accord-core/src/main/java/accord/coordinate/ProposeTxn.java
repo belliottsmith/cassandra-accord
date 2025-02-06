@@ -37,7 +37,7 @@ class ProposeTxn extends Propose<Result>
 {
     ProposeTxn(Node node, Topologies topologies, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, topologies, kind, ballot, txnId, txn, route, executeAt, deps, callback);
+        super(node, topologies, kind, ballot, txnId, txn, route, route, executeAt, deps, callback);
     }
 
     protected CoordinationAdapter<Result> adapter()

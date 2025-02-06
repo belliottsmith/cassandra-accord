@@ -20,28 +20,32 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
-import accord.api.Result;
 import accord.local.Node;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
-import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
-
-public class StabiliseTxn extends Stabilise<Result>
+public class StabiliseOnly extends Stabilise<Deps>
 {
-    StabiliseTxn(Node node, Topologies coordinates, Topologies all, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps unstableDeps, BiConsumer<? super Result, Throwable> callback)
+    StabiliseOnly(Node node, Topologies coordinates, Topologies all, Route<?> sendTo, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps unstableDeps, BiConsumer<? super Deps, Throwable> callback)
     {
-        super(node, coordinates, all, route, route, txnId, ballot, txn, executeAt, unstableDeps, callback);
+        super(node, coordinates, all, sendTo, route, txnId, ballot, txn, executeAt, unstableDeps, callback);
     }
 
     @Override
-    protected CoordinationAdapter<Result> adapter()
+    protected void onStabilised()
     {
-        return node.coordinationAdapter(txnId, Standard);
+        callback.accept(stabiliseDeps, null);
+    }
+
+    @Override
+    protected CoordinationAdapter<Deps> adapter()
+    {
+        throw new UnsupportedOperationException();
     }
 }

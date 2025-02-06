@@ -41,7 +41,7 @@ public class ProposeSyncPoint<R> extends Propose<R>
 
     ProposeSyncPoint(CoordinationAdapter<R> adapter, Node node, Topologies topologies, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
-        super(node, topologies, kind, ballot, txnId, txn, route, executeAt, deps, callback);
+        super(node, topologies, kind, ballot, txnId, txn, route, route, executeAt, deps, callback);
         this.adapter = adapter;
     }
 

@@ -1427,6 +1427,12 @@ public class SortedArrays
     @Inline
     public static <T> long foldlIntersection(AsymmetricComparator<? super T, ? super T> comparator, T[] as, int ai, int alim, T[] bs, int bi, int blim, IndexedFoldIntersectToLong<? super T> fold, long param, long initialValue, long terminalValue)
     {
+        return foldlIntersection(1, comparator, as, ai, alim, bs, bi, blim, fold, param, initialValue, terminalValue);
+    }
+
+    @Inline
+    public static <T> long foldlIntersection(int aiMatchIncrement, AsymmetricComparator<? super T, ? super T> comparator, T[] as, int ai, int alim, T[] bs, int bi, int blim, IndexedFoldIntersectToLong<? super T> fold, long param, long initialValue, long terminalValue)
+    {
         while (true)
         {
             long abi = findNextIntersection(as, ai, alim, bs, bi, blim, comparator);
@@ -1440,7 +1446,7 @@ public class SortedArrays
             if (initialValue == terminalValue)
                 break;
 
-            ++ai;
+            ai += aiMatchIncrement;
             ++bi;
         }
 

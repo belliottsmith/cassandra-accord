@@ -424,7 +424,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
     public void forEach(Ranges ranges, BiConsumer<RoutingKey, TxnId> forEach)
     {
         int[] keysToTxnIds = keysToTxnIds();
-        Routables.foldl(keys, ranges, (key, value, index) -> {
+        Routables.foldl(keys, (AbstractRanges) ranges, (key, value, index) -> {
             for (int t = startOffset(index), end = endOffset(index); t < end ; ++t)
             {
                 TxnId txnId = txnIds[keysToTxnIds[t]];
@@ -472,7 +472,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
         }
         else
         {
-            BitSet bitset = Routables.foldl(keys, ranges, (key, value, keyIndex) -> {
+            BitSet bitset = Routables.foldl(keys, (AbstractRanges) ranges, (key, value, keyIndex) -> {
                 int index = startOffset(keyIndex);
                 int end = endOffset(keyIndex);
                 while (index < end)

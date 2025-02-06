@@ -42,7 +42,6 @@ import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -59,6 +58,7 @@ import static accord.messages.Commit.WithDeps.NoDeps;
 import static accord.messages.Commit.WithTxn.HasNewlyOwnedTxnRanges;
 import static accord.messages.Commit.WithTxn.HasTxn;
 import static accord.messages.Commit.WithTxn.NoTxn;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
 {
@@ -127,7 +127,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         CommitWithTxn (      HasTxn,                 HasDeps, Committed),
         // We retain HasNewlyOwnedTxnRanges for the later eventuality where we permit fast path decisions if the fast quorum is valid for all topologies and everyone agrees on the execution timestamp.
         StableFastPath(      HasNewlyOwnedTxnRanges, HasDeps, SaveStatus.Stable),
-        StableMediumPath(    NoTxn,                  NoDeps,  SaveStatus.Stable),
+        StableMediumPath(    NoTxn,                  HasDeps, SaveStatus.Stable),
         StableSlowPath(      NoTxn,                  NoDeps,  SaveStatus.Stable),
         StableWithTxnAndDeps(HasTxn,                 HasDeps, SaveStatus.Stable);
 
@@ -188,20 +188,11 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     // TODO (desired, efficiency): do not commit if we're already ready to execute (requires extra info in Accept responses)
     public static void stableAndRead(Node node, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps stableDeps, IntHashSet readSet, Callback<ReadReply> callback, boolean onlyContactOldAndReadSet)
     {
-        Invariants.require(all.oldestEpoch() == txnId.epoch());
         Invariants.require(all.currentEpoch() == executeAt.epoch());
 
         SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
         sendTo(contact, readSet, (set, id) -> set.contains(id.id), (set, id) -> false, node, all, kind, Ballot.ZERO,
                txnId, txn, route, executeAt, stableDeps, callback, onlyContactOldAndReadSet);
-    }
-
-    public static void stableAndRead(Id to, Node node, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps stableDeps, Callback<ReadReply> callback, boolean onlyContactOldAndReadSet)
-    {
-        Invariants.require(all.oldestEpoch() == txnId.epoch());
-        Invariants.require(all.currentEpoch() == executeAt.epoch());
-
-        sendTo(to, true, true, node, all, kind, Ballot.ZERO, txnId, txn, route, executeAt, stableDeps, callback, onlyContactOldAndReadSet);
     }
 
     private static <P> void sendTo(SortedArrayList<Id> contact, P param, BiPredicate<P, Id> reads, BiPredicate<P, Id> registerCallback,
@@ -252,14 +243,8 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     public static void stableMaximal(Node node, Node.Id to, Txn txn, TxnId txnId, Timestamp executeAt, FullRoute<?> route, Deps deps)
     {
         // the replica may be missing the original commit, or the additional commit, so send everything
-        Topologies topologies = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
+        Topologies topologies = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
         node.send(to, new Commit(StableWithTxnAndDeps, to, topologies, txnId, txn, route, Ballot.ZERO, executeAt, deps));
-    }
-
-    @Override
-    public Unseekables<?> keys()
-    {
-        return scope;
     }
 
     @Override
@@ -355,7 +340,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
             // TODO (expected, safety): this kind of check needs to be inserted in all equivalent methods
             Invariants.require(untilEpoch >= txnId.epoch());
             Invariants.require(node.topology().hasEpoch(untilEpoch));
-            Topologies commitTo = node.topology().preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch);
+            Topologies commitTo = node.topology().preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch, SHARE);
             commitInvalidate(node, commitTo, txnId, inform);
         }
 

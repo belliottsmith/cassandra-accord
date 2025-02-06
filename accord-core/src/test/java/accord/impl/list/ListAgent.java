@@ -51,6 +51,7 @@ import accord.utils.RandomSource;
 
 import static accord.local.Node.Id.NONE;
 import static com.google.common.base.Functions.identity;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -169,7 +170,7 @@ public class ListAgent implements Agent
     @Override
     public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
     {
-        // TODO (testing): meta randomise
+        // TODO (required): meta randomise
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
@@ -197,8 +198,14 @@ public class ListAgent implements Agent
     }
 
     @Override
+    public long localSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    {
+        return unit.convert(timeoutSupplier.slowAt(), MICROSECONDS);
+    }
+
+    @Override
     public long localExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
-        return timeoutSupplier.expiresAt();
+        return unit.convert(timeoutSupplier.expiresAt(), MICROSECONDS);
     }
 }

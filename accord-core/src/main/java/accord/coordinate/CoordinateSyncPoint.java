@@ -57,6 +57,7 @@ import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.TxnId.Cardinality.cardinality;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
@@ -151,7 +152,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
                                     : TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
-        CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter);
+        CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter);
         coordinate.start();
         return coordinate;
     }
@@ -176,7 +177,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
                 withFlags = txnId.addFlag(HLC_BOUND);
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             if (tracker.hasFastPathAccepted())
-                adapter.execute(node, topologies, route, FAST, txnId, txn, withFlags, deps, this);
+                adapter.execute(node, topologies, route, FAST, txnId, txn, withFlags, deps, deps, this);
             else if (tracker.hasMediumPathAccepted())
                 adapter.propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, this);
             else

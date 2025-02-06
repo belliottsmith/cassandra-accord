@@ -63,6 +63,7 @@ import static accord.impl.mock.MockCluster.configService;
 import static accord.local.KeyHistory.SYNC;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Utils.listOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -161,7 +162,7 @@ public class PreAcceptTest
             Txn txn = writeTxn(Keys.of(key));
 
             Participants<?> invalidateWith = txn.keys().toParticipants();
-            BeginInvalidation invalidate = new BeginInvalidation(ID1, node.topology().forEpoch(invalidateWith, txnId.epoch()), txnId, invalidateWith, Ballot.fromValues(txnId.epoch(), txnId.hlc(), txnId.node));
+            BeginInvalidation invalidate = new BeginInvalidation(ID1, node.topology().forEpoch(invalidateWith, txnId.epoch(), SHARE), txnId, invalidateWith, Ballot.fromValues(txnId.epoch(), txnId.hlc(), txnId.node));
             invalidate.process(node, ID2, REPLY_CONTEXT);
 
             messageSink.assertHistorySizes(0, 1);

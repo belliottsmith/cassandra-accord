@@ -43,6 +43,8 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+
 public class Apply extends TxnRequest<ApplyReply>
 {
     public static final Factory FACTORY = Apply::new;
@@ -84,26 +86,6 @@ public class Apply extends TxnRequest<ApplyReply>
         this.minEpoch = participates.oldestEpoch();
     }
 
-    public static void sendMaximal(Node node, Id to, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute)
-    {
-        Topologies executes = executes(node, sendTo, executeAt);
-        sendMaximal(node, to, executes, txnId, sendTo, txn, executeAt, deps, writes, result, fullRoute, null);
-    }
-
-    public static void sendMaximal(Node node, Id to, Topologies executes, TxnId txnId, Route<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute, @Nullable Callback<ApplyReply> callback)
-    {
-        Topologies participates = participates(node, route, txnId, executeAt, executes);
-        // TODO (required): should this FACTORY be overridden by the implementation???
-        Apply apply = applyMaximal(FACTORY, to, participates, txnId, route, txn, executeAt, deps, writes, result, fullRoute);
-        if (callback == null) node.send(to, apply);
-        else node.send(to, apply, callback);
-    }
-
-    public static Topologies executes(Node node, Unseekables<?> route, Timestamp executeAt)
-    {
-        return node.topology().forEpoch(route, executeAt.epoch());
-    }
-
     public static Topologies participates(Node node, Unseekables<?> route, TxnId txnId, Timestamp executeAt, Topologies executes)
     {
         return txnId.epoch() == executeAt.epoch() ? executes : participates(node, route, txnId, executeAt);
@@ -111,12 +93,7 @@ public class Apply extends TxnRequest<ApplyReply>
 
     public static Topologies participates(Node node, Unseekables<?> route, TxnId txnId, Timestamp executeAt)
     {
-        return node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
-    }
-
-    public static Apply applyMaximal(Factory factory, Id to, Topologies participates, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> fullRoute)
-    {
-        return factory.create(Kind.Maximal, to, participates, txnId, sendTo, txn, executeAt, stableDeps, writes, result, fullRoute);
+        return node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
     }
 
     protected Apply(Kind kind, TxnId txnId, Route<?> route, long minEpoch, long waitForEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
@@ -175,18 +152,6 @@ public class Apply extends TxnRequest<ApplyReply>
     public ApplyReply reduce(ApplyReply a, ApplyReply b)
     {
         return a.compareTo(b) >= 0 ? a : b;
-    }
-
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
-    @Override
-    public Unseekables<?> keys()
-    {
-        return scope;
     }
 
     @Override

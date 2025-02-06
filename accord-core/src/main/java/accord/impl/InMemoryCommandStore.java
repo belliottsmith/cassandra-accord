@@ -669,10 +669,8 @@ public abstract class InMemoryCommandStore extends CommandStore
             if (updated.saveStatus() == Erased || updated.saveStatus() == Vestigial)
                 return;
 
-            Ranges slice = ranges(txnId, updated.executeAtOrTxnId());
-            slice = commandStore().unsafeGetRedundantBefore().removeGcBefore(txnId, updated.executeAtOrTxnId(), slice);
             commandStore().rangeCommands.computeIfAbsent(txnId, ignore -> new RangeCommand(commandStore().commands.get(txnId)))
-                         .update(((AbstractRanges)updated.participants().touches()).toRanges().slice(slice, Minimal));
+                         .update(((AbstractRanges)updated.participants().stillTouches()).toRanges());
         }
 
         @Override
@@ -878,7 +876,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public <T> AsyncChain<T> submit(Callable<T> task)
+        public <T> AsyncChain<T> build(Callable<T> task)
         {
             return new AsyncChains.Head<T>()
             {
@@ -952,7 +950,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public <T> AsyncChain<T> submit(Callable<T> task)
+        public <T> AsyncChain<T> build(Callable<T> task)
         {
             return AsyncChains.ofCallable(executor, task);
         }

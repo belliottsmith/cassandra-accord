@@ -76,6 +76,7 @@ import static accord.local.Commands.Validated.INSUFFICIENT;
 import static accord.local.Commands.Validated.UPDATE_TXN_IGNORE_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_KEEP_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_AND_DEPS;
+import static accord.local.Commands.Validated.UPDATE_TXN_MERGE_DEPS;
 import static accord.local.KeyHistory.INCR;
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.PreLoadContext.contextFor;
@@ -129,7 +130,7 @@ public class Commands
     {
     }
 
-    public enum AcceptOutcome { Success, Redundant, RejectedBallot, Retired, Truncated }
+    public enum AcceptOutcome { Success, Redundant, RejectedBallot, Insufficient, Retired, Truncated }
 
     public static AcceptOutcome preaccept(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Txn partialTxn, @Nullable Deps partialDeps, boolean hasCoordinatorVote, FullRoute<?> route)
     {
@@ -235,20 +236,42 @@ public class Commands
         return true;
     }
 
-    public static AcceptOutcome accept(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Accept.Kind kind, Ballot ballot, Route<?> route, Timestamp executeAt, PartialDeps deps)
+    private static AcceptOutcome maybeRejectAccept(Ballot ballot, Timestamp executeAt, Command command)
     {
-        final Command command = safeCommand.current();
-        if (command.hasBeen(PreCommitted))
+        Status status = command.status();
+        int compareStatus = status.compareTo(PreCommitted);
+        if (compareStatus > 0)
         {
-            logger.trace("{}: skipping accept - already committed ({})", txnId, command.status());
+            logger.trace("{}: skipping accept/notaccept - already committed/invalidated ({})", command.txnId(), status);
             return AcceptOutcome.Redundant;
         }
 
-        if (command.promised().compareTo(ballot) > 0)
+        Ballot promised = command.promised();
+        int comparePromised = command.promised().compareTo(ballot);
+        if (comparePromised > 0 || (comparePromised == 0 && compareStatus == 0 && command.acceptedOrCommitted().compareTo(ballot) == 0))
         {
             if (logger.isTraceEnabled())
-                logger.trace("{}: skipping accept - witnessed higher ballot ({} > {})", txnId, command.promised(), ballot);
+                logger.trace("{}: rejecting accept/notaccept - witnessed higher ballot (({},{}) > {})", command.txnId(), promised, status, ballot);
             return AcceptOutcome.RejectedBallot;
+        }
+
+        if (compareStatus == 0 && executeAt != null && !executeAt.equals(command.executeAt()))
+        {
+            // we have to special-case this because we advance to Stable/Applied without Ballot, so we can propagate PreCommitted without the ballot used to agree it
+            if (logger.isTraceEnabled())
+                logger.trace("{}: rejecting accept/notaccept - witnessed conflicting committed timestamp: {} != {}", command.txnId(), executeAt, command.executeAt());
+            return AcceptOutcome.RejectedBallot;
+        }
+        return null;
+    }
+
+    public static AcceptOutcome accept(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Accept.Kind kind, Ballot ballot, Route<?> route, Timestamp executeAt, PartialDeps deps)
+    {
+        final Command command = safeCommand.current();
+        {
+            AcceptOutcome reject = maybeRejectAccept(ballot, executeAt, command);
+            if (reject != null)
+                return reject;
         }
 
         SaveStatus newSaveStatus = SaveStatus.get(kind == Accept.Kind.MEDIUM ? Status.AcceptedMedium : Status.AcceptedSlow, command.known());
@@ -256,10 +279,11 @@ public class Commands
         Validated validated = validate(ballot, newSaveStatus, command, participants, route, null, deps);
         Invariants.require(validated != INSUFFICIENT);
 
+        PartialTxn partialTxn = prepareTxn(newSaveStatus, participants, command, null);
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
-        safeCommand.accept(safeStore, newSaveStatus, participants, ballot, executeAt, partialDeps, ballot);
+        safeCommand.accept(safeStore, newSaveStatus, participants, ballot, executeAt, partialTxn, partialDeps, ballot);
         safeStore.notifyListeners(safeCommand, command);
 
         return AcceptOutcome.Success;
@@ -268,28 +292,13 @@ public class Commands
     public static AcceptOutcome notAccept(SafeCommandStore safeStore, SafeCommand safeCommand, Status status, Ballot ballot)
     {
         final Command command = safeCommand.current();
-        if (command.hasBeen(PreCommitted))
         {
-            logger.trace("{}: skipping not accept - already committed or invalidated ({})", command.txnId(), command.status());
-            return AcceptOutcome.Redundant;
-        }
-
-        if (command.promised().compareTo(ballot) > 0)
-        {
-            if (logger.isTraceEnabled())
-                logger.trace("{}: skipping {} - witnessed higher ballot ({} > {})", command.txnId(), status, command.promised(), ballot);
-            return AcceptOutcome.RejectedBallot;
-        }
-
-        if (status.compareTo(command.status()) < 0 && command.acceptedOrCommitted().equals(ballot))
-        {
-            if (logger.isTraceEnabled())
-                logger.trace("{}: skipping {} - already acceptedOrCommitted ballot {} with status {}", command.txnId(), status, ballot, command.status());
-            return AcceptOutcome.Redundant;
+            AcceptOutcome reject = maybeRejectAccept(ballot, null, command);
+            if (reject != null)
+                return reject;
         }
 
         logger.trace("{}: not accepted ({})", command.txnId(), status);
-
         safeCommand.notAccept(safeStore, status, ballot);
         safeStore.notifyListeners(safeCommand, command);
         return AcceptOutcome.Success;
@@ -334,9 +343,7 @@ public class Commands
 
         participants = participants.filter(UPDATE, safeStore, txnId, executeAt);
         Known known = curStatus.known;
-        if (kind == StableMediumPath && known.is(DepsProposedFixed))
-            known = known.with(DepsKnown);
-        Validated validated = validate(ballot, known, newSaveStatus, command, participants, route, txn, deps);
+        Validated validated = validate(ballot, known, newSaveStatus, command, participants, route, txn, deps, kind);
         if (validated == INSUFFICIENT)
             return CommitOutcome.Insufficient;
 
@@ -366,7 +373,7 @@ public class Commands
     }
 
     // relies on mutual exclusion for each key
-    public static CommitOutcome precommit(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Timestamp executeAt)
+    public static CommitOutcome precommit(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Timestamp executeAt, Ballot promisedAtLeast)
     {
         Invariants.require(Route.isFullRoute(participants.route()));
         final Command command = safeCommand.current();
@@ -388,7 +395,7 @@ public class Commands
         }
 
         supplementParticipants(safeStore, safeCommand, participants);
-        safeCommand.precommit(safeStore, executeAt);
+        safeCommand.precommit(safeStore, executeAt, promisedAtLeast);
         safeStore.notifyListeners(safeCommand, command);
         logger.trace("{}: precommitted with executeAt: {}", txnId, executeAt);
         return CommitOutcome.Success;
@@ -1292,7 +1299,13 @@ public class Commands
     private static PartialTxn prepareTxn(SaveStatus newSaveStatus, StoreParticipants newParticipants, Command upd, @Nullable Txn txn)
     {
         PartialTxn cur = upd.partialTxn();
-        if (txn == null || !newSaveStatus.known.definition().isKnown())
+        if (!newSaveStatus.known.definition().isKnown())
+            return cur;
+
+        if (cur != null)
+            cur = cur.intersecting(newParticipants.owns(), true);
+
+        if (txn == null)
             return cur;
 
         if (cur != null && cur.covers(newParticipants.stillOwns()))
@@ -1328,6 +1341,8 @@ public class Commands
             default: throw new UnhandledEnum(validated);
             case UPDATE_TXN_KEEP_DEPS:
                 return upd.partialDeps();
+            case UPDATE_TXN_MERGE_DEPS:
+                return upd.partialDeps().with(newDeps.intersecting(participants.stillTouches()));
             case UPDATE_TXN_AND_DEPS:
                 return newDeps.intersecting(participants.stillTouches());
             case UPDATE_TXN_IGNORE_DEPS:
@@ -1335,16 +1350,16 @@ public class Commands
         }
     }
 
-    enum Validated { INSUFFICIENT, UPDATE_TXN_IGNORE_DEPS, UPDATE_TXN_KEEP_DEPS, UPDATE_TXN_AND_DEPS }
+    enum Validated { INSUFFICIENT, UPDATE_TXN_IGNORE_DEPS, UPDATE_TXN_KEEP_DEPS, UPDATE_TXN_MERGE_DEPS, UPDATE_TXN_AND_DEPS }
 
     private static Validated validate(@Nullable Ballot ballot, SaveStatus newStatus, Command cur, StoreParticipants participants,
                                       Route<?> addRoute, @Nullable Txn addPartialTxn, @Nullable Deps partialDeps)
     {
-        return validate(ballot, cur.known(), newStatus, cur, participants, addRoute, addPartialTxn, partialDeps);
+        return validate(ballot, cur.known(), newStatus, cur, participants, addRoute, addPartialTxn, partialDeps, null);
     }
 
     private static Validated validate(@Nullable Ballot ballot, Known haveKnown, SaveStatus newStatus, Command cur, StoreParticipants participants,
-                                      Route<?> addRoute, @Nullable Txn addPartialTxn, @Nullable Deps partialDeps)
+                                      Route<?> addRoute, @Nullable Txn addPartialTxn, @Nullable Deps partialDeps, @Nullable Commit.Kind commitKind)
     {
         Known expectKnown = newStatus.known;
 
@@ -1378,6 +1393,13 @@ public class Commands
 
         if (!expectKnown.hasAnyDeps())
             return UPDATE_TXN_IGNORE_DEPS;
+
+        if (commitKind == StableMediumPath)
+        {
+            if (haveKnown.is(DepsProposedFixed) && expectKnown.is(DepsKnown) && ballot != null && ballot.equals(Ballot.ZERO) && participants.stillTouches().equals(cur.participants().touches()))
+                return UPDATE_TXN_MERGE_DEPS;
+            return INSUFFICIENT;
+        }
 
         if (haveKnown.is(DepsKnown) || (haveKnown.equalDeps(expectKnown) && (ballot == null || ballot.equals(cur.acceptedOrCommitted()))))
             return UPDATE_TXN_KEEP_DEPS;

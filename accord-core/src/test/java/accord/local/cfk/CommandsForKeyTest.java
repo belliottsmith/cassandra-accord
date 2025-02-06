@@ -1010,7 +1010,7 @@ public class CommandsForKeyTest
         protected void registerTransitive(SafeCommandStore safeStore, RangeDeps deps){ }
 
         @Override
-        public <T> AsyncChain<T> submit(Callable<T> task)
+        public <T> AsyncChain<T> build(Callable<T> task)
         {
             throw new UnsupportedOperationException();
         }
@@ -1101,6 +1101,12 @@ public class CommandsForKeyTest
 
         @Override
         public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
+        {
+            return 0;
+        }
+
+        @Override
+        public long localSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
         {
             return 0;
         }

@@ -34,7 +34,7 @@ public class StabiliseSyncPoint<R> extends Stabilise<R>
     final CoordinationAdapter<R> adapter;
     StabiliseSyncPoint(CoordinationAdapter<R> adapter, Node node, Topologies coordinates, Topologies all, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps unstableDeps, BiConsumer<? super R, Throwable> callback)
     {
-        super(node, coordinates, all, route, txnId, ballot, txn, executeAt, unstableDeps, callback);
+        super(node, coordinates, all, route, route, txnId, ballot, txn, executeAt, unstableDeps, callback);
         this.adapter = adapter;
     }
 

@@ -26,6 +26,9 @@ import accord.primitives.Unseekable;
 public interface RoutingKey extends Unseekable, RoutableKey
 {
     @Override default RoutingKey toUnseekable() { return this; }
+
+    @Override default Kind kind() { return Kind.UnseekableKey; }
+
     Range asRange();
     RangeFactory rangeFactory();
 }

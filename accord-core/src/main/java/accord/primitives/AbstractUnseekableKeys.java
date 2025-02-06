@@ -18,11 +18,13 @@
 
 package accord.primitives;
 
+import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.SortedArrays;
 
 import java.util.Arrays;
 
+import static accord.primitives.Routable.Kind.UnseekableKey;
 import static accord.utils.ArrayBuffers.cachedRoutingKeys;
 
 // TODO: do we need this class?
@@ -35,15 +37,64 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     }
 
     @Override
+    public final Routable.Kind domainKind()
+    {
+        return UnseekableKey;
+    }
+
+    @Override
     public final int indexOf(RoutingKey key)
     {
         return Arrays.binarySearch(keys, key);
     }
 
     @Override
-    public final boolean intersectsAll(Unseekables<?> keysOrRanges)
+    public final boolean contains(RoutingKey key)
     {
-        return containsAll(keysOrRanges);
+        return Arrays.binarySearch(keys, key) >= 0;
+    }
+
+    @Override
+    public final boolean contains(Key key)
+    {
+        return Arrays.binarySearch(keys, key, RoutableKey::compareAsRoutingKey) >= 0;
+    }
+
+    @Override
+    public final int find(RoutingKey key, SortedArrays.Search search)
+    {
+        return SortedArrays.binarySearch(keys, 0, keys.length, key, RoutingKey::compareTo, search);
+    }
+
+    @Override
+    public final int findNext(int thisIndex, RoutingKey key, SortedArrays.Search search)
+    {
+        return SortedArrays.exponentialSearch(keys, thisIndex, keys.length, key, RoutingKey::compareTo, search);
+    }
+
+    @Override
+    public long findNextIntersection(int thisIndex, Keys with, int withIndex)
+    {
+        return SortedArrays.findNextIntersection(this.keys, thisIndex, with.keys, withIndex, RoutableKey::compareAsRoutingKey);
+    }
+
+    @Override
+    public final boolean containsAll(AbstractUnseekableKeys that)
+    {
+        return containsAllSameKind(that);
+    }
+
+    @Override
+    public final boolean containsAll(Keys that)
+    {
+        return that.size() == SortedArrays.foldlIntersection(0, RoutableKey::compareAsRoutingKey, keys, 0, keys.length, that.keys, 0, that.keys.length, (k, p, v, l, r) -> v + 1, 0, 0, 0);
+    }
+
+    @Override
+    public boolean containsAll(AbstractRanges ranges)
+    {
+        // TODO (desired): something more efficient
+        return toRanges().containsAll(ranges);
     }
 
     @Override

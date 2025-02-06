@@ -41,6 +41,7 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owned;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
  * An Ephemeral Read is a single-key linearizable read, that is invisible to other transactions so can be non-durable.
@@ -125,7 +126,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     void onPreAccepted(Topologies topologies)
     {
         Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
-        topologies = node.topology().reselect(topologies, QuorumEpochIntersections.preaccept.include, route, executeAtEpoch, executeAtEpoch, Owned);
+        topologies = node.topology().reselect(topologies, QuorumEpochIntersections.preaccept.include, route, executeAtEpoch, executeAtEpoch, SHARE, Owned);
         new ExecuteEphemeralRead(node, topologies, route, txnId.withEpoch(executeAtEpoch), txn, deps, this).start();
         if (!Invariants.debug()) oks.clear();
     }

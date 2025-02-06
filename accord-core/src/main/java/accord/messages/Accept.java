@@ -36,12 +36,13 @@ import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Route;
+import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
 import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
@@ -49,6 +50,7 @@ import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
 import static accord.local.KeyHistory.SYNC;
+import static accord.primitives.Known.KnownDeps.DepsKnown;
 
 // TODO (low priority, efficiency): use different objects for send and receive, so can be more efficient
 //                                  (e.g. serialize without slicing, and without unnecessary fields)
@@ -56,9 +58,9 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 {
     public static class SerializerSupport
     {
-        public static Accept create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps)
+        public static Accept create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps, boolean isPartialAccept)
         {
-            return new Accept(txnId, scope, waitForEpoch, minEpoch, kind, ballot, executeAt, partialDeps);
+            return new Accept(txnId, scope, waitForEpoch, minEpoch, kind, ballot, executeAt, partialDeps, isPartialAccept);
         }
     }
 
@@ -68,23 +70,26 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     public final Ballot ballot;
     public final Timestamp executeAt;
     public final PartialDeps partialDeps;
+    public final boolean isPartialAccept;
 
-    public Accept(Id to, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, FullRoute<?> route, Timestamp executeAt, Deps deps)
+    public Accept(Id to, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, FullRoute<?> route, Timestamp executeAt, Deps deps, boolean isPartialAccept)
     {
         super(to, topologies, txnId, route);
         this.kind = kind;
         this.ballot = ballot;
         this.executeAt = executeAt;
         this.partialDeps = deps.intersecting(scope);
+        this.isPartialAccept = isPartialAccept;
     }
 
-    private Accept(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps)
+    private Accept(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps, boolean isPartialAccept)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
         this.kind = kind;
         this.ballot = ballot;
         this.executeAt = executeAt;
         this.partialDeps = partialDeps;
+        this.isPartialAccept = isPartialAccept;
     }
 
     @Override
@@ -95,28 +100,83 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         AcceptOutcome outcome = Commands.accept(safeStore, safeCommand, participants, txnId, kind, ballot, scope, executeAt, partialDeps);
         switch (outcome)
         {
-            default: throw new IllegalStateException();
+            default: throw new UnhandledEnum(outcome);
             case Redundant:
             case Truncated:
-                return AcceptReply.redundant(ballot, participants, safeCommand.current());
+            {
+                Command command = safeCommand.current();
+
+                boolean notOwner = participants.owns().isEmpty();
+                Participants<?> hasDeps = null;
+                Deps deps = null;
+
+                if (command.known().is(DepsKnown) && (isPartialAccept || notOwner))
+                {
+                    deps = command.partialDeps().asFullUnsafe();
+                    hasDeps = command.participants().stillTouches();
+                }
+
+                Ballot superseding = command.promised();
+                if (superseding.compareTo(ballot) <= 0)
+                    superseding = null;
+
+                boolean calculateDeps = isPartialAccept;
+                if (command.saveStatus() == SaveStatus.Vestigial)
+                {
+                    superseding = null;
+                    outcome = Success;
+                    calculateDeps = true;
+                }
+
+                if (calculateDeps)
+                {
+                    Participants<?> calculate = participants.touches();
+                    if (hasDeps != null)
+                        calculate = calculate.without(hasDeps);
+
+                    if (!calculate.isEmpty())
+                    {
+                        Deps calculatedDeps = calculateDeps(safeStore, calculate);
+                        if (calculatedDeps == null)
+                            return AcceptReply.inThePast(ballot, participants, command);
+
+                        deps = deps == null ? calculatedDeps : calculatedDeps.with(deps);
+                    }
+                    hasDeps = participants.touches();
+                }
+
+                Participants<?> successful = isPartialAccept ? hasDeps : null;
+                if (notOwner && (outcome == Redundant || (hasDeps != null && hasDeps.containsAll(participants.touches()))))
+                    outcome = Success;
+                return new AcceptReply(outcome, superseding, successful, deps, command.executeAtIfKnown());
+            }
+
             case RejectedBallot:
                 return new AcceptReply(safeCommand.current().promised());
+
             case Retired:
                 // if we're Retired, participants.owns() is empty, so we're just fetching deps
                 // TODO (desired): optimise deps calculation; for some keys we only need to return the last RX
             case Success:
                 Deps deps = calculateDeps(safeStore, participants);
                 if (deps == null)
-                    return AcceptReply.redundant(ballot, participants, safeCommand.current());
+                    return AcceptReply.inThePast(ballot, participants, safeCommand.current());
 
                 Invariants.require(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
                 if (filterDuplicateDependenciesFromAcceptReply())
                     deps = deps.without(this.partialDeps);
-                return new AcceptReply(deps);
+
+                Participants<?> successful = isPartialAccept ? participants.touches() : null;
+                return new AcceptReply(successful, deps);
         }
     }
 
     private Deps calculateDeps(SafeCommandStore safeStore, StoreParticipants participants)
+    {
+        return PreAccept.calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), executeAt, true);
+    }
+
+    private Deps calculateDeps(SafeCommandStore safeStore, Participants<?> participants)
     {
         return PreAccept.calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), executeAt, true);
     }
@@ -131,18 +191,6 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     public Cancellable submit()
     {
         return node.mapReduceConsumeLocal(this, minEpoch, executeAt.epoch(), this);
-    }
-
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
-    @Override
-    public Unseekables<?> keys()
-    {
-        return scope;
     }
 
     @Override
@@ -173,6 +221,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
         public final AcceptOutcome outcome;
         public final Ballot supersededBy;
+        public final @Nullable Participants<?> successful;
         public final @Nullable Deps deps;
         public final @Nullable Timestamp committedExecuteAt;
 
@@ -180,6 +229,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         {
             this.outcome = outcome;
             this.supersededBy = null;
+            this.successful = null;
             this.deps = null;
             this.committedExecuteAt = null;
         }
@@ -188,46 +238,68 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         {
             this.outcome = RejectedBallot;
             this.supersededBy = supersededBy;
+            this.successful = null;
             this.deps = null;
             this.committedExecuteAt = null;
         }
 
-        public AcceptReply(@Nonnull Deps deps)
+        public AcceptReply(@Nullable Participants<?> successful, @Nonnull Deps deps)
         {
             this.outcome = Success;
             this.supersededBy = null;
+            this.successful = successful;
             this.deps = deps;
             this.committedExecuteAt = null;
         }
 
-        public AcceptReply(Ballot supersededBy, @Nullable Timestamp committedExecuteAt)
+        public AcceptReply(AcceptOutcome outcome, Ballot supersededBy, @Nullable Timestamp committedExecuteAt)
         {
-            this.outcome = Redundant;
+            this.outcome = outcome;
             this.supersededBy = supersededBy;
+            this.successful = null;
             this.deps = null;
             this.committedExecuteAt = committedExecuteAt;
         }
 
-        static AcceptReply redundant(Ballot ballot, StoreParticipants participants, Command command)
+        public AcceptReply(AcceptOutcome outcome, Ballot supersededBy, @Nullable Participants<?> successful, @Nullable Deps deps,  @Nullable Timestamp committedExecuteAt)
         {
-            if (participants.owns().isEmpty() && (command.is(Status.Truncated) || command.promised().compareTo(ballot) <= 0))
-                return new AcceptReply(Deps.NONE);
+            this.outcome = outcome;
+            this.supersededBy = supersededBy;
+            this.successful = successful;
+            this.deps = deps;
+            this.committedExecuteAt = committedExecuteAt;
+        }
 
+        static AcceptReply redundant(AcceptOutcome outcome, Ballot ballot, Command command)
+        {
             Ballot superseding = command.promised();
             if (superseding.compareTo(ballot) <= 0)
                 superseding = null;
-            return new AcceptReply(superseding, command.executeAtIfKnown());
+
+            return new AcceptReply(outcome, superseding, command.executeAtIfKnown());
+        }
+
+        static AcceptReply inThePast(Ballot ballot, StoreParticipants participants, Command command)
+        {
+            if (participants.owns().isEmpty() && (command.is(Status.Truncated) || command.promised().compareTo(ballot) <= 0))
+                return new AcceptReply(participants.owns(), Deps.NONE);
+
+            return redundant(Redundant, ballot, command);
         }
 
         public static AcceptReply reduce(AcceptReply r1, AcceptReply r2)
         {
-            if (!r1.isOk() || !r2.isOk())
-                return r1.outcome().compareTo(r2.outcome()) >= 0 ? r1 : r2;
-
+            AcceptOutcome o1 = r1.outcome(), o2 = r2.outcome();
+            AcceptOutcome o = o1.compareTo(o2) >= 0 ? o1 : o2;
             Deps deps = r1.deps == null ? r2.deps : r2.deps == null ? r1.deps : r1.deps.with(r2.deps);
-            if (deps == r1.deps) return r1;
-            if (deps == r2.deps) return r2;
-            return new AcceptReply(deps);
+            Participants<?> successful = Participants.merge(r1.successful, (Participants)r2.successful);
+            Ballot supersededBy = Ballot.nonNullOrMax(r1.supersededBy, r2.supersededBy);
+            Timestamp committedExecuteAt = r1.committedExecuteAt != null ? r1.committedExecuteAt : r2.committedExecuteAt;
+            if (o == r1.outcome && successful == r1.successful && deps == r1.deps && supersededBy == r1.supersededBy && committedExecuteAt == r1.committedExecuteAt)
+                return r1;
+            if (o == r2.outcome && successful == r2.successful && deps == r2.deps && supersededBy == r2.supersededBy && committedExecuteAt == r2.committedExecuteAt)
+                return r2;
+            return new AcceptReply(o, supersededBy, successful, deps, committedExecuteAt);
         }
 
         @Override
@@ -293,7 +365,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
                 default: throw new IllegalArgumentException("Unknown status: " + outcome);
                 case Redundant:
                 case Truncated:
-                    return AcceptReply.redundant(ballot, participants, safeCommand.current());
+                    return AcceptReply.redundant(outcome, ballot, safeCommand.current());
                 case Retired:
                 case Success:
                     return AcceptReply.SUCCESS;

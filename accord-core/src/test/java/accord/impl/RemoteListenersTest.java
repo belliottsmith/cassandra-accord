@@ -414,7 +414,7 @@ public class RemoteListenersTest
         @Override public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
         @Override public void shutdown() {}
         @Override protected void registerTransitive(SafeCommandStore safeStore, RangeDeps deps) { }
-        @Override public <T> AsyncChain<T> submit(Callable<T> task) { return null; }
+        @Override public <T> AsyncChain<T> build(Callable<T> task) { return null; }
     }
 
     static class TestSafeCommandStore extends SafeCommandStore

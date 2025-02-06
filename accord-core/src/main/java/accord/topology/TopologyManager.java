@@ -54,6 +54,7 @@ import accord.primitives.Routables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId.FastPath;
 import accord.primitives.Unseekables;
+import accord.topology.Topologies.SelectNodeOwnership;
 import accord.topology.Topologies.Single;
 import accord.utils.IndexedBiFunction;
 import accord.utils.Invariants;
@@ -528,7 +529,8 @@ public class TopologyManager
     }
 
     private final TopologySorter.Supplier sorter;
-    private final TopologiesCollectors topologiesCollectors;
+    private final TopologiesCollectors collector;
+    private final TopologiesCollectors selectNodeOwnershipCollector;
     private final BestFastPath bestFastPath;
     private final SupportsPrivilegedFastPath supportsPrivilegedFastPath;
     private final Agent agent;
@@ -543,7 +545,8 @@ public class TopologyManager
     public TopologyManager(TopologySorter.Supplier sorter, Agent agent, Id self, Scheduler scheduler, TimeService time, LocalConfig localConfig)
     {
         this.sorter = sorter;
-        this.topologiesCollectors = new TopologiesCollectors(sorter);
+        this.collector = new TopologiesCollectors(sorter, SelectNodeOwnership.SHARE);
+        this.selectNodeOwnershipCollector = new TopologiesCollectors(sorter, SelectNodeOwnership.SLICE);
         this.bestFastPath = new BestFastPath(self);
         this.supportsPrivilegedFastPath = new SupportsPrivilegedFastPath(self);
         this.agent = agent;
@@ -768,35 +771,35 @@ public class TopologyManager
         return withUnsyncedEpochs(select, min.epoch(), max.epoch());
     }
 
-    public Topologies select(Unseekables<?> select, Timestamp min, Timestamp max, Include include)
+    public Topologies select(Unseekables<?> select, Timestamp min, Timestamp max, SelectNodeOwnership selectNodeOwnership, Include include)
     {
-        return select(select, min.epoch(), max.epoch(), include);
+        return select(select, min.epoch(), max.epoch(), selectNodeOwnership, include);
     }
 
-    public Topologies select(Unseekables<?> select, long minEpoch, long maxEpoch, Include include)
+    public Topologies select(Unseekables<?> select, long minEpoch, long maxEpoch, SelectNodeOwnership selectNodeOwnership, Include include)
     {
         switch (include)
         {
             default: throw new AssertionError("Unhandled Include: " +include);
             case Unsynced: return withUnsyncedEpochs(select, minEpoch, maxEpoch);
-            case Owned: return preciseEpochs(select, minEpoch, maxEpoch);
+            case Owned: return preciseEpochs(select, minEpoch, maxEpoch, selectNodeOwnership);
         }
     }
 
-    public Topologies reselect(@Nullable Topologies prev, @Nullable Include prevIncluded, Unseekables<?> select, Timestamp min, Timestamp max, Include include)
+    public Topologies reselect(@Nullable Topologies prev, @Nullable Include prevIncluded, Unseekables<?> select, Timestamp min, Timestamp max, SelectNodeOwnership selectNodeOwnership, Include include)
     {
-        return reselect(prev, prevIncluded, select, min.epoch(), max.epoch(), include);
+        return reselect(prev, prevIncluded, select, min.epoch(), max.epoch(), selectNodeOwnership, include);
     }
 
     // prevIncluded may be null even when prev is not null, in cases where we do not know what prev was produced with
-    public Topologies reselect(@Nullable Topologies prev, @Nullable Include prevIncluded, Unseekables<?> select, long minEpoch, long maxEpoch, Include include)
+    public Topologies reselect(@Nullable Topologies prev, @Nullable Include prevIncluded, Unseekables<?> select, long minEpoch, long maxEpoch, SelectNodeOwnership selectNodeOwnership, Include include)
     {
         if (include == Owned)
         {
             if (prev != null && prev.currentEpoch() >= maxEpoch && prev.oldestEpoch() <= minEpoch)
                 return prev.forEpochs(minEpoch, maxEpoch);
             else
-                return preciseEpochs(select, minEpoch, maxEpoch);
+                return preciseEpochs(select, minEpoch, maxEpoch, selectNodeOwnership);
         }
         else
         {
@@ -847,7 +850,7 @@ public class TopologyManager
 
     private Topologies withSufficientEpochsAtLeast(Unseekables<?> select, long minEpoch, long maxEpoch, Function<EpochState, Ranges> isSufficientFor)
     {
-        return atLeast(select, minEpoch, maxEpoch, isSufficientFor, topologiesCollectors);
+        return atLeast(select, minEpoch, maxEpoch, isSufficientFor, collector);
     }
 
 
@@ -919,7 +922,7 @@ public class TopologyManager
 
     private Topologies withSufficientEpochsAtMost(Routables<?> select, long minEpoch, long maxEpoch, BiFunction<EpochState, EpochState, Ranges> isSufficientFor)
     {
-        return atMost(select, minEpoch, maxEpoch, isSufficientFor, topologiesCollectors);
+        return atMost(select, minEpoch, maxEpoch, isSufficientFor, collector);
     }
 
     private <C, K extends Routables<?>, T> T atMost(K select, long minEpoch, long maxEpoch, BiFunction<EpochState, EpochState, Ranges> isSufficientFor,
@@ -1007,31 +1010,36 @@ public class TopologyManager
         return maxEpoch;
     }
 
-    public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch)
+    public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, SelectNodeOwnership selectNodeOwnership)
     {
-        return preciseEpochs(select, minEpoch, maxEpoch, Topology::select);
+        return preciseEpochs(select, minEpoch, maxEpoch, selectNodeOwnership, Topology::select);
     }
 
-    public Topologies preciseEpochsIfExists(Unseekables<?> select, long minEpoch, long maxEpoch)
+    public Topologies preciseEpochsIfExists(Unseekables<?> select, long minEpoch, long maxEpoch, SelectNodeOwnership selectNodeOwnership)
     {
-        return preciseEpochs(select, minEpoch, maxEpoch, Topology::selectIfExists);
+        return preciseEpochs(select, minEpoch, maxEpoch, selectNodeOwnership, Topology::selectIfExists);
     }
 
-    public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, BiFunction<Topology, Unseekables<?>, Topology> selectFunction)
+    public interface SelectFunction
+    {
+        Topology apply(Topology topology, Unseekables<?> select, SelectNodeOwnership selectNodeOwnership);
+    }
+
+    public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, SelectNodeOwnership selectNodeOwnership, SelectFunction selectFunction)
     {
         Epochs snapshot = epochs;
 
         EpochState maxState = snapshot.get(maxEpoch);
         Invariants.require(maxState != null, "Unable to find epoch %d; known epochs are %d -> %d", maxEpoch, snapshot.minEpoch(), snapshot.currentEpoch);
         if (minEpoch == maxEpoch)
-            return new Single(sorter, selectFunction.apply(snapshot.get(minEpoch).global, select));
+            return new Single(sorter, selectFunction.apply(snapshot.get(minEpoch).global, select, selectNodeOwnership));
 
         int count = (int)(1 + maxEpoch - minEpoch);
         Topologies.Builder topologies = new Topologies.Builder(count);
         for (int i = count - 1 ; i >= 0 ; --i)
         {
             EpochState epochState = snapshot.get(minEpoch + i);
-            topologies.add(selectFunction.apply(epochState.global, select));
+            topologies.add(selectFunction.apply(epochState.global, select, selectNodeOwnership));
             select = select.without(epochState.addedRanges);
         }
         Invariants.require(!topologies.isEmpty(), "Unable to find an epoch that contained %s", select);
@@ -1039,10 +1047,10 @@ public class TopologyManager
         return topologies.build(sorter);
     }
 
-    public Topologies forEpoch(Unseekables<?> select, long epoch)
+    public Topologies forEpoch(Unseekables<?> select, long epoch, SelectNodeOwnership selectNodeOwnership)
     {
         EpochState state = epochs.get(epoch);
-        return new Single(sorter, state.global.select(select));
+        return new Single(sorter, state.global.select(select, selectNodeOwnership));
     }
 
     public Shard forEpochIfKnown(RoutableKey key, long epoch)
@@ -1112,23 +1120,25 @@ public class TopologyManager
     static class TopologiesCollectors implements Collectors<Topologies.Builder, Routables<?>, Topologies>
     {
         final TopologySorter.Supplier sorter;
+        final SelectNodeOwnership selectNodeOwnership;
 
-        TopologiesCollectors(TopologySorter.Supplier sorter)
+        TopologiesCollectors(TopologySorter.Supplier sorter, SelectNodeOwnership selectNodeOwnership)
         {
             this.sorter = sorter;
+            this.selectNodeOwnership = selectNodeOwnership;
         }
 
         @Override
         public Topologies.Builder update(Topologies.Builder collector, EpochState epoch, Routables<?> select, boolean permitMissing)
         {
-            collector.add(epoch.global.select(select, permitMissing));
+            collector.add(epoch.global.select(select, permitMissing, selectNodeOwnership));
             return collector;
         }
 
         @Override
         public Topologies one(EpochState epoch, Routables<?> unseekables, boolean permitMissing)
         {
-            return new Topologies.Single(sorter, epoch.global.select(unseekables, permitMissing));
+            return new Topologies.Single(sorter, epoch.global.select(unseekables, permitMissing, selectNodeOwnership));
         }
 
         @Override

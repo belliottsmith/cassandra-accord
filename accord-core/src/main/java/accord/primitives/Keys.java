@@ -26,11 +26,11 @@ import java.util.SortedSet;
 import java.util.function.Function;
 
 import accord.api.Key;
-import accord.primitives.Routable.Domain;
+import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers.ObjectBuffers;
-import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 
+import static accord.primitives.Routable.Kind.SeekableKey;
 import static accord.utils.ArrayBuffers.cachedKeys;
 import static accord.utils.SortedArrays.isSortedUnique;
 
@@ -65,6 +65,12 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     }
 
     @Override
+    public final Routable.Kind domainKind()
+    {
+        return SeekableKey;
+    }
+
+    @Override
     public boolean equals(Object o)
     {
         if (this == o) return true;
@@ -86,11 +92,21 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     }
 
     @Override
-    public final boolean intersectsAll(Unseekables<?> keysOrRanges)
+    public final boolean containsAll(AbstractUnseekableKeys that)
     {
-        Invariants.requireArgument(keysOrRanges.domain() == Domain.Key);
-        AbstractUnseekableKeys that = (AbstractUnseekableKeys) keysOrRanges;
-        return SortedArrays.isSubset((rk, k) -> -k.compareAsRoutingKey(rk), that.keys, 0, that.keys.length, this.keys, 0, this.keys.length);
+        return that.size() == SortedArrays.foldlIntersection(0, RoutableKey::compareAsRoutingKey, that.keys, 0, that.keys.length, keys, 0, keys.length, (k, p, v, l, r) -> v + 1, 0, 0, 0);
+    }
+
+    @Override
+    public final boolean containsAll(Keys that)
+    {
+        return containsAllSameKind(that);
+    }
+
+    @Override
+    public final boolean containsAll(AbstractRanges ranges)
+    {
+        throw new UnsupportedOperationException();
     }
 
     @Override
@@ -145,6 +161,12 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
         return wrap(SortedArrays.intersectWithMultipleMatches(this.keys, this.keys.length, that.keys, that.keys.length, Key::compareAsRoutingKey, cachedKeys()), this);
     }
 
+    @Override
+    public final long findNextIntersection(int thisIndex, Keys with, int withIndex)
+    {
+        return SortedArrays.findNextIntersection(this.keys, thisIndex, with.keys, withIndex, Key::compareTo);
+    }
+
     public Keys with(Key key)
     {
         int insertPos = Arrays.binarySearch(keys, key);
@@ -169,6 +191,36 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     public Keys without(Ranges ranges)
     {
         return wrap(subtract(ranges, keys, Key[]::new));
+    }
+
+    @Override
+    public boolean contains(RoutingKey key)
+    {
+        return Arrays.binarySearch(keys, key, RoutableKey::compareAsRoutingKey) >= 0;
+    }
+
+    @Override
+    public final boolean contains(Key key)
+    {
+        return Arrays.binarySearch(keys, key, RoutableKey::compareTo) >= 0;
+    }
+
+    @Override
+    public int find(RoutingKey find, SortedArrays.Search search)
+    {
+        return SortedArrays.binarySearch(keys, 0, keys.length, find, RoutingKey::compareAsRoutingKey, search);
+    }
+
+    @Override
+    public int findNext(int thisIndex, RoutingKey find, SortedArrays.Search search)
+    {
+        return SortedArrays.exponentialSearch(keys, thisIndex, keys.length, find, RoutingKey::compareAsRoutingKey, search);
+    }
+
+    @Override
+    public int findNext(int thisIndex, Key find, SortedArrays.Search search)
+    {
+        return SortedArrays.exponentialSearch(keys, thisIndex, keys.length, find, Key::compareTo, search);
     }
 
     @Override

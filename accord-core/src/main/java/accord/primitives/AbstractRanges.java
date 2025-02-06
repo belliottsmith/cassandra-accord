@@ -25,6 +25,7 @@ import javax.annotation.Nonnull;
 
 import com.google.common.collect.Iterators;
 
+import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers.ObjectBuffers;
 import accord.utils.IndexedFoldToLong;
@@ -54,6 +55,12 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         this.ranges = Invariants.nonNull(ranges);
     }
 
+    @Override
+    public final Routable.Kind domainKind()
+    {
+        return Routable.Kind.Range;
+    }
+
     public int indexOf(RoutableKey key)
     {
         return SortedArrays.binarySearch(ranges, 0, ranges.length, key, (k, r) -> -r.compareTo(k), FAST);
@@ -69,27 +76,41 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return indexOf(find, CEIL);
     }
 
-    @Override
-    public boolean contains(RoutableKey key)
+    public final boolean contains(RoutingKey key)
     {
         return indexOf(key) >= 0;
     }
 
-    @Override
-    public boolean containsAll(Routables<?> that)
+    public final boolean contains(Key key)
     {
-        switch (that.domain())
-        {
-            default: throw new AssertionError();
-            case Key: return containsAll((AbstractKeys<?>) that);
-            case Range: return containsAll((AbstractRanges) that);
-        }
+        return indexOf(key) >= 0;
+    }
+
+    public final boolean contains(RoutableKey key)
+    {
+        return indexOf(key) >= 0;
     }
 
     /**
      * @return true iff {@code that} is fully contained within {@code this}
      */
-    public boolean containsAll(AbstractKeys<?> that)
+    public final boolean containsAll(Keys that)
+    {
+        return containsAll((AbstractKeys<?>) that);
+    }
+
+    /**
+     * @return true iff {@code that} is fully contained within {@code this}
+     */
+    public final boolean containsAll(AbstractUnseekableKeys that)
+    {
+        return containsAll((AbstractKeys<?>) that);
+    }
+
+    /**
+     * @return true iff {@code that} is fully contained within {@code this}
+     */
+    public final boolean containsAll(AbstractKeys<?> that)
     {
         if (this.isEmpty()) return that.isEmpty();
         if (that.isEmpty()) return true;
@@ -99,37 +120,11 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     /**
      * @return true iff {@code that} is a subset of {@code this}
      */
-    public boolean containsAll(AbstractRanges that)
+    public final boolean containsAll(AbstractRanges that)
     {
         if (this.isEmpty()) return that.isEmpty();
         if (that.isEmpty()) return true;
         return ((int) supersetLinearMerge(this.ranges, that.ranges)) == that.size();
-    }
-
-    @Override
-    public boolean intersectsAll(Unseekables<?> keysOrRanges)
-    {
-        return intersectsAll((Routables<?>) keysOrRanges);
-    }
-
-    public boolean intersectsAll(Routables<?> that)
-    {
-        switch (that.domain())
-        {
-            default: throw new AssertionError();
-            case Key: return containsAll((AbstractKeys<?>) that);
-            case Range: return intersectsAll((AbstractRanges) that);
-        }
-    }
-
-    /**
-     * @return true iff {@code that} is a subset of {@code this}
-     */
-    public boolean intersectsAll(AbstractRanges that)
-    {
-        if (this.isEmpty()) return that.isEmpty();
-        if (that.isEmpty()) return true;
-        return Routables.rangeFoldl(that, this, (p, v, from, to) -> v + (to - from), 0, 0, 0) == that.size();
     }
 
     @Override
@@ -186,7 +181,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
 
     // returns ri in low 32 bits, ki in top, or -1 if no match found
     @Override
-    public final long findNextIntersection(int ri, AbstractKeys<?> keys, int ki)
+    public final long findNextIntersection(int ri, Keys keys, int ki)
     {
         return swapHighLow32b(SortedArrays.findNextIntersectionWithMultipleMatches(keys.keys, ki, ranges, ri));
     }
@@ -202,6 +197,12 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     public final long findNextIntersection(int thisi, AbstractRanges that, int thati)
     {
         return SortedArrays.findNextIntersectionWithMultipleMatches(ranges, thisi, that.ranges, thati, Range::compareIntersecting, Range::compareIntersecting);
+    }
+
+    // returns ki in bottom 32 bits, ri in top, or -1 if no match found
+    public final long findNextSameKindIntersection(int thisi, Routables<Range> that, int thati)
+    {
+        return findNextIntersection(thisi, (AbstractRanges) that, thati);
     }
 
     @Override
@@ -222,14 +223,12 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return SortedArrays.exponentialSearch(ranges, thisIndex, size(), find, Range::compareIntersecting, search);
     }
 
-    @Override
-    public final int find(RoutableKey find, SortedArrays.Search search)
+    public final int find(RoutingKey find, SortedArrays.Search search)
     {
         return SortedArrays.binarySearch(ranges, 0, size(), find, (k, r) -> -r.compareTo(k), search);
     }
 
-    @Override
-    public final int findNext(int thisIndex, RoutableKey find, SortedArrays.Search search)
+    public final int findNext(int thisIndex, RoutingKey find, SortedArrays.Search search)
     {
         return SortedArrays.exponentialSearch(ranges, thisIndex, size(), find, (k, r) -> -r.compareTo(k), search);
     }
@@ -665,7 +664,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         try
         {
             int count = copyAndMergeTouching(ranges, 0, buffer, 0, ranges.length);
-            if (count == buffer.length)
+            if (count == ranges.length)
                 return input;
             Range[] result = cachedRanges.complete(buffer, count);
             cachedRanges.discard(buffer, count);

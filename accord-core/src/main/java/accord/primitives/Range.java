@@ -229,6 +229,9 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     @Override
     public final Domain domain() { return Domain.Range; }
 
+    @Override
+    public final Kind kind() { return Kind.Range; }
+
     public abstract boolean startInclusive();
     public abstract boolean endInclusive();
 
@@ -306,6 +309,21 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         if (this.start.compareTo(that.end) >= 0)
             return 1;
         if (this.end.compareTo(that.start) <= 0)
+            return -1;
+        return 0;
+    }
+
+    /**
+     * Returns a negative integer, zero, or a positive integer if both points of the provided range are less than,
+     * the range touches or intersects this range, or both points are greater than this range
+     */
+    public int compareTouching(Range that)
+    {
+        if (that.getClass() != this.getClass())
+            throw new IllegalArgumentException("Cannot mix Range of different types");
+        if (this.start.compareTo(that.end) > 0)
+            return 1;
+        if (this.end.compareTo(that.start) < 0)
             return -1;
         return 0;
     }
@@ -433,7 +451,6 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     {
         return this;
     }
-
 
     @Override
     public String toString()

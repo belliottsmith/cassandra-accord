@@ -236,8 +236,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     @VisibleForTesting
     protected void recordInFlightRead(Id node)
     {
-        if (!inflight.add(node.id))
-            throw illegalState(node + " already in flight");
+        Invariants.require(inflight.add(node.id), "%s already in flight", node);
 
         recordResponse(this, node, ReadShardTracker::recordInFlightRead, false);
     }
@@ -256,7 +255,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     protected RequestStatus recordSlowResponse(Id from)
     {
         if (!inflight.contains(from.id))
-            throw new IllegalStateException();
+            return RequestStatus.NoChange;
 
         if (slow == null)
             slow = new IntHashSet(topologies.nodes().size());

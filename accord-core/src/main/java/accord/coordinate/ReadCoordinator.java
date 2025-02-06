@@ -35,6 +35,7 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
+import accord.utils.UnhandledEnum;
 
 import static accord.primitives.WithQuorum.HasQuorum;
 import static accord.primitives.WithQuorum.NoQuorum;
@@ -61,6 +62,8 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
          * (such as a commit) in order to serve the response, and so additional information is sent by the coordinator.
          */
         TryAlternative,
+
+        None,
 
         /**
          * This response is unsuitable by itself, but if a quorum of such responses is received for the shard
@@ -125,11 +128,14 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         if (isDone)
             return;
 
-        switch (process(from, reply))
+        Action action = process(from, reply);
+        switch (action)
         {
-            default: throw new IllegalStateException();
+            default: throw new UnhandledEnum(action);
             case Aborted:
                 isDone = true;
+
+            case None:
                 break;
 
             case TryAlternative:
@@ -173,7 +179,8 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         if (this.failure == null) this.failure = failure;
         else this.failure.addSuppressed(failure);
 
-        handle(recordFailure(from));
+        if (txnId.hasPrivilegedCoordinator() && from.id == node.id().id) finishOnFailure();
+        else handle(recordFailure(from));
     }
 
     @Override

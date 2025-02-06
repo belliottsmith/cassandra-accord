@@ -20,7 +20,6 @@ package accord.impl.progresslog;
 
 import accord.local.Node;
 import accord.primitives.Ranges;
-import accord.primitives.Routables;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -115,7 +114,7 @@ public class PackedKeyTracker
         int bitSet = 0, start = roundSize * roundIndex, ai = start, bi = 0;
         for (int i = 0; i < intersecting.size(); ++i)
         {
-            long abi = route.findNextIntersection(ai, (Routables) intersecting, bi);
+            long abi = route.findNextSameKindIntersection(ai, (Unseekables) intersecting, bi);
             if (abi < 0)
                 break;
 

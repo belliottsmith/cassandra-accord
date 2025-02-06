@@ -45,6 +45,7 @@ import static accord.coordinate.ReadCoordinator.Action.Aborted;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.primitives.Txn.Kind.EphemeralRead;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
 
 public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
@@ -100,7 +101,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
             {
                 // TODO (expected): only submit new requests for the keys that execute in a later epoch
                 node.withEpoch(ok.futureEpoch, callback, t -> WrappableException.wrap(t), () -> {
-                    new ExecuteEphemeralRead(node, node.topology().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch), route, txnId.withEpoch(ok.futureEpoch), txn, deps, callback).start();
+                    new ExecuteEphemeralRead(node, node.topology().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch, SHARE), route, txnId.withEpoch(ok.futureEpoch), txn, deps, callback).start();
                 });
                 return Aborted;
             }

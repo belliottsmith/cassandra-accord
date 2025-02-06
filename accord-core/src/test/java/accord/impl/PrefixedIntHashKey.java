@@ -33,7 +33,7 @@ import accord.utils.Invariants;
 
 import static accord.utils.Utils.toArray;
 
-public class PrefixedIntHashKey implements RoutableKey
+public abstract class PrefixedIntHashKey implements RoutableKey
 {
     public static final int MIN_KEY = Integer.MIN_VALUE + 1;
 

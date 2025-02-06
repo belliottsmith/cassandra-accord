@@ -53,6 +53,7 @@ import accord.utils.async.AsyncResults.SettableResult;
 import static accord.messages.Apply.ApplyReply.Insufficient;
 import static accord.primitives.Status.Durability.Majority;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableResult<SyncPoint<U>> implements Callback<ReadReply>
 {
@@ -151,7 +152,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
         private long retryInFutureEpoch;
         public ExecuteExclusive(Node node, SyncPoint<Range> syncPoint, Function<Topologies, SimpleTracker<?>> trackerSupplier)
         {
-            super(node, syncPoint, Adapters.exclusiveSyncPoint().forExecution(node, syncPoint.route(), syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor), trackerSupplier);
+            super(node, syncPoint, Adapters.exclusiveSyncPoint().forExecution(node, syncPoint.route(), SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor), trackerSupplier);
             Invariants.requireArgument(syncPoint.syncId.kind() == ExclusiveSyncPoint);
         }
 
@@ -193,7 +194,7 @@ public abstract class ExecuteSyncPoint<U extends Unseekable> extends SettableRes
             if (retryInFutureEpoch > tracker.topologies().currentEpoch())
             {
                 node.withEpoch(retryInFutureEpoch, (ignore, failure) -> tryFailure(WrappableException.wrap(failure)), () -> {
-                    ExecuteExclusive continuation = new ExecuteExclusive(node, syncPoint, trackerSupplier, trackerSupplier.apply(node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch)));
+                    ExecuteExclusive continuation = new ExecuteExclusive(node, syncPoint, trackerSupplier, trackerSupplier.apply(node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE)));
                     continuation.addCallback((success, failure) -> {
                         if (failure == null) trySuccess(success);
                         else tryFailure(failure);

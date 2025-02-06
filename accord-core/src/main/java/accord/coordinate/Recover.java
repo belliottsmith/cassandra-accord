@@ -34,7 +34,6 @@ import accord.coordinate.tracking.RecoveryTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Accept;
-import accord.primitives.Known.KnownDeps;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutingKeys;
@@ -79,12 +78,12 @@ import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Accept.Kind.SLOW;
 import static accord.messages.BeginRecovery.RecoverOk.maxAccepted;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedNotTruncated;
-import static accord.primitives.Known.KnownDeps.DepsCommitted;
-import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedMedium;
+import static accord.primitives.Status.AcceptedSlow;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FLOOR;
@@ -191,7 +190,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Timestamp executeAt, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        Topologies topologies = node.topology().select(route, txnId, executeAt == null ? txnId : executeAt, QuorumEpochIntersections.recover);
+        Topologies topologies = node.topology().select(route, txnId, executeAt == null ? txnId : executeAt, SHARE, QuorumEpochIntersections.recover);
         return recover(node, topologies, ballot, txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
     }
 
@@ -233,6 +232,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 acceptsFastPath = true;
         }
 
+        // TODO (expected): don't trigger recovery unless we have Q+1 responses, or 1 or more responses have
+        //  no entries in WP where it is itself the coordinator. This means we can always recover immediately.
         if (tracker.recordSuccess(from, acceptsFastPath) == Success)
             recover();
     }
@@ -257,7 +258,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             {
                 Invariants.require(acceptOrCommitNotTruncated.status.compareTo(Status.PreCommitted) < 0 || executeAt.equals(committedExecuteAt));
                 // if we know from a prior Accept attempt that this is committed we can go straight to the commit phase
-                if (status == AcceptedMedium)
+                if (status == AcceptedMedium || status == AcceptedSlow)
                     status = Status.Committed;
             }
             switch (status)
@@ -283,7 +284,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 case Stable:
                 {
                     withStableDeps(recoverOkList, executeAt, this, stableDeps -> {
-                        adapter.execute(node, tracker.topologies(), route, RECOVER, txnId, txn, executeAt, stableDeps, this);
+                        adapter.execute(node, tracker.topologies(), route, RECOVER, txnId, txn, executeAt, stableDeps, stableDeps, this);
                     });
                     return;
                 }
@@ -465,18 +466,14 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void withCommittedDeps(List<RecoverOk> nullableRecoverOkList, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        withCommittedOrStableDeps(DepsCommitted, nullableRecoverOkList, executeAt, failureCallback, withDeps);
+        LatestDeps.Merge merge = LatestDeps.merge(nullableRecoverOkList, ok -> ok == null ? null : ok.deps);
+        LatestDeps.withCommitted(adapter, node, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
     }
 
     private void withStableDeps(List<RecoverOk> nullableRecoverOkList, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        withCommittedOrStableDeps(DepsKnown, nullableRecoverOkList, executeAt, failureCallback, withDeps);
-    }
-
-    private void withCommittedOrStableDeps(KnownDeps atLeast, List<RecoverOk> nullableRecoverOkList, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
-    {
-        LatestDeps.MergedCommitResult merged = LatestDeps.mergeCommit(atLeast, executeAt, nullableRecoverOkList, txnId, ok -> ok == null ? null : ok.deps);
-        LatestDeps.withCommitted(node, txnId, executeAt, merged.deps, route, route.without(merged.sufficientFor), failureCallback, withDeps);
+        LatestDeps.Merge merge = LatestDeps.merge(nullableRecoverOkList, ok -> ok == null ? null : ok.deps);
+        LatestDeps.withStable(adapter, node, merge, Deps.NONE, route, null, null, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
     }
 
     private void invalidate(SortedListMap<Id, RecoverOk> recoverOks)
@@ -524,8 +521,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     {
         Topologies topologies = tracker.topologies();
         if (executeAt != null && executeAt.epoch() != (this.committedExecuteAt == null ? txnId : this.committedExecuteAt).epoch())
-            topologies = node.topology().select(route, txnId, executeAt, QuorumEpochIntersections.recover);
-        Recover.recover(node, topologies, ballot, txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
+            topologies = node.topology().select(route, txnId, executeAt, SHARE, QuorumEpochIntersections.recover);
+        Recover.recover(node, topologies, new Ballot(node.uniqueNow()), txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
     }
 
     AsyncResult<InferredFastPath> awaitEarlier(Node node, Deps waitOn, BlockedUntil blockedUntil)
@@ -541,8 +538,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 Participants<?> participants = waitOn.participants(awaitId);
 
                 Topologies topologies;
-                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch());
-                else topologies = node.topology().forEpoch(participants, awaitId.epoch());
+                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
+                else topologies = node.topology().forEpoch(participants, awaitId.epoch(), SHARE);
                 requests.add(SynchronousRecoverAwait.awaitAny(node, topologies, awaitId, blockedUntil, true, participants, recoverId));
             }
             if (requests.isEmpty())
@@ -609,8 +606,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     continue;
 
                 Topologies topologies;
-                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch());
-                else topologies = node.topology().forEpoch(participants, awaitId.epoch());
+                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
+                else topologies = node.topology().forEpoch(participants, awaitId.epoch(), SHARE);
                 requests.add(SynchronousRecoverAwait.awaitAny(node, topologies, awaitId, blockedUntil, true, participants, recoverId));
             }
             if (requests.isEmpty())

@@ -33,20 +33,23 @@ import com.google.common.collect.ImmutableList;
 
 import accord.api.RoutingKey;
 import accord.coordinate.CollectLatestDeps;
+import accord.coordinate.CoordinationAdapter;
 import accord.local.Node;
 import accord.primitives.Known.KnownDeps;
+import accord.topology.Topologies.SelectNodeOwnership;
 import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
 import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 
+import static accord.messages.Accept.Kind.SLOW;
 import static accord.primitives.Known.KnownDeps.DepsCommitted;
 import static accord.primitives.Known.KnownDeps.DepsErased;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
-import static accord.primitives.Known.KnownDeps.DepsUnknown;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 {
@@ -60,27 +63,108 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         }
     }
 
-    public static void withCommitted(Node node, TxnId txnId, Timestamp executeAt, Deps mergeDeps, FullRoute<?> route, Unseekables<?> missing, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
+    public static void withCommitted(CoordinationAdapter<?> adapter, Node node, Merge merge, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        node.withEpoch(executeAt.epoch(), failureCallback, () -> {
-            if (missing.isEmpty())
+        if (!node.topology().hasEpoch(executeAt.epoch()))
+        {
+            node.withEpoch(executeAt.epoch(), failureCallback, () -> withCommitted(adapter, node, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
+            return;
+        }
+
+        LatestDeps.MergedCommitResult merged = merge.mergeCommitOrStable(null, DepsCommitted);
+        Route<?> missing = route.without(merged.sufficientFor);
+        Deps committed = merged.deps;
+        if (missing.isEmpty()) withDeps.accept(merged.deps);
+        else
+        {
+            // we include the committed deps in our proposal so that if we contact a replica that participates in one of the committed shards we include any deps it should see
+            Deps propose = merge.mergeProposal(missing).with(committed);
+            adapter.proposeOnly(node, missing, missing, SHARE, route, SLOW, ballot, txnId, txn, executeAt, propose, (success, fail) -> {
+                if (fail != null) failureCallback.accept(null, fail);
+                else
+                {
+                    success = success.intersecting(missing).asFullUnsafe();
+                    withDeps.accept(success.with(committed));
+                }
+            });
+        }
+    }
+
+    public static void withStable(CoordinationAdapter<?> adapter, Node node, Merge merge, Deps alreadyStableDeps, Route<?> require, @Nullable Route<?> sendTo, @Nullable SelectNodeOwnership selectSendTo, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
+    {
+        Invariants.require(sendTo == null || selectSendTo != null);
+        if (!node.topology().hasEpoch(executeAt.epoch()))
+        {
+            node.withEpoch(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
+            return;
+        }
+
+        LatestDeps.MergedCommitResult mergedStable = merge.mergeCommitOrStable(null, DepsKnown);
+        Deps stable = mergedStable.deps.with(alreadyStableDeps);
+        Route<?> stabilise = require.without(mergedStable.sufficientFor);
+        if (stabilise.isEmpty()) withDeps.accept(stable);
+        else
+        {
+            LatestDeps.MergedCommitResult mergedCommitted = merge.mergeCommitOrStable(stabilise, DepsCommitted);
+            Route<?> propose = stabilise.without(mergedCommitted.sufficientFor);
+            // we merge with stable to make sure we can send a full Commit to any replica that overlaps the stable and unstable ranges
+            Deps committed = stable.with(mergedCommitted.deps);
+            if (propose.isEmpty())
             {
-                withDeps.accept(mergeDeps);
+                stabilise(adapter, node, committed, stabilise, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
             }
             else
             {
-                CollectLatestDeps.withLatestDeps(node, txnId, route, missing, executeAt, (extraDeps, fail) -> {
-                    if (fail != null)
-                    {
-                        failureCallback.accept(null, fail);
-                    }
+                // we merge with committed to make sure we can send a full Commit to any replica that overlaps the stable and unstable ranges
+                Deps notaccepted = committed.with(merge.mergeProposal(propose));
+                adapter.proposeOnly(node, propose, sendTo == null ? propose : sendTo, sendTo == null ? SHARE : selectSendTo, route, SLOW, ballot, txnId, txn, executeAt, notaccepted, (success, fail) -> {
+                    if (fail != null) failureCallback.accept(null, fail);
                     else
                     {
-                        withDeps.accept(LatestDeps.mergeCommit(DepsUnknown, executeAt, extraDeps, executeAt, i -> i).deps.with(mergeDeps));
+                        // TODO (desired): do we need to slice to those we were proposing, or can we just stabilise whatever we get back?
+                        success = success.intersecting(propose).asFullUnsafe();
+                        stabilise(adapter, node, success.with(committed), stabilise, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
                     }
                 });
             }
+        }
+    }
+
+    public static void stabilise(CoordinationAdapter<?> adapter, Node node, Deps deps, Route<?> stabilise, @Nullable Route<?> sendTo, SelectNodeOwnership selectSendTo, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
+    {
+        Invariants.require(sendTo == null || selectSendTo != null);
+        adapter.stabiliseOnly(node, stabilise, sendTo == null ? stabilise : sendTo, sendTo == null ? SHARE : selectSendTo, route, ballot, txnId, txn, executeAt, deps, (success, fail) -> {
+            if (fail != null) failureCallback.accept(null, fail);
+            else withDeps.accept(deps);
         });
+    }
+
+    public static void withStable(CoordinationAdapter<?> adapter, Node node, TxnId txnId, Timestamp executeAt, Txn txn, Deps alreadyStableDeps, Route<?> require, @Nullable Route<?> sendTo, SelectNodeOwnership selectSendTo, FullRoute<?> route, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
+    {
+        Invariants.require(sendTo == null || selectSendTo != null);
+        if (!node.topology().hasEpoch(executeAt.epoch()))
+        {
+            node.withEpoch(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, txnId, executeAt, txn, alreadyStableDeps, require, sendTo, selectSendTo, route, failureCallback, withDeps));
+        }
+        else if (require.isEmpty())
+        {
+            withDeps.accept(alreadyStableDeps);
+        }
+        else
+        {
+            Ballot ballot = new Ballot(node.uniqueNow());
+            CollectLatestDeps.withLatestDeps(node, txnId, route, require, ballot, executeAt, (extraDeps, fail) -> {
+                if (fail != null)
+                {
+                    failureCallback.accept(null, fail);
+                }
+                else
+                {
+                    Merge merge = merge(extraDeps, i -> i);
+                    LatestDeps.withStable(adapter, node, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
+                }
+            });
+        }
     }
 
     public static class MergedCommitResult
@@ -101,7 +185,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         public final Ballot ballot;
         public final @Nullable Deps coordinatedDeps;
 
-        private AbstractEntry(KnownDeps known, Ballot ballot, Deps coordinatedDeps)
+        private AbstractEntry(KnownDeps known, Ballot ballot, @Nullable Deps coordinatedDeps)
         {
             this.known = known;
             this.ballot = ballot;
@@ -263,16 +347,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         return merge.mergeProposal();
     }
 
-    public static <T> MergedCommitResult mergeCommit(KnownDeps atLeast, Timestamp executeAt, List<T> list, Timestamp localDepsComputedUntil, Function<T, LatestDeps> getter)
-    {
-        Invariants.require(atLeast.compareTo(DepsCommitted) >= 0 || executeAt.compareTo(localDepsComputedUntil) <= 0);
-        // merge merge merge
-        Merge merge = merge(list, getter);
-        return merge.mergeForCommitOrStable(atLeast == DepsProposedFixed ? test -> test.compareTo(DepsKnown) >= 0 || test == DepsProposedFixed
-                                                                         : test -> test.compareTo(atLeast) >= 0);
-    }
-
-    private static <T> Merge merge(List<T> list, Function<T, LatestDeps> getter)
+    public static <T> Merge merge(List<T> list, Function<T, LatestDeps> getter)
     {
         Merge merge = Merge.EMPTY;
         for (int i = 0, size = list.size() ; i < size ; ++i)
@@ -286,7 +361,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
     }
 
     // build a merge-intention without actually merging any deps, to save time merging ones we discover we don't need to
-    private static class Merge extends ReducingRangeMap<Merge.MergeEntry>
+    public static class Merge extends ReducingRangeMap<Merge.MergeEntry>
     {
         private static final Merge EMPTY = new Merge();
 
@@ -348,33 +423,61 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
         Deps mergeProposal()
         {
+            return mergeProposal(null);
+        }
+
+        Deps mergeProposal(Participants<?> intersecting)
+        {
             if (size() == 0)
                 return Deps.NONE;
 
-            KeyDeps keyDeps =  KeyDeps.merge(stream(Merge::forProposal, (d, r) -> d.keyDeps.slice(r)));
-            KeyDeps directKeyDeps =  KeyDeps.merge(stream(Merge::forProposal, (d, r) -> d.directKeyDeps.slice(r)));
-            RangeDeps rangeDeps =  RangeDeps.merge(stream(Merge::forProposal, (d, r) -> d.rangeDeps.slice(r)));
+            KeyDeps keyDeps =  KeyDeps.merge(stream(intersecting, Merge::forProposal, (d, r) -> slice(d.keyDeps, r, intersecting)));
+            KeyDeps directKeyDeps =  KeyDeps.merge(stream(intersecting, Merge::forProposal, (d, r) -> slice(d.directKeyDeps, r, intersecting)));
+            RangeDeps rangeDeps =  RangeDeps.merge(stream(intersecting, Merge::forProposal, (d, r) -> slice(d.rangeDeps, r, intersecting)));
             return new Deps(keyDeps, rangeDeps, directKeyDeps);
         }
 
-        MergedCommitResult mergeForCommitOrStable(Predicate<KnownDeps> atLeast)
+        MergedCommitResult mergeCommitOrStable(@Nullable Participants<?> intersecting, KnownDeps atLeast)
+        {
+            return mergeCommitOrStable(intersecting, atLeast == DepsProposedFixed ? test -> test.compareTo(DepsKnown) >= 0 || test == DepsProposedFixed
+                                                                                  : test -> test.compareTo(atLeast) >= 0);
+        }
+
+        MergedCommitResult mergeCommitOrStable(@Nullable Participants<?> intersecting, Predicate<KnownDeps> atLeast)
         {
             if (size() == 0)
                 return new MergedCommitResult(Deps.NONE, Ranges.EMPTY);
 
             SuccessCollector sufficientFor = new SuccessCollector(true);
-            KeyDeps keyDeps =  KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.keyDeps.slice(r)));
-            KeyDeps directKeyDeps = KeyDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.directKeyDeps.slice(r)));
-            RangeDeps rangeDeps = RangeDeps.merge(stream(forCommitOrStable(atLeast, sufficientFor), (d, r) -> d.rangeDeps.slice(r)));
+            KeyDeps keyDeps =  KeyDeps.merge(stream(intersecting, forCommitOrStable(atLeast, sufficientFor), (d, r) -> slice(d.keyDeps, r, intersecting)));
+            KeyDeps directKeyDeps = KeyDeps.merge(stream(intersecting, forCommitOrStable(atLeast, sufficientFor), (d, r) -> slice(d.directKeyDeps, r, intersecting)));
+            RangeDeps rangeDeps = RangeDeps.merge(stream(intersecting, forCommitOrStable(atLeast, sufficientFor), (d, r) -> slice(d.rangeDeps, r, intersecting)));
             return new MergedCommitResult(new Deps(keyDeps, rangeDeps, directKeyDeps), Ranges.of(sufficientFor.toArray(new Range[0])));
         }
 
-        private <V> Stream<V> stream(TriFunction<Ranges, MergeEntry, BiFunction<Deps, Ranges, V>, Stream<V>> selector, BiFunction<Deps, Ranges, V> getter)
+        private static KeyDeps slice(KeyDeps keyDeps, Ranges ranges, @Nullable Participants<?> intersecting)
+        {
+            keyDeps = keyDeps.slice(ranges);
+            return intersecting == null ? keyDeps : keyDeps.intersecting(intersecting);
+        }
+
+        private static RangeDeps slice(RangeDeps rangeDeps, Ranges ranges, @Nullable Participants<?> intersecting)
+        {
+            rangeDeps = rangeDeps.slice(ranges);
+            return intersecting == null ? rangeDeps : rangeDeps.intersecting(intersecting);
+        }
+
+        private <V> Stream<V> stream(@Nullable Participants<?> intersecting, TriFunction<Ranges, MergeEntry, BiFunction<Deps, Ranges, V>, Stream<V>> selector, BiFunction<Deps, Ranges, V> getter)
         {
             RangeFactory rangeFactory = starts[0].rangeFactory();
             return IntStream.range(0, size())
                             .filter(i -> values[i] != null)
-                            .mapToObj(i -> selector.apply(Ranges.of(rangeFactory.newRange(starts[i], starts[i+1])), values[i], getter))
+                            .mapToObj(i -> {
+                                Range range = rangeFactory.newRange(starts[i], starts[i+1]);
+                                if (intersecting != null && !intersecting.intersects(range))
+                                    return Stream.<V>of();
+                                return selector.apply(Ranges.of(range), values[i], getter);
+                            })
                             .flatMap(v -> v);
         }
 
@@ -386,7 +489,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                 case DepsProposedFixed: case DepsProposed: return Stream.of(getter.apply(e.coordinatedDeps, slice));
                 case DepsUnknown: case DepsFromCoordinator: return e.merge.stream().map(d -> getter.apply(d, slice));
                 case DepsKnown: case DepsErased: case NoDeps: case DepsCommitted:
-                    throw new AssertionError("Invalid KnownDeps for proposal: " + e.known);
+                    throw UnhandledEnum.invalid(e.known);
             }
         }
 

@@ -92,6 +92,14 @@ public class ReadEphemeralTxnData extends ReadData
     }
 
     @Override
+    public CommitOrReadNack apply(SafeCommandStore safeStore)
+    {
+        StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
+        SafeCommand safeCommand = safeStore.get(txnId, participants);
+        return apply(safeStore, safeCommand, participants);
+    }
+
+    @Override
     protected synchronized CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
     {
         Commands.ephemeralRead(safeStore, safeCommand, participants, route, txnId, partialTxn, partialDeps);

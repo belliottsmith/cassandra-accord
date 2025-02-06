@@ -36,12 +36,13 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.TreeSet;
 import java.util.function.Consumer;
 
+import static accord.topology.Topologies.SelectNodeOwnership.SLICE;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.topology.TopologyUtils.routingKey;
 import static accord.topology.TopologyUtils.routingKeyOutsideRange;
 import static accord.topology.TopologyUtils.withEpoch;
@@ -62,7 +63,7 @@ public class TopologyTest
         Assertions.assertTrue(shard.range.contains(expectedKey));
         Assertions.assertEquals(expectedRange, shard.range);
 
-        Topology subTopology = topology.select(Keys.of(expectedKey).toParticipants());
+        Topology subTopology = topology.select(Keys.of(expectedKey).toParticipants(), SHARE);
         shard = Iterables.getOnlyElement(subTopology.shards());
         Assertions.assertTrue(shard.range.contains(expectedKey));
         Assertions.assertEquals(expectedRange, shard.range);
@@ -127,61 +128,57 @@ public class TopologyTest
             for (int i = 0; i < topology.size(); i++)
             {
                 Shard shard = topology.get(i);
-                for (boolean withNodes : Arrays.asList(true, false))
+
+                Topology subset = topology.forSubset(new int[] {i}, SLICE);
+                Topology trimmed = subset.trim();
+
+                assertThat(subset)
+                .isSubset()
+                .isEqualTo(trimmed)
+                .hasSameHashCodeAs(trimmed)
+                // this is slightly redundant as trimmed model should catch this... it is here in case trim breaks
+                .hasSize(1)
+                .isShardsEqualTo(shard)
+                .isHostsEqualTo(shard.nodes)
+                .isRangesEqualTo(shard.range);
+
+                checkTopology(subset, rs);
                 {
-                    Topology subset = withNodes ?
-                                      topology.forSubset(new int[] {i}, topology.nodes()) : // TODO (correctness): should this drop non-overlapping nodes, or reject?
-                                      topology.forSubset(new int[] {i});
-                    Topology trimmed = subset.trim();
+                    List<Shard> forEachShard = new ArrayList<>(1);
+                    subset.forEach(s -> forEachShard.add(s)); // cant do forEachShard::add due ambiguous signature (multiple matches in topology)
+                    assertThat(forEachShard).isEqualTo(Collections.singletonList(shard));
+                }
 
-                    assertThat(subset)
-                            .isSubset()
-                            .isEqualTo(trimmed)
-                            .hasSameHashCodeAs(trimmed)
-                            // this is slightly redundant as trimmed model should catch this... it is here in case trim breaks
-                            .hasSize(1)
-                            .isShardsEqualTo(shard)
-                            .isHostsEqualTo(shard.nodes)
-                            .isRangesEqualTo(shard.range);
-
-                    checkTopology(subset, rs);
+                Consumer<Unseekables<?>> foldl = unseekables -> assertThat(subset.foldl(unseekables, (s, accum, indexed) -> accum + System.identityHashCode(s), 0))
+                                                                .isEqualTo(trimmed.foldl(unseekables, (s, accum, indexed) -> accum + System.identityHashCode(s), 0))
+                                                                .isEqualTo(System.identityHashCode(shard));
+                Consumer<Unseekables<?>> visitNodeForKeysOnceOrMore = unseekables -> {
+                    List<Node.Id> actual = new ArrayList<>(shard.nodes.size());
+                    subset.visitNodeForKeysOnceOrMore(unseekables, actual::add);
+                    assertThat(actual).isEqualTo(shard.nodes);
+                };
+                for (Range range : subset.ranges())
+                {
+                    for (int j = 0; j < 10; j++)
                     {
-                        List<Shard> forEachShard = new ArrayList<>(1);
-                        subset.forEach(s -> forEachShard.add(s)); // cant do forEachShard::add due ambiguous signature (multiple matches in topology)
-                        assertThat(forEachShard).isEqualTo(Collections.singletonList(shard));
-                    }
+                        RoutingKey key = routingKey(range, rs);
+                        assertThat(subset.forKey(key)).isEqualTo(shard);
 
-                    Consumer<Unseekables<?>> foldl = unseekables -> assertThat(subset.foldl(unseekables, (s, accum, indexed) -> accum + System.identityHashCode(s), 0))
-                            .isEqualTo(trimmed.foldl(unseekables, (s, accum, indexed) -> accum + System.identityHashCode(s), 0))
-                            .isEqualTo(System.identityHashCode(shard));
-                    Consumer<Unseekables<?>> visitNodeForKeysOnceOrMore = unseekables -> {
-                        List<Node.Id> actual = new ArrayList<>(shard.nodes.size());
-                        subset.visitNodeForKeysOnceOrMore(unseekables, actual::add);
-                        assertThat(actual).isEqualTo(shard.nodes);
-                    };
-                    for (Range range : subset.ranges())
-                    {
-                        for (int j = 0; j < 10; j++)
-                        {
-                            RoutingKey key = routingKey(range, rs);
-                            assertThat(subset.forKey(key)).isEqualTo(shard);
-
-                            RoutingKeys unseekables = RoutingKeys.of(key);
-                            foldl.accept(unseekables);
-                            visitNodeForKeysOnceOrMore.accept(unseekables);
-                        }
-                        Ranges unseekables = Ranges.single(range);
+                        RoutingKeys unseekables = RoutingKeys.of(key);
                         foldl.accept(unseekables);
                         visitNodeForKeysOnceOrMore.accept(unseekables);
                     }
+                    Ranges unseekables = Ranges.single(range);
+                    foldl.accept(unseekables);
+                    visitNodeForKeysOnceOrMore.accept(unseekables);
+                }
 
-                    for (Node.Id node : new TreeSet<>(subset.nodes()))
-                    {
-                        assertThat(subset.forNode(node))
-                                .isEqualTo(trimmed.forNode(node))
-                                .isRangesEqualTo(subset.rangesForNode(node))
-                                .isRangesEqualTo(trimmed.rangesForNode(node));
-                    }
+                for (Node.Id node : new TreeSet<>(subset.nodes()))
+                {
+                    assertThat(subset.forNode(node))
+                    .isEqualTo(trimmed.forNode(node))
+                    .isRangesEqualTo(subset.rangesForNode(node))
+                    .isRangesEqualTo(trimmed.rangesForNode(node));
                 }
             }
         });
@@ -202,12 +199,12 @@ public class TopologyTest
         }
         for (Range range : topology.ranges())
         {
-            Topology subset = topology.select(Ranges.single(range));
+            Topology subset = topology.select(Ranges.single(range), SHARE);
             for (int i = 0; i < 10; i++)
             {
                 RoutingKey key = routingKey(range, rs);
 
-                assertThat(topology.select(RoutingKeys.of(key))).isEqualTo(subset);
+                assertThat(topology.select(RoutingKeys.of(key), SHARE)).isEqualTo(subset);
 
                 assertThat(topology.forKey(key))
                         .describedAs("forKey(key) != get(indexForKey(key)) for key %s", key)
@@ -225,6 +222,6 @@ public class TopologyTest
                         .hasMessage("Range not found for %s", outsideRange);
             }
         }
-        assertThat(topology.select(topology.ranges())).isEqualTo(topology);
+        assertThat(topology.select(topology.ranges(), SHARE)).isEqualTo(topology);
     }
 }

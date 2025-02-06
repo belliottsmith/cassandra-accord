@@ -28,6 +28,7 @@ import accord.primitives.*;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -68,7 +69,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     private static Topologies topologyFor(Node node, TxnId txnId, Unseekables<?> contact, long epoch)
     {
         // TODO (desired): only fetch data from source epoch
-        return node.topology().preciseEpochs(contact, txnId.epoch(), epoch);
+        return node.topology().preciseEpochs(contact, txnId.epoch(), epoch, SHARE);
     }
 
     @Override

@@ -28,6 +28,7 @@ import accord.primitives.TxnId;
 import accord.utils.ArrayBuffers.RecursiveObjectBuffers;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
+import accord.utils.UnhandledEnum;
 import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
 import accord.utils.btree.BulkIterator;
@@ -159,6 +160,14 @@ public class Pruning
             return ifNoMatch;
 
         return obj.witnessedBy;
+    }
+
+    /**
+     * Find the list of TxnId that are waiting for {@code find} to load
+     */
+    static LoadingPruned find(Object[] loadingPruned, TxnId find)
+    {
+        return (LoadingPruned) BTree.find(loadingPruned, TxnId::compareTo, find);
     }
 
     /**
@@ -325,7 +334,7 @@ public class Pruning
                 TxnInfo txn = byId[i];
                 switch (txn.status())
                 {
-                    default: throw new AssertionError("Unhandled status: " + txn.status());
+                    default: throw new UnhandledEnum(txn.status());
                     case COMMITTED:
                     case STABLE:
                         if (txn.mayExecute())

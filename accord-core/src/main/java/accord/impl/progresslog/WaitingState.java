@@ -34,7 +34,6 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
 import accord.primitives.Participants;
-import accord.primitives.Routables;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -66,6 +65,7 @@ import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitSlice;
 import static accord.impl.progresslog.WaitingState.CallbackKind.Fetch;
 import static accord.impl.progresslog.WaitingState.CallbackKind.FetchRoute;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
  * This represents a simple state machine encoded in a small number of bits for efficiently gathering
@@ -227,7 +227,7 @@ abstract class WaitingState extends BaseTxnState
     Topologies contact(DefaultProgressLog owner, Unseekables<?> forKeys, long epoch)
     {
         Node node = owner.node();
-        Topologies topologies = node.topology().forEpoch(forKeys, epoch);
+        Topologies topologies = node.topology().forEpoch(forKeys, epoch, SHARE);
         return node.agent().selectPreferred(node.id(), topologies);
     }
 
@@ -459,7 +459,7 @@ abstract class WaitingState extends BaseTxnState
             int prevRoundStart = prevRoundIndex * prevRoundSize;
             int newRoundIndex = -1;
             if (prevRoundStart < prevAwaitRoute.size())
-                newRoundIndex = (int)awaitRoute.findNextIntersection(0, (Routables)prevAwaitRoute, prevRoundStart + prevRoundIndex);
+                newRoundIndex = (int)awaitRoute.findNextSameKindIntersection(0, (Unseekables)prevAwaitRoute, prevRoundStart + prevRoundIndex);
             if (newRoundIndex < 0)
                 newRoundIndex = awaitRoute.size();
             updateAwaitRound(newRoundIndex, roundSize);
@@ -550,14 +550,14 @@ abstract class WaitingState extends BaseTxnState
                     {
                         if (notReady == null)
                         {
-                            Invariants.expect((int) awaitRoute.findNextIntersection(roundStart, (Routables) ready, 0) / roundSize == roundIndex);
+                            Invariants.expect((int) awaitRoute.findNextSameKindIntersection(roundStart, (Unseekables) ready, 0) / roundSize == roundIndex);
                             // TODO (desired): in this case perhaps upgrade to fetch for next round?
                             state.updateAwaitRound(roundIndex + 1, roundSize);
                             state.runInternal(safeStore, safeCommand, owner);
                         }
                         else
                         {
-                            Invariants.expect((int) awaitRoute.findNextIntersection(roundStart, (Routables) notReady, 0) / roundSize == roundIndex);
+                            Invariants.expect((int) awaitRoute.findNextSameKindIntersection(roundStart, (Unseekables) notReady, 0) / roundSize == roundIndex);
                             // TODO (desired): would be nice to validate this is 0 in cases where we are starting a fresh round
                             //  but have to be careful as cannot zero when we restart as we may have an async callback arrive while we're waiting that then advances state machine
                             state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
@@ -581,7 +581,7 @@ abstract class WaitingState extends BaseTxnState
                     Invariants.require(notReady.intersects(slicedRoute), "Fetch was successful for all keys, but the WaitingState has not been cleared");
                     int nextIndex;
                     if (roundStart >= awaitRoute.size()) nextIndex = -1;
-                    else if (slicedRoute == awaitRoute) nextIndex = (int) awaitRoute.findNextIntersection(roundStart, (Routables) notReady, 0);
+                    else if (slicedRoute == awaitRoute) nextIndex = (int) awaitRoute.findNextSameKindIntersection(roundStart, (Unseekables) notReady, 0);
                     else
                     {
                         Invariants.require(roundIndex == 0);

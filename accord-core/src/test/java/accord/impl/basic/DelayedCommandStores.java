@@ -304,7 +304,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
 
         @Override
-        public <T> AsyncChain<T> submit(Callable<T> fn)
+        public <T> AsyncChain<T> build(Callable<T> fn)
         {
             return submit(new DelayedTask<>(fn));
         }

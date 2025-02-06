@@ -91,6 +91,8 @@ public class StableThenRead extends ReadData
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, Ballot.ZERO, txnId, route, partialTxn, executeAt, partialDeps, kind);
+        if (participants.executes().isEmpty())
+            return null;
         return super.apply(safeStore, safeCommand, participants);
     }
 

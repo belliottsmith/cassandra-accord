@@ -149,10 +149,4 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     {
         return MessageType.INFORM_DURABLE_REQ;
     }
-
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
 }

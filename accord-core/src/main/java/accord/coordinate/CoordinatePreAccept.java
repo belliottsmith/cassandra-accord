@@ -44,6 +44,7 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.primitives.Timestamp.mergeMaxAndFlags;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
@@ -60,7 +61,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
 
     CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route)
     {
-        this(node, txnId, txn, route, node.topology().select(route, txnId, txnId, QuorumEpochIntersections.preaccept.include));
+        this(node, txnId, txn, route, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include));
     }
 
     CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies)

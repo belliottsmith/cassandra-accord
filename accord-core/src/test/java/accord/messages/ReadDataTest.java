@@ -62,6 +62,7 @@ import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.topology.Topology;
@@ -101,8 +102,21 @@ class ReadDataTest
 
         AsyncResults.SettableResult<Data> readResult = new AsyncResults.SettableResult<>();
 
+        Read read = mockRead(keys, readResult);
+        Query query = Mockito.mock(Query.class);
+        Update update = Mockito.mock(Update.class);
+        Mockito.when(update.intersecting(any())).thenReturn(update);
+
+        Txn txn = new Txn.InMemory(keys, read, query, update);
+        PartialTxn partialTxn = txn.intersecting(RANGES, true);
+
+        fn.accept(new State(node, sink, txnId, partialTxn, readResult));
+    }
+
+    private Read mockRead(Keys keys, AsyncResults.SettableResult<Data> readResult)
+    {
         Read read = Mockito.mock(Read.class);
-        Mockito.when(read.intersecting(any())).thenReturn(read);
+        Mockito.when(read.intersecting(any())).thenAnswer(i -> mockRead(keys.intersecting((Unseekables) i.getArgument(0)), readResult));
         Mockito.when(read.merge(any())).thenReturn(read);
         Mockito.when(read.keys()).thenReturn((Seekables)keys);
         Mockito.when(read.read(any(), any(), any(), any())).thenAnswer(new Answer<AsyncChain<Data>>()
@@ -115,14 +129,7 @@ class ReadDataTest
                 return readResult;
             }
         });
-        Query query = Mockito.mock(Query.class);
-        Update update = Mockito.mock(Update.class);
-        Mockito.when(update.intersecting(any())).thenReturn(update);
-
-        Txn txn = new Txn.InMemory(keys, read, query, update);
-        PartialTxn partialTxn = txn.intersecting(RANGES, true);
-
-        fn.accept(new State(node, sink, txnId, partialTxn, readResult));
+        return read;
     }
 
     @Test
@@ -151,7 +158,9 @@ class ReadDataTest
                 CheckedCommands.accept(safe, state.txnId, Ballot.ZERO, state.partialRoute, state.executeAt, state.deps);
 
                 SafeCommand safeCommand = safe.ifInitialised(state.txnId);
-                safeCommand.stable(safe, StoreParticipants.execute(safe, state.route, state.txnId, state.txnId.epoch()), Ballot.ZERO, state.executeAt, state.partialTxn, state.deps, Command.WaitingOn.empty(state.txnId.domain()));
+                StoreParticipants participants = StoreParticipants.execute(safe, state.route, state.txnId, state.txnId.epoch());
+                PartialTxn txn = state.partialTxn.intersecting(participants.owns(), true);
+                safeCommand.stable(safe, participants, Ballot.ZERO, state.executeAt, txn, state.deps, Command.WaitingOn.empty(state.txnId.domain()));
             })));
 
             ReplyContext replyContext = state.process();

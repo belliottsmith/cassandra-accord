@@ -102,12 +102,6 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
     }
 
     @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
-    @Override
     public long waitForEpoch()
     {
         return txnId.epoch();

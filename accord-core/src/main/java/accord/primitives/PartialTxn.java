@@ -22,8 +22,10 @@ import accord.api.Query;
 import accord.api.Read;
 import accord.api.Update;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 
 public interface PartialTxn extends Txn
@@ -40,7 +42,7 @@ public interface PartialTxn extends Txn
         if (query() == null && route.contains(route.homeKey()))
             return false;
 
-        return keys().intersectsAll(route);
+        return keys().containsAll(route);
     }
 
     default boolean covers(Unseekables<?> participants)
@@ -48,7 +50,7 @@ public interface PartialTxn extends Txn
         if (kind().isSystemTxn())
             return true;
 
-        return keys().intersectsAll(participants);
+        return keys().containsAll(participants);
     }
 
     static PartialTxn merge(@Nullable PartialTxn a, @Nullable PartialTxn b)
@@ -106,6 +108,28 @@ public interface PartialTxn extends Txn
                 return this;
 
             return new PartialTxn.InMemory(kind(), keys(), read(), query(), update());
+        }
+
+        @Nonnull
+        @Override
+        public PartialTxn intersecting(Participants<?> participants, boolean includeQuery)
+        {
+            Seekables<?, ?> keys = keys();
+            Seekables<?, ?> intersecting = keys().intersecting(participants, Minimal);
+            if (intersecting == keys)
+                return this;
+
+            return new PartialTxn.InMemory(
+                kind(), intersecting,
+                read().intersecting(participants), includeQuery ? query() : null,
+                update() == null ? null : update().intersecting(participants)
+            );
+        }
+
+        @Override
+        public PartialTxn slice(Ranges ranges, boolean includeQuery)
+        {
+            return super.slice(ranges, includeQuery);
         }
     }
 }

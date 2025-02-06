@@ -41,6 +41,8 @@ import accord.primitives.Seekable;
 import accord.primitives.Seekables;
 import accord.utils.async.AsyncExecutor;
 
+import static accord.primitives.Routables.Slice.Minimal;
+
 public class ListRead implements Read
 {
     private static final Logger logger = LoggerFactory.getLogger(ListRead.class);
@@ -69,7 +71,7 @@ public class ListRead implements Read
     {
         ListStore s = (ListStore)store;
         logger.trace("submitting READ on {} at {} key:{}", s.node, executeAt, key);
-        return executor.apply(safeStore.commandStore()).submit(() -> {
+        return executor.apply(safeStore.commandStore()).build(() -> {
             Ranges unavailable = safeStore.unsafeToReadAt(executeAt);
             ListData result = new ListData();
             switch (key.domain())
@@ -96,13 +98,13 @@ public class ListRead implements Read
     @Override
     public Read slice(Ranges ranges)
     {
-        return new ListRead(executor, isEphemeralRead, userReadKeys.slice(ranges), keys.slice(ranges));
+        return new ListRead(executor, isEphemeralRead, userReadKeys.slice(ranges, Minimal), keys.slice(ranges, Minimal));
     }
 
     @Override
     public Read intersecting(Participants<?> participants)
     {
-        return new ListRead(executor, isEphemeralRead, userReadKeys.intersecting(participants), keys.intersecting(participants));
+        return new ListRead(executor, isEphemeralRead, userReadKeys.intersecting(participants, Minimal), keys.intersecting(participants, Minimal));
     }
 
     @Override

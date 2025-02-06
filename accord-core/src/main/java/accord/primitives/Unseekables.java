@@ -19,6 +19,8 @@
 package accord.primitives;
 
 import accord.api.RoutingKey;
+import accord.utils.SortedArrays;
+import accord.utils.UnhandledEnum;
 
 /**
  * Either a Route or a simple collection of keys or ranges
@@ -39,6 +41,20 @@ public interface Unseekables<K extends Unseekable> extends Iterable<K>, Routable
             return this == FullKeyRoute | this == FullRangeRoute;
         }
     }
+
+    /**
+     * Perform {@link SortedArrays#exponentialSearch} from {@code thisIndex} looking for {@code find} with behaviour of {@code search}
+     */
+    default int findNext(int thisIndex, Unseekable find, SortedArrays.Search search)
+    {
+        switch (find.domain())
+        {
+            default: throw new AssertionError("Unhandled domain: " + find.domain());
+            case Key: return findNext(thisIndex, (RoutingKey) find, search);
+            case Range: return findNext(thisIndex, (Range) find, search);
+        }
+    }
+
 
     @Override
     Unseekables<K> slice(int from, int to);
@@ -65,6 +81,21 @@ public interface Unseekables<K extends Unseekable> extends Iterable<K>, Routable
     Unseekables<K> with(Unseekables<K> with);
     Unseekables<K> with(RoutingKey withKey);
     UnseekablesKind kind();
+
+    /**
+     * Search forwards from {code thisIndex} and {@code withIndex} to find the first entries in each collection
+     * that intersect with each other. Return their position packed in a long, with low bits representing
+     * the resultant {@code thisIndex} and high bits {@code withIndex}.
+     */
+    default long findNextIntersection(int thisIndex, Unseekables<K> with, int withIndex)
+    {
+        switch (with.domain())
+        {
+            default: throw new UnhandledEnum(with.domainKind());
+            case Key: return findNextIntersection(thisIndex, (AbstractUnseekableKeys) with, withIndex);
+            case Range: return findNextIntersection(thisIndex, (AbstractRanges) with, withIndex);
+        }
+    }
 
     /**
      * If both left and right are a Route, invoke {@link Route#with} on them. Otherwise invoke {@link #with}.

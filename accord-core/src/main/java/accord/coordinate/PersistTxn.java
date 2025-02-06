@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import accord.api.Result;
 import accord.local.Node;
+import accord.messages.Apply;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Route;
@@ -31,8 +32,8 @@ import accord.topology.Topologies;
 
 public class PersistTxn extends Persist
 {
-    public PersistTxn(Node node, Topologies topologies, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> route)
+    public PersistTxn(Node node, Topologies topologies, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> route, Apply.Factory factory)
     {
-        super(node, topologies, txnId, sendTo, txn, executeAt, deps, writes, result, route);
+        super(node, topologies, txnId, sendTo, txn, executeAt, deps, writes, result, route, factory);
     }
 }

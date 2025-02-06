@@ -111,6 +111,11 @@ public class PartialDeps extends Deps
         return new PartialDeps(this.covering.intersecting(participants, Minimal), keyDeps.intersecting(participants), rangeDeps.intersecting(participants), directKeyDeps.intersecting(participants));
     }
 
+    public Deps asFullUnsafe()
+    {
+        return new Deps(keyDeps, rangeDeps, directKeyDeps);
+    }
+
     public Deps reconstitute(FullRoute<?> route)
     {
         if (!covers(route.participants()))

@@ -101,7 +101,7 @@ class CoordinateSyncPointTest
         var await = CoordinateSyncPoint.exclusiveSyncPoint(node, new TxnId(1, node.now(), 0, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, node.id()), Ranges.single(removed))
                                        .flatMap(syncPoint ->
                                                         // the test uses an executor that runs everything right away, so this gets called outside the CommandStore
-                                                        node.commandStores().forId(0).submit(() -> {
+                                                        node.commandStores().forId(0).build(() -> {
                                                             ExecuteSyncPoint.ExecuteExclusive execute = new ExecuteSyncPoint.ExecuteExclusive(node, syncPoint, AllTracker::new);
                                                             execute.start();
                                                             return execute;
@@ -124,7 +124,7 @@ class CoordinateSyncPointTest
             }
             else if (request instanceof Accept)
             {
-                onSuccess(args, new Accept.AcceptReply(PartialDeps.NONE));
+                onSuccess(args, new Accept.AcceptReply(((Accept) request).scope, PartialDeps.NONE));
             }
             else if (request instanceof Commit)
             {

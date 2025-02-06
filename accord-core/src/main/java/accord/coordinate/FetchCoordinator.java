@@ -32,6 +32,7 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -150,7 +151,7 @@ public abstract class FetchCoordinator
         this.fetchRanges = fetchRanges;
         // TODO (expected): prioritise nodes that were members in the "prior" epoch also
         //  (by prior, we mean the prior epoch affecting ownership of this shard, not the prior numerical epoch)
-        Topology topology = node.topology().forEpoch(ranges, syncPoint.syncId.epoch()).get(0);
+        Topology topology = node.topology().forEpoch(ranges, syncPoint.syncId.epoch(), SHARE).get(0);
         for (Node.Id id : topology.nodes())
         {
             if (!id.equals(node.id()))

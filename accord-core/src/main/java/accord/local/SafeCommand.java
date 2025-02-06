@@ -109,9 +109,9 @@ public abstract class SafeCommand
         return incidentalUpdate(current().updatePromised(promised));
     }
 
-    public Command.Accepted accept(SafeCommandStore safeStore, SaveStatus status, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialDeps partialDeps, Ballot acceptedOrCommitted)
+    public Command.Accepted accept(SafeCommandStore safeStore, SaveStatus status, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
     {
-        return update(safeStore, Command.accept(current(), status, participants, promised, executeAt, partialDeps, acceptedOrCommitted));
+        return update(safeStore, Command.accept(current(), status, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted));
     }
 
     public Command notAccept(SafeCommandStore safeStore, Status status, Ballot ballot)
@@ -138,9 +138,9 @@ public abstract class SafeCommand
         return update(safeStore, Truncated.invalidated(current));
     }
 
-    public Command precommit(SafeCommandStore safeStore, Timestamp executeAt)
+    public Command precommit(SafeCommandStore safeStore, Timestamp executeAt, Ballot promisedAtLeast)
     {
-        return update(safeStore, Command.precommit(current(), executeAt));
+        return update(safeStore, Command.precommit(current(), executeAt, promisedAtLeast));
     }
 
     public Command.Committed readyToExecute(SafeCommandStore safeStore)

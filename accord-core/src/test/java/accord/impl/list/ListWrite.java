@@ -56,7 +56,7 @@ public class ListWrite extends TreeMap<Key, int[]> implements Write
             return Writes.SUCCESS;
 
         logger.trace("submitting WRITE on {} at {} key:{}", s.node, executeAt, key);
-        return executor.apply(safeStore.commandStore()).submit(() -> {
+        return executor.apply(safeStore.commandStore()).build(() -> {
             int[] data = get(key);
             s.write((Key)key, executeAt, data);
             logger.trace("WRITE on {} at {} key:{} -> {}", s.node, executeAt, key, data);

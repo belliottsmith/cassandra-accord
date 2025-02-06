@@ -117,7 +117,7 @@ class Updating
         // TODO (expected): do not calculate any deps or additions if we're transitioning from Stable to Applied; wasted effort and might trigger LoadPruned
         Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, mayExecute, command);
         if (newInfoObj.getClass() != InfoWithAdditions.class)
-            return insertOrUpdate(cfk, insertPos, plainTxnId, curInfo, (TxnInfo)newInfoObj, false, null, command);
+            return insertOrUpdate(cfk, insertPos, plainTxnId, curInfo, (TxnInfo)newInfoObj, null, command);
 
         InfoWithAdditions newInfoWithAdditions = (InfoWithAdditions) newInfoObj;
         TxnId[] additions = newInfoWithAdditions.additions;
@@ -328,7 +328,7 @@ class Updating
         return new InfoWithAdditions(info, additions, additionCount);
     }
 
-    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, boolean wasPruned, @Nullable TxnId[] loadingAsPrunedFor, Command command)
+    static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, @Nullable TxnId[] loadingAsPrunedFor, Command command)
     {
         if (curInfo == newInfo)
             return cfk;
@@ -337,8 +337,8 @@ class Updating
         if (loadingAsPrunedFor != null) newLoadingPruned = Pruning.removeLoadingPruned(newLoadingPruned, plainTxnId);
 
         int committedByExecuteAtUpdatePos = committedByExecuteAtUpdatePos(cfk.committedByExecuteAt, curInfo, newInfo);
-        TxnInfo[] newCommittedByExecuteAt = updateCommittedByExecuteAt(cfk, committedByExecuteAtUpdatePos, newInfo, wasPruned);
-        int newMaxAppliedWriteByExecuteAt = updateMaxAppliedWriteByExecuteAt(cfk, committedByExecuteAtUpdatePos, newInfo, newCommittedByExecuteAt, wasPruned);
+        TxnInfo[] newCommittedByExecuteAt = updateCommittedByExecuteAt(cfk, committedByExecuteAtUpdatePos, newInfo, loadingAsPrunedFor != null);
+        int newMaxAppliedWriteByExecuteAt = updateMaxAppliedWriteByExecuteAt(cfk, committedByExecuteAtUpdatePos, newInfo, newCommittedByExecuteAt, loadingAsPrunedFor != null);
 
         int newMinUndecidedById = cfk.minUndecidedById;
         TxnInfo[] byId = cfk.byId;

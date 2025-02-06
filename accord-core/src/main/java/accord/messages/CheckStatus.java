@@ -121,12 +121,6 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         this.includeInfo = includeInfo;
     }
 
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
     public CheckStatus(Id to, Topologies topologies, TxnId txnId, Participants<?> query, long sourceEpoch, IncludeInfo includeInfo)
     {
         super(txnId);

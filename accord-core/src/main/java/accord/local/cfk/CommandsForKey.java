@@ -84,6 +84,7 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE_VISIBLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.from;
 import static accord.local.cfk.CommandsForKey.InternalStatus.prunedFrom;
 import static accord.local.cfk.PostProcess.notifyManagedPreBootstrap;
+import static accord.local.cfk.Pruning.find;
 import static accord.local.cfk.Pruning.isAnyPredecessorWaitingOnPruned;
 import static accord.local.cfk.Pruning.isWaitingOnPruned;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
@@ -1353,7 +1354,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
         // the range is marked as durable. If now the replica then witnesses one of these transactions it will
         // consider that they must be invalidated, as it had not witnessed them, they were not pre-bootstrap and
         // they were pre-RX.
-        TxnInfo maxCommittedWriteBefore;
+        TxnInfo maxCommittedWriteBefore = NO_INFO;
+        TxnInfo maxCommittedWriteForEpoch = NO_INFO;
         {
             int from = 0, to = committedByExecuteAt.length;
             if (maxAppliedWriteByExecuteAt >= 0)
@@ -1365,7 +1367,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
             if (i < 0) i = -2 - i;
             else --i;
             while (i >= 0 && !committedByExecuteAt[i].is(Write)) --i;
-            maxCommittedWriteBefore = i < 0 ? null : committedByExecuteAt[i];
+            if (i >= 0)
+            {
+                maxCommittedWriteBefore = committedByExecuteAt[i];
+                if (maxCommittedWriteBefore.executeAt == maxCommittedWriteBefore)
+                    maxCommittedWriteForEpoch = maxCommittedWriteBefore;
+            }
         }
 
         // TODO (expected): consider whether this is strictly needed - if we've applied a transaction after the pruned
@@ -1380,7 +1387,6 @@ public class CommandsForKey extends CommandsForKeyUpdate
             nextPruned = loadingPruned.next();
         }
 
-        TxnInfo maxCommittedWriteForEpoch = null;
         for (int i = 0; i < end ; ++i)
         {
             TxnInfo txn = byId[i];
@@ -1409,8 +1415,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 case APPLIED_NOT_DURABLE:
                 case APPLIED_DURABLE:
                 case APPLIED_NOT_EXECUTED:
-                    if (maxCommittedWriteBefore == null
-                        || txn.compareTo(maxCommittedWriteBefore) >= 0
+                    if (txn.compareTo(maxCommittedWriteBefore) >= 0
                         || txn.executeAt.compareTo(maxCommittedWriteBefore.executeAt) >= 0
                         || !Write.witnesses(txn))
                         break;
@@ -1434,14 +1439,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
                             // from all epochs we know
 
                             long epoch = txn.epoch();
-                            if (epoch == maxCommittedWriteBefore.epoch())
-                                continue;
-
-                            if (maxCommittedWriteForEpoch != null && epoch != maxCommittedWriteForEpoch.epoch())
-                                maxCommittedWriteForEpoch = null;
-
-                            if (maxCommittedWriteForEpoch == null)
+                            if (epoch != maxCommittedWriteForEpoch.epoch())
                             {
+                                maxCommittedWriteForEpoch = NO_INFO;
                                 for (int j = i ; j < end ; ++j)
                                 {
                                     TxnInfo t = byId[j];
@@ -1451,10 +1451,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
                                     if (!t.isWrite() || t.executeAt != t || !t.isCommittedToExecute())
                                         continue;
 
-                                    if (maxCommittedWriteForEpoch == null || t.compareExecuteAt(maxCommittedWriteForEpoch) > 0)
+                                    if (t.compareExecuteAt(maxCommittedWriteForEpoch) > 0)
                                         maxCommittedWriteForEpoch = t;
                                 }
-                                if (maxCommittedWriteForEpoch == null)
+                                if (maxCommittedWriteForEpoch == NO_INFO)
                                     maxCommittedWriteForEpoch = txn;
                             }
 
@@ -1494,24 +1494,34 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public CommandsForKeyUpdate callback(SafeCommandStore safeStore, Command update)
     {
+        LoadingPruned loading = find(loadingPruned, update.txnId());
         if (maybePruned(update))
-            return maybePrunedCallback(safeStore, update);
-        return update(safeStore, update);
+            return maybePrunedCallback(safeStore, update, loading);
+        return update(safeStore, update, loading);
     }
 
     public CommandsForKeyUpdate update(SafeCommandStore safeStore, Command update)
+    {
+        return update(safeStore, update, find(loadingPruned, update.txnId()));
+    }
+
+    private CommandsForKeyUpdate update(SafeCommandStore safeStore, Command update, @Nullable LoadingPruned loading)
     {
         Invariants.require(manages(update.txnId()));
         InternalStatus newStatus = from(safeStore, update);
         if (newStatus == null)
         {
-            // handle replay of TruncatedApply with uniqueHlc
-            if (update.known().is(ApplyAtKnown))
-                return updateUniqueHlc(update.executeAt().uniqueHlc());
-            return this;
+            if (loading == null)
+            {
+                // handle replay of TruncatedApply with uniqueHlc
+                if (update.known().is(ApplyAtKnown))
+                    return updateUniqueHlc(update.executeAt().uniqueHlc());
+                return this;
+            }
+            newStatus = loading.isVisible ? TRANSITIVE_VISIBLE : TRANSITIVE;
         }
 
-        return update(newStatus, update);
+        return update(newStatus, update, loading);
     }
 
     public CommandsForKey updateUniqueHlc(long minUniqueHlc)
@@ -1536,22 +1546,21 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return new CommandsForKey(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
     }
 
-    CommandsForKeyUpdate maybePrunedCallback(SafeCommandStore safeStore, Command update)
+    CommandsForKeyUpdate maybePrunedCallback(SafeCommandStore safeStore, Command update, @Nullable LoadingPruned loading)
     {
         TxnId txnId = update.txnId();
         InternalStatus ifPrunedStatus = prunedFrom(update.saveStatus());
-        boolean isLoadingPruned = loadingPrunedFor(loadingPruned, txnId, null) != null;
-        if (!isLoadingPruned)
+        if (loading == null)
         {
             TxnInfo cur = get(txnId);
             if (cur != null && !cur.is(PRUNED))
-                return update(safeStore, update); // if we're not pruned, this should be treated as a regular callback
+                return update(safeStore, update, loading); // if we're not pruned, this should be treated as a regular callback
 
             if (!manages(txnId))
                 ifPrunedStatus = PRUNED;
         }
 
-        return update(ifPrunedStatus, update);
+        return update(ifPrunedStatus, update, loading);
     }
 
     private boolean maybePruned(Command command)
@@ -1565,7 +1574,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return command.hasBeen(Status.Truncated) || (command.hasBeen(Status.Applied) && prunedBefore.executeAt.compareTo(command.executeAt()) > 0);
     }
 
-    private CommandsForKeyUpdate update(InternalStatus newStatus, Command updated)
+    private CommandsForKeyUpdate update(InternalStatus newStatus, Command updated, @Nullable LoadingPruned loading)
     {
         TxnId txnId = updated.txnId();
         Invariants.requireArgument(updated.participants().hasTouched(key) || !manages(txnId));
@@ -1577,10 +1586,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
         boolean isOutOfRange = !mayExecute && newStatus.compareTo(APPLIED) <= 0 && manages(txnId)
                                && !updated.participants().stillTouches(key);
 
-        TxnId[] loadingAsPrunedFor = loadingPrunedFor(loadingPruned, txnId, null); // we default to null to distinguish between no match, and a match with NO_TXNIDS
-        boolean wasPruned = loadingAsPrunedFor != null;
+        TxnId[] loadingAsPrunedFor = loading != null ? loading.witnessedBy : null;
 
-        if (!wasPruned && isOutOfRange && newStatus.compareTo(COMMITTED) < 0)
+        if (loading == null && isOutOfRange && newStatus.compareTo(COMMITTED) < 0)
             return this;
 
         int pos = Arrays.binarySearch(byId, txnId);
@@ -1591,9 +1599,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 return this; // if outOfRange we only need to maintain any existing records; if none, don't update
 
             pos = -1 - pos;
-            if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, null, newStatus, mayExecute, updated, wasPruned, loadingAsPrunedFor);
-            else if (newStatus.hasDeps() && !wasPruned) result = insert(pos, txnId, newStatus, mayExecute, updated);
-            else result = insert(pos, txnId, TxnInfo.create(txnId, newStatus, mayExecute, updated), wasPruned, loadingAsPrunedFor, updated);
+            if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, null, newStatus, mayExecute, updated, loadingAsPrunedFor);
+            else if (newStatus.hasDeps() && loading == null) result = insert(pos, txnId, newStatus, mayExecute, updated);
+            else result = insert(pos, txnId, TxnInfo.create(txnId, newStatus, mayExecute, updated), loadingAsPrunedFor, updated);
         }
         else
         {
@@ -1627,9 +1635,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 }
             }
 
-            if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, cur, newStatus, mayExecute, updated, wasPruned, loadingAsPrunedFor);
-            else if (newStatus.hasDeps() && !wasPruned) result = update(pos, txnId, cur, newStatus, mayExecute, updated);
-            else result = update(pos, txnId, cur, TxnInfo.create(txnId, newStatus, mayExecute, updated), wasPruned, loadingAsPrunedFor, updated);
+            if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, cur, newStatus, mayExecute, updated, loadingAsPrunedFor);
+            else if (newStatus.hasDeps() && loading == null) result = update(pos, txnId, cur, newStatus, mayExecute, updated);
+            else result = update(pos, txnId, cur, TxnInfo.create(txnId, newStatus, mayExecute, updated), loadingAsPrunedFor, updated);
         }
 
         return result;
@@ -1645,20 +1653,20 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return insertOrUpdate(this, updatePos, updatePos, plainTxnId, curInfo, newStatus, mayExecute, command);
     }
 
-    CommandsForKeyUpdate update(int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, boolean wasPruned, TxnId[] loadingAsPrunedFor, Command command)
+    CommandsForKeyUpdate update(int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, TxnId[] loadingAsPrunedFor, Command command)
     {
-        return insertOrUpdate(this, pos, plainTxnId, curInfo, newInfo, wasPruned, loadingAsPrunedFor, command);
+        return insertOrUpdate(this, pos, plainTxnId, curInfo, newInfo, loadingAsPrunedFor, command);
     }
 
     /**
      * Insert a new txnId and info
      */
-    CommandsForKeyUpdate insert(int pos, TxnId plainTxnId, TxnInfo newInfo, boolean wasPruned, TxnId[] loadingAsPrunedFor, Command updated)
+    CommandsForKeyUpdate insert(int pos, TxnId plainTxnId, TxnInfo newInfo, TxnId[] loadingAsPrunedFor, Command updated)
     {
-        return insertOrUpdate(this, pos, plainTxnId, null, newInfo, wasPruned, loadingAsPrunedFor, updated);
+        return insertOrUpdate(this, pos, plainTxnId, null, newInfo, loadingAsPrunedFor, updated);
     }
 
-    private CommandsForKeyUpdate insertOrUpdateOutOfRange(int updatePos, TxnId plainTxnId, @Nullable TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command updated, boolean wasPruned, TxnId[] loadingAsPrunedFor)
+    private CommandsForKeyUpdate insertOrUpdateOutOfRange(int updatePos, TxnId plainTxnId, @Nullable TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command updated, TxnId[] loadingAsPrunedFor)
     {
         Invariants.requireArgument(!mayExecute);
         int statusOverridesXor = newStatus.flags & 1;
@@ -1666,7 +1674,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (curInfo == null) newInfo = TxnInfo.create(plainTxnId, newStatus, false, statusOverridesXor, plainTxnId, newStatus.hasBallot ? updated.acceptedOrCommitted() : Ballot.ZERO);
         else newInfo = curInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, false, statusOverridesXor));
         // out of range means we have no deps, we're just marking committed, so we set HAS_DEPS to 0
-        return insertOrUpdate(this, updatePos, plainTxnId, curInfo, newInfo, wasPruned, loadingAsPrunedFor, updated);
+        return insertOrUpdate(this, updatePos, plainTxnId, curInfo, newInfo, loadingAsPrunedFor, updated);
     }
 
     // TODO (required): additional linearizability violation detection, based on expectation of presence in missing set

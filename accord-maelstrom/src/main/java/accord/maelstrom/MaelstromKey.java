@@ -33,7 +33,7 @@ import com.google.gson.stream.JsonWriter;
 
 import javax.annotation.Nonnull;
 
-public class MaelstromKey implements RoutableKey
+public abstract class MaelstromKey implements RoutableKey
 {
     public static class Splitter implements ShardDistributor.EvenSplit.Splitter<Long>
     {

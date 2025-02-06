@@ -188,24 +188,24 @@ public interface CommandSummaries
                 if (!txnId.is(testKind))
                     return null;
 
-                // TODO (desired): generalise this better for key loading
-                Ranges ranges = touches.toRanges().intersecting(searchKeysOrRanges, Minimal);
-                if (ranges.isEmpty())
+                // start in search key domain, since this is what we consult to decide if can be recovered
+                Unseekables<?> intersecting = searchKeysOrRanges.intersecting(touches, Minimal);
+                if (intersecting.isEmpty())
                     return null;
 
                 if (redundantBefore != null)
                 {
                     // TODO (expected): consider whether this is necessary (and document it).
-                    Ranges newRanges = redundantBefore.foldlWithBounds(ranges, (e, accum, start, end) -> {
+                    Unseekables<?> newIntersecting = redundantBefore.foldlWithBounds(intersecting, (e, accum, start, end) -> {
                         if (e.gcBefore.compareTo(txnId) <= 0)
                             return accum;
                         return accum.without(Ranges.of(start.rangeFactory().newRange(start, end)));
-                    }, ranges, ignore -> false);
+                    }, intersecting, ignore -> false);
 
-                    if (newRanges.isEmpty())
+                    if (newIntersecting.isEmpty())
                         return null;
 
-                    ranges = newRanges;
+                    intersecting = newIntersecting;
                 }
 
                 Invariants.require(partialDeps != null || findAsDep == null || !saveStatus.known.deps().hasProposedOrDecidedDeps());
@@ -219,14 +219,17 @@ public interface CommandSummaries
                     else
                     {
                         boolean isStable = summaryStatus.compareTo(ACCEPTED) >= 0;
-                        Unseekables<?> participants = partialDeps.participants(findAsDep);
-                        isDep = participants != null && participants.containsAll(ranges)
+                        // this should be in same domain as intersecting, as will be taken from relevant Deps entry
+                        Participants<?> participants = partialDeps.participants(findAsDep);
+                        isDep = participants != null && participants.containsAll(intersecting)
                                 ? (isStable ? IsDep.IS_STABLE_DEP     : IsDep.IS_COORD_DEP)
                                 : (isStable ? IsDep.IS_NOT_STABLE_DEP : IsDep.IS_NOT_COORD_DEP);
                     }
                 }
 
-                return new Summary(txnId, executeAt, summaryStatus, ranges, isDep, findAsDep);
+                // convert to the domain of the command we're loading
+                intersecting = touches.intersecting(intersecting, Minimal);
+                return new Summary(txnId, executeAt, summaryStatus, intersecting, isDep, findAsDep);
             }
         }
     }

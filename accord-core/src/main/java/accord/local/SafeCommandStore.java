@@ -488,11 +488,6 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         return ranges().allAt(txnId.epoch());
     }
 
-    public Ranges ranges(TxnId txnId, Timestamp executeAt)
-    {
-        return ranges(txnId, executeAt.epoch());
-    }
-
     public Ranges ranges(TxnId txnId, long untilLocalEpoch)
     {
         return ranges().allBetween(txnId.epoch(), untilLocalEpoch);

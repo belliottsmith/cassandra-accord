@@ -34,7 +34,7 @@ import javax.annotation.Nonnull;
 
 import static accord.utils.Utils.toArray;
 
-public class IntKey implements RoutableKey
+public abstract class IntKey implements RoutableKey
 {
     public static class Splitter implements ShardDistributor.EvenSplit.Splitter<Long>
     {

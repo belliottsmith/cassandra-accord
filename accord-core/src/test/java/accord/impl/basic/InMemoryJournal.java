@@ -34,7 +34,6 @@ import accord.api.Journal;
 import accord.api.Result;
 import accord.impl.CommandChange;
 import accord.impl.InMemoryCommandStore;
-import accord.impl.RetiredSafeCommand;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.Command.WaitingOnWithExecuteAt;
@@ -89,7 +88,6 @@ import static accord.impl.CommandChange.unsetIterable;
 import static accord.impl.CommandChange.validateFlags;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.primitives.SaveStatus.Erased;
-import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
 import static accord.utils.Invariants.illegalState;
@@ -122,17 +120,7 @@ public class InMemoryJournal implements Journal
             return null;
 
         Builder builder = reconstruct(saved, ALL);
-        Cleanup cleanup = builder.shouldCleanup(FULL, agent, redundantBefore, durableBefore);
-        switch (cleanup)
-        {
-            case VESTIGIAL:
-                return RetiredSafeCommand.erased(txnId, Vestigial);
-
-            case EXPUNGE:
-            case ERASE:
-                return RetiredSafeCommand.erased(txnId, Erased);
-        }
-
+        builder.maybeCleanup(FULL, agent, redundantBefore, durableBefore);
         return builder.construct(redundantBefore);
     }
 
@@ -183,7 +171,7 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public void saveCommand(int store, CommandUpdate update, Runnable onFlush)
+    public void saveCommand(int commandStoreId, CommandUpdate update, Runnable onFlush)
     {
         Diff diff;
         if ((diff = toDiff(update)) == null)
@@ -193,7 +181,7 @@ public class InMemoryJournal implements Journal
             return;
         }
 
-        diffsPerCommandStore.computeIfAbsent(store, (k) -> new TreeMap<>())
+        diffsPerCommandStore.computeIfAbsent(commandStoreId, (k) -> new TreeMap<>())
                             .computeIfAbsent(update.txnId, (k_) -> new ArrayList<>())
                             .add(diff);
 

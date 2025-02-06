@@ -104,6 +104,12 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
         return scope;
     }
 
+    @Override
+    public Unseekables<?> keys()
+    {
+        return scope;
+    }
+
     /**
      * The minimum epoch the recipient needs to know in order to process the request. This is computed by the sender
      * to permit a recipient to process a request before knowing of a topology change if the sender determines it is

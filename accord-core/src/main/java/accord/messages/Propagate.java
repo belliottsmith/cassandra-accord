@@ -83,7 +83,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     // TODO (desired): remove dependency on these two SaveStatus
     final SaveStatus maxKnowledgeSaveStatus;
     final SaveStatus maxSaveStatus;
-    final Ballot ballot;
+    final Ballot promised;
+    final Ballot acceptedOrCommitted;
     final Status.Durability durability;
     @Nullable final RoutingKey homeKey;
     // this is a WHOLE NODE measure, so if commit epoch has more ranges we do not count as committed if we can only commit in coordination epoch
@@ -105,8 +106,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     Route<?> route,
     Unseekables<?> propagateTo, Known target, InvalidIf invalidIf,
     SaveStatus maxKnowledgeSaveStatus,
-    SaveStatus maxSaveStatus,
-    Ballot ballot,
+    SaveStatus maxSaveStatus, Ballot promised,
+    Ballot acceptedOrCommitted,
     Status.Durability durability,
     @Nullable RoutingKey homeKey,
     KnownMap known, WithQuorum withQuorum,
@@ -127,7 +128,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.invalidIf = invalidIf;
         this.maxKnowledgeSaveStatus = maxKnowledgeSaveStatus;
         this.maxSaveStatus = maxSaveStatus;
-        this.ballot = ballot;
+        this.promised = promised;
+        this.acceptedOrCommitted = acceptedOrCommitted;
         this.durability = durability;
         this.homeKey = homeKey;
         this.known = known;
@@ -158,7 +160,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         Route<?> route = Invariants.nonNull(full.route);
 
         Propagate propagate =
-            new Propagate(node, txnId, route, propagateTo, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, lowEpoch, highEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
+            new Propagate(node, txnId, route, propagateTo, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, lowEpoch, highEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
 
         if (full.executeAt != null && full.executeAt.epoch() > highEpoch)
             highEpoch = full.executeAt.epoch();
@@ -282,13 +284,13 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 break;
 
             case Stable:
-                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, ballot, txnId, route, partialTxn, executeAtIfKnown, stableDeps, null));
+                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, acceptedOrCommitted, txnId, route, partialTxn, executeAtIfKnown, stableDeps, null));
                 break;
 
             case Committed:
                 // TODO (expected): we can propagate Committed as Stable if we have any other Stable result AND a quorum of committedDeps
             case PreCommitted:
-                confirm(Commands.precommit(safeStore, safeCommand, participants, txnId, executeAtIfKnown));
+                confirm(Commands.precommit(safeStore, safeCommand, participants, txnId, executeAtIfKnown, promised));
                 // TODO (desired): would it be clearer to yield a SaveStatus so we can have PreCommittedWithDefinition
                 if (!found.definition().isKnown())
                     break;

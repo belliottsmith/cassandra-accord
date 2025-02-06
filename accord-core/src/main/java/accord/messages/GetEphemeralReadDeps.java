@@ -29,7 +29,6 @@ import accord.primitives.FullRoute;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
@@ -95,18 +94,6 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
                "txnId:" + txnId +
                ", scope:" + scope +
                '}';
-    }
-
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
-    @Override
-    public Unseekables<?> keys()
-    {
-        return scope;
     }
 
     @Override

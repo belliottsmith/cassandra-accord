@@ -24,15 +24,13 @@ import java.util.concurrent.Executors;
 
 public interface AsyncExecutor extends Executor
 {
-    default AsyncChain<?> submit(Runnable task)
+    default AsyncChain<?> build(Runnable task)
     {
-        return submit(Executors.callable(task));
+        return build(Executors.callable(task));
     }
-
-    default <T> AsyncChain<T> submit(Runnable task, T result)
+    default <T> AsyncChain<T> build(Runnable task, T result)
     {
-        return submit(Executors.callable(task, result));
+        return build(Executors.callable(task, result));
     }
-
-    <T> AsyncChain<T> submit(Callable<T> task);
+    <T> AsyncChain<T> build(Callable<T> task);
 }

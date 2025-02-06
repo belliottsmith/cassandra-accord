@@ -33,6 +33,7 @@ import accord.utils.WrappableException;
 import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
  * Abstract parent class for implementing preaccept-like operations where we may need to fetch additional replies
@@ -49,7 +50,7 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
 
     AbstractCoordinatePreAccept(Node node, FullRoute<?> route, @Nonnull TxnId txnId)
     {
-        this(node, route, txnId, node.topology().select(route, txnId, txnId, QuorumEpochIntersections.preaccept.include));
+        this(node, route, txnId, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include));
     }
 
     AbstractCoordinatePreAccept(Node node, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies)

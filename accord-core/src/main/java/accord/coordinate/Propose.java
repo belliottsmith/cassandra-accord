@@ -25,6 +25,7 @@ import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.SimpleTracker;
+import accord.local.Commands.AcceptOutcome;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Accept;
@@ -51,8 +52,10 @@ import static accord.coordinate.ExecutePath.MEDIUM;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedInvalidate;
 import static accord.primitives.TxnId.MediumPath.TrackStable;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.debug;
 
 abstract class Propose<R> implements Callback<AcceptReply>
@@ -63,21 +66,25 @@ abstract class Propose<R> implements Callback<AcceptReply>
     final TxnId txnId;
     final Txn txn;
     final FullRoute<?> route;
+    final Route<?> require;
     final Deps deps;
 
     final SortedListMap<Id, AcceptReply> acceptOks;
     final Timestamp executeAt;
     final QuorumTracker acceptTracker;
     final BiConsumer<? super R, Throwable> callback;
+
+    private Throwable failure;
     private boolean isDone;
 
-    Propose(Node node, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
+    Propose(Node node, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, Txn txn, Route<?> require, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
         this.node = node;
         this.kind = kind;
         this.ballot = ballot;
         this.txnId = txnId;
         this.txn = txn;
+        this.require = require;
         this.route = route;
         this.deps = deps;
         this.executeAt = executeAt;
@@ -93,7 +100,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
     {
         SortedArrays.SortedArrayList<Node.Id> contact = acceptTracker.filterAndRecordFaulty();
         if (contact == null) callback.accept(null, new Timeout(null, null));
-        else node.send(contact, to -> new Accept(to, acceptTracker.topologies(), kind, ballot, txnId, route, executeAt, deps), this);
+        else node.send(contact, to -> new Accept(to, acceptTracker.topologies(), kind, ballot, txnId, route, executeAt, deps, require != route), this);
     }
 
     @Override
@@ -102,32 +109,35 @@ abstract class Propose<R> implements Callback<AcceptReply>
         if (isDone)
             return;
 
-        switch (reply.outcome())
+        switch (reply.outcome)
         {
             default: throw new AssertionError("Unhandled AcceptOutcome: " + reply.outcome());
-            case Truncated:
-                isDone = true;
-                callback.accept(null, new Truncated(txnId, route.homeKey()));
-                break;
-
             case RejectedBallot:
                 isDone = true;
                 callback.accept(null, new Preempted(txnId, route.homeKey()));
                 break;
 
+            case Truncated:
             case Redundant:
-                if (reply.supersededBy != null || ballot.equals(Ballot.ZERO))
+                if (require == route || !isSufficientPartialReply(reply, from))
                 {
-                    isDone = true;
-                    callback.accept(null, new Preempted(txnId, route.homeKey()));
-                }
-                else if (reply.committedExecuteAt != null)
-                {
-                    isDone = true;
-                    callback.accept(null, new Redundant(txnId, route.homeKey(), reply.committedExecuteAt));
-                }
+                    Throwable failNow = null;
+                    if (reply.outcome == AcceptOutcome.Truncated)
+                        failNow = new Truncated(txnId, route.homeKey());
+                    else if (reply.supersededBy != null || ballot.equals(Ballot.ZERO))
+                        failNow = new Preempted(txnId, route.homeKey());
 
-                break;
+                    if (failNow != null)
+                    {
+                        isDone = true;
+                        callback.accept(null, failNow);
+                    }
+                    else
+                    {
+                        onFailure(from, reply.committedExecuteAt == null ? null : new Redundant(txnId, route.homeKey(), reply.committedExecuteAt));
+                    }
+                    break;
+                }
 
             case Retired:
             case Success:
@@ -140,17 +150,28 @@ abstract class Propose<R> implements Callback<AcceptReply>
         }
     }
 
+    private boolean isSufficientPartialReply(AcceptReply reply, Id from)
+    {
+        return reply.successful != null && reply.successful.containsAll(require.slice(acceptTracker.topologies().computeRangesForNode(from), Minimal));
+    }
+
     @Override
     public void onFailure(Id from, Throwable failure)
     {
+        // TODO (required): verify we are consistent in our error handling;
+        // TODO (desired): find a way to more fully share this common pattern
         if (isDone)
             return;
 
-        // TODO (required): we aren't tracking the specific failure here to report
+        if (failure != null)
+            this.failure = FailureAccumulator.append(this.failure, failure);
+
         if (acceptTracker.recordFailure(from) == Failed)
         {
             isDone = true;
-            callback.accept(null, new Timeout(txnId, route.homeKey()));
+            if (this.failure == null)
+                this.failure = new Exhausted(txnId, route.homeKey(), null);
+            callback.accept(null, this.failure);
         }
     }
 
@@ -171,13 +192,24 @@ abstract class Propose<R> implements Callback<AcceptReply>
         //  I think probably not possible, as we could have a recovery coordinator for some id' < id contact us before our original coordinator does.
         //  In this case either id' needs to wait (which requires potentially more states like the alternative medium path)
         //  Or we must pick it up as an Unstable dependency here.
-        Deps deps = mergeDeps();
-        if (kind == Kind.MEDIUM) adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, txnId, txn, executeAt, deps, callback);
-        else adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, deps, callback);
+        Deps newDeps = mergeNewDeps();
+        Deps stableDeps = mergeDeps(newDeps);
+        if (kind == Kind.MEDIUM) adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, txnId, txn, executeAt, stableDeps, newDeps, callback);
+        else adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, stableDeps, callback);
         if (!Invariants.debug()) acceptOks.clear();
     }
 
     Deps mergeDeps()
+    {
+        return mergeNewDeps().with(deps);
+    }
+
+    Deps mergeDeps(Deps newDeps)
+    {
+        return Faults.discardPreAcceptDeps(txnId) ? newDeps : newDeps.with(deps);
+    }
+
+    Deps mergeNewDeps()
     {
         Deps deps = Deps.merge(acceptOks, acceptOks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
         if (Faults.discardPreAcceptDeps(txnId))
@@ -185,14 +217,14 @@ abstract class Propose<R> implements Callback<AcceptReply>
 
         if (txnId.is(TrackStable))
         {
-            // we must not propose as stable any dep < txnId that we did not witness in our original preaccept
-            if (!filterDuplicateDependenciesFromAcceptReply())
+            // we must not propose as stable any dep < txnId that we did not propose as part of this phase
+            if (filterDuplicateDependenciesFromAcceptReply())
                 deps = deps.without(this.deps);
 
             deps = deps.markUnstableBefore(txnId);
         }
 
-        return deps.with(this.deps);
+        return deps;
     }
 
     abstract CoordinationAdapter<R> adapter();
@@ -231,7 +263,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
         public static NotAccept proposeNotAccept(Node node, Status status, Ballot ballot, TxnId txnId, RoutingKey participatingKey, BiConsumer<Void, Throwable> callback)
         {
             Participants<?> participants = Participants.singleton(txnId.domain(), participatingKey);
-            Topologies topologies = node.topology().forEpoch(participants, txnId.epoch());
+            Topologies topologies = node.topology().forEpoch(participants, txnId.epoch(), SHARE);
             NotAccept notAccept = new NotAccept(node, status, topologies, ballot, txnId, participants, callback);
             node.send(topologies.nodes(), to -> new Accept.NotAccept(status, ballot, txnId, participants), notAccept);
             return notAccept;

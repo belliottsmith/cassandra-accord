@@ -27,6 +27,7 @@ import accord.local.Command;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.local.cfk.NotifySink.DefaultNotifySink;
 import accord.primitives.Status;
 import accord.primitives.TxnId;
 
@@ -46,12 +47,6 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         return key;
     }
 
-    void updatePruned(SafeCommandStore safeStore, Command nextCommand, NotifySink notifySink)
-    {
-        CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.maybePrunedCallback(safeStore, nextCommand), notifySink);
-    }
-
     public void update(SafeCommandStore safeStore, Command nextCommand)
     {
         CommandsForKey prevCfk = current();
@@ -67,13 +62,18 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     // equivalent to update, but for async callbacks with additional validation around pruning
     public void callback(SafeCommandStore safeStore, Command nextCommand)
     {
+        callback(safeStore, nextCommand, DefaultNotifySink.INSTANCE);
+    }
+
+    public void callback(SafeCommandStore safeStore, Command nextCommand, NotifySink notifySink)
+    {
         CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.callback(safeStore, nextCommand));
+        update(safeStore, nextCommand, prevCfk, prevCfk.callback(safeStore, nextCommand), notifySink);
     }
 
     private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk)
     {
-        update(safeStore, command, prevCfk, updateCfk, NotifySink.DefaultNotifySink.INSTANCE);
+        update(safeStore, command, prevCfk, updateCfk, DefaultNotifySink.INSTANCE);
     }
 
     private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk, NotifySink notifySink)

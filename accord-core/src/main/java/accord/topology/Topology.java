@@ -21,7 +21,6 @@ package accord.topology;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +40,7 @@ import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Routables;
 import accord.primitives.Unseekables;
+import accord.topology.Topologies.SelectNodeOwnership;
 import accord.utils.ArrayBuffers;
 import accord.utils.ArrayBuffers.IntBuffers;
 import accord.utils.IndexedBiFunction;
@@ -54,6 +54,7 @@ import accord.utils.Utils;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntArrayList;
 
+import static accord.topology.Topologies.SelectNodeOwnership.SLICE;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.SortedArrays.Search.FLOOR;
 import static accord.utils.SortedArrays.exponentialSearch;
@@ -269,36 +270,31 @@ public class Topology
         return subsetOfRanges.indexOf(range, search);
     }
 
-    @VisibleForTesting
-    public Topology withEmptySubset()
+    public Topology select(Routables<?> select, SelectNodeOwnership selectNodeOwnership)
     {
-        return forSubset(EMPTY_SUBSET);
+        return select(select, false, selectNodeOwnership);
     }
 
-    public Topology select(Routables<?> select)
+    public Topology selectIfExists(Routables<?> select, SelectNodeOwnership selectNodeOwnership)
     {
-        return select(select, false);
+        return select(select, true, selectNodeOwnership);
     }
 
-    public Topology selectIfExists(Routables<?> select)
+    public Topology select(Routables<?> select, boolean permitMissing, SelectNodeOwnership selectNodeOwnership)
     {
-        return select(select, true);
-    }
-
-    public Topology select(Routables<?> select, boolean permitMissing)
-    {
-        return forSubset(subsetFor(select, permitMissing));
+        return forSubset(subsetFor(select, permitMissing), selectNodeOwnership);
     }
 
     @VisibleForTesting
-    Topology forSubset(int[] newSubset)
+    Topology forSubset(int[] newSubset, SelectNodeOwnership selectNodeOwnership)
     {
         Ranges rangeSubset = ranges.select(newSubset);
         if (rangeSubset == ranges)
             return this;
 
+        boolean reselectNodeOwnership = selectNodeOwnership == SLICE;
         SimpleBitSet nodes = new SimpleBitSet(nodeIds.size());
-        Int2ObjectHashMap<NodeInfo> nodeLookup = new Int2ObjectHashMap<>(nodes.size(), 0.8f);
+        Int2ObjectHashMap<NodeInfo> nodeLookup = reselectNodeOwnership ? new Int2ObjectHashMap<>(nodes.size(), 0.8f) : this.nodeLookup;
         for (int shardIndex : newSubset)
         {
             Shard shard = shards[shardIndex];
@@ -308,33 +304,16 @@ public class Topology
                 i = nodeIds.findNext(i, id);
                 if (i >= 0) nodes.set(i++);
                 else i = -1 - i;
-                // TODO (expected): do we need to shrink to the subset? I don't think we do anymore, and if not we can avoid copying the nodeLookup entirely
-                nodeLookup.putIfAbsent(id.id, this.nodeLookup.get(id.id).forSubset(newSubset));
+                if (reselectNodeOwnership)
+                    nodeLookup.putIfAbsent(id.id, this.nodeLookup.get(id.id).forSubset(newSubset));
             }
         }
+
         Id[] nodeIds = new Id[nodes.getSetBitCount()];
         int count = 0;
         for (int i = nodes.firstSetBit() ; i >= 0 ; i = nodes.nextSetBit(i + 1, -1))
             nodeIds[count++] = this.nodeIds.get(i);
-        return new Topology(global(), epoch, shards, ranges, staleNodes, new SortedArrayList<>(nodeIds), nodeLookup, rangeSubset, newSubset);
-    }
 
-    @VisibleForTesting
-    Topology forSubset(int[] newSubset, Collection<Id> nodes)
-    {
-        Ranges rangeSubset = ranges.select(newSubset);
-        Id[] nodeIds = new Id[nodes.size()];
-        Int2ObjectHashMap<NodeInfo> nodeLookup = new Int2ObjectHashMap<>(nodes.size(), 0.8f);
-        for (Id id : nodes)
-        {
-            NodeInfo info = this.nodeLookup.get(id.id).forSubset(newSubset);
-            if (info.ranges.isEmpty()) continue;
-            nodeIds[nodeLookup.size()] = id;
-            nodeLookup.put(id.id, info);
-        }
-        if (nodeLookup.size() != nodeIds.length)
-            nodeIds = Arrays.copyOf(nodeIds, nodeLookup.size());
-        Arrays.sort(nodeIds);
         return new Topology(global(), epoch, shards, ranges, staleNodes, new SortedArrayList<>(nodeIds), nodeLookup, rangeSubset, newSubset);
     }
 

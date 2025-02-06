@@ -481,7 +481,7 @@ public class DurabilityScheduling implements ConfigurationService.Listener
         try
         {
             long epoch = node.epoch();
-            AsyncChain<AsyncResult<Void>> resultChain = node.withEpoch(epoch, () -> node.commandStores().any().submit(() -> CoordinateGloballyDurable.coordinate(node, epoch)));
+            AsyncChain<AsyncResult<Void>> resultChain = node.withEpoch(epoch, () -> node.commandStores().any().build(() -> CoordinateGloballyDurable.coordinate(node, epoch)));
             resultChain.begin((success, fail) -> {
                 if (fail != null) logger.trace("Exception initiating coordination of global durability", fail);
                 else logger.trace("Successful coordination of global durability");

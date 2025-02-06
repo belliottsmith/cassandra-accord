@@ -46,6 +46,7 @@ import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.PreAccepted;
 import static accord.primitives.ProgressToken.INVALIDATED;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
 
 public class Invalidate implements Callback<InvalidateReply>
@@ -74,7 +75,7 @@ public class Invalidate implements Callback<InvalidateReply>
         this.transitivelyInvokedByPriorInvalidation = transitivelyInvokedByPriorInvalidation;
         this.reportLowEpoch = reportLowEpoch;
         this.reportHighEpoch = reportHighEpoch;
-        Topologies topologies = node.topology().forEpoch(invalidateWith, txnId.epoch());
+        Topologies topologies = node.topology().forEpoch(invalidateWith, txnId.epoch(), SHARE);
         Invariants.require(topologies.size() == 1);
         this.tracker = new InvalidationTracker(topologies, txnId);
         this.replies = new SortedListMap<>(topologies.nodes(), InvalidateReply[]::new);

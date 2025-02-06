@@ -55,9 +55,10 @@ public abstract class Persist implements Callback<ApplyReply>
     protected final Topologies topologies;
     // TODO (expected): track separate ALL and Quorum, so we can report Universal durability to permit faster GC
     protected final QuorumTracker tracker;
+    protected final Apply.Factory factory;
     boolean isDone;
 
-    protected Persist(Node node, Topologies all, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route)
+    protected Persist(Node node, Topologies all, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, Apply.Factory factory)
     {
         this.node = node;
         this.txnId = txnId;
@@ -70,6 +71,7 @@ public abstract class Persist implements Callback<ApplyReply>
         this.route = route;
         this.topologies = all;
         this.tracker = new QuorumTracker(all);
+        this.factory = factory;
         Invariants.require((writes != null) == txnId.is(Txn.Kind.Write), "%s: writes %s", txnId, writes);
     }
 
@@ -91,7 +93,7 @@ public abstract class Persist implements Callback<ApplyReply>
                 }
                 break;
             case Insufficient:
-                Apply.sendMaximal(node, from, txnId, route, txn, executeAt, stableDeps, writes, result, route);
+                node.send(from, factory.create(Apply.Kind.Maximal, from, topologies, txnId, sendTo, txn, executeAt, stableDeps, writes, result, route));
         }
     }
 
@@ -109,7 +111,7 @@ public abstract class Persist implements Callback<ApplyReply>
         return false;
     }
 
-    public void start(Apply.Factory factory, Apply.Kind kind, Topologies all, Writes writes, Result result)
+    public void start(Apply.Kind kind, Topologies all, Writes writes, Result result)
     {
         // applyMinimal is used for transaction execution by the original coordinator so it's important to use
         // Node's Apply factory in case the factory has to do synchronous Apply.

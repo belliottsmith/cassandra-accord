@@ -47,9 +47,18 @@ public class ProtocolModifiers
         {
             Chase, DoNotChase;
         }
+
         public enum Include
         {
-            Unsynced, Owned;
+            // include all nodes and epochs with unsynced ranges
+            Unsynced,
+            // include only replicas that own the ranges, and only the ownership epochs
+            Owned;
+
+            private static Include max(Include a, Include b)
+            {
+                return a.compareTo(b) >= 0 ? a : b;
+            }
         }
 
         public static class ChaseAndInclude
@@ -80,8 +89,8 @@ public class ProtocolModifiers
                 this.commit = commit;
                 this.stable = stable;
                 this.recover = recover;
-                this.preacceptOrRecover = preaccept.include == Owned || recover == Owned ? Owned : Unsynced;
-                this.preacceptOrCommit = preaccept.include == Owned || commit == Owned ? Owned : Unsynced;
+                this.preacceptOrRecover = Include.max(preaccept.include, recover);
+                this.preacceptOrCommit = Include.max(preaccept.include, commit);
             }
 
             static Spec parse(String description)
@@ -129,7 +138,7 @@ public class ProtocolModifiers
 
         static
         {
-            Spec spec = Spec.parse(System.getProperty("accord.quorums.epochs", "preaccept=-,accept=-,commit=-,stable=,recover=-"));
+            Spec spec = Spec.parse(System.getProperty("accord.quorums.epochs", "preaccept=-,accept=-,commit=-,stable=-,recover=-"));
             preaccept = spec.preaccept;
             accept = spec.accept;
             commit = spec.commit;
@@ -196,6 +205,10 @@ public class ProtocolModifiers
         public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
         public static void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }
 
+        private static boolean sendMinimalStableMessages = true;
+        public static void setSendMinimalStableMessages(boolean newSendMinimalStableMessages) { sendMinimalStableMessages = newSendMinimalStableMessages; }
+        public static boolean sendMinimalStableMessages() { return sendMinimalStableMessages; }
+
         private static boolean permitLocalExecution = true;
         public static boolean permitLocalExecution() { return permitLocalExecution; }
         public static void setPermitLocalExecution(boolean newPermitLocalExecution) { permitLocalExecution = newPermitLocalExecution; }
@@ -203,6 +216,11 @@ public class ProtocolModifiers
         private static boolean requiresUniqueHlcs = true;
         public static boolean requiresUniqueHlcs() { return requiresUniqueHlcs; }
         public static void setRequiresUniqueHlcs(boolean newRequiresUniqueHlcs) { requiresUniqueHlcs = newRequiresUniqueHlcs; }
+
+        // TODO (required): this is a temporary measure to not break migration
+        private static boolean temporaryPermitUnsafeBlindWrites = true;
+        public static boolean temporaryPermitUnsafeBlindWrites() { return temporaryPermitUnsafeBlindWrites; }
+        public static void setTemporaryPermitUnsafeBlindWrites(boolean newTemporaryPermitUnsafeBlindWrites) { temporaryPermitUnsafeBlindWrites = newTemporaryPermitUnsafeBlindWrites; }
 
         private static int markStaleIfCannotExecute = TinyEnumSet.encode(Txn.Kind.Write);
         public static boolean markStaleIfCannotExecute(TxnId txnId) { return TinyEnumSet.contains(markStaleIfCannotExecute, txnId.kindOrdinal()); }

@@ -48,7 +48,6 @@ import accord.utils.UnhandledEnum;
 import static accord.api.Journal.Load;
 import static accord.api.Journal.Load.ALL;
 import static accord.impl.CommandChange.Field.ACCEPTED;
-import static accord.impl.CommandChange.Field.CLEANUP;
 import static accord.impl.CommandChange.Field.DURABILITY;
 import static accord.impl.CommandChange.Field.EXECUTES_AT_LEAST;
 import static accord.impl.CommandChange.Field.EXECUTE_AT;
@@ -63,7 +62,6 @@ import static accord.impl.CommandChange.Field.SAVE_STATUS;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
 import static accord.local.Cleanup.NO;
-import static accord.local.Cleanup.TRUNCATE_WITH_OUTCOME;
 import static accord.local.Command.Accepted.accepted;
 import static accord.local.Command.Committed.committed;
 import static accord.local.Command.Executed.executed;
@@ -111,7 +109,7 @@ public class CommandChange
      * which we can use in order to mark the corresponding fields as changed
      * and setting them to null when they are erased.
      */
-    public static int[] saveStatusMasks;
+    protected static final int[] saveStatusMasks;
 
     static
     {
@@ -121,13 +119,22 @@ public class CommandChange
             SaveStatus saveStatus = SaveStatus.forOrdinal(i);
             int mask = 0;
             if (forceFieldChangedToNullFlag(saveStatus, saveStatus.known::is, DepsErased))
-                mask |= setFieldIsNullAndChanged(PARTIAL_DEPS, mask);
+                mask |= setFieldIsNullAndChanged(PARTIAL_DEPS, mask)
+                     |  setFieldIsNullAndChanged(WAITING_ON, mask)
+                     |  setFieldIsNullAndChanged(MIN_UNIQUE_HLC, mask);
             if (forceFieldChangedToNullFlag(saveStatus, saveStatus.known::is, ExecuteAtErased))
-                mask |= setFieldIsNullAndChanged(EXECUTE_AT, mask);
+                mask |= setFieldIsNullAndChanged(EXECUTE_AT, mask)
+                     |  setFieldIsNullAndChanged(EXECUTES_AT_LEAST, mask);
             if (forceFieldChangedToNullFlag(saveStatus, saveStatus.known::is, DefinitionErased))
                 mask |= setFieldIsNullAndChanged(PARTIAL_TXN, mask);
             if (forceFieldChangedToNullFlag(saveStatus, saveStatus.known::is, WasApply))
-                mask |= setFieldIsNullAndChanged(RESULT, mask);
+                mask |= setFieldIsNullAndChanged(RESULT, mask)
+                     |  setFieldIsNullAndChanged(WRITES, mask);
+            if (saveStatus.hasBeen(Status.Truncated))
+                mask |= setFieldIsNullAndChanged(PROMISED, mask)
+                     |  setFieldIsNullAndChanged(ACCEPTED, mask);
+            if (saveStatus == SaveStatus.Invalidated || saveStatus == SaveStatus.Vestigial)
+                mask |= setFieldIsNullAndChanged(DURABILITY, mask);
             saveStatusMasks[i] = mask;
         }
     }
@@ -137,7 +144,7 @@ public class CommandChange
         return saveStatus == SaveStatus.Vestigial || predicate.test(erased);
     }
 
-    public static class Builder
+    public static abstract class Builder
     {
         protected final int mask;
         protected int flags;
@@ -185,6 +192,11 @@ public class CommandChange
         public Builder()
         {
             this(ALL);
+        }
+
+        public TxnId txnId()
+        {
+            return txnId;
         }
 
         public SaveStatus saveStatus()
@@ -264,84 +276,58 @@ public class CommandChange
             return cleanup;
         }
 
-        public Builder maybeCleanup(Cleanup cleanup)
+        public boolean maybeCleanup(Input input, Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore)
+        {
+            Cleanup cleanup = shouldCleanup(input, agent, redundantBefore, durableBefore);
+            return maybeCleanup(input, cleanup);
+        }
+
+        public boolean maybeCleanup(Input input, Cleanup cleanup)
         {
             if (saveStatus == null)
-                return this;
+                return false;
 
-            switch (cleanup)
+            cleanup = cleanup.filter(saveStatus);
+            if (cleanup == NO)
+                return false;
+
+            SaveStatus newSaveStatus = cleanup.appliesIfNot;
+            truncate(saveStatusMasks[newSaveStatus.ordinal()]);
+            if (input == Input.FULL)
             {
-                case EXPUNGE:
-                case ERASE:
-                    return null;
-
-                case VESTIGIAL:
-                case INVALIDATE:
-                    return saveStatusOnly();
-
-                case TRUNCATE_WITH_OUTCOME:
-                case TRUNCATE:
-                    return expungePartial(cleanup, cleanup.appliesIfNot, cleanup == TRUNCATE_WITH_OUTCOME);
-
-                case NO:
-                    return this;
-                default:
-                    throw new UnhandledEnum(cleanup);
+                if (newSaveStatus == SaveStatus.TruncatedApply && !saveStatus.known.is(ApplyAtKnown))
+                    newSaveStatus = SaveStatus.TruncatedUnapplied;
+                saveStatus = newSaveStatus;
             }
+            return true;
         }
 
-        public Builder expungePartial(Cleanup cleanup, SaveStatus saveStatus, boolean includeOutcome)
+        protected void truncate(int mask)
         {
-            Invariants.require(txnId != null);
-            Builder builder = new Builder(txnId, ALL);
-
-            builder.count++;
-            builder.nextCalled = true;
-
-            Invariants.require(saveStatus != null);
-            builder.flags = setChanged(SAVE_STATUS, builder.flags);
-            builder.saveStatus = saveStatus;
-            builder.flags = setChanged(CLEANUP, builder.flags);
-            builder.cleanup = cleanup;
-            if (executeAt != null)
+            // low flag bits represent fields already nulled out, so no need to visit them again
+            int iterable = toIterableSetFields(mask) & ~flags;
+            for (Field next = nextSetField(iterable); next != null; iterable = unsetIterable(next, iterable), next = nextSetField(iterable))
             {
-                builder.flags = setChanged(EXECUTE_AT, builder.flags);
-                builder.executeAt = executeAt;
+                switch (next)
+                {
+                    default: throw new UnhandledEnum(next);
+                    case PARTICIPANTS:      participants = null;                     break;
+                    case SAVE_STATUS:       saveStatus = null;                       break;
+                    case PARTIAL_DEPS:      partialDeps = null;                      break;
+                    case EXECUTE_AT:        executeAt = null;                        break;
+                    case EXECUTES_AT_LEAST: executeAtLeast = null;                   break;
+                    case MIN_UNIQUE_HLC:    minUniqueHlc = 0;                        break;
+                    case DURABILITY:        durability = null;                       break;
+                    case ACCEPTED:          acceptedOrCommitted = null;              break;
+                    case PROMISED:          promised = null;                         break;
+                    case WAITING_ON:        waitingOnBytes = null; waitingOn = null; break;
+                    case PARTIAL_TXN:       partialTxn = null;                       break;
+                    case WRITES:            writes = null;                           break;
+                    case CLEANUP:           cleanup = null;                          break;
+                    case RESULT:            result = null;                           break;
+                }
             }
-            if (durability != null)
-            {
-                builder.flags = setChanged(DURABILITY, builder.flags);
-                builder.durability = durability;
-            }
-            if (participants != null)
-            {
-                builder.flags = setChanged(PARTICIPANTS, builder.flags);
-                builder.participants = participants;
-            }
-            if (includeOutcome && builder.writes != null)
-            {
-                builder.flags = setChanged(WRITES, builder.flags);
-                builder.writes = writes;
-            }
-
-            return builder;
-        }
-
-        public Builder saveStatusOnly()
-        {
-            Invariants.require(txnId != null);
-            Builder builder = new Builder(txnId, ALL);
-
-            builder.count++;
-            builder.nextCalled = true;
-
-            if (saveStatus != null)
-            {
-                builder.flags = setChanged(SAVE_STATUS, builder.flags);
-                builder.saveStatus = saveStatus;
-            }
-
-            return builder;
+            flags |= mask;
         }
 
         public Command.Minimal asMinimal()
@@ -585,6 +571,22 @@ public class CommandChange
     public static int unsetIterable(Field field, int iterable)
     {
         return iterable & ~(1 << field.ordinal());
+    }
+
+    public static String describeFlags(int flags)
+    {
+        int iterable = toIterableSetFields(flags);
+        StringBuilder builder = new StringBuilder("[");
+        for (Field next = nextSetField(iterable) ; next != null; iterable = unsetIterable(next, iterable), next = nextSetField(iterable))
+        {
+            if (builder.length() > 1)
+                builder.append(',');
+            builder.append(next);
+            if (isNull(next, flags))
+                builder.append(":null");
+        }
+        builder.append(']');
+        return builder.toString();
     }
 
     @VisibleForTesting

@@ -39,6 +39,20 @@ import static accord.utils.SortedArrays.isSortedUnique;
 //  (e.g. at least implementing Topologies by Topology)
 public interface Topologies extends TopologySorter
 {
+    enum SelectNodeOwnership
+    {
+        /**
+         * Slice node ownership information to cover only those ranges we have queried.
+         */
+        SLICE,
+
+        /**
+         * Use the node information from the topology we are selecting from. This means nodes may report
+         * ranges that do not intersect the ranges we are selecting.
+         */
+        SHARE
+    }
+
     Topology current();
 
     default boolean containsEpoch(long epoch) { return epoch >= oldestEpoch() && epoch <= currentEpoch(); }
@@ -83,9 +97,9 @@ public interface Topologies extends TopologySorter
 
     int maxShardsPerEpoch();
 
-    Topologies selectSince(Participants<?> participants, long sinceEpoch);
+    Topologies selectSince(Participants<?> participants, long sinceEpoch, SelectNodeOwnership selectNodeOwnership);
 
-    Topologies selectEpoch(Participants<?> participants, long epoch);
+    Topologies selectEpoch(Participants<?> participants, long epoch, SelectNodeOwnership selectNodeOwnership);
 
     default void forEach(IndexedConsumer<Topology> consumer)
     {
@@ -206,18 +220,18 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topologies selectSince(Participants<?> participants, long sinceEpoch)
+        public Topologies selectSince(Participants<?> participants, long sinceEpoch, SelectNodeOwnership selectNodeOwnership)
         {
             Invariants.require(sinceEpoch <= currentEpoch());
-            Topology subset = topology.select(participants);
+            Topology subset = topology.select(participants, selectNodeOwnership);
             return subset == topology ? this : new Single(sorter, subset);
         }
 
         @Override
-        public Topologies selectEpoch(Participants<?> participants, long epoch)
+        public Topologies selectEpoch(Participants<?> participants, long epoch, SelectNodeOwnership selectNodeOwnership)
         {
             Invariants.require(epoch == currentEpoch());
-            Topology subset = topology.select(participants);
+            Topology subset = topology.select(participants, selectNodeOwnership);
             return subset == topology ? this : new Single(sorter, subset);
         }
 
@@ -479,7 +493,7 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topologies selectSince(Participants<?> participants, long sinceEpoch)
+        public Topologies selectSince(Participants<?> participants, long sinceEpoch, SelectNodeOwnership selectNodeOwnership)
         {
             Topology[] subsets = null;
             int limit = topologies.length;
@@ -488,7 +502,7 @@ public interface Topologies extends TopologySorter
             for (int i = 0 ; i < limit ; ++i)
             {
                 Topology superset = topologies[i];
-                Topology subset = superset.select(participants);
+                Topology subset = superset.select(participants, selectNodeOwnership);
                 if (subset != superset && subsets == null)
                 {
                     subsets = new Topology[limit];
@@ -510,13 +524,13 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topologies selectEpoch(Participants<?> participants, long epoch)
+        public Topologies selectEpoch(Participants<?> participants, long epoch, SelectNodeOwnership selectNodeOwnership)
         {
             if (!containsEpoch(epoch))
                 throw new IndexOutOfBoundsException();
 
             Topology superset = getEpoch(epoch);
-            Topology subset = superset.select(participants);
+            Topology subset = superset.select(participants, selectNodeOwnership);
             return new Single(sorter, subset);
         }
     }

@@ -35,4 +35,7 @@ public interface Key extends Seekable, RoutableKey
 
     @Override
     default Range asRange() { throw new UnsupportedOperationException(); }
+
+    @Override
+    default Kind kind() { return Kind.SeekableKey; }
 }

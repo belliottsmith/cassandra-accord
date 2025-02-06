@@ -34,11 +34,11 @@ public class PersistSyncPoint extends Persist
 {
     public PersistSyncPoint(Node node, Topologies topologies, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
-        super(node, topologies, txnId, route, txn, executeAt, deps, writes, result, route);
+        super(node, topologies, txnId, route, txn, executeAt, deps, writes, result, route, Apply.FACTORY);
     }
 
     @Override
-    public void start(Apply.Factory factory, Apply.Kind kind, Topologies all, Writes writes, Result result)
+    public void start(Apply.Kind kind, Topologies all, Writes writes, Result result)
     {
         SortedArrays.SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
         if (contact == null)

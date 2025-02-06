@@ -144,6 +144,8 @@ public abstract class Command implements ICommand
         this.partialDeps = partialDeps;
         this.executeAt = executeAt;
         this.acceptedOrCommitted = Invariants.nonNull(acceptedOrCommitted);
+        Invariants.require(partialTxn == null || txnId.isSystemTxn() || participants.owns().containsAll(partialTxn.keys()));
+        Invariants.require(partialTxn == null || txnId.isSystemTxn() || participants.owns().containsAll(partialTxn.read().keys()));
     }
 
     protected Command(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, @Nullable PartialTxn partialTxn, @Nullable PartialDeps partialDeps, Ballot acceptedOrCommitted, boolean unsafeInitialisation)
@@ -438,6 +440,7 @@ public abstract class Command implements ICommand
         public static Truncated truncated(Command command, @Nonnull StoreParticipants participants)
         {
             Invariants.requireArgument(command.known().isExecuteAtKnown());
+            // TODO (expected): centralise this translation so applied consistently
             SaveStatus newSaveStatus = command.known().is(ApplyAtKnown) ? TruncatedApply : TruncatedUnapplied;
             Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
             if (command.txnId().awaitsOnlyDeps())
@@ -524,7 +527,6 @@ public abstract class Command implements ICommand
             this.result = copy.result();
         }
 
-        // TODO (required): is Ballot.MAX helpful or harmful here? We must consider how to best protect against infinite reject loops.
         public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable Writes writes, @Nullable Result result)
         {
             super(txnId, saveStatus, durability, participants, Ballot.MAX, executeAt, null, null, Ballot.MAX);
@@ -1542,10 +1544,10 @@ public abstract class Command implements ICommand
                                          command.acceptedOrCommitted());
     }
 
-    static Command.Accepted accept(Command current, SaveStatus saveStatus, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialDeps partialDeps, Ballot acceptedOrCommitted)
+    static Command.Accepted accept(Command current, SaveStatus saveStatus, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
     {
-        Invariants.require(saveStatus.status == Status.AcceptedSlow || saveStatus.status == Status.AcceptedMedium);
-        return validate(new Command.Accepted(current.txnId(), saveStatus, current.durability(), participants, promised, executeAt, current.partialTxn(), partialDeps, acceptedOrCommitted));
+        Invariants.require(saveStatus.status == Status.AcceptedSlow || saveStatus.status == Status.AcceptedMedium || saveStatus.status == Status.PreCommitted);
+        return validate(new Command.Accepted(current.txnId(), saveStatus, current.durability(), participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted));
     }
 
     static Command notAccept(Status newStatus, Command copy, Ballot ballot)
@@ -1576,13 +1578,13 @@ public abstract class Command implements ICommand
                                   Ballot.max(ballot, command.acceptedOrCommitted()), waitingOn));
     }
 
-    static Command precommit(Command command, Timestamp executeAt)
+    static Command precommit(Command command, Timestamp executeAt, Ballot promisedAtLeast)
     {
         SaveStatus saveStatus = SaveStatus.get(Status.PreCommitted, command.known());
         PartialDeps partialDeps = command.partialDeps();
         if (!saveStatus.known.deps().hasProposedOrDecidedDeps() && command.partialDeps() != null)
             partialDeps = null;
-        return validate(new Command.Accepted(command.txnId, saveStatus, command.durability, command.participants, command.promised, executeAt, command.partialTxn, partialDeps, command.acceptedOrCommitted));
+        return validate(new Command.Accepted(command.txnId, saveStatus, command.durability, command.participants, Ballot.max(command.promised, promisedAtLeast), executeAt, command.partialTxn, partialDeps, command.acceptedOrCommitted));
     }
 
     static Command.Committed readyToExecute(Command.Committed command)

@@ -20,7 +20,6 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
-import accord.messages.Commit;
 import accord.messages.InformDurable;
 import accord.primitives.*;
 import accord.utils.Invariants;
@@ -31,6 +30,7 @@ import accord.messages.CheckStatus.IncludeInfo;
 import accord.utils.UnhandledEnum;
 
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
+import static accord.messages.Commit.Invalidate.commitInvalidate;
 
 /**
  * A result of null indicates the transaction is globally persistent
@@ -133,7 +133,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     break;
 
                 case Abort:
-                    Commit.Invalidate.commitInvalidate(node, txnId, Route.merge(full.route, (Route)route), txnId.epoch());
+                    commitInvalidate(node, txnId, Route.merge(full.route, (Route)route), txnId.epoch());
                     locallyInvalidateAndCallback(node, txnId, txnId.epoch(), txnId.epoch(), someRoute, full.toProgressToken(), callback);
                     break;
             }

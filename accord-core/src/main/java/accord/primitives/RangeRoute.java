@@ -91,15 +91,15 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
     }
 
     @Override
-    public PartialRangeRoute slice(Ranges ranges)
+    public RangeRoute slice(Ranges ranges)
     {
         return slice(ranges, Overlapping);
     }
 
     @Override
-    public PartialRangeRoute slice(Ranges ranges, Slice slice)
+    public RangeRoute slice(Ranges ranges, Slice slice)
     {
-        return slice(ranges, slice, this, homeKey, (ignore, hk, rs) -> new PartialRangeRoute(hk, rs));
+        return slice(ranges, slice, this, homeKey, (self, hk, rs) -> self.ranges == rs ? this : new PartialRangeRoute(hk, rs));
     }
 
     @Override

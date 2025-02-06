@@ -32,6 +32,7 @@ import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.PartialDeps;
+import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
 import accord.local.StoreParticipants;
 import accord.messages.TxnRequest.WithUnsynced;
@@ -44,7 +45,6 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
@@ -95,18 +95,6 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         this.partialDeps = partialDeps;
         this.route = fullRoute;
         this.hasCoordinatorVote = hasCoordinatorVote;
-    }
-
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
-    @Override
-    public Unseekables<?> keys()
-    {
-        return scope;
     }
 
     @Override
@@ -266,11 +254,16 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
 
     public static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, StoreParticipants participants, EpochSupplier minEpoch, Timestamp executeAt, boolean nullIfRedundant)
     {
+        return calculateDeps(safeStore, txnId, participants.touches(), minEpoch, executeAt, nullIfRedundant);
+    }
+
+    public static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, Participants<?> touches, EpochSupplier minEpoch, Timestamp executeAt, boolean nullIfRedundant)
+    {
         // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
         try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder(true);
              RangeDeps.BuilderByRange redundantBuilder = RangeDeps.builderByRange())
         {
-            RangeDeps redundant = safeStore.redundantBefore().collectDeps(participants.touches(), redundantBuilder, minEpoch, executeAt).build();
+            RangeDeps redundant = safeStore.redundantBefore().collectDeps(touches, redundantBuilder, minEpoch, executeAt).build();
             if (nullIfRedundant && !txnId.is(EphemeralRead))
             {
                 TxnId maxRedundantBefore = redundant.maxTxnId(null);
@@ -281,7 +274,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 }
             }
 
-            safeStore.visit(participants.touches(), executeAt, txnId.witnesses(),
+            safeStore.visit(touches, executeAt, txnId.witnesses(),
                             (p1, in, keyOrRange, testTxnId) -> {
                                 if (p1 == null || !testTxnId.equals(p1))
                                     in.add(keyOrRange, testTxnId);

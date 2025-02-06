@@ -53,6 +53,40 @@ public interface Routable
         }
     }
 
+    enum Kind
+    {
+        SeekableKey('K'), UnseekableKey('U'), Range('R');
+
+        final char shortName;
+        private static final Domain[] VALUES = Domain.values();
+
+        Kind(char shortName)
+        {
+            this.shortName = shortName;
+        }
+
+        public boolean isKey()
+        {
+            return this != Range;
+        }
+
+        public boolean isRange()
+        {
+            return this == Range;
+        }
+
+        public static Routable.Domain ofOrdinal(int ordinal)
+        {
+            return VALUES[ordinal];
+        }
+
+        public char shortName()
+        {
+            return shortName;
+        }
+    }
+
+    Kind kind();
     Domain domain();
     Unseekable toUnseekable();
 

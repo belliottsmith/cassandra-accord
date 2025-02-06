@@ -407,7 +407,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public void withEpoch(long epoch, BiConsumer<?, Throwable> ifFailure, Runnable ifSuccess)
+    public void withEpoch(long epoch, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
     {
         if (topology.hasEpoch(epoch))
         {

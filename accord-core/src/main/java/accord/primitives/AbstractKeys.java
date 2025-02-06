@@ -95,19 +95,6 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     }
 
     @Override
-    public final boolean contains(RoutableKey key)
-    {
-        return Arrays.binarySearch(keys, key) >= 0;
-    }
-
-    @Override
-    public final boolean containsAll(Routables<?> keysOrRanges)
-    {
-        // TODO (required): this is incorrect for ranges, it's effectively intersectsAll
-        return keysOrRanges.size() == Routables.foldl(keysOrRanges, this, (k, p, v, i) -> v + 1, 0, 0, 0);
-    }
-
-    @Override
     public final boolean intersects(AbstractUnseekableKeys keys)
     {
         return findNextIntersection(0, keys, 0) >= 0;
@@ -117,18 +104,6 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     public final boolean intersects(AbstractRanges ranges)
     {
         return findNextIntersection(0, ranges, 0) >= 0;
-    }
-
-    @Override
-    public final int find(RoutableKey key, SortedArrays.Search search)
-    {
-        return SortedArrays.binarySearch(keys, 0, keys.length, key, RoutableKey::compareTo, search);
-    }
-
-    @Override
-    public final int findNext(int thisIndex, RoutableKey key, SortedArrays.Search search)
-    {
-        return SortedArrays.exponentialSearch(keys, thisIndex, keys.length, key, RoutableKey::compareTo, search);
     }
 
     @Override
@@ -150,21 +125,20 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     }
 
     @Override
-    public final long findNextIntersection(int thisIdx, AbstractKeys<?> that, int thatIdx)
-    {
-        return SortedArrays.findNextIntersection(this.keys, thisIdx, that.keys, thatIdx, RoutableKey::compareTo);
-    }
-
-    @Override
     public final long findNextIntersection(int thisIdx, AbstractUnseekableKeys that, int thatIdx)
     {
         return SortedArrays.findNextIntersection(this.keys, thisIdx, that.keys, thatIdx, RoutableKey::compareAsRoutingKey);
     }
 
     @Override
-    public final long findNextIntersection(int thisIndex, Routables<K> with, int withIndex)
+    public final long findNextSameKindIntersection(int thisIdx, Routables<K> that, int thatIdx)
     {
-        return findNextIntersection(thisIndex, (AbstractKeys<?>) with, withIndex);
+        return SortedArrays.findNextIntersection(this.keys, thisIdx, ((AbstractKeys<?>)that).keys, thatIdx, RoutableKey::compareTo);
+    }
+
+    final boolean containsAllSameKind(AbstractKeys<?> that)
+    {
+        return that.size() == SortedArrays.foldlIntersection(keys, 0, keys.length, that.keys, 0, that.keys.length, (k, p, v, l, r) -> v + 1, 0, 0, 0);
     }
 
     @Override
@@ -262,18 +236,6 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     }
 
     @Inline
-    public final long foldl(AbstractKeys<K> intersect, IndexedFoldToLong<K> fold, long param, long accumulator, long terminalValue)
-    {
-        return Routables.foldl(this, intersect, fold, param, accumulator, terminalValue);
-    }
-
-    @Inline
-    public final <P1, P2, V> V foldl(AbstractKeys<K> intersect, IndexedTriFold<P1, P2, K, V> fold, P1 p1, P2 p2, V accumulator)
-    {
-        return Routables.foldl(this, intersect, fold, p1, p2, accumulator, i -> false);
-    }
-
-    @Inline
     public final <P1, P2, V> V foldl(AbstractRanges intersect, IndexedTriFold<P1, P2, K, V> fold, P1 p1, P2 p2, V accumulator)
     {
         return Routables.foldl(this, intersect, fold, p1, p2, accumulator, i -> false);
@@ -298,6 +260,12 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     public final long foldl(Ranges rs, IndexedFoldToLong<? super K> fold, long param, long initialValue, long terminalValue)
     {
         return Routables.foldl(this, rs, fold, param, initialValue, terminalValue);
+    }
+
+    @Inline
+    public final long foldl(AbstractKeys<K> that, IndexedFoldToLong<? super K> fold, long param, long initialValue, long terminalValue)
+    {
+        return Routables.foldl(this, that, fold, param, initialValue, terminalValue);
     }
 
     @Inline

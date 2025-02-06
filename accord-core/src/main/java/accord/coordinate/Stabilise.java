@@ -31,6 +31,7 @@ import accord.messages.ReadData.ReadReply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -50,6 +51,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
     final Node node;
     final Txn txn;
     final FullRoute<?> route;
+    final Route<?> sendTo;
     final TxnId txnId;
     final Ballot ballot;
     final Timestamp executeAt;
@@ -61,10 +63,11 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
     final BiConsumer<? super R, Throwable> callback;
     private boolean isDone;
 
-    public Stabilise(Node node, Topologies coordinates, Topologies allTopologies, FullRoute<?> route, TxnId txnId, Ballot ballot, Txn txn, Timestamp executeAt, Deps stabiliseDeps, BiConsumer<? super R, Throwable> callback)
+    public Stabilise(Node node, Topologies coordinates, Topologies allTopologies, Route<?> sendTo, FullRoute<?> route, TxnId txnId, Ballot ballot, Txn txn, Timestamp executeAt, Deps stabiliseDeps, BiConsumer<? super R, Throwable> callback)
     {
         this.node = node;
         this.txn = txn;
+        this.sendTo = sendTo;
         this.route = route;
         this.txnId = txnId;
         this.ballot = ballot;
@@ -154,7 +157,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
 
     protected void onStabilised()
     {
-        adapter().execute(node, allTopologies, route, ballot == Ballot.ZERO ? SLOW : RECOVER, txnId, txn, executeAt, stabiliseDeps, callback);
+        adapter().execute(node, allTopologies, route, ballot == Ballot.ZERO ? SLOW : RECOVER, txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
     }
 
     protected abstract CoordinationAdapter<R> adapter();

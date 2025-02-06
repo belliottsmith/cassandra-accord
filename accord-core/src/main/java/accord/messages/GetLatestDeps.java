@@ -19,6 +19,7 @@
 package accord.messages;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import accord.local.Command;
 import accord.local.KeyHistory;
@@ -26,6 +27,7 @@ import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
+import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.LatestDeps;
 import accord.primitives.PartialDeps;
@@ -33,7 +35,6 @@ import accord.primitives.Route;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
@@ -41,27 +42,30 @@ import accord.utils.async.Cancellable;
 import static accord.messages.PreAccept.calculateDeps;
 import static accord.primitives.EpochSupplier.constant;
 
-public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLatestDepsOk>
+public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLatestDepsReply>
 {
     public static final class SerializationSupport
     {
-        public static GetLatestDeps create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Timestamp executeAt)
+        public static GetLatestDeps create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, @Nullable Ballot ballot, Timestamp executeAt)
         {
-            return new GetLatestDeps(txnId, scope, waitForEpoch, minEpoch, executeAt);
+            return new GetLatestDeps(txnId, scope, waitForEpoch, minEpoch, ballot, executeAt);
         }
     }
 
+    public final Ballot ballot;
     public final Timestamp executeAt;
 
-    public GetLatestDeps(Id to, Topologies topologies, Route<?> route, TxnId txnId, Timestamp executeAt)
+    public GetLatestDeps(Id to, Topologies topologies, Route<?> route, TxnId txnId, Ballot ballot, Timestamp executeAt)
     {
         super(to, topologies, txnId, route);
+        this.ballot = ballot;
         this.executeAt = executeAt;
     }
 
-    protected GetLatestDeps(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Timestamp executeAt)
+    protected GetLatestDeps(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
+        this.ballot = ballot;
         this.executeAt = executeAt;
     }
 
@@ -72,11 +76,17 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
     }
 
     @Override
-    public GetLatestDepsOk apply(SafeCommandStore safeStore)
+    public GetLatestDepsReply apply(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
+        if (ballot != null)
+        {
+            if (command.promised().compareTo(ballot) > 0)
+                return GetLatestDepsNack.INSTANCE;
+            command = safeCommand.updatePromised(ballot);
+        }
         PartialDeps coordinatedDeps = command.partialDeps();
         Deps localDeps = null;
         if (!command.known().deps().hasCommittedOrDecidedDeps() && !command.hasBeen(Status.Truncated))
@@ -89,9 +99,11 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
     }
 
     @Override
-    public GetLatestDepsOk reduce(GetLatestDepsOk ok1, GetLatestDepsOk ok2)
+    public GetLatestDepsReply reduce(GetLatestDepsReply r1, GetLatestDepsReply r2)
     {
-        return new GetLatestDepsOk(LatestDeps.merge(ok1.deps, ok2.deps));
+        if (!r1.isOk()) return r1;
+        if (!r2.isOk()) return r2;
+        return new GetLatestDepsOk(LatestDeps.merge(((GetLatestDepsOk)r1).deps, ((GetLatestDepsOk)r2).deps));
     }
 
     @Override
@@ -111,24 +123,35 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
     }
 
     @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
-    @Override
-    public Unseekables<?> keys()
-    {
-        return scope;
-    }
-
-    @Override
     public KeyHistory keyHistory()
     {
         return KeyHistory.SYNC;
     }
 
-    public static class GetLatestDepsOk implements Reply
+    public interface GetLatestDepsReply extends Reply
+    {
+        boolean isOk();
+    }
+
+    public static final class GetLatestDepsNack implements GetLatestDepsReply
+    {
+        public static final GetLatestDepsNack INSTANCE = new GetLatestDepsNack();
+        private GetLatestDepsNack(){}
+
+        @Override
+        public boolean isOk()
+        {
+            return false;
+        }
+
+        @Override
+        public MessageType type()
+        {
+            return MessageType.GET_LATEST_DEPS_RSP;
+        }
+    }
+
+    public static class GetLatestDepsOk implements GetLatestDepsReply
     {
         public final LatestDeps deps;
 
@@ -147,6 +170,12 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
         public MessageType type()
         {
             return MessageType.GET_LATEST_DEPS_RSP;
+        }
+
+        @Override
+        public boolean isOk()
+        {
+            return true;
         }
     }
 

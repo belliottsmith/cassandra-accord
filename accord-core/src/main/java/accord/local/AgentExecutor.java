@@ -28,6 +28,11 @@ public interface AgentExecutor extends AsyncExecutor
     @Override
     default void execute(Runnable command)
     {
-        submit(command).begin(agent());
+        build(command).begin(agent());
+    }
+
+    default void maybeExecuteImmediately(Runnable command)
+    {
+        execute(command);
     }
 }

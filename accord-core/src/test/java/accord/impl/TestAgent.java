@@ -168,6 +168,12 @@ public class TestAgent implements Agent
     }
 
     @Override
+    public long localSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    {
+        return unit.convert(100L, MICROSECONDS);
+    }
+
+    @Override
     public long localExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
         return unit.convert(1L, SECONDS);

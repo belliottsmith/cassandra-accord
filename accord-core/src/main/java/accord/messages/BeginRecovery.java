@@ -40,7 +40,6 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
-import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
@@ -220,18 +219,6 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                 ok1.supersedingRejects | ok2.supersedingRejects,
             ok1.writes, ok1.result
         );
-    }
-
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
-    @Override
-    public Unseekables<?> keys()
-    {
-        return scope;
     }
 
     @Override

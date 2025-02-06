@@ -66,8 +66,7 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
             case Key:
             {
                 AbstractUnseekableKeys that = (AbstractUnseekableKeys) keysOrRanges;
-                RoutingKey[] newKeys = SortedArrays.linearSubtract(this.keys, that.keys, cachedRoutingKeys());
-                return newKeys == keys ? this : new PartialKeyRoute(homeKey, newKeys);
+                return select(SortedArrays.linearSubtract(this.keys, that.keys, cachedRoutingKeys()));
             }
             case Range:
             {
@@ -84,8 +83,7 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
 
     private KeyRoute without(AbstractRanges ranges)
     {
-        RoutingKey[] newKeys = subtract(ranges, keys, RoutingKey[]::new);
-        return newKeys == keys ? this : new PartialKeyRoute(homeKey, newKeys);
+        return select(subtract(ranges, keys, RoutingKey[]::new));
     }
 
     @SuppressWarnings("unchecked")
@@ -129,38 +127,36 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
     }
 
     @Override
-    public PartialKeyRoute slice(Ranges select)
+    public KeyRoute slice(Ranges select)
     {
-        return new PartialKeyRoute(homeKey, slice(select, RoutingKey[]::new));
+        return select(slice(select, RoutingKey[]::new));
     }
 
     @Override
-    public PartialKeyRoute slice(Ranges ranges, Slice slice)
+    public KeyRoute slice(Ranges ranges, Slice slice)
     {
         return slice(ranges);
     }
 
     @Override
-    public PartialKeyRoute intersecting(Unseekables<?> intersecting)
+    public KeyRoute intersecting(Unseekables<?> intersecting)
     {
         switch (intersecting.domain())
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
-            case Key: return new PartialKeyRoute(homeKey, intersecting((AbstractUnseekableKeys)intersecting, cachedRoutingKeys()));
-            case Range: return new PartialKeyRoute(homeKey, slice((AbstractRanges)intersecting, RoutingKey[]::new));
+            case Key: return select(intersecting((AbstractUnseekableKeys)intersecting, cachedRoutingKeys()));
+            case Range: return select(slice((AbstractRanges)intersecting, RoutingKey[]::new));
         }
     }
 
     @Override
-    public PartialKeyRoute intersecting(Unseekables<?> intersecting, Slice slice)
+    public KeyRoute intersecting(Unseekables<?> intersecting, Slice slice)
     {
         return intersecting(intersecting);
     }
 
-    private AbstractUnseekableKeys wrap(RoutingKey[] wrap, AbstractKeys<RoutingKey> that)
+    private KeyRoute select(RoutingKey[] newKeys)
     {
-        return wrap == keys ? this : wrap == that.keys && that instanceof AbstractUnseekableKeys
-                ? (AbstractUnseekableKeys) that
-                : new RoutingKeys(wrap);
+        return newKeys == keys ? this : new PartialKeyRoute(homeKey, newKeys);
     }
 }
