@@ -28,6 +28,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.CoordinationAdapter.Adapters.SyncPointAdapter;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Node;
 import accord.messages.Accept;
 import accord.messages.Apply;
@@ -177,7 +178,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
                 withFlags = txnId.addFlag(HLC_BOUND);
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             if (tracker.hasFastPathAccepted())
-                adapter.execute(node, topologies, route, FAST, txnId, txn, withFlags, deps, deps, this);
+                adapter.execute(node, topologies, route, FAST, ExecuteFlags.none(), txnId, txn, withFlags, deps, deps, this);
             else if (tracker.hasMediumPathAccepted())
                 adapter.propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, this);
             else

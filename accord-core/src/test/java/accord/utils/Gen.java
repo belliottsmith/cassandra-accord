@@ -34,7 +34,8 @@ import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
-public interface Gen<A> {
+public interface Gen<A>
+{
     /**
      * For cases where method handles isn't able to detect the proper type, this method acts as a cast
      * to inform the compiler of the desired type.

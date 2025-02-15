@@ -152,7 +152,7 @@ public class CommandChange
         protected TxnId txnId;
 
         protected Timestamp executeAt;
-        protected Timestamp executeAtLeast;
+        protected Timestamp executesAtLeast;
         protected long minUniqueHlc;
         protected SaveStatus saveStatus;
         protected Status.Durability durability;
@@ -164,7 +164,6 @@ public class CommandChange
         protected PartialTxn partialTxn;
         protected PartialDeps partialDeps;
 
-        protected byte[] waitingOnBytes;
         protected CommandChange.WaitingOnProvider waitingOn;
         protected Writes writes;
         protected Result result;
@@ -215,7 +214,7 @@ public class CommandChange
             txnId = null;
 
             executeAt = null;
-            executeAtLeast = null;
+            executesAtLeast = null;
             minUniqueHlc = 0;
             saveStatus = null;
             durability = null;
@@ -227,7 +226,6 @@ public class CommandChange
             partialTxn = null;
             partialDeps = null;
 
-            waitingOnBytes = null;
             waitingOn = null;
             writes = null;
             result = null;
@@ -246,10 +244,10 @@ public class CommandChange
         public void init(TxnId txnId)
         {
             this.txnId = txnId;
-            durability = NotDurable;
-            acceptedOrCommitted = promised = Ballot.ZERO;
-            waitingOn = (txn, deps, executeAtLeast, uniqueHlc) -> null;
-            result = null;
+            this.durability = NotDurable;
+            this.acceptedOrCommitted = promised = Ballot.ZERO;
+            this.waitingOn = (txn, deps, executeAtLeast, uniqueHlc) -> null;
+            this.result = null;
         }
 
         public boolean isEmpty()
@@ -292,7 +290,7 @@ public class CommandChange
                 return false;
 
             SaveStatus newSaveStatus = cleanup.appliesIfNot;
-            truncate(saveStatusMasks[newSaveStatus.ordinal()]);
+            setNulls(saveStatusMasks[newSaveStatus.ordinal()]);
             if (input == Input.FULL)
             {
                 if (newSaveStatus == SaveStatus.TruncatedApply && !saveStatus.known.is(ApplyAtKnown))
@@ -302,9 +300,11 @@ public class CommandChange
             return true;
         }
 
-        protected void truncate(int mask)
+        protected void setNulls(int mask)
         {
-            // low flag bits represent fields already nulled out, so no need to visit them again
+            // limit ourselves to those fields that have been changed to null
+            mask &= 0xffff | (mask << 16);
+            // low bits of flags represent fields already nulled out, so no need to visit them again
             int iterable = toIterableSetFields(mask) & ~flags;
             for (Field next = nextSetField(iterable); next != null; iterable = unsetIterable(next, iterable), next = nextSetField(iterable))
             {
@@ -315,12 +315,12 @@ public class CommandChange
                     case SAVE_STATUS:       saveStatus = null;                       break;
                     case PARTIAL_DEPS:      partialDeps = null;                      break;
                     case EXECUTE_AT:        executeAt = null;                        break;
-                    case EXECUTES_AT_LEAST: executeAtLeast = null;                   break;
+                    case EXECUTES_AT_LEAST: executesAtLeast = null;                  break;
                     case MIN_UNIQUE_HLC:    minUniqueHlc = 0;                        break;
                     case DURABILITY:        durability = null;                       break;
                     case ACCEPTED:          acceptedOrCommitted = null;              break;
                     case PROMISED:          promised = null;                         break;
-                    case WAITING_ON:        waitingOnBytes = null; waitingOn = null; break;
+                    case WAITING_ON:        waitingOn = null;                        break;
                     case PARTIAL_TXN:       partialTxn = null;                       break;
                     case WRITES:            writes = null;                           break;
                     case CLEANUP:           cleanup = null;                          break;
@@ -354,7 +354,7 @@ public class CommandChange
 
             WaitingOn waitingOn = null;
             if (this.waitingOn != null)
-                waitingOn = this.waitingOn.provide(txnId, partialDeps, executeAtLeast, minUniqueHlc);
+                waitingOn = this.waitingOn.provide(txnId, partialDeps, executesAtLeast, minUniqueHlc);
 
             switch (saveStatus.status)
             {
@@ -378,7 +378,7 @@ public class CommandChange
                     return executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result);
                 case Truncated:
                 case Invalidated:
-                    return truncated(txnId, saveStatus, durability, participants, executeAt, executeAtLeast, writes, result);
+                    return truncated(txnId, saveStatus, durability, participants, executeAt, executesAtLeast, writes, result);
                 default:
                     throw new UnhandledEnum(saveStatus.status);
             }
@@ -408,7 +408,7 @@ public class CommandChange
             return "Builder {" +
                    "txnId=" + txnId +
                    ", executeAt=" + executeAt +
-                   ", executeAtLeast=" + executeAtLeast +
+                   ", executeAtLeast=" + executesAtLeast +
                    ", uniqueHlc=" + minUniqueHlc +
                    ", saveStatus=" + saveStatus +
                    ", durability=" + durability +
@@ -562,6 +562,11 @@ public class CommandChange
         return flags >>> 16;
     }
 
+    public static int toIterableNonNullFields(int flags)
+    {
+        return toIterableSetFields(flags) & ~flags;
+    }
+
     public static Field nextSetField(int iterable)
     {
         int i = Integer.numberOfTrailingZeros(Integer.lowestOneBit(iterable));
@@ -577,7 +582,7 @@ public class CommandChange
     {
         int iterable = toIterableSetFields(flags);
         StringBuilder builder = new StringBuilder("[");
-        for (Field next = nextSetField(iterable) ; next != null; iterable = unsetIterable(next, iterable), next = nextSetField(iterable))
+        for (Field next = nextSetField(iterable) ; next != null; next = nextSetField(iterable = unsetIterable(next, iterable)))
         {
             if (builder.length() > 1)
                 builder.append(',');

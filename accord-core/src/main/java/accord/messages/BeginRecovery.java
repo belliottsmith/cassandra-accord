@@ -54,8 +54,6 @@ import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Retired;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Truncated;
-import static accord.messages.PreAccept.calculateDeps;
-import static accord.primitives.EpochSupplier.constant;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.Phase;
@@ -111,7 +109,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, executeAtOrTxnIdEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        Commands.AcceptOutcome outcome = Commands.recover(safeStore, safeCommand, participants, txnId, partialTxn, route, ballot);
+        Commands.AcceptOutcome outcome = Commands.recover(safeStore, safeCommand, participants, txnId, partialTxn, ballot);
         switch (outcome)
         {
             default:             throw UnhandledEnum.unknown(outcome);
@@ -129,7 +127,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
             Deps localDeps = null;
             if (!command.known().deps().hasCommittedOrDecidedDeps())
             {
-                localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), txnId, false);
+                localDeps = DepsCalculator.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, false);
             }
             if (localDeps != null && coordinatedDeps != null && !participants.touches().equals(coordinatedDeps.covering))
             {

@@ -30,6 +30,7 @@ import javax.annotation.Nullable;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Result;
 import accord.api.RoutingKey;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.coordinate.tracking.RecoveryTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -284,7 +285,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 case Stable:
                 {
                     withStableDeps(recoverOkList, executeAt, this, stableDeps -> {
-                        adapter.execute(node, tracker.topologies(), route, RECOVER, txnId, txn, executeAt, stableDeps, stableDeps, this);
+                        adapter.execute(node, tracker.topologies(), route, RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, stableDeps, this);
                     });
                     return;
                 }

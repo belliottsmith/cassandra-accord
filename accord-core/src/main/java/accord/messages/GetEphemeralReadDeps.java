@@ -20,6 +20,8 @@ package accord.messages;
 
 import javax.annotation.Nonnull;
 
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
+import accord.local.DepsCalculator;
 import accord.local.KeyHistory;
 import accord.local.Node.Id;
 import accord.local.SafeCommandStore;
@@ -33,8 +35,7 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
-import static accord.messages.PreAccept.calculateDeps;
-import static accord.primitives.EpochSupplier.constant;
+import static accord.local.DepsCalculator.calculateDeps;
 
 public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralReadDeps.GetEphemeralReadDepsOk>
 {
@@ -70,15 +71,20 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     public GetEphemeralReadDepsOk apply(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, Long.MAX_VALUE);
-        Deps deps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), Timestamp.MAX, false);
-
-        return new GetEphemeralReadDepsOk(deps, Math.max(safeStore.node().epoch(), node.epoch()));
+        Deps deps;
+        ExecuteFlags flags;
+        try (DepsCalculator calculator = new DepsCalculator())
+        {
+             deps = calculateDeps(safeStore, txnId, participants, minEpoch, Timestamp.MAX, false);
+             flags = calculator.executeFlags(txnId);
+        }
+        return new GetEphemeralReadDepsOk(deps, Math.max(safeStore.node().epoch(), node.epoch()), flags);
     }
 
     @Override
-    public GetEphemeralReadDepsOk reduce(GetEphemeralReadDepsOk reply1, GetEphemeralReadDepsOk reply2)
+    public GetEphemeralReadDepsOk reduce(GetEphemeralReadDepsOk r1, GetEphemeralReadDepsOk r2)
     {
-        return new GetEphemeralReadDepsOk(reply1.deps.with(reply2.deps), Math.max(reply1.latestEpoch, reply2.latestEpoch));
+        return new GetEphemeralReadDepsOk(r1.deps.with(r2.deps), Math.max(r1.latestEpoch, r2.latestEpoch), r1.flags.and(r2.flags));
     }
 
     @Override
@@ -104,13 +110,17 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
 
     public static class GetEphemeralReadDepsOk implements Reply
     {
+        public enum Flag { READY_TO_EXECUTE }
+
         public final Deps deps;
         public final long latestEpoch;
+        public final ExecuteFlags flags;
 
-        public GetEphemeralReadDepsOk(@Nonnull Deps deps, long latestEpoch)
+        public GetEphemeralReadDepsOk(@Nonnull Deps deps, long latestEpoch, ExecuteFlags flags)
         {
             this.deps = Invariants.nonNull(deps);
             this.latestEpoch = latestEpoch;
+            this.flags = flags;
         }
 
         @Override

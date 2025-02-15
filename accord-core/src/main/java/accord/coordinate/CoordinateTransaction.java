@@ -26,9 +26,11 @@ import accord.api.Result;
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
 import accord.coordinate.CoordinationAdapter.Adapters;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
+import accord.local.DepsCalculator;
 import accord.local.KeyHistory;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
@@ -38,7 +40,6 @@ import accord.messages.Accept;
 import accord.messages.PreAccept;
 import accord.messages.PreAccept.PreAcceptNack;
 import accord.messages.PreAccept.PreAcceptReply;
-import accord.primitives.EpochSupplier;
 import accord.primitives.Status;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies;
@@ -50,6 +51,7 @@ import accord.primitives.FullRoute;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.utils.Functions;
 import accord.utils.MapReduceConsume;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncResult;
@@ -103,10 +105,11 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         if (tracker.hasFastPathAccepted())
         {
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
+            ExecuteFlags executeFlags = Functions.foldl(oks.valuesAsNullableList(), (ok, v) -> ok == null ? v : v.and(ok.flags), ExecuteFlags.all());
             // note: we merge all Deps regardless of witnessedAt. While we only need fast path votes,
             // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
             // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
-            executeAdapter().execute(node, topologies, route, FAST, txnId, txn, txnId, deps, deps, settingCallback());
+            executeAdapter().execute(node, topologies, route, FAST, executeFlags, txnId, txn, txnId, deps, deps, settingCallback());
             node.agent().metricsEventsListener().onFastPathTaken(txnId, deps);
         }
         else if (tracker.hasMediumPathAccepted() && txnId.hasMediumPath())
@@ -219,34 +222,43 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         @Override
         public PreAcceptReply apply(SafeCommandStore safeStore)
         {
-            EpochSupplier minEpoch = topologies.size() == 1 ? txnId : EpochSupplier.constant(topologies.oldestEpoch());
-            StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch.epoch(), txnId, txnId.epoch());
+            long minEpoch = topologies.oldestEpoch();
+            StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, txnId.epoch());
             SafeCommand safeCommand = safeStore.get(txnId, participants);
 
+            ExecuteFlags flags;
             Deps deps;
             if (txnId.is(PrivilegedCoordinatorWithDeps))
             {
-                deps = PreAccept.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, true);
-                if (deps == null)
-                    return PreAcceptNack.INSTANCE;
+                try (DepsCalculator calculator = new DepsCalculator())
+                {
+                    deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
+                    if (deps == null)
+                        return PreAcceptNack.INSTANCE;
+                    flags = calculator.executeFlags(txnId);
+                }
 
-                Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, deps, true, route);
+                Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, deps, true);
                 if (outcome != Success)
                     return PreAcceptNack.INSTANCE;
             }
             else
             {
-                Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, null, true, route);
+                Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, null, true);
                 if (outcome != Success)
                     return PreAcceptNack.INSTANCE;
 
-                deps = PreAccept.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, true);
-                if (deps == null)
-                    return PreAcceptNack.INSTANCE;
+                try (DepsCalculator calculator = new DepsCalculator())
+                {
+                    deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
+                    if (deps == null)
+                        return PreAcceptNack.INSTANCE;
+                    flags = calculator.executeFlags(txnId);
+                }
             }
 
             Command command = safeCommand.current();
-            return new PreAcceptOk(txnId, command.executeAt(), deps);
+            return new PreAcceptOk(txnId, command.executeAt(), deps, flags);
         }
 
         @Override

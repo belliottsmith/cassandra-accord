@@ -69,6 +69,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 {
     private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
 
+    public enum Flag { FAST_READ }
     private enum State { PENDING, PENDING_OBSOLETE, RETURNED, OBSOLETE }
     protected enum StoreAction { WAIT, EXECUTE, OBSOLETE }
 
@@ -121,6 +122,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public final TxnId txnId;
     public final Participants<?> scope;
     public final long executeAtEpoch;
+    public final int flags;
     private transient State state = State.PENDING; // TODO (low priority, semantics): respond with the Executed result we have stored?
 
     transient Timestamp executeAt;
@@ -139,7 +141,13 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long executeAtEpoch)
     {
+        this(to, topologies, txnId, scope, executeAtEpoch, 0);
+    }
+
+    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long executeAtEpoch, int flags)
+    {
         this.txnId = txnId;
+        this.flags = flags;
         int startIndex = latestRelevantEpochIndex(to, topologies, scope);
         this.scope = TxnRequest.computeScope(to, topologies, scope, startIndex, Participants::slice, Participants::with);
         this.executeAtEpoch = executeAtEpoch;
@@ -147,9 +155,15 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     protected ReadData(TxnId txnId, Participants<?> scope, long executeAtEpoch)
     {
+        this(txnId, scope, executeAtEpoch, 0);
+    }
+
+    protected ReadData(TxnId txnId, Participants<?> scope, long executeAtEpoch, int flags)
+    {
         this.txnId = txnId;
         this.scope = scope;
         this.executeAtEpoch = executeAtEpoch;
+        this.flags = flags;
     }
 
     protected abstract ExecuteOn executeOn();

@@ -27,7 +27,6 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.local.Command;
-import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -46,6 +45,7 @@ import accord.utils.btree.BTree;
 
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.KeyHistory.SYNC;
+import static accord.local.PreLoadContext.contextFor;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
@@ -98,10 +98,9 @@ abstract class PostProcess
                 safeStore = safeStore; // make it unsafe for use in lambda
                 SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
                 if (safeCommand != null) load(safeStore, safeCommand, safeCfk, notifySink);
-                else
-                    safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, RoutingKeys.of(key), SYNC), safeStore0 -> {
-                        load(safeStore0, safeStore0.unsafeGet(txnId), safeStore0.get(key), notifySink);
-                    }, safeStore.agent());
+                else safeStore.commandStore().execute(contextFor(txnId, RoutingKeys.of(key), SYNC), safeStore0 -> {
+                    load(safeStore0, safeStore0.unsafeGet(txnId), safeStore0.get(key), notifySink);
+                }, safeStore.agent());
             }
         }
 

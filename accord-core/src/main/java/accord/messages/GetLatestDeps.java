@@ -22,6 +22,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.local.Command;
+import accord.local.DepsCalculator;
 import accord.local.KeyHistory;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
@@ -38,9 +39,6 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
-
-import static accord.messages.PreAccept.calculateDeps;
-import static accord.primitives.EpochSupplier.constant;
 
 public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLatestDepsReply>
 {
@@ -91,7 +89,7 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
         Deps localDeps = null;
         if (!command.known().deps().hasCommittedOrDecidedDeps() && !command.hasBeen(Status.Truncated))
         {
-            localDeps = calculateDeps(safeStore, txnId, participants, constant(minEpoch), executeAt, false);
+            localDeps = DepsCalculator.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, false);
         }
 
         LatestDeps deps = LatestDeps.create(participants.owns(), command.known().deps(), command.acceptedOrCommitted(), coordinatedDeps, localDeps);

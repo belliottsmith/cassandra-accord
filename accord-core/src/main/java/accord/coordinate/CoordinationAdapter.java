@@ -24,6 +24,7 @@ import javax.annotation.Nullable;
 
 import accord.api.ProtocolModifiers;
 import accord.api.Result;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.coordinate.ExecuteSyncPoint.ExecuteInclusive;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.PreAcceptExclusiveSyncPointTracker;
@@ -48,8 +49,8 @@ import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
-import static accord.api.ProtocolModifiers.Toggles.temporaryPermitUnsafeBlindWrites;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
+import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.SLOW;
 import static accord.messages.Apply.Kind.Maximal;
@@ -68,7 +69,7 @@ public interface CoordinationAdapter<R>
     void proposeOnly(Node node, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback);
     void stabilise(Node node, @Nullable Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
     void stabiliseOnly(Node node, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback);
-    void execute(Node node, @Nullable Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super R, Throwable> callback);
+    void execute(Node node, @Nullable Topologies any, FullRoute<?> route, ExecutePath path, ExecuteFlags executeFlags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super R, Throwable> callback);
     void persist(Node node, @Nullable Topologies any, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback);
     default void persist(Node node, @Nullable Topologies any, FullRoute<?> route, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback)
     {
@@ -181,7 +182,7 @@ public interface CoordinationAdapter<R>
                                                           route, txnId, executeAt, SHARE, QuorumEpochIntersections.commit);
                 Topologies coordinates = all.size() == 1 ? all : accept.forEpoch(txnId.epoch());
 
-                if (ProtocolModifiers.Faults.txnInstability) execute(node, all, route, SLOW, txnId, txn, executeAt, deps, deps, callback);
+                if (ProtocolModifiers.Faults.txnInstability) execute(node, all, route, SLOW, ExecuteFlags.none(), txnId, txn, executeAt, deps, deps, callback);
                 else new StabiliseTxn(node, coordinates, all, route, ballot, txnId, txn, executeAt, deps, callback).start();
             }
 
@@ -205,11 +206,11 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
+            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, ExecuteFlags executeFlags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
             {
                 Topologies all = execution(node, any, route, SHARE, route, txnId, executeAt);
 
-                if ((temporaryPermitUnsafeBlindWrites() || !requiresUniqueHlcs()) && txn.read().keys().isEmpty())
+                if ((executeFlags.contains(HAS_UNIQUE_HLC) || !requiresUniqueHlcs()) && txn.read().keys().isEmpty())
                 {
                     Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, null) : null;
                     Result result = txn.result(txnId, executeAt, null);
@@ -283,7 +284,7 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super R, Throwable> callback)
+            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, ExecuteFlags executeFlags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super R, Throwable> callback)
             {
                 persist(node, null, route, txnId, txn, executeAt, stableDeps, null, txn.result(txnId, executeAt, null), callback);
             }
@@ -319,12 +320,12 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super R, Throwable> callback)
+            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, ExecuteFlags executeFlags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super R, Throwable> callback)
             {
                 // We cannot use the fast path for sync points as their visibility is asymmetric wrt other transactions,
                 // so we could recover to include different transactions than those we fast path committed with.
                 Invariants.require(path != FAST);
-                super.execute(node, any, route, path, txnId, txn, executeAt, stableDeps, sendDeps, callback);
+                super.execute(node, any, route, path, executeFlags, txnId, txn, executeAt, stableDeps, sendDeps, callback);
             }
         }
 
@@ -405,7 +406,7 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void execute(Node node, Topologies any, FullRoute<?> route, ExecutePath path, ExecuteFlags executeFlags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
             {
                 Topologies all = forExecution(node, route, SHARE, txnId, executeAt, stableDeps);
 

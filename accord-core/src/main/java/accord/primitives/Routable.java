@@ -89,6 +89,7 @@ public interface Routable
     Kind kind();
     Domain domain();
     Unseekable toUnseekable();
+    default Object prefix() { return null; }
 
     /**
      * Deterministically select a key that intersects this Routable and the provided Ranges

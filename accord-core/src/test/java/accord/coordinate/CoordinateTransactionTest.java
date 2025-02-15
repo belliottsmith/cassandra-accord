@@ -236,7 +236,7 @@ public class CoordinateTransactionTest
             for (Node n : cluster)
                 assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).build(blockingTxnContext, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, blockingTxnId.epoch(), blockingTxnId, blockingTxnId.epoch());
-                    return Commands.preaccept(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId), true), null, false, route);
+                    return Commands.preaccept(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId), true), null, false);
                 })));
 
             // Now create the transaction that should be blocked by the previous one
@@ -245,7 +245,7 @@ public class CoordinateTransactionTest
             for (Node n : cluster)
                 assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).build(context, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
-                    return Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txn.slice(safeStore.ranges().allAt(txnId.epoch()), true), null, false, route);
+                    return Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txn.slice(safeStore.ranges().allAt(txnId.epoch()), true), null, false);
                 })));
 
 

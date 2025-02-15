@@ -29,6 +29,16 @@ public class TinyEnumSet<E extends Enum<E>>
         this.bitset = encode(values);
     }
 
+    public TinyEnumSet(Enum<E> value)
+    {
+        this.bitset = encode(value);
+    }
+
+    public TinyEnumSet()
+    {
+        this.bitset = 0;
+    }
+
     protected TinyEnumSet(int bitset)
     {
         this.bitset = bitset;

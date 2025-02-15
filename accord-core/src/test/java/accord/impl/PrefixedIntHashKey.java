@@ -145,6 +145,12 @@ public abstract class PrefixedIntHashKey implements RoutableKey
                 }
             };
         }
+
+        @Override
+        public Object prefix()
+        {
+            return prefix;
+        }
     }
 
     public static final class Sentinel extends PrefixedIntRoutingKey

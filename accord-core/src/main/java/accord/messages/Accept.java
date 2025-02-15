@@ -21,9 +21,11 @@ package accord.messages;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Commands.AcceptOutcome;
+import accord.local.DepsCalculator;
 import accord.local.KeyHistory;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
@@ -31,7 +33,6 @@ import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
-import accord.primitives.EpochSupplier;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
@@ -136,7 +137,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
                     if (!calculate.isEmpty())
                     {
-                        Deps calculatedDeps = calculateDeps(safeStore, calculate);
+                        Deps calculatedDeps = DepsCalculator.calculateDeps(safeStore, txnId, calculate, minEpoch, executeAt, true);
                         if (calculatedDeps == null)
                             return AcceptReply.inThePast(ballot, participants, command);
 
@@ -158,27 +159,23 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
                 // if we're Retired, participants.owns() is empty, so we're just fetching deps
                 // TODO (desired): optimise deps calculation; for some keys we only need to return the last RX
             case Success:
-                Deps deps = calculateDeps(safeStore, participants);
-                if (deps == null)
-                    return AcceptReply.inThePast(ballot, participants, safeCommand.current());
+                ExecuteFlags flags;
+                Deps deps;
+                try (DepsCalculator calculator = new DepsCalculator())
+                {
+                    deps = calculator.calculate(safeStore, txnId, participants, minEpoch, executeAt, true);
+                    if (deps == null)
+                        return AcceptReply.inThePast(ballot, participants, safeCommand.current());
+                    flags = calculator.executeFlags(txnId);
+                }
 
                 Invariants.require(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
                 if (filterDuplicateDependenciesFromAcceptReply())
                     deps = deps.without(this.partialDeps);
 
                 Participants<?> successful = isPartialAccept ? participants.touches() : null;
-                return new AcceptReply(successful, deps);
+                return new AcceptReply(successful, deps, flags);
         }
-    }
-
-    private Deps calculateDeps(SafeCommandStore safeStore, StoreParticipants participants)
-    {
-        return PreAccept.calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), executeAt, true);
-    }
-
-    private Deps calculateDeps(SafeCommandStore safeStore, Participants<?> participants)
-    {
-        return PreAccept.calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), executeAt, true);
     }
 
     @Override
@@ -217,6 +214,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
     public static final class AcceptReply implements Reply
     {
+        public enum Flag { READY_TO_EXECUTE, HAS_UNIQUE_HLC }
         public static final AcceptReply SUCCESS = new AcceptReply(Success);
 
         public final AcceptOutcome outcome;
@@ -224,6 +222,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         public final @Nullable Participants<?> successful;
         public final @Nullable Deps deps;
         public final @Nullable Timestamp committedExecuteAt;
+        public final ExecuteFlags flags;
 
         private AcceptReply(AcceptOutcome outcome)
         {
@@ -232,6 +231,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
             this.successful = null;
             this.deps = null;
             this.committedExecuteAt = null;
+            this.flags = ExecuteFlags.none();
         }
 
         public AcceptReply(Ballot supersededBy)
@@ -241,15 +241,22 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
             this.successful = null;
             this.deps = null;
             this.committedExecuteAt = null;
+            this.flags = ExecuteFlags.none();
         }
 
         public AcceptReply(@Nullable Participants<?> successful, @Nonnull Deps deps)
+        {
+            this(successful, deps, ExecuteFlags.none());
+        }
+
+        public AcceptReply(@Nullable Participants<?> successful, @Nonnull Deps deps, ExecuteFlags flags)
         {
             this.outcome = Success;
             this.supersededBy = null;
             this.successful = successful;
             this.deps = deps;
             this.committedExecuteAt = null;
+            this.flags = flags;
         }
 
         public AcceptReply(AcceptOutcome outcome, Ballot supersededBy, @Nullable Timestamp committedExecuteAt)
@@ -259,15 +266,22 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
             this.successful = null;
             this.deps = null;
             this.committedExecuteAt = committedExecuteAt;
+            this.flags = ExecuteFlags.none();
         }
 
         public AcceptReply(AcceptOutcome outcome, Ballot supersededBy, @Nullable Participants<?> successful, @Nullable Deps deps,  @Nullable Timestamp committedExecuteAt)
+        {
+            this(outcome, supersededBy, successful, deps, committedExecuteAt, ExecuteFlags.none());
+        }
+
+        public AcceptReply(AcceptOutcome outcome, Ballot supersededBy, @Nullable Participants<?> successful, @Nullable Deps deps,  @Nullable Timestamp committedExecuteAt, ExecuteFlags flags)
         {
             this.outcome = outcome;
             this.supersededBy = supersededBy;
             this.successful = successful;
             this.deps = deps;
             this.committedExecuteAt = committedExecuteAt;
+            this.flags = flags;
         }
 
         static AcceptReply redundant(AcceptOutcome outcome, Ballot ballot, Command command)

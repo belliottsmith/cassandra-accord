@@ -577,7 +577,7 @@ public class InMemoryJournal implements Journal
                     executeAt = Invariants.nonNull((Timestamp) diff.changes.get(EXECUTE_AT));
                     break;
                 case EXECUTES_AT_LEAST:
-                    executeAtLeast = Invariants.nonNull((Timestamp) diff.changes.get(EXECUTES_AT_LEAST));
+                    executesAtLeast = Invariants.nonNull((Timestamp) diff.changes.get(EXECUTES_AT_LEAST));
                     break;
                 case MIN_UNIQUE_HLC:
                     minUniqueHlc = (Long)diff.changes.get(MIN_UNIQUE_HLC);

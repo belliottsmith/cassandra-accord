@@ -79,10 +79,10 @@ public abstract class CommandStore implements AgentExecutor
 {
     private static final Logger logger = LoggerFactory.getLogger(CommandStore.class);
 
-    static class EpochUpdate
+    public static class EpochUpdate
     {
-        final RangesForEpoch newRangesForEpoch;
-        final RedundantBefore addRedundantBefore;
+        public final RangesForEpoch newRangesForEpoch;
+        public final RedundantBefore addRedundantBefore;
 
         EpochUpdate(RangesForEpoch newRangesForEpoch, RedundantBefore addRedundantBefore)
         {

@@ -81,6 +81,14 @@ public class Functions
         return result;
     }
 
+    public static <I> long foldl(List<I> list, FoldToLong<I> foldl, long accumulate)
+    {
+        long result = accumulate;
+        for (int i = 0, mi = list.size(); i < mi; ++i)
+            result = foldl.apply(list.get(i), result);
+        return result;
+    }
+
     public static <I, O> O foldl(I[] array, BiFunction<I, O, O> foldl, O zero)
     {
         O result = zero;

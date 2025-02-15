@@ -39,7 +39,6 @@ import accord.messages.Commit;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
-import accord.primitives.FullRoute;
 import accord.primitives.Known;
 import accord.primitives.Known.KnownExecuteAt;
 import accord.primitives.PartialDeps;
@@ -132,7 +131,7 @@ public class Commands
 
     public enum AcceptOutcome { Success, Redundant, RejectedBallot, Insufficient, Retired, Truncated }
 
-    public static AcceptOutcome preaccept(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Txn partialTxn, @Nullable Deps partialDeps, boolean hasCoordinatorVote, FullRoute<?> route)
+    public static AcceptOutcome preaccept(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Txn partialTxn, @Nullable Deps partialDeps, boolean hasCoordinatorVote)
     {
         Invariants.require(partialDeps == null || txnId.is(PrivilegedCoordinatorWithDeps));
         Invariants.require(!hasCoordinatorVote || txnId.hasPrivilegedCoordinator());
@@ -141,16 +140,16 @@ public class Commands
         else if (hasCoordinatorVote) newSaveStatus = PreAcceptedWithVote;
         else newSaveStatus = PreAccepted;
 
-        return preacceptOrRecover(safeStore, safeCommand, participants, newSaveStatus, txnId, partialTxn, partialDeps, route, Ballot.ZERO);
+        return preacceptOrRecover(safeStore, safeCommand, participants, newSaveStatus, txnId, partialTxn, partialDeps, Ballot.ZERO);
     }
 
-    public static AcceptOutcome recover(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, PartialTxn partialTxn, FullRoute<?> route, Ballot ballot)
+    public static AcceptOutcome recover(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, PartialTxn partialTxn, Ballot ballot)
     {
         // for recovery we only ever propose either the original epoch or an Accept that we witness; otherwise we invalidate
-        return preacceptOrRecover(safeStore, safeCommand, participants, SaveStatus.PreAccepted, txnId, partialTxn, null, route, ballot);
+        return preacceptOrRecover(safeStore, safeCommand, participants, SaveStatus.PreAccepted, txnId, partialTxn, null, ballot);
     }
 
-    private static AcceptOutcome preacceptOrRecover(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, SaveStatus newSaveStatus, TxnId txnId, Txn txn, @Nullable Deps deps, FullRoute<?> route, Ballot ballot)
+    private static AcceptOutcome preacceptOrRecover(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, SaveStatus newSaveStatus, TxnId txnId, Txn txn, @Nullable Deps deps, Ballot ballot)
     {
         final Command command = safeCommand.current();
         if (command.hasBeen(Truncated))
@@ -180,7 +179,7 @@ public class Commands
         if (command.known().deps().hasProposedOrDecidedDeps()) participants = command.participants().supplement(participants);
         else participants = participants.filter(UPDATE, safeStore, txnId, null);
 
-        Validated validated = validate(ballot, newSaveStatus, command, participants, route, txn, deps);
+        Validated validated = validate(ballot, newSaveStatus, command, participants, participants.route(), txn, deps);
         Invariants.require(validated != INSUFFICIENT);
 
         if (command.executeAt() == null)
@@ -191,7 +190,7 @@ public class Commands
             // if we are performing recovery (i.e. non-zero ballot), do not permit a fast path decision as we want to
             // invalidate any transactions that were not completed by their initial coordinator
             // TODO (desired): limit preaccept to keys we include, to avoid inflating unnecessary state
-            Timestamp executeAt = safeStore.commandStore().preaccept(txnId, route, safeStore, ballot.equals(Ballot.ZERO));
+            Timestamp executeAt = safeStore.commandStore().preaccept(txnId, participants.route(), safeStore, ballot.equals(Ballot.ZERO));
             if (txnId != executeAt || !command.is(NotDefined))
             {
                 newSaveStatus = PreAccepted;

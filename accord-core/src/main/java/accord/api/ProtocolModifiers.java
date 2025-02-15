@@ -217,11 +217,6 @@ public class ProtocolModifiers
         public static boolean requiresUniqueHlcs() { return requiresUniqueHlcs; }
         public static void setRequiresUniqueHlcs(boolean newRequiresUniqueHlcs) { requiresUniqueHlcs = newRequiresUniqueHlcs; }
 
-        // TODO (required): this is a temporary measure to not break migration
-        private static boolean temporaryPermitUnsafeBlindWrites = true;
-        public static boolean temporaryPermitUnsafeBlindWrites() { return temporaryPermitUnsafeBlindWrites; }
-        public static void setTemporaryPermitUnsafeBlindWrites(boolean newTemporaryPermitUnsafeBlindWrites) { temporaryPermitUnsafeBlindWrites = newTemporaryPermitUnsafeBlindWrites; }
-
         private static int markStaleIfCannotExecute = TinyEnumSet.encode(Txn.Kind.Write);
         public static boolean markStaleIfCannotExecute(TxnId txnId) { return TinyEnumSet.contains(markStaleIfCannotExecute, txnId.kindOrdinal()); }
         public static boolean markStaleIfCannotExecute(Txn.Kind kind) { return TinyEnumSet.contains(markStaleIfCannotExecute, kind); }

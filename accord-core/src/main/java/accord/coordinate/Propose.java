@@ -23,6 +23,7 @@ import java.util.function.BiConsumer;
 
 import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Commands.AcceptOutcome;
@@ -76,6 +77,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
 
     private Throwable failure;
     private boolean isDone;
+    private int executeFlags;
 
     Propose(Node node, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, Txn txn, Route<?> require, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
@@ -194,7 +196,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
         //  Or we must pick it up as an Unstable dependency here.
         Deps newDeps = mergeNewDeps();
         Deps stableDeps = mergeDeps(newDeps);
-        if (kind == Kind.MEDIUM) adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, txnId, txn, executeAt, stableDeps, newDeps, callback);
+        if (kind == Kind.MEDIUM) adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, newDeps, callback);
         else adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, stableDeps, callback);
         if (!Invariants.debug()) acceptOks.clear();
     }

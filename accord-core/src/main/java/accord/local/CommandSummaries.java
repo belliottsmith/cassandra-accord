@@ -246,7 +246,8 @@ public interface CommandSummaries
 
     interface ActiveCommandVisitor<P1, P2>
     {
-        void visit(P1 p1, P2 p2, Unseekable keyOrRange, TxnId txnId);
+        void visit(P1 p1, P2 p2, SummaryStatus status, Unseekable keyOrRange, TxnId txnId);
+        default void visitMaxAppliedHlc(long maxAppliedHlc) {}
     }
 
     interface AllCommandVisitor
@@ -328,7 +329,7 @@ public interface CommandSummaries
                     continue;
 
                 for (Unseekable keyOrRange : value.participants.intersecting(keysOrRanges, Minimal))
-                    visit.visit(p1, p2, keyOrRange, txnId);
+                    visit.visit(p1, p2, status, keyOrRange, txnId);
             }
         }
     }

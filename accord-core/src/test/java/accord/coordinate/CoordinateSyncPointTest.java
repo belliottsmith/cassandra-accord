@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import accord.Utils;
 import accord.api.MessageSink;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.coordinate.tracking.AllTracker;
 import accord.impl.IntKey;
 import accord.impl.TestAgent;
@@ -120,7 +121,7 @@ class CoordinateSyncPointTest
             if (request instanceof PreAccept)
             {
                 PreAccept preAccept = (PreAccept) request;
-                onSuccess(args, new PreAccept.PreAcceptOk(preAccept.txnId, preAccept.txnId, PartialDeps.NONE));
+                onSuccess(args, new PreAccept.PreAcceptOk(preAccept.txnId, preAccept.txnId, PartialDeps.NONE, ExecuteFlags.none()));
             }
             else if (request instanceof Accept)
             {

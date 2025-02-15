@@ -48,7 +48,7 @@ public class CheckedCommands
         StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command before = safeCommand.current();
-        Commands.AcceptOutcome result = Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false, route);
+        Commands.AcceptOutcome result = Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false);
         Command after = safeCommand.current();
         if (result != Commands.AcceptOutcome.Success) throw illegalState("Command mutation rejected: " + result);
         consumer.accept(before, after);

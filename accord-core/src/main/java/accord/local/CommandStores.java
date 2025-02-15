@@ -514,9 +514,10 @@ public abstract class CommandStores
             for (Ranges addRanges : shardDistributor.split(added))
             {
                 EpochUpdateHolder updateHolder = new EpochUpdateHolder();
+                RangesForEpoch rangesForEpoch = new RangesForEpoch(epoch, addRanges);
+                updateHolder.add(epoch, rangesForEpoch, addRanges);
                 ShardHolder shard = new ShardHolder(supplier.create(nextId++, updateHolder));
-                shard.ranges = new RangesForEpoch(epoch, addRanges);
-                shard.store.epochUpdateHolder.add(epoch, shard.ranges, addRanges);
+                shard.ranges = rangesForEpoch;
 
                 Map<Boolean, Ranges> partitioned = addRanges.partitioningBy(range -> shouldBootstrap(node, prev.global, newLocalTopology, range));
                 if (partitioned.containsKey(false))

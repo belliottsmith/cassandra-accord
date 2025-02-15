@@ -21,6 +21,7 @@ package accord.coordinate;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
@@ -157,7 +158,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
 
     protected void onStabilised()
     {
-        adapter().execute(node, allTopologies, route, ballot == Ballot.ZERO ? SLOW : RECOVER, txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
+        adapter().execute(node, allTopologies, route, ballot == Ballot.ZERO ? SLOW : RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
     }
 
     protected abstract CoordinationAdapter<R> adapter();

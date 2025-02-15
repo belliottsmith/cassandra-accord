@@ -70,6 +70,7 @@ import static accord.local.CommandSummaries.IsDep.IS_NOT_COORD_DEP;
 import static accord.local.CommandSummaries.IsDep.IS_NOT_STABLE_DEP;
 import static accord.local.CommandSummaries.IsDep.NOT_ELIGIBLE;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
+import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
 import static accord.local.CommandSummaries.SummaryStatus.PREACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_DURABLE;
@@ -1343,6 +1344,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
                                ActiveCommandVisitor<P1, P2> visitor,
                                P1 p1, P2 p2)
     {
+        visitor.visitMaxAppliedHlc(maxUniqueHlc);
+
         TxnId prunedBefore = prunedBefore();
         int end = insertPos(startedBefore);
         // We only filter durable transactions less than BOTH the txnId and executeAt of our max preceding write.
@@ -1396,7 +1399,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             while (nextPruned != null && nextPruned.compareTo(txn) < 0)
             {
                 if (nextPruned.isVisible && nextPruned.is(testKind))
-                    visitor.visit(p1, p2, key, nextPruned.plainTxnId());
+                    visitor.visit(p1, p2, NOT_DIRECTLY_WITNESSED, key, nextPruned.plainTxnId());
 
                 if (loadingPruned.hasNext()) nextPruned = loadingPruned.next();
                 else nextPruned = null;
@@ -1464,8 +1467,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                     }
             }
 
-
-            visitor.visit(p1, p2, key, txn.plainTxnId());
+            visitor.visit(p1, p2, txn.summaryStatus(), key, txn.plainTxnId());
         }
 
         if (startedBefore.compareTo(prunedBefore) <= 0)
@@ -1483,7 +1485,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
                 if (txn.is(Write))
                 {
-                    visitor.visit(p1, p2, key, committedByExecuteAt[i].plainTxnId());
+                    visitor.visit(p1, p2, txn.summaryStatus(), key, committedByExecuteAt[i].plainTxnId());
                     if (txn.compareTo(startedBefore) > 0)
                         break;
                 }

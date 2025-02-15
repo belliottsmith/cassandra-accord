@@ -298,7 +298,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             case PreAccepted:
                 // only preaccept if we coordinate the transaction
                 if (safeStore.ranges().coordinates(txnId).intersects(route) && Route.isFullRoute(route))
-                    Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false, Route.castToFullRoute(route));
+                    Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false);
 
             case NotDefined:
                 if (invalidIf == IfUncommitted)

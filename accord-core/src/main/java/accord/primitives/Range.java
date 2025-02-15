@@ -28,7 +28,6 @@ import java.util.Objects;
 
 import javax.annotation.Nullable;
 
-import static accord.utils.Invariants.illegalState;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FAST;
 
@@ -208,10 +207,10 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
 
     private Range(RoutingKey start, RoutingKey end)
     {
-        if (start.compareTo(end) >= 0)
-            throw new IllegalArgumentException(start + " >= " + end);
-        if (startInclusive() == endInclusive())
-            throw illegalState("Range must have one side inclusive, and the other exclusive. Range of different types should not be mixed.");
+        // TODO (expected): should we at least relax to permit an empty Range?
+        Invariants.requireArgument(start.compareTo(end) < 0, start + " >= " + end);
+        Invariants.requireArgument(Objects.equals(start.prefix(), end.prefix()), "Range bounds must share their prefix: %s vs %s", start, end);
+        Invariants.require(startInclusive() != endInclusive(), "Range must have one side inclusive, and the other exclusive. Range of different types should not be mixed.");
         this.start = start;
         this.end = end;
     }
@@ -224,6 +223,11 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     public RoutingKey end()
     {
         return end;
+    }
+
+    public Object prefix()
+    {
+        return start.prefix();
     }
 
     @Override

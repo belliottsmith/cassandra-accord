@@ -25,19 +25,18 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Commands;
+import accord.local.DepsCalculator;
 import accord.local.KeyHistory;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.PartialDeps;
-import accord.primitives.Participants;
-import accord.primitives.RangeDeps;
 import accord.local.StoreParticipants;
 import accord.messages.TxnRequest.WithUnsynced;
 import accord.primitives.Deps;
-import accord.primitives.EpochSupplier;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
@@ -52,8 +51,6 @@ import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
 import static accord.primitives.Timestamp.Flag.REJECTED;
-import static accord.primitives.Txn.Kind.EphemeralRead;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
 {
@@ -114,7 +111,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, acceptEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, partialDeps, hasCoordinatorVote, route);
+        Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, partialDeps, hasCoordinatorVote);
         Command command = safeCommand.current();
         switch (outcome)
         {
@@ -127,12 +124,18 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                     return PreAcceptNack.INSTANCE;
 
                 if (command.executeAt().is(REJECTED))
-                    return new PreAcceptOk(txnId, command.executeAt(), Deps.NONE);
+                    return new PreAcceptOk(txnId, command.executeAt(), Deps.NONE, ExecuteFlags.none());
 
             case Retired:
-                Deps deps = calculateDeps(safeStore, txnId, participants, EpochSupplier.constant(minEpoch), txnId, true);
-                if (deps == null)
-                    return PreAcceptNack.INSTANCE;
+                ExecuteFlags flags;
+                Deps deps;
+                try (DepsCalculator calculator = new DepsCalculator())
+                {
+                    deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
+                    if (deps == null)
+                        return PreAcceptNack.INSTANCE;
+                    flags = calculator.executeFlags(txnId);
+                }
 
                 // NOTE: we CANNOT test whether we adopt a future dependency here because it might be that this command
                 // is guaranteed to not reach agreement, but that this replica is unaware of that fact and has pruned
@@ -140,7 +143,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 // We do however prohibit later epochs as dependencies as we cannot handle those effectively
                 // when back-filling for execution of the transaction.
                 Invariants.require(deps.maxTxnId(txnId).epoch() <= txnId.epoch());
-                return new PreAcceptOk(txnId, command.executeAtOrTxnId(), deps);
+                return new PreAcceptOk(txnId, command.executeAtOrTxnId(), deps, flags);
 
             case Truncated:
             case RejectedBallot:
@@ -181,10 +184,11 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
 
             Timestamp witnessedAt = Timestamp.mergeMaxAndFlags(okMax.witnessedAt, okMin.witnessedAt);
             Deps deps = ok1.deps.with(ok2.deps);
+            ExecuteFlags flags = ok1.flags.and(ok2.flags);
 
-            if (deps == okMax.deps && witnessedAt == okMax.witnessedAt)
+            if (deps == okMax.deps && witnessedAt == okMax.witnessedAt && okMax.flags == flags)
                 return okMax;
-            return new PreAcceptOk(ok1.txnId, witnessedAt, deps);
+            return new PreAcceptOk(ok1.txnId, witnessedAt, deps, flags);
         }
     }
 
@@ -193,12 +197,14 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         public final TxnId txnId;
         public final Timestamp witnessedAt;
         public final Deps deps;
+        public final ExecuteFlags flags;
 
-        public PreAcceptOk(TxnId txnId, Timestamp witnessedAt, Deps deps)
+        public PreAcceptOk(TxnId txnId, Timestamp witnessedAt, Deps deps, ExecuteFlags flags)
         {
             this.txnId = txnId;
             this.witnessedAt = witnessedAt;
             this.deps = deps;
+            this.flags = flags;
         }
 
         @Override
@@ -249,41 +255,6 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         public String toString()
         {
             return "PreAcceptNack{}";
-        }
-    }
-
-    public static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, StoreParticipants participants, EpochSupplier minEpoch, Timestamp executeAt, boolean nullIfRedundant)
-    {
-        return calculateDeps(safeStore, txnId, participants.touches(), minEpoch, executeAt, nullIfRedundant);
-    }
-
-    public static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, Participants<?> touches, EpochSupplier minEpoch, Timestamp executeAt, boolean nullIfRedundant)
-    {
-        // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
-        try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder(true);
-             RangeDeps.BuilderByRange redundantBuilder = RangeDeps.builderByRange())
-        {
-            RangeDeps redundant = safeStore.redundantBefore().collectDeps(touches, redundantBuilder, minEpoch, executeAt).build();
-            if (nullIfRedundant && !txnId.is(EphemeralRead))
-            {
-                TxnId maxRedundantBefore = redundant.maxTxnId(null);
-                if (maxRedundantBefore != null && maxRedundantBefore.compareTo(executeAt) >= 0)
-                {
-                    Invariants.require(maxRedundantBefore.is(ExclusiveSyncPoint));
-                    return null;
-                }
-            }
-
-            safeStore.visit(touches, executeAt, txnId.witnesses(),
-                            (p1, in, keyOrRange, testTxnId) -> {
-                                if (p1 == null || !testTxnId.equals(p1))
-                                    in.add(keyOrRange, testTxnId);
-                                }, executeAt.equals(txnId) ? null : txnId, builder);
-
-            Deps result = builder.build();
-            result = new Deps(result.keyDeps, result.rangeDeps.with(redundant), result.directKeyDeps);
-            Invariants.require(!result.contains(txnId));
-            return result;
         }
     }
 

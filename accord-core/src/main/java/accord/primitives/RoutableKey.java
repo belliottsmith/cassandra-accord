@@ -38,15 +38,9 @@ public interface RoutableKey extends Routable, Comparable<RoutableKey>
     default int compareAsRoutingKey(@Nonnull RoutableKey that) { return toUnseekable().compareTo(that.toUnseekable()); }
 
     /**
-     * Some prefix that may be shared by other keys, particularly in a Range or Ranges.
-     * Mostly used for pretty printing Range and Ranges.
-     */
-    default Object prefix() { return null; }
-
-    /**
      * Some suffix that, combined with prefix(), uniquely identifies the Key.
      */
-    default String suffix() { return toString(); }
+    default Object suffix() { return toString(); }
 
     @Override default RoutingKey someIntersectingRoutingKey(@Nullable Ranges ranges)
     {
