@@ -207,7 +207,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         this.now = new AtomicReference<>(Timestamp.fromValues(topology.epoch(), time.now(), id));
         this.agent = agent;
         this.random = random;
-        this.persistDurableBefore = new PersistentField<>(() -> durableBefore, DurableBefore::merge, durableBeforePersister, this::setPersistedDurableBefore);
+        this.persistDurableBefore = new PersistentField<>(() -> durableBefore, DurableBefore::merge, safeDurableBeforePersister(durableBeforePersister), this::setPersistedDurableBefore);
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         this.durabilityScheduling = new DurabilityScheduling(this);
         // TODO (desired): make frequency configurable
@@ -292,6 +292,20 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
+    private Persister<DurableBefore, DurableBefore> safeDurableBeforePersister(Persister<DurableBefore, DurableBefore> wrap)
+    {
+        return new Persister<>()
+        {
+            @Override
+            public AsyncResult<?> persist(DurableBefore addValue, DurableBefore newValue)
+            {
+                Invariants.require(addValue.maxEpoch() <= epoch());
+                return wrap.persist(addValue, newValue);
+            }
+            @Override public DurableBefore load() { return wrap.load(); }
+        };
+    }
+
     private void setPersistedDurableBefore(DurableBefore newDurableBefore)
     {
         durableBeforeLock.lock();
@@ -313,7 +327,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public AsyncResult<?> markDurable(DurableBefore addDurableBefore)
     {
-        return persistDurableBefore.mergeAndUpdate(DurableBefore.merge(durableBefore, addDurableBefore));
+        return withEpoch(addDurableBefore.maxEpoch(), () -> persistDurableBefore.mergeAndUpdate(DurableBefore.merge(durableBefore, addDurableBefore)))
+               .beginAsResult();
     }
 
     @Override
@@ -482,7 +497,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public Timestamp uniqueNow(Timestamp atLeast)
     {
         Timestamp cur = now.get();
-        if (!cur.isAtLeastByEpochAndHlc(atLeast))
+        if (cur.compareSimultaneousEpochAndHlc(atLeast) <= 0)
         {
             long topologyEpoch = topology.epoch();
             if (atLeast.epoch() > topologyEpoch)

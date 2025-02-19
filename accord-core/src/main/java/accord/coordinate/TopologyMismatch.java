@@ -27,6 +27,8 @@ import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.utils.Invariants;
 
+import static accord.topology.Shard.Flag.PENDING_REMOVAL;
+
 public class TopologyMismatch extends CoordinationFailed
 {
     public enum Reason { HOME_KEY, KEYS_OR_RANGES }
@@ -80,13 +82,13 @@ public class TopologyMismatch extends CoordinationFailed
     private static TopologyMismatch checkForPendingRemoval(Topology t, @Nullable TxnId txnId, @Nullable RoutingKey homeKey, Routables<?> keysOrRanges)
     {
         EnumSet<TopologyMismatch.Reason> reasons = null;
-        if (homeKey != null && !t.reduce(true, s -> s.contains(homeKey), (result, s) -> result & !s.pendingRemoval))
+        if (homeKey != null && !t.reduce(true, s -> s.contains(homeKey), (result, s) -> result & !s.is(PENDING_REMOVAL)))
         {
             if (reasons == null)
                 reasons = EnumSet.noneOf(TopologyMismatch.Reason.class);
             reasons.add(TopologyMismatch.Reason.HOME_KEY);
         }
-        if (!t.reduce(true, s -> keysOrRanges.intersects(s.range), (result, s) -> result & !s.pendingRemoval))
+        if (!t.reduce(true, s -> keysOrRanges.intersects(s.range), (result, s) -> result & !s.is(PENDING_REMOVAL)))
         {
             if (reasons == null)
                 reasons = EnumSet.noneOf(TopologyMismatch.Reason.class);

@@ -208,7 +208,7 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     private Range(RoutingKey start, RoutingKey end)
     {
         // TODO (expected): should we at least relax to permit an empty Range?
-        Invariants.requireArgument(start.compareTo(end) < 0, start + " >= " + end);
+        Invariants.requireArgument(start.compareTo(end) < 0, "%s >= %s", start, end);
         Invariants.requireArgument(Objects.equals(start.prefix(), end.prefix()), "Range bounds must share their prefix: %s vs %s", start, end);
         Invariants.require(startInclusive() != endInclusive(), "Range must have one side inclusive, and the other exclusive. Range of different types should not be mixed.");
         this.start = start;
@@ -460,19 +460,12 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     public String toString()
     {
         Object prefix = start().prefix();
-        if (prefix == null || !prefix.equals(end().prefix()))
-        {
-            return (startInclusive() ? "[" : "(") + start() + "," + end() + (endInclusive() ? ']' : ')');
-        }
-        else
-        {
-            return prefix + ":" + toSuffixString();
-        }
+        return (prefix == null ? "" : prefix + ":") + toSuffixString();
     }
 
     public String toSuffixString()
     {
-        return (startInclusive() ? "[" : "(") + start().suffix() + "," + end().suffix() + (endInclusive() ? ']' : ')');
+        return (startInclusive() ? "[" : "(") + start().printableSuffix() + "," + end().printableSuffix() + (endInclusive() ? ']' : ')');
     }
 
 }

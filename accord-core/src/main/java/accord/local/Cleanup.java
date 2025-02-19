@@ -41,8 +41,9 @@ import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.NOT_OWNED;
+import static accord.local.RedundantStatus.Property.SHARD_AND_LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_REDUNDANT;
-import static accord.local.RedundantStatus.Property.SHARD_APPLIED_ONLY;
+import static accord.local.RedundantStatus.Property.SHARD_ONLY_APPLIED;
 import static accord.local.RedundantStatus.Property.TRUNCATE_BEFORE;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -178,12 +179,12 @@ public enum Cleanup
 
         if (input == FULL)
         {
-            Participants<?> executes = participants.stillExecutes();
-            if (!saveStatus.hasBeen(Applied) && (executes == null || (!executes.isEmpty() && redundantBefore.preBootstrapOrStale(txnId, executes) != ALL)))
+            Participants<?> waitsOn = participants.waitsOn();
+            if (!saveStatus.hasBeen(Applied) && (waitsOn == null || (!waitsOn.isEmpty() && redundantBefore.preBootstrapOrStale(txnId, waitsOn) != ALL)))
             {
                 // if we should execute this transaction locally, and we have not done so by the time we reach a GC point, something has gone wrong
-                TxnId supersededBy = redundantBefore.max(participants.route(), e -> e.shardAppliedBefore);
-                Participants<?> on = executes.slice(redundantBefore.foldl(participants.route(), (e, r, s) -> s.equals(e.shardAppliedBefore) ? r.with(Ranges.of(e.range)) : r, Ranges.EMPTY, supersededBy), Minimal);
+                TxnId supersededBy = redundantBefore.max(participants.route(), e -> e.maxBound(SHARD_AND_LOCALLY_APPLIED));
+                Participants<?> on = waitsOn.slice(redundantBefore.foldl(participants.route(), (e, r, s) -> s.equals(e.maxBound(SHARD_AND_LOCALLY_APPLIED)) ? r.with(Ranges.of(e.range)) : r, Ranges.EMPTY, supersededBy), Minimal);
                 String message = "Loading " + redundant + " command " + txnId + " with status " + saveStatus + " (that should have been Applied). Expected to be witnessed and executed by " + supersededBy + ".";
                 agent.onViolation(message, on, txnId, executeAt, supersededBy, supersededBy);
                 return truncate(txnId);
@@ -240,7 +241,7 @@ public enum Cleanup
         {
             // TODO (required): consider more the invariants we're guaranteeing here, particularly with respect to other shards
             //  also consider whether we interfere with stronger cleanup that would run after in cleanupWithFullRoute
-            if (input != PARTIAL && redundantStatus.all(SHARD_APPLIED_ONLY) && !redundantStatus.any(LOCALLY_APPLIED) && redundantStatus.all(LOCALLY_DEFUNCT))
+            if (input != PARTIAL && redundantStatus.all(SHARD_ONLY_APPLIED) && !redundantStatus.any(LOCALLY_APPLIED) && redundantStatus.all(LOCALLY_DEFUNCT))
                 return truncate(txnId);
             return ifDecided;
         }
@@ -276,7 +277,7 @@ public enum Cleanup
         if (!saveStatus.known.is(ApplyAtKnown)) return true;
         if (executeAt == null) return true;
         if (minGcBefore.is(HLC_BOUND) && executeAt.uniqueHlc() < minGcBefore.hlc()) return true;
-        return participants.executes().isEmpty();
+        return participants.waitsOn().isEmpty();
     }
 
     public static Cleanup forOrdinal(int ordinal)

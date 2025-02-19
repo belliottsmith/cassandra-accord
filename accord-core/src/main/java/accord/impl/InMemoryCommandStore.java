@@ -800,8 +800,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (!command.hasBeen(Committed)) continue;
                 if (command.hasBeen(Applied)) continue;
                 if (txnId.is(EphemeralRead)) continue;
-                Participants<?> intersecting = txnId.is(ExclusiveSyncPoint) ? command.participants().owns().intersecting(updated.participants().touches(), Minimal)
-                                                                            : command.participants().stillExecutes().intersecting(covering, Minimal);
+                Participants<?> intersecting = (txnId.is(ExclusiveSyncPoint) ? command.participants().owns(): command.participants().stillWaitsOn()).intersecting(covering, Minimal);
                 if (intersecting.isEmpty()) continue;
                 if (commandStore().unsafeGetRedundantBefore().preBootstrapOrStale(command.txnId(), intersecting) == ALL) continue;
                 illegalState();

@@ -175,7 +175,18 @@ extends SafeCommandStore
         }
     }
 
+    // TODO (expected): cleanup the integration hooks here; they're a bit byzantine. Also clearly document behaviour.
     public void postExecute()
+    {
+        flushFieldUpdates();
+    }
+
+    protected void persistFieldUpdates()
+    {
+        flushFieldUpdates();
+    }
+
+    protected void flushFieldUpdates()
     {
         if (fieldUpdates == null)
             return;
@@ -191,6 +202,8 @@ extends SafeCommandStore
 
         if (fieldUpdates.newRangesForEpoch != null)
             super.setRangesForEpoch(fieldUpdates.newRangesForEpoch);
+
+        fieldUpdates = null;
     }
 
     /**
@@ -233,7 +246,7 @@ extends SafeCommandStore
         if (fieldUpdates != null && fieldUpdates.newRangesForEpoch != null)
             return fieldUpdates.newRangesForEpoch;
 
-        return null;
+        return commandStore.unsafeGetRangesForEpoch();
     }
 
     @Override

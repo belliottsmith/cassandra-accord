@@ -28,7 +28,7 @@ import com.google.common.primitives.Ints;
 
 import accord.api.RoutingKey;
 import accord.local.Node.Id;
-import accord.local.RedundantBefore;
+import accord.local.RedundantBefore.QuickBounds;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.local.cfk.CommandsForKey.InternalStatus;
 import accord.local.cfk.CommandsForKey.TxnInfoExtra;
@@ -352,9 +352,9 @@ public class Serialize
                 prevEpoch = redundantBefore.epoch();
                 prevHlc = redundantBefore.hlc();
                 {
-                    RedundantBefore.Entry boundsInfo = cfk.boundsInfo();
-                    long start = boundsInfo.startOwnershipEpoch;
-                    long end = boundsInfo.endOwnershipEpoch;
+                    QuickBounds bounds = cfk.bounds();
+                    long start = bounds.startEpoch;
+                    long end = bounds.endEpoch;
                     totalBytes += sizeOfUnsignedVInt(start * 2 + (end == Long.MAX_VALUE ? 0 : 1));
                     if (end != Long.MAX_VALUE)
                         totalBytes += sizeOfUnsignedVInt(end - start);
@@ -446,9 +446,9 @@ public class Serialize
             {
                 TxnId redundantBefore = cfk.redundantBefore();
                 Timestamp bootstrappedAt = cfk.bootstrappedAt();
-                RedundantBefore.Entry boundsInfo = cfk.boundsInfo();
-                long start = boundsInfo.startOwnershipEpoch;
-                long end = boundsInfo.endOwnershipEpoch;
+                QuickBounds bounds = cfk.bounds();
+                long start = bounds.startEpoch;
+                long end = bounds.endEpoch;
                 VIntCoding.writeUnsignedVInt((start << 1) | (end != Long.MAX_VALUE ? 1 : 0), out);
                 if (end != Long.MAX_VALUE)
                     VIntCoding.writeUnsignedVInt(end - start, out);
@@ -750,7 +750,7 @@ public class Serialize
         }
 
         long flagHistory = EMPTY_FLAG_HISTORY;
-        RedundantBefore.Entry boundsInfo;
+        QuickBounds bounds;
         long prevEpoch, prevHlc, maxUniqueHlc = 0;
         {
             long startEpoch, endEpoch;
@@ -762,13 +762,13 @@ public class Serialize
                 else endEpoch = Long.MAX_VALUE;
             }
 
-            boundsInfo = NO_BOUNDS_INFO.withEpochs(startEpoch, endEpoch);
+            bounds = NO_BOUNDS_INFO.withEpochs(startEpoch, endEpoch);
             prevEpoch = startEpoch + VIntCoding.readUnsignedVInt(in);
             prevHlc = VIntCoding.readUnsignedVInt(in);
             {
                 int flags = ((globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT) == 0) ? RX_FLAGS : VIntCoding.readUnsignedVInt32(in);
                 Id node = (Id)nodeIds[VIntCoding.readUnsignedVInt32(in)];
-                boundsInfo = boundsInfo.withGcBeforeBeforeAtLeast(TxnId.fromValues(prevEpoch, prevHlc, flags, node));
+                bounds = bounds.withGcBeforeBeforeAtLeast(TxnId.fromValues(prevEpoch, prevHlc, flags, node));
             }
             if (0 != (globalFlags & HAS_BOOTSTRAPPED_AT_HEADER_BIT))
             {
@@ -776,10 +776,10 @@ public class Serialize
                 long hlc = prevHlc + VIntCoding.readVInt(in);
                 int flags = ((globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT) == 0) ? RX_FLAGS : VIntCoding.readUnsignedVInt32(in);
                 Id node = (Id)nodeIds[VIntCoding.readUnsignedVInt32(in)];
-                boundsInfo = boundsInfo.withBootstrappedAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
+                bounds = bounds.withBootstrappedAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
             }
             if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
-                maxUniqueHlc = boundsInfo.gcBefore.hlc() + VIntCoding.readVInt(in);
+                maxUniqueHlc = bounds.gcBefore.hlc() + VIntCoding.readVInt(in);
         }
         int prunedBeforeIndex = VIntCoding.readUnsignedVInt32(in) - 1;
 
@@ -1021,7 +1021,7 @@ public class Serialize
                 int statusIndex = commandDecodeFlags >>> 6;
                 InternalStatus status = DECODE_STATUS[statusIndex];
                 int statusOverrides = (commandDecodeFlags >>> 3) & 0x1;
-                txns[i] = create(boundsInfo, txnId, status, statusOverrides, executeAt, missing, ballot);
+                txns[i] = create(bounds, txnId, status, statusOverrides, executeAt, missing, ballot);
             }
 
             cachedTxnIds().forceDiscard(missingIdBuffer, maxIdBufferCount);
@@ -1034,18 +1034,18 @@ public class Serialize
                 int statusIndex = commandDecodeFlags >>> 6;
                 InternalStatus status = DECODE_STATUS[statusIndex];
                 int statusOverrides = (commandDecodeFlags >>> 3) & 0x1;
-                txns[i] = create(boundsInfo, txnIds[i], status, statusOverrides, txnIds[i], NO_TXNIDS, Ballot.ZERO);
+                txns[i] = create(bounds, txnIds[i], status, statusOverrides, txnIds[i], NO_TXNIDS, Ballot.ZERO);
             }
         }
         cachedTxnIds().forceDiscard(txnIds, commandCount);
         cachedAny().forceDiscard(nodeIds, nodeIdCount);
-        return CommandsForKey.SerializerSupport.create(key, txns, maxUniqueHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], boundsInfo);
+        return CommandsForKey.SerializerSupport.create(key, txns, maxUniqueHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], bounds);
     }
 
-    private static TxnInfo create(RedundantBefore.Entry boundsInfo, @Nonnull TxnId txnId, InternalStatus status, int statusOverrides, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
+    private static TxnInfo create(QuickBounds bounds, @Nonnull TxnId txnId, InternalStatus status, int statusOverrides, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
     {
-        boolean mayExecute = status.isCommittedToExecute() ? CommandsForKey.executes(boundsInfo, txnId, executeAt)
-                                                           : CommandsForKey.mayExecute(boundsInfo, txnId);
+        boolean mayExecute = status.isCommittedToExecute() ? CommandsForKey.executes(bounds, txnId, executeAt)
+                                                           : CommandsForKey.mayExecute(bounds, txnId);
         return TxnInfo.create(txnId, status, mayExecute, statusOverrides, executeAt, missing, ballot);
     }
 

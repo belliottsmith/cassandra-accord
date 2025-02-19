@@ -635,7 +635,7 @@ public class AccordGens
     }
 
     public static Gen<RedundantBefore> redundantBefore(Gen<Ranges> rangesGen,
-                                                       BiFunction<RandomSource, Range, RedundantBefore.Entry> entryGen)
+                                                       BiFunction<RandomSource, Range, RedundantBefore.Bounds> entryGen)
     {
         return rs -> {
             Ranges ranges = rangesGen.next(rs);

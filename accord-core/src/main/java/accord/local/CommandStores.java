@@ -45,6 +45,8 @@ import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.local.CommandStore.EpochUpdateHolder;
+import accord.primitives.AbstractRanges;
+import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.Range;
@@ -56,10 +58,15 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.topology.Shard;
 import accord.topology.Topology;
+import accord.utils.IndexedQuadConsumer;
+import accord.utils.IndexedRangeQuadConsumer;
 import accord.utils.Invariants;
 import accord.utils.MapReduce;
 import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
+import accord.utils.SearchableRangeList;
+import accord.utils.SimpleBitSet;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
@@ -159,7 +166,6 @@ public abstract class CommandStores
         RangesForEpoch ranges();
     }
 
-    // TODO (expected): merge with RedundantBefore, and standardise executeRanges() to treat removing stale ranges the same as adding new epoch ranges
     // We ONLY remove ranges to keep logic manageable; likely to only merge CommandStores into a new CommandStore via some kind of Bootstrap
     public static class RangesForEpoch
     {
@@ -389,14 +395,50 @@ public abstract class CommandStores
     {
         public final ShardHolder[] shards;
         public final Int2ObjectHashMap<CommandStore> byId;
+        private final int[] indexForRange;
+        public final SearchableRangeList lookupByRange;
 
         public Snapshot(ShardHolder[] shards, Topology local, Topology global)
         {
             super(asMap(shards), local, global);
             this.shards = shards;
             this.byId = new Int2ObjectHashMap<>(shards.length, Hashing.DEFAULT_LOAD_FACTOR, true);
+            int count = 0;
             for (ShardHolder shard : shards)
+            {
                 byId.put(shard.store.id(), shard.store);
+                count += shard.ranges.all().size();
+            }
+            class RangeAndIndex
+            {
+                final Range range;
+                final int index;
+
+                RangeAndIndex(Range range, int index)
+                {
+                    this.range = range;
+                    this.index = index;
+                }
+            }
+            RangeAndIndex[] rangesAndIndexes = new RangeAndIndex[count];
+            count = 0;
+            for (int i = 0; i < shards.length ; ++i)
+            {
+                Ranges add = shards[i].ranges.all();
+                for (Range range : add)
+                    rangesAndIndexes[count++] = new RangeAndIndex(range, i);
+            }
+
+            Arrays.sort(rangesAndIndexes, (a, b) -> a.range.compareTo(b.range));
+
+            Range[] ranges = new Range[count];
+            indexForRange = new int[count];
+            for (int i = 0 ; i < rangesAndIndexes.length ; ++i)
+            {
+                ranges[i] = rangesAndIndexes[i].range;
+                indexForRange[i] = rangesAndIndexes[i].index;
+            }
+            lookupByRange = SearchableRangeList.build(ranges);
         }
 
         // This method exists to ensure we do not hold references to command stores
@@ -664,17 +706,59 @@ public abstract class CommandStores
         return reduced.begin(mapReduceConsume);
     }
 
-    public <O> AsyncChain<O> mapReduce(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
+    private static class StoreSelector extends SimpleBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
+    {
+        final int[] indexMap;
+        public StoreSelector(int size, int[] indexMap)
+        {
+            super(size);
+            this.indexMap = indexMap;
+        }
+
+        @Override
+        public void accept(Object p1, Object p2, Object p3, Object p4, int index)
+        {
+            set(indexMap[index]);
+        }
+
+        @Override
+        public void accept(Object p1, Object p2, Object p3, Object p4, int fromIndex, int toIndex)
+        {
+            for (int i = fromIndex ; i < toIndex ; ++i)
+                set(indexMap[i]);
+        }
+    }
+
+    public <O> AsyncChain<O> mapReduce(PreLoadContext context, Unseekables<?> unseekables, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
         AsyncChain<O> chain = null;
         BiFunction<O, O, O> reducer = mapReduce::reduce;
         Snapshot snapshot = current;
-        ShardHolder[] shards = snapshot.shards;
-        for (ShardHolder shard : shards)
+        StoreSelector selector = new StoreSelector(snapshot.shards.length, snapshot.indexForRange);
+        switch (unseekables.domain())
         {
-            // TODO (required, efficiency): range map for intersecting ranges (e.g. that to be introduced for range dependencies)
+            default: throw new UnhandledEnum(unseekables.domain());
+            case Range:
+            {
+                int minIndex = 0;
+                for (Range range : (AbstractRanges)unseekables)
+                    minIndex = snapshot.lookupByRange.forEachRange(range, selector, selector, null, null, null, null, minIndex);
+                break;
+            }
+            case Key:
+            {
+                int minIndex = 0;
+                for (RoutingKey key : (AbstractUnseekableKeys)unseekables)
+                    minIndex = snapshot.lookupByRange.forEachKey(key, selector, selector, null, null, null, null, minIndex);
+                break;
+            }
+        }
+
+        for (int i = selector.nextSetBit(0, -1); i >= 0 ; i = selector.nextSetBit(i + 1, -1))
+        {
+            ShardHolder shard = snapshot.shards[i];
             Ranges shardRanges = shard.ranges().allBetween(minEpoch, maxEpoch);
-            if (!shardRanges.intersects(keys))
+            if (shardRanges != shard.ranges.all() && !shardRanges.intersects(unseekables))
                 continue;
 
             AsyncChain<O> next = shard.store.build(context, mapReduce);
@@ -743,7 +827,12 @@ public abstract class CommandStores
         ShardHolder[] shards = new ShardHolder[update.commandStores.size()];
         int i = 0;
         for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
-            shards[i++] = new ShardHolder(supplier.create(e.getKey(), new EpochUpdateHolder()), e.getValue());
+        {
+            Invariants.require(e.getValue() != null);
+            EpochUpdateHolder holder = new EpochUpdateHolder();
+            holder.add(1, e.getValue(), e.getValue().all());
+            shards[i++] = new ShardHolder(supplier.create(e.getKey(), holder), e.getValue());
+        }
 
         loadSnapshot(new Snapshot(shards, update.local, update.global));
     }

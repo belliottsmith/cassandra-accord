@@ -31,6 +31,7 @@ import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
+import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
@@ -85,10 +86,10 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
         }
 
         @Override
-        protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Ranges unavailable)
+        protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> executes)
         {
-            readStarted(safeStore, unavailable);
-            return super.beginRead(safeStore, executeAt, txn, unavailable);
+            readStarted(safeStore);
+            return super.beginRead(safeStore, executeAt, txn, executes);
         }
     }
 }

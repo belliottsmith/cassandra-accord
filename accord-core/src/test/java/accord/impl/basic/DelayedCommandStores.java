@@ -80,7 +80,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
     public static CommandStores.Factory factory(PendingQueue pending, CacheLoading isLoadedCheck)
     {
         return (time, agent, store, random, journal, shardDistributor, progressLogFactory, listenersFactory) ->
-               new DelayedCommandStores(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, new SimulatedDelayedExecutorService(pending, agent), isLoadedCheck, journal);
+               new DelayedCommandStores(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, new SimulatedDelayedExecutorService(pending, agent, time.id()), isLoadedCheck, journal);
     }
 
     @Override
@@ -179,7 +179,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 super(fn, origin);
             }
 
-            public DelayedCommandStore parent()
+            public DelayedCommandStore owner()
             {
                 return DelayedCommandStore.this;
             }
@@ -410,10 +410,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         public void postExecute()
         {
-            Journal.FieldUpdates fieldUpdates = fieldUpdates();
-            if (fieldUpdates != null)
-                commandStore.journal.saveStoreState(commandStore.id(), fieldUpdates, () -> {});
-
+            persistFieldUpdates();
             commands.entrySet().forEach(e -> {
                 InMemorySafeCommand safe = e.getValue();
                 if (!safe.isModified()) return;
@@ -424,6 +421,15 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 commandStore.onWrite(safe.current());
             });
             super.postExecute();
+        }
+
+        @Override
+        protected void persistFieldUpdates()
+        {
+            Journal.FieldUpdates fieldUpdates = fieldUpdates();
+            if (fieldUpdates != null)
+                commandStore.journal.saveStoreState(commandStore.id(), fieldUpdates, () -> {});
+            super.persistFieldUpdates();
         }
 
         @Override

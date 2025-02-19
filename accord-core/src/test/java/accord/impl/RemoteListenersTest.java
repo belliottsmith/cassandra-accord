@@ -435,6 +435,7 @@ public class RemoteListenersTest
 
         @Override public PreLoadContext canExecute(PreLoadContext context) { return null;}
         @Override public PreLoadContext context() { return null; }
+        @Override protected void persistFieldUpdates() {}
 
         @Override
         public void upsertRedundantBefore(RedundantBefore addRedundantBefore)

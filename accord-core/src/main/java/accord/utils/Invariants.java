@@ -18,6 +18,7 @@
 
 package accord.utils;
 
+import java.util.Comparator;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -523,6 +524,17 @@ public class Invariants
     {
         for (int i = 1 ; i < vs.length ; ++i)
             Invariants.requireArgument(vs[i - 1].compareTo(vs[i]) <= 0);
+    }
+
+    public static <T extends Comparable<? super T>> void requireStrictlyOrdered(T... vs)
+    {
+        requireStrictlyOrdered(Comparable::compareTo, vs);
+    }
+
+    public static <T> void requireStrictlyOrdered(Comparator<? super T> comparator, T... vs)
+    {
+        for (int i = 1 ; i < vs.length ; ++i)
+            Invariants.requireArgument(comparator.compare(vs[i - 1], vs[i]) < 0);
     }
 
     public static <T extends Comparable<? super T>> void requireOrdered(T... vs)

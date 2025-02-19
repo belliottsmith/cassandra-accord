@@ -44,7 +44,7 @@ public interface Journal
     Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     Command.Minimal loadMinimal(int store, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
 
-    // TODO (required): use OnDone instead of Runnable
+    // TODO (required): propagate exceptions (i.e. using OnDone instead of Runnable)
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
     Iterator<TopologyUpdate> replayTopologies();
@@ -117,7 +117,6 @@ public interface Journal
 
     class FieldUpdates
     {
-        // TODO (required): use persisted field logic
         public RedundantBefore newRedundantBefore;
         public NavigableMap<TxnId, Ranges> newBootstrapBeganAt;
         public NavigableMap<Timestamp, Ranges> newSafeToRead;
@@ -125,12 +124,18 @@ public interface Journal
 
         public String toString()
         {
-            return "FieldUpdates{" +
-                   "newRedundantBefore=" + newRedundantBefore +
-                   ", newBootstrapBeganAt=" + newBootstrapBeganAt +
-                   ", newSafeToRead=" + newSafeToRead +
-                   ", newRangesForEpoch=" + newRangesForEpoch +
-                   '}';
+            StringBuilder builder = new StringBuilder("FieldUpdates{");
+            if (newRedundantBefore != null)
+                builder.append("newRedundantBefore=").append(newRedundantBefore).append(", ");
+            if (newBootstrapBeganAt != null)
+                builder.append("newBootstrapBeganAt=").append(newBootstrapBeganAt).append(", ");
+            if (newSafeToRead != null)
+                builder.append("newSafeToRead=").append(newSafeToRead).append(", ");
+            if (newRangesForEpoch != null)
+                builder.append("newRangesForEpoch=").append(newRangesForEpoch).append(", ");
+            builder.setLength(builder.length() - 2);
+            builder.append('}');
+            return builder.toString();
         }
     }
 

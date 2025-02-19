@@ -35,7 +35,6 @@ import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
 import accord.local.Command;
 import accord.local.CommandStore;
-import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.CommandSummaries.ActiveCommandVisitor;
@@ -72,6 +71,7 @@ import static accord.local.CommandSummaries.IsDep.NOT_ELIGIBLE;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
 import static accord.local.CommandSummaries.SummaryStatus.PREACCEPTED;
+import static accord.local.RedundantBefore.*;
 import static accord.local.cfk.CommandsForKey.InternalStatus.ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_DURABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_NOT_DURABLE;
@@ -89,11 +89,12 @@ import static accord.local.cfk.Pruning.find;
 import static accord.local.cfk.Pruning.isAnyPredecessorWaitingOnPruned;
 import static accord.local.cfk.Pruning.isWaitingOnPruned;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
-import static accord.local.cfk.Pruning.pruneById;
+import static accord.local.cfk.Pruning.removeRedundantById;
 import static accord.local.cfk.Pruning.prunedBeforeId;
 import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Updating.insertOrUpdate;
 import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
+import static accord.local.cfk.Updating.maybeUpdateMaxAppliedPreBootstrapWriteById;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
@@ -228,9 +229,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     private static boolean reportLinearizabilityViolations = true;
 
-    public static final RedundantBefore.Entry NO_BOUNDS_INFO = new RedundantBefore.Entry(null, 0, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, null);
+    public static final QuickBounds NO_BOUNDS_INFO = new QuickBounds(0, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE);
     public static final TxnInfo NO_INFO = TxnInfo.create(TxnId.NONE, TRANSITIVE, false, TxnId.NONE, Ballot.ZERO);
     public static final TxnInfo[] NO_INFOS = new TxnInfo[0];
+    static final TxnId[] NOT_LOADING_PRUNED = new TxnId[0];
     public static final Unmanaged[] NO_PENDING_UNMANAGED = new Unmanaged[0];
 
     /**
@@ -255,12 +257,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public boolean executes(TxnId txnId, Timestamp executeAt)
     {
-        return executes(boundsInfo, txnId, executeAt);
+        return executes(bounds, txnId, executeAt);
     }
 
     public boolean mayExecute(TxnId txnId)
     {
-        return mayExecute(boundsInfo, txnId);
+        return mayExecute(bounds, txnId);
     }
 
     public boolean mayExecute(TxnInfo txn)
@@ -273,27 +275,27 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return mayExecute(txnId, status.isCommittedToExecute() ? command.executeAt() : null);
     }
 
-    public static boolean mayExecute(RedundantBefore.Entry boundsInfo, TxnId txnId)
+    public static boolean mayExecute(QuickBounds bounds, TxnId txnId)
     {
-        return executes(boundsInfo, txnId, txnId);
+        return executes(bounds, txnId, txnId);
     }
 
     public boolean mayExecute(TxnId txnId, @Nullable Timestamp committedToExecuteAt)
     {
-        return executes(boundsInfo, txnId, committedToExecuteAt != null ? committedToExecuteAt : txnId);
+        return executes(bounds, txnId, committedToExecuteAt != null ? committedToExecuteAt : txnId);
     }
 
-    public static boolean executes(RedundantBefore.Entry boundsInfo, TxnId txnId, Timestamp executeAt)
+    public static boolean executes(QuickBounds bounds, TxnId txnId, Timestamp executeAt)
     {
-        return executesIgnoringBootstrap(boundsInfo, txnId, executeAt)
-               && boundsInfo.bootstrappedAt.compareTo(txnId) < 0;
+        return executesIgnoringBootstrap(bounds, txnId, executeAt)
+               && bounds.bootstrappedAt.compareTo(txnId) < 0;
     }
 
-    public static boolean executesIgnoringBootstrap(RedundantBefore.Entry boundsInfo, TxnId txnId, Timestamp executeAt)
+    public static boolean executesIgnoringBootstrap(QuickBounds bounds, TxnId txnId, Timestamp executeAt)
     {
         return managesExecution(txnId)
-               && boundsInfo.endOwnershipEpoch > executeAt.epoch()
-               && boundsInfo.startOwnershipEpoch <= txnId.epoch(); // if we don't own from txnId.epoch() we will learn of this transaction via bootstrap
+               && bounds.endEpoch > executeAt.epoch()
+               && bounds.startEpoch <= txnId.epoch(); // if we don't own from txnId.epoch() we will learn of this transaction via bootstrap
     }
 
     public static boolean needsUpdate(SafeCommandStore safeStore, Command prev, Command updated)
@@ -317,15 +319,19 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public static class SerializerSupport
     {
-        public static CommandsForKey create(RoutingKey key, TxnInfo[] byId, long maxUniqueHlc, Unmanaged[] unmanageds, TxnId prunedBefore, RedundantBefore.Entry boundsInfo)
+        public static CommandsForKey create(RoutingKey key, TxnInfo[] byId, long maxUniqueHlc, Unmanaged[] unmanageds, TxnId prunedBefore, QuickBounds bounds)
         {
-            return reconstruct(key, boundsInfo, true, byId, maxUniqueHlc, prunedBefore, unmanageds);
+            return reconstruct(key, bounds, true, byId, maxUniqueHlc, prunedBefore, unmanageds);
         }
     }
 
     interface Updater<O>
     {
-        O update(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds);
+        O update(RoutingKey key, QuickBounds bounds, boolean isNewBoundsInfo,
+                 TxnInfo[] byId, int minUndecidedById, int maxAppliedPreBootstrapWriteById,
+                 TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt,
+                 long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById,
+                 Unmanaged[] unmanageds);
     }
 
     /**
@@ -374,9 +380,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
             return new TxnInfoExtra(txnId, encodedStatus, executeAt, NO_TXNIDS, ballot);
         }
 
-        public static TxnInfo createTransitive(@Nonnull TxnId txnId, RedundantBefore.Entry boundsInfo, @Nonnull TxnId witnessedBy)
+        public static TxnInfo createTransitive(@Nonnull TxnId txnId, QuickBounds bounds, @Nonnull TxnId witnessedBy)
         {
-            return create(txnId, isTransitiveDependencyVisible(witnessedBy) ? TRANSITIVE_VISIBLE : TRANSITIVE, CommandsForKey.mayExecute(boundsInfo, txnId), txnId, Ballot.ZERO);
+            return create(txnId, isTransitiveDependencyVisible(witnessedBy) ? TRANSITIVE_VISIBLE : TRANSITIVE, CommandsForKey.mayExecute(bounds, txnId), txnId, Ballot.ZERO);
         }
 
         public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean mayExecute, @Nonnull Timestamp executeAt, @Nonnull Ballot ballot)
@@ -989,11 +995,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
     }
 
     final RoutingKey key;
-    final RedundantBefore.Entry boundsInfo;
+    final QuickBounds bounds;
 
     // all transactions, sorted by TxnId
     final TxnInfo[] byId;
     final int minUndecidedById;
+    final int maxAppliedPreBootstrapWriteById;
 
     // managed commands that are committed, stable or applied; sorted by executeAt
     // TODO (required): validate that it is always a prefix that is Applied (i.e. never a gap)
@@ -1013,18 +1020,19 @@ public class CommandsForKey extends CommandsForKeyUpdate
     final Unmanaged[] unmanageds;
     final long maxUniqueHlc;
 
-    CommandsForKey(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int prunedBeforeById, Unmanaged[] unmanageds)
+    CommandsForKey(RoutingKey key, QuickBounds bounds, boolean isNewBoundsInfo, TxnInfo[] byId, int minUndecidedById, int maxAppliedPreBootstrapWriteById, TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int prunedBeforeById, Unmanaged[] unmanageds)
     {
-        this(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
+        this(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
     }
 
-    CommandsForKey(RoutingKey key, RedundantBefore.Entry boundsInfo, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int prunedBeforeById, Unmanaged[] unmanageds)
+    CommandsForKey(RoutingKey key, QuickBounds bounds, TxnInfo[] byId, int minUndecidedById, int maxAppliedPreBootstrapWriteById, TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int prunedBeforeById, Unmanaged[] unmanageds)
     {
         this.key = key;
-        this.boundsInfo = boundsInfo;
+        this.bounds = bounds;
         this.byId = byId;
-        this.committedByExecuteAt = committedByExecuteAt;
         this.minUndecidedById = minUndecidedById;
+        this.maxAppliedPreBootstrapWriteById = maxAppliedPreBootstrapWriteById;
+        this.committedByExecuteAt = committedByExecuteAt;
         this.maxAppliedWriteByExecuteAt = maxAppliedWriteByExecuteAt;
         this.maxUniqueHlc = maxUniqueHlc;
         this.loadingPruned = loadingPruned;
@@ -1036,10 +1044,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
     CommandsForKey(CommandsForKey copy, Object[] loadingPruned, Unmanaged[] unmanageds)
     {
         this.key = copy.key;
-        this.boundsInfo = copy.boundsInfo;
+        this.bounds = copy.bounds;
         this.byId = copy.byId;
-        this.committedByExecuteAt = copy.committedByExecuteAt;
         this.minUndecidedById = copy.minUndecidedById;
+        this.maxAppliedPreBootstrapWriteById = copy.maxAppliedPreBootstrapWriteById;
+        this.committedByExecuteAt = copy.committedByExecuteAt;
         this.maxAppliedWriteByExecuteAt = copy.maxAppliedWriteByExecuteAt;
         this.maxUniqueHlc = copy.maxUniqueHlc;
         this.loadingPruned = loadingPruned;
@@ -1056,10 +1065,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
     public CommandsForKey(RoutingKey key, long maxUniqueHlc)
     {
         this.key = key;
-        this.boundsInfo = NO_BOUNDS_INFO;
+        this.bounds = NO_BOUNDS_INFO;
         this.byId = NO_INFOS;
         this.committedByExecuteAt = NO_INFOS;
-        this.minUndecidedById = this.maxAppliedWriteByExecuteAt = -1;
+        this.minUndecidedById = this.maxAppliedPreBootstrapWriteById = this.maxAppliedWriteByExecuteAt = -1;
         this.maxUniqueHlc = maxUniqueHlc;
         this.loadingPruned = LoadingPruned.empty();
         this.prunedBeforeById = -1;
@@ -1114,9 +1123,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return unmanageds[i];
     }
 
-    public RedundantBefore.Entry boundsInfo()
+    public QuickBounds bounds()
     {
-        return boundsInfo;
+        return bounds;
     }
 
     public TxnInfo get(TxnId txnId)
@@ -1137,69 +1146,53 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return prunedBeforeById < 0 ? NO_INFO : byId[prunedBeforeById];
     }
 
-    public TxnId safelyPrunedBefore()
-    {
-        return safelyPrunedBefore(boundsInfo);
-    }
-
-    static TxnId safelyPrunedBefore(RedundantBefore.Entry boundsInfo)
-    {
-        /*
-         * We cannot use locallyDecidedAndAppliedOrInvalidatedBefore to GC because until it has been applied everywhere
-         * it cannot safely e substituted for earlier transactions as a dependency.
-         *
-         * However, it can be safely used as a prune lower bound that we know we do not need to go to disk to load.
-         */
-        return boundsInfo.locallyDecidedAndAppliedBefore;
-    }
-
     public TxnId redundantOrBootstrappedBefore()
     {
-        return TxnId.nonNullOrMax(redundantBefore(), boundsInfo.bootstrappedAt);
+        return TxnId.nonNullOrMax(redundantBefore(), bounds.bootstrappedAt);
     }
 
     public TxnId bootstrappedAt()
     {
-        return bootstrappedAt(boundsInfo);
+        return bootstrappedAt(bounds);
     }
 
-    static TxnId bootstrappedAt(RedundantBefore.Entry boundsInfo)
+    static TxnId bootstrappedAt(QuickBounds bounds)
     {
-        TxnId bootstrappedAt = boundsInfo.bootstrappedAt;
-        if (bootstrappedAt.compareTo(boundsInfo.gcBefore) <= 0)
+        TxnId bootstrappedAt = bounds.bootstrappedAt;
+        if (bootstrappedAt.compareTo(bounds.gcBefore) <= 0)
             bootstrappedAt = null;
         return bootstrappedAt;
     }
 
     public TxnId redundantBefore()
     {
-        return redundantBefore(boundsInfo);
+        return redundantBefore(bounds);
     }
 
-    static TxnId redundantBefore(RedundantBefore.Entry boundsInfo)
+    static TxnId redundantBefore(QuickBounds bounds)
     {
         // TODO (expected): this can be weakened to shardAppliedOrInvalidatedBefore
-        return boundsInfo.gcBefore;
+        return bounds.gcBefore;
     }
 
     public boolean isPostBootstrapAndOwned(TxnId txnId)
     {
-        return isPostBootstrapAndOwned(txnId, boundsInfo);
+        return isPostBootstrapAndOwned(txnId, bounds);
     }
 
-    private static boolean isPostBootstrapAndOwned(TxnId txnId, RedundantBefore.Entry boundsInfo)
+    private static boolean isPostBootstrapAndOwned(TxnId txnId, QuickBounds bounds)
     {
-        return txnId.compareTo(boundsInfo.bootstrappedAt) >= 0 && txnId.epoch() >= boundsInfo.startOwnershipEpoch;
+        return txnId.compareTo(bounds.bootstrappedAt) >= 0 && txnId.epoch() >= bounds.startEpoch;
     }
 
     public boolean isPreBootstrap(TxnId txnId)
     {
-        return isPreBootstrap(txnId, boundsInfo);
+        return isPreBootstrap(txnId, bounds);
     }
 
-    private static boolean isPreBootstrap(TxnId txnId, RedundantBefore.Entry boundsInfo)
+    static boolean isPreBootstrap(TxnId txnId, QuickBounds bounds)
     {
-        return txnId.compareTo(boundsInfo.bootstrappedAt) < 0 || txnId.epoch() < boundsInfo.startOwnershipEpoch;
+        return txnId.compareTo(bounds.bootstrappedAt) < 0 || txnId.epoch() < bounds.startEpoch;
     }
 
     private TxnId nextWaitingToApply(Kinds kinds, @Nullable Timestamp untilExecuteAt)
@@ -1531,10 +1524,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (maxUniqueHlc >= minUniqueHlc)
             return this;
 
-        if (maxUniqueHlc <= boundsInfo.gcBefore.hlc() && boundsInfo.gcBefore.is(HLC_BOUND))
+        if (maxUniqueHlc <= bounds.gcBefore.hlc() && bounds.gcBefore.is(HLC_BOUND))
             return this;
 
-        return new CommandsForKey(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, minUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
+        return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, minUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
     }
 
     public CommandsForKey setDurable(TxnId txnId)
@@ -1545,7 +1538,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
         txn.setDurableInPlace();
         // return the exact same data as we have updated in place, but change detection relies on identity
-        return new CommandsForKey(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
+        return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
     }
 
     CommandsForKeyUpdate maybePrunedCallback(SafeCommandStore safeStore, Command update, @Nullable LoadingPruned loading)
@@ -1588,8 +1581,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         boolean isOutOfRange = !mayExecute && newStatus.compareTo(APPLIED) <= 0 && manages(txnId)
                                && !updated.participants().stillTouches(key);
 
-        TxnId[] loadingAsPrunedFor = loading != null ? loading.witnessedBy : null;
-
+        TxnId[] witnessedBy = loading != null ? loading.witnessedBy : NOT_LOADING_PRUNED;
         if (loading == null && isOutOfRange && newStatus.compareTo(COMMITTED) < 0)
             return this;
 
@@ -1597,13 +1589,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
         CommandsForKeyUpdate result;
         if (pos < 0)
         {
-            if (isOutOfRange && loadingAsPrunedFor == null)
+            if (isOutOfRange && loading == null)
                 return this; // if outOfRange we only need to maintain any existing records; if none, don't update
 
             pos = -1 - pos;
-            if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, null, newStatus, mayExecute, updated, loadingAsPrunedFor);
-            else if (newStatus.hasDeps() && loading == null) result = insert(pos, txnId, newStatus, mayExecute, updated);
-            else result = insert(pos, txnId, TxnInfo.create(txnId, newStatus, mayExecute, updated), loadingAsPrunedFor, updated);
+            if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, null, newStatus, mayExecute, updated, witnessedBy);
+            else if (newStatus.hasDeps()) result = insert(pos, txnId, newStatus, mayExecute, updated, witnessedBy);
+            else result = insert(pos, txnId, TxnInfo.create(txnId, newStatus, mayExecute, updated), updated, witnessedBy);
         }
         else
         {
@@ -1637,38 +1629,38 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 }
             }
 
-            if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, cur, newStatus, mayExecute, updated, loadingAsPrunedFor);
-            else if (newStatus.hasDeps() && loading == null) result = update(pos, txnId, cur, newStatus, mayExecute, updated);
-            else result = update(pos, txnId, cur, TxnInfo.create(txnId, newStatus, mayExecute, updated), loadingAsPrunedFor, updated);
+            if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, cur, newStatus, mayExecute, updated, witnessedBy);
+            else if (newStatus.hasDeps()) result = update(pos, txnId, cur, newStatus, mayExecute, updated, witnessedBy);
+            else result = update(pos, txnId, cur, TxnInfo.create(txnId, newStatus, mayExecute, updated), updated, witnessedBy);
         }
 
         return result;
     }
 
-    private CommandsForKeyUpdate insert(int insertPos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Command command)
+    private CommandsForKeyUpdate insert(int insertPos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Command command, TxnId[] witnessedBy)
     {
-        return insertOrUpdate(this, insertPos, -1, plainTxnId, null, newStatus, mayExecute, command);
+        return insertOrUpdate(this, insertPos, -1, plainTxnId, null, newStatus, mayExecute, command, witnessedBy);
     }
 
-    private CommandsForKeyUpdate update(int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command command)
+    private CommandsForKeyUpdate update(int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command command, TxnId[] witnessedBy)
     {
-        return insertOrUpdate(this, updatePos, updatePos, plainTxnId, curInfo, newStatus, mayExecute, command);
+        return insertOrUpdate(this, updatePos, updatePos, plainTxnId, curInfo, newStatus, mayExecute, command, witnessedBy);
     }
 
-    CommandsForKeyUpdate update(int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, TxnId[] loadingAsPrunedFor, Command command)
+    CommandsForKeyUpdate update(int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, Command command, TxnId[] witnessedBy)
     {
-        return insertOrUpdate(this, pos, plainTxnId, curInfo, newInfo, loadingAsPrunedFor, command);
+        return insertOrUpdate(this, pos, plainTxnId, curInfo, newInfo, command, witnessedBy);
     }
 
     /**
      * Insert a new txnId and info
      */
-    CommandsForKeyUpdate insert(int pos, TxnId plainTxnId, TxnInfo newInfo, TxnId[] loadingAsPrunedFor, Command updated)
+    CommandsForKeyUpdate insert(int pos, TxnId plainTxnId, TxnInfo newInfo, Command updated, TxnId[] witnessedBy)
     {
-        return insertOrUpdate(this, pos, plainTxnId, null, newInfo, loadingAsPrunedFor, updated);
+        return insertOrUpdate(this, pos, plainTxnId, null, newInfo, updated, witnessedBy);
     }
 
-    private CommandsForKeyUpdate insertOrUpdateOutOfRange(int updatePos, TxnId plainTxnId, @Nullable TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command updated, TxnId[] loadingAsPrunedFor)
+    private CommandsForKeyUpdate insertOrUpdateOutOfRange(int updatePos, TxnId plainTxnId, @Nullable TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command updated, TxnId[] witnessedBy)
     {
         Invariants.requireArgument(!mayExecute);
         int statusOverridesXor = newStatus.flags & 1;
@@ -1676,43 +1668,52 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (curInfo == null) newInfo = TxnInfo.create(plainTxnId, newStatus, false, statusOverridesXor, plainTxnId, newStatus.hasBallot ? updated.acceptedOrCommitted() : Ballot.ZERO);
         else newInfo = curInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, false, statusOverridesXor));
         // out of range means we have no deps, we're just marking committed, so we set HAS_DEPS to 0
-        return insertOrUpdate(this, updatePos, plainTxnId, curInfo, newInfo, loadingAsPrunedFor, updated);
+        return insertOrUpdate(this, updatePos, plainTxnId, curInfo, newInfo, updated, witnessedBy);
     }
 
     // TODO (required): additional linearizability violation detection, based on expectation of presence in missing set
 
-    CommandsForKeyUpdate update(TxnInfo[] newById, int newMinUndecidedById, TxnInfo[] newCommittedByExecuteAt, int newMaxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] newLoadingPruned, int newPrunedBeforeById, @Nullable TxnInfo curInfo, @Nonnull TxnInfo newInfo)
+    CommandsForKeyUpdate update(TxnInfo[] newById, int newMinUndecidedById, int newMaxAppliedPreBootstrapWriteById, TxnInfo[] newCommittedByExecuteAt, int newMaxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] newLoadingPruned, int newPrunedBeforeById, @Nullable TxnInfo curInfo, @Nonnull TxnInfo newInfo)
     {
         Invariants.require(prunedBeforeById < 0 || newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
-        return updateAndNotifyUnmanageds(key, boundsInfo, false,
-                                         newById, newCommittedByExecuteAt,
-                                         newMinUndecidedById, newMaxAppliedWriteByExecuteAt, maxUniqueHlc,
-                                         newLoadingPruned, newPrunedBeforeById, unmanageds, curInfo, newInfo);
+        return updateAndNotifyUnmanageds(key, bounds, false,
+                                         newById, newMinUndecidedById, newMaxAppliedPreBootstrapWriteById,
+                                         newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt,
+                                         maxUniqueHlc, newLoadingPruned, newPrunedBeforeById,
+                                         unmanageds, curInfo, newInfo);
     }
 
-    static CommandsForKey reconstruct(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, TxnId prunedBefore, Unmanaged[] unmanageds)
+    static CommandsForKey reconstruct(RoutingKey key, QuickBounds bounds, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, TxnId prunedBefore, Unmanaged[] unmanageds)
     {
         int prunedBeforeById = Arrays.binarySearch(byId, prunedBefore);
         Invariants.require(prunedBeforeById >= 0 || prunedBefore.equals(TxnId.NONE));
-        return reconstruct(key, boundsInfo, isNewBoundsInfo, byId, maxUniqueHlc, BTree.empty(), prunedBeforeById, unmanageds);
+        return reconstruct(key, bounds, isNewBoundsInfo, byId, maxUniqueHlc, BTree.empty(), prunedBeforeById, unmanageds);
     }
 
-    static CommandsForKey reconstruct(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds)
+    static CommandsForKey reconstruct(RoutingKey key, QuickBounds bounds, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds)
     {
-        return reconstruct(key, boundsInfo, isNewBoundsInfo, byId, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds, CommandsForKey::new);
+        return reconstruct(key, bounds, isNewBoundsInfo, byId, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds, CommandsForKey::new);
     }
 
-    static <O> O reconstruct(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds, Updater<O> updater)
+    static <O> O reconstruct(RoutingKey key, QuickBounds bounds, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds, Updater<O> updater)
     {
         int countCommitted = 0;
         int minUndecidedById = -1;
+        int maxAppliedPreBootstrapWriteById = -1;
         for (int i = 0; i < byId.length ; ++i)
         {
             TxnInfo txn = byId[i];
             if (txn.isAtLeast(INVALIDATED)) continue;
-            if (txn.isCommittedAndExecutes()) ++countCommitted;
-            else if (minUndecidedById == -1 && !txn.isCommittedToExecute() && txn.mayExecute())
-                minUndecidedById = i;
+            if (txn.mayExecute())
+            {
+                if (txn.isCommittedAndExecutes()) ++countCommitted;
+                else if (minUndecidedById == -1 && !txn.isCommittedToExecute())
+                    minUndecidedById = i;
+            }
+            else
+            {
+                maxAppliedPreBootstrapWriteById = maybeUpdateMaxAppliedPreBootstrapWriteById(bounds, byId, maxAppliedPreBootstrapWriteById, i);
+            }
         }
         TxnInfo[] committedByExecuteAt = new TxnInfo[countCommitted];
         countCommitted = 0;
@@ -1726,31 +1727,31 @@ public class CommandsForKey extends CommandsForKeyUpdate
         while (--maxAppliedWriteByExecuteAt >= 0)
         {
             TxnInfo txn = committedByExecuteAt[maxAppliedWriteByExecuteAt];
-            if (txn.is(Write) && (txn.is(APPLIED) || isPreBootstrap(txn, boundsInfo)))
+            if (txn.is(Write) && (txn.is(APPLIED) || isPreBootstrap(txn, bounds)))
                 break;
         }
         if (maxAppliedWriteByExecuteAt >= 0) maxUniqueHlc = Math.max(maxUniqueHlc, committedByExecuteAt[maxAppliedWriteByExecuteAt].executeAt.hlc());
-        else maxUniqueHlc = Math.max(maxUniqueHlc, boundsInfo.gcBefore.hlc());
+        else maxUniqueHlc = Math.max(maxUniqueHlc, bounds.gcBefore.hlc());
 
-        return updater.update(key, boundsInfo, isNewBoundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds);
+        return updater.update(key, bounds, isNewBoundsInfo, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds);
     }
 
-    static CommandsForKeyUpdate reconstructAndUpdateUnmanaged(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds)
+    static CommandsForKeyUpdate reconstructAndUpdateUnmanaged(RoutingKey key, QuickBounds bounds, boolean isNewBoundsInfo, TxnInfo[] byId, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds)
     {
-        return reconstruct(key, boundsInfo, isNewBoundsInfo, byId, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds, CommandsForKey::updateAndNotifyUnmanageds);
+        return reconstruct(key, bounds, isNewBoundsInfo, byId, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds, CommandsForKey::updateAndNotifyUnmanageds);
     }
 
-    static CommandsForKeyUpdate updateAndNotifyUnmanageds(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds)
+    static CommandsForKeyUpdate updateAndNotifyUnmanageds(RoutingKey key, QuickBounds bounds, boolean isNewBoundsInfo, TxnInfo[] byId, int minUndecidedById, int maxAppliedPreBootstrapWriteById, TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds)
     {
-        return updateAndNotifyUnmanageds(key, boundsInfo, isNewBoundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds, null, null);
+        return updateAndNotifyUnmanageds(key, bounds, isNewBoundsInfo, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds, null, null);
     }
 
-    static CommandsForKeyUpdate updateAndNotifyUnmanageds(RoutingKey key, RedundantBefore.Entry boundsInfo, boolean isNewBoundsInfo, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds, @Nullable TxnInfo curInfo, @Nullable TxnInfo newInfo)
+    static CommandsForKeyUpdate updateAndNotifyUnmanageds(RoutingKey key, QuickBounds bounds, boolean isNewBoundsInfo, TxnInfo[] byId, int minUndecidedById, int maxAppliedPreBootstrapWriteById, TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt, long maxUniqueHlc, Object[] loadingPruned, int newPrunedBeforeById, Unmanaged[] unmanageds, @Nullable TxnInfo curInfo, @Nullable TxnInfo newInfo)
     {
-        NotifyUnmanagedResult notifyUnmanaged = PostProcess.notifyUnmanaged(unmanageds, byId, minUndecidedById, committedByExecuteAt, maxAppliedWriteByExecuteAt, loadingPruned, boundsInfo, isNewBoundsInfo, curInfo, newInfo);
+        NotifyUnmanagedResult notifyUnmanaged = PostProcess.notifyUnmanaged(unmanageds, byId, minUndecidedById, committedByExecuteAt, maxAppliedWriteByExecuteAt, loadingPruned, bounds, isNewBoundsInfo, curInfo, newInfo);
         if (notifyUnmanaged != null)
             unmanageds = notifyUnmanaged.newUnmanaged;
-        CommandsForKey newCfk = new CommandsForKey(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds);
+        CommandsForKey newCfk = new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds);
         CommandsForKeyUpdate result = newCfk;
         if (notifyUnmanaged != null)
             result = new CommandsForKeyUpdateWithPostProcess(newCfk, notifyUnmanaged.postProcess);
@@ -1761,12 +1762,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     CommandsForKey update(Unmanaged[] newUnmanageds)
     {
-        return new CommandsForKey(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, newUnmanageds);
+        return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, newUnmanageds);
     }
 
     CommandsForKey update(Object[] newLoadingPruned)
     {
-        return new CommandsForKey(key, boundsInfo, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, maxUniqueHlc, newLoadingPruned, prunedBeforeById, unmanageds);
+        return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, newLoadingPruned, prunedBeforeById, unmanageds);
     }
 
     CommandsForKeyUpdate registerUnmanaged(SafeCommand safeCommand, UpdateUnmanagedMode mode)
@@ -1857,7 +1858,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         long unappliedCounters = 0L;
         TxnId minUndecided = minUndecided();
         if (minUndecided == null)
-            minUndecided = bootstrappedAt(boundsInfo); // we don't count txns before this as waiting to execute
+            minUndecided = bootstrappedAt(bounds); // we don't count txns before this as waiting to execute
 
         for (int i = maxAppliedWriteByExecuteAt + 1; i < mayExecuteToIndex ; ++i)
         {
@@ -1868,7 +1869,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             Kind kind = txn.kind();
             if (txn.mayExecute() && !txn.hasNotifiedReady())
             {
-                if (i >= mayNotExecuteBeforeIndex && (kinds.test(kind) || i == mayExecuteAny) && !isWaitingOnPruned(loadingPruned, txn, txn.executeAt, boundsInfo))
+                if (i >= mayNotExecuteBeforeIndex && (kinds.test(kind) || i == mayExecuteAny) && !isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
                 {
                     switch (txn.status())
                     {
@@ -1927,7 +1928,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
                             if (expectMissingCount == missingCount)
                             {
                                 TxnId txnId = txn.plainTxnId();
-                                notifySink.notWaiting(safeStore, txnId, key, txnId.is(Write) ? maxUniqueHlc + 1 : 0);
+                                long minUniqueHlc = 0;
+                                if (txnId.isWrite() && (maxAppliedPreBootstrapWriteById < 0 || byId[maxAppliedPreBootstrapWriteById].executeAt.compareTo(txn.executeAt) < 0))
+                                    minUniqueHlc = maxUniqueHlc + 1;
+                                notifySink.notWaiting(safeStore, txnId, key, minUniqueHlc);
                                 // TODO (expected): avoid invoking this here; we may do redundant work if we have local dependencies we're already waiting on
                                 notifySink.waitingOn(safeStore, txn, key, SaveStatus.PreApplied, CanApply, false);
                                 txn.setNotifiedReadyInPlace();
@@ -1987,30 +1991,29 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
     }
 
-    public CommandsForKeyUpdate withRedundantBeforeAtLeast(RedundantBefore.Entry newBoundsInfo)
+    public CommandsForKeyUpdate withRedundantBeforeAtLeast(QuickBounds newBounds)
     {
         // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
-        if (newBoundsInfo.gcBefore.hlc() < boundsInfo.gcBefore.hlc())
+        if (newBounds.gcBefore.hlc() < bounds.gcBefore.hlc())
         {
-            if (newBoundsInfo.endOwnershipEpoch != boundsInfo.endOwnershipEpoch || !newBoundsInfo.bootstrappedAt.equals(boundsInfo.bootstrappedAt))
+            if (newBounds.endEpoch != bounds.endEpoch || !newBounds.bootstrappedAt.equals(bounds.bootstrappedAt))
             {
-                newBoundsInfo = boundsInfo.withEpochs(boundsInfo.startOwnershipEpoch, newBoundsInfo.endOwnershipEpoch)
-                                          .withBootstrappedAtLeast(newBoundsInfo.bootstrappedAt);
+                newBounds = bounds.withEpochs(bounds.startEpoch, newBounds.endEpoch)
+                                  .withBootstrappedAtLeast(newBounds.bootstrappedAt);
             }
             else
             {
                 return this;
             }
         }
-        else if (newBoundsInfo.gcBefore.equals(boundsInfo.gcBefore)
-                 && newBoundsInfo.bootstrappedAt.equals(boundsInfo.bootstrappedAt)
-                 && newBoundsInfo.locallyDecidedAndAppliedBefore.equals(boundsInfo.locallyDecidedAndAppliedBefore)
-                 && newBoundsInfo.endOwnershipEpoch == boundsInfo.endOwnershipEpoch)
+        else if (newBounds.gcBefore.equals(bounds.gcBefore)
+                 && newBounds.bootstrappedAt.equals(bounds.bootstrappedAt)
+                 && newBounds.endEpoch == bounds.endEpoch)
         {
             return this;
         }
 
-        if (newBoundsInfo.gcBefore.epoch() >= newBoundsInfo.endOwnershipEpoch)
+        if (newBounds.gcBefore.epoch() >= newBounds.endEpoch)
         {
             // we should be completely finished; notify every unmanaged and return an empty CFK
             // we special case this to handle the case of future dependencies supplied to us by other CommandsForKey that had pruned their dependencies;
@@ -2019,19 +2022,20 @@ public class CommandsForKey extends CommandsForKeyUpdate
             for (int i = 0 ; i < notify.length ; ++i)
                 notify[i] = unmanageds[i].txnId;
             PostProcess newPostProcess = new PostProcess.NotifyNotWaiting(null, notify);
-            CommandsForKey newCfk = new CommandsForKey(key, newBoundsInfo, NO_INFOS, NO_INFOS, -1, -1, maxUniqueHlc, BTree.empty(), -1, NO_PENDING_UNMANAGED);
+            CommandsForKey newCfk = new CommandsForKey(key, newBounds, NO_INFOS, -1, -1, NO_INFOS, -1, maxUniqueHlc, BTree.empty(), -1, NO_PENDING_UNMANAGED);
             return new CommandsForKeyUpdateWithPostProcess(newCfk, newPostProcess);
         }
 
-        TxnInfo[] newById = pruneById(byId, boundsInfo, newBoundsInfo);
-        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBoundsInfo));
-        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBoundsInfo));
+        TxnInfo[] newById = removeRedundantById(byId, bounds, newBounds);
+        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBounds));
+        Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
+        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBounds));
 
         long maxUniqueHlc = this.maxUniqueHlc;
-        if (maxUniqueHlc <= newBoundsInfo.gcBefore.hlc() && newBoundsInfo.gcBefore.is(HLC_BOUND))
+        if (maxUniqueHlc <= newBounds.gcBefore.hlc() && newBounds.gcBefore.is(HLC_BOUND))
             maxUniqueHlc = 0;
 
-        return notifyManagedPreBootstrap(this, newBoundsInfo, reconstructAndUpdateUnmanaged(key, newBoundsInfo, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds));
+        return notifyManagedPreBootstrap(this, newBounds, reconstructAndUpdateUnmanaged(key, newBounds, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds));
     }
 
     /**
@@ -2042,10 +2046,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
     @VisibleForImplementation
     public CommandsForKey withRedundantBeforeAtLeast(TxnId newRedundantBefore)
     {
-        RedundantBefore.Entry newBoundsInfo = boundsInfo.withGcBeforeBeforeAtLeast(newRedundantBefore);
+        QuickBounds newBoundsInfo = bounds.withGcBeforeBeforeAtLeast(newRedundantBefore);
 
-        TxnInfo[] newById = pruneById(byId, boundsInfo, newBoundsInfo);
+        TxnInfo[] newById = removeRedundantById(byId, bounds, newBoundsInfo);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newRedundantBefore);
+        Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
         Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newRedundantBefore);
 
         return reconstruct(key, newBoundsInfo, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds);
@@ -2184,6 +2189,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             Invariants.require(prunedBeforeById == -1 || (prunedBefore().is(APPLIED) && prunedBefore().is(Write)));
             Invariants.require(minUndecidedById < 0 || (byId[minUndecidedById].status().compareTo(InternalStatus.COMMITTED) < 0 && mayExecute(byId[minUndecidedById])));
             Invariants.require(maxAppliedWrite() == null || maxUniqueHlc >= maxAppliedWrite().executeAt.hlc());
+            Invariants.require(maxAppliedPreBootstrapWriteById < 0 || (maxAppliedPreBootstrapWriteById < byId.length && byId[maxAppliedPreBootstrapWriteById].isWrite() && !byId[maxAppliedPreBootstrapWriteById].mayExecute()));
 
             if (maxAppliedWriteByExecuteAt >= 0)
             {
@@ -2219,7 +2225,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 LoadingPruned minLoadingPruned = BTree.isEmpty(loadingPruned) ? null : BTree.findByIndex(loadingPruned, 0);
                 Invariants.require(minLoadingPruned == null|| redundantBefore().compareTo(BTree.findByIndex(loadingPruned, 0)) <= 0);
                 for (Unmanaged unmanaged : unmanageds)
-                    Invariants.require(unmanaged.waitingUntil.epoch() < boundsInfo.endOwnershipEpoch);
+                    Invariants.require(unmanaged.waitingUntil.epoch() < bounds.endEpoch);
             }
             if (testParanoia(SUPERLINEAR, NONE, LOW))
             {

@@ -27,6 +27,7 @@ import javax.annotation.Nullable;
 import accord.api.Agent;
 
 import accord.local.CommandStores.RangesForEpoch;
+import accord.local.RedundantBefore.Bounds;
 import accord.primitives.RangeDeps;
 import accord.primitives.Routables;
 import accord.primitives.Route;
@@ -65,6 +66,11 @@ import org.agrona.collections.LongHashSet;
 import static accord.api.ConfigurationService.EpochReady.DONE;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.PreLoadContext.empty;
+import static accord.local.RedundantStatus.GC_BEFORE_AND_LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.LOCALLY_APPLIED_ONLY;
+import static accord.local.RedundantStatus.LOCALLY_WITNESSED_ONLY;
+import static accord.local.RedundantStatus.PRE_BOOTSTRAP_ONLY;
+import static accord.local.RedundantStatus.SHARD_ONLY_APPLIED_ONLY;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
@@ -96,13 +102,13 @@ public abstract class CommandStore implements AgentExecutor
         // TODO (desired): can better encapsulate by accepting only the newRangesForEpoch and deriving the add/remove ranges
         public void add(long epoch, RangesForEpoch newRangesForEpoch, Ranges addRanges)
         {
-            RedundantBefore addRedundantBefore = RedundantBefore.create(addRanges, epoch, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.minForEpoch(epoch));
+            RedundantBefore addRedundantBefore = RedundantBefore.create(addRanges, epoch, Long.MAX_VALUE, TxnId.minForEpoch(epoch), PRE_BOOTSTRAP_ONLY);
             update(newRangesForEpoch, addRedundantBefore);
         }
 
         public void remove(long epoch, RangesForEpoch newRangesForEpoch, Ranges removeRanges)
         {
-            RedundantBefore addRedundantBefore = RedundantBefore.create(removeRanges, Long.MIN_VALUE, epoch, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE);
+            RedundantBefore addRedundantBefore = RedundantBefore.create(removeRanges, Long.MIN_VALUE, epoch, TxnId.NONE, RedundantStatus.NONE);
             update(newRangesForEpoch, addRedundantBefore);
         }
 
@@ -219,6 +225,8 @@ public abstract class CommandStore implements AgentExecutor
             safeStore.upsertRedundantBefore(update.addRedundantBefore);
         if (update.newRangesForEpoch != null)
             safeStore.setRangesForEpoch(update.newRangesForEpoch);
+
+        safeStore.persistFieldUpdates();
     }
 
     @VisibleForTesting
@@ -446,7 +454,7 @@ public abstract class CommandStore implements AgentExecutor
     {
         // TODO (desired): narrow ranges to those that are owned
         Invariants.requireArgument(txnId.is(ExclusiveSyncPoint));
-        RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, txnId, txnId, TxnId.NONE, TxnId.NONE, TxnId.NONE));
+        RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, txnId, LOCALLY_APPLIED_ONLY));
         safeStore.upsertRedundantBefore(newRedundantBefore);
         unsafeSetRedundantBefore(newRedundantBefore);
         updatedRedundantBefore(safeStore, txnId, ranges);
@@ -591,7 +599,7 @@ public abstract class CommandStore implements AgentExecutor
 
     private AsyncResult<Void> readyToCoordinate(Ranges ranges, long epoch)
     {
-        if (redundantBefore.min(ranges, RedundantBefore.Entry::locallyWitnessedBefore).epoch() >= epoch)
+        if (redundantBefore.min(ranges, Bounds::locallyWitnessedBefore).epoch() >= epoch)
             return DONE;
 
         AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
@@ -625,7 +633,7 @@ public abstract class CommandStore implements AgentExecutor
     {
         safeStore.setBootstrapBeganAt(bootstrap(globalSyncId, ranges, bootstrapBeganAt));
         updateMaxConflicts(ranges, globalSyncId);
-        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, globalSyncId);
+        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, PRE_BOOTSTRAP_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
         updatedRedundantBefore(safeStore, globalSyncId, ranges);
     }
@@ -634,8 +642,8 @@ public abstract class CommandStore implements AgentExecutor
     public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges)
     {
         final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
-        TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, e -> e.locallyAppliedBefore);
-        RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, TxnId.NONE, globalSyncId, TxnId.NONE, TxnId.NONE);
+        TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, Bounds::maxLocallyAppliedBefore);
+        RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, globalSyncId, SHARD_ONLY_APPLIED_ONLY);
         safeStore.upsertRedundantBefore(addShardRedundant);
         updatedRedundantBefore(safeStore, globalSyncId, slicedRanges);
         safeStore = safeStore; // make unusable in lambda
@@ -643,7 +651,7 @@ public abstract class CommandStore implements AgentExecutor
         if (locallyRedundantBefore.compareTo(globalSyncId) < 0)
         {
             // TODO (expected): if bootstrapping only part of the range, mark the rest for GC; or relax this as can safely GC behind bootstrap
-            TxnId maxBootstrap = safeStore.redundantBefore().max(slicedRanges, e -> e.bootstrappedAt);
+            TxnId maxBootstrap = safeStore.redundantBefore().max(slicedRanges, Bounds::maxBootstrappedAt);
             if (maxBootstrap.compareTo(globalSyncId) >= 0)
                 logger.info("Ignoring markShardDurable for a point we are bootstrapping. Bootstrapping: {}, Global: {}, Ranges: {}", maxBootstrap, globalSyncId, slicedRanges);
             else
@@ -662,7 +670,7 @@ public abstract class CommandStore implements AgentExecutor
                 }
 
                 execute(PreLoadContext.empty(), safeStore0 -> {
-                    RedundantBefore addGc = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, globalSyncId, globalSyncId, globalSyncId, TxnId.NONE);
+                    RedundantBefore addGc = RedundantBefore.create(slicedRanges, globalSyncId, GC_BEFORE_AND_LOCALLY_APPLIED);
                     safeStore0.upsertRedundantBefore(addGc);
                 }, agent());
             });
@@ -679,7 +687,7 @@ public abstract class CommandStore implements AgentExecutor
 
     protected void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
-        RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, syncId, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE));
+        RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY));
         unsafeSetRedundantBefore(newRedundantBefore);
         updatedRedundantBefore(safeStore, syncId, ranges);
 
@@ -727,7 +735,7 @@ public abstract class CommandStore implements AgentExecutor
         }
         agent.onStale(staleSince, ranges);
 
-        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE, staleUntilAtLeast);
+        RedundantBefore addRedundantBefore = RedundantBefore.createStale(ranges, staleUntilAtLeast);
         safeStore.upsertRedundantBefore(addRedundantBefore);
         // find which ranges need to bootstrap, subtracting those already in progress that cover the id
 
@@ -784,6 +792,11 @@ public abstract class CommandStore implements AgentExecutor
     public final DurableBefore durableBefore()
     {
         return node.durableBefore();
+    }
+
+    public final ProgressLog unsafeProgressLog()
+    {
+        return progressLog;
     }
 
     @VisibleForTesting

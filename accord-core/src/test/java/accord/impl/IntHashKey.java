@@ -115,6 +115,12 @@ public abstract class IntHashKey implements RoutableKey
         {
             super(key);
         }
+
+        @Override
+        public Object suffix()
+        {
+            return hash + ":" + key;
+        }
     }
 
     public static final class Hash extends IntHashKey implements RoutingKey
@@ -140,6 +146,12 @@ public abstract class IntHashKey implements RoutableKey
         public RangeFactory rangeFactory()
         {
             return (s, e) -> new Range((Hash) s, (Hash) e);
+        }
+
+        @Override
+        public Object suffix()
+        {
+            return hash;
         }
     }
 

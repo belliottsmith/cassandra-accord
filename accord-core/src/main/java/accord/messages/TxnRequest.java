@@ -34,10 +34,12 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.topology.Topology;
+import accord.topology.Topology.NodeInfo;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.Cancellable;
 
+import static accord.topology.Shard.Flag.MUST_WITNESS;
 import static accord.utils.Invariants.illegalArgument;
 
 public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> implements Request, PreLoadContext, MapReduceConsume<SafeCommandStore, R>
@@ -126,8 +128,10 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
     // finds the first topology index that intersects with the node
     protected static int latestRelevantEpochIndex(Node.Id node, Topologies topologies, Unseekables<?> route)
     {
-        Ranges latest = topologies.current().rangesForNode(node);
+        if (topologies.size() == 1)
+            return 0;
 
+        Ranges latest = topologies.current().rangesForNode(node);
         if (route.intersects(latest))
             return 0;
 
@@ -179,14 +183,31 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
         if (i == mi)
             return topologies.oldestEpoch();
 
-        Ranges latest = topologies.get(i - 1).rangesForNode(node);
+
+        Ranges latest;
+        {
+            Topology mostRecent = topologies.get(i - 1);
+            NodeInfo nodeInfo = mostRecent.nodeInfo(node);
+            if (nodeInfo == null)
+                return mostRecent.epoch();
+            latest = nodeInfo.ranges;
+            if (nodeInfo.anyMatch(mostRecent, shard -> shard.is(MUST_WITNESS)))
+                return mostRecent.epoch();
+        }
         while (i < mi)
         {
             Topology topology = topologies.get(i);
-            Ranges ranges = topology.rangesForNode(node);
+            NodeInfo nodeInfo = topology.nodeInfo(node);
+            if (nodeInfo == null)
+                break;
+
+            Ranges ranges = nodeInfo.ranges;
             if (!ranges.equals(latest))
                 break;
+
             ++i;
+            if (nodeInfo.anyMatch(topology, shard -> shard.is(MUST_WITNESS)))
+                break;
         }
         return topologies.get(i - 1).epoch();
     }
@@ -236,24 +257,5 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
         if (scope == null)
             throw illegalArgument("No intersection between " + topologies + " and " + keys + " on " + node);
         return scope;
-    }
-
-    private static boolean doNotComputeProgressKey(Topologies topologies, int startIndex, long epoch, long waitForEpoch)
-    {
-        // to understand this calculation we must bear in mind the following:
-        //  - startIndex is the "latest relevant" which means we skip over recent epochs where we are not owners at all,
-        //    i.e. if this node does not participate in the most recent epoch, startIndex > 0
-        //  - waitForEpoch gives us the most recent epoch with differing ownership information, starting from startIndex
-        // So, we can have some surprising situations arise where a *prior* owner must be contacted for its vote,
-        // and does not need to wait for the latest ring information because from the point of view of its contribution
-        // the stale ring information is sufficient, however we do not want it to compute a progress key with this stale
-        // ring information and mistakenly believe that it is a home shard for the transaction, as it will not receive
-        // updates for the transaction going forward.
-        // So in these cases we send a special flag indicating that the progress key should not be computed
-        // (as it might be done so with stale ring information)
-
-        // TODO (low priority, clarity): this would be better defined as "hasProgressKey"
-        return waitForEpoch < epoch && startIndex > 0
-                && topologies.get(startIndex).epoch() < epoch;
     }
 }

@@ -27,7 +27,7 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.local.Command;
-import accord.local.RedundantBefore;
+import accord.local.RedundantBefore.QuickBounds;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
@@ -145,7 +145,7 @@ abstract class PostProcess
      * In practice this means that transactions which include a bootstrap range and a range not covered by bootstrap
      * will not wait for the bootstrapping key.
      */
-    static CommandsForKeyUpdate notifyManagedPreBootstrap(CommandsForKey prev, RedundantBefore.Entry newBoundsInfo, CommandsForKeyUpdate update)
+    static CommandsForKeyUpdate notifyManagedPreBootstrap(CommandsForKey prev, QuickBounds newBounds, CommandsForKeyUpdate update)
     {
         Timestamp maxApplied = null;
         TxnId[] notify = NO_TXNIDS;
@@ -153,7 +153,7 @@ abstract class PostProcess
         // <= because maxAppliedWrite is actually maxAppliedOrPreBootstrapWrite
         for (TxnInfo txn : prev.committedByExecuteAt)
         {
-            if (txn.compareTo(newBoundsInfo.bootstrappedAt) >= 0)
+            if (txn.compareTo(newBounds.bootstrappedAt) >= 0)
                 break;
 
             if (txn.is(STABLE))
@@ -253,14 +253,14 @@ abstract class PostProcess
                                                  TxnInfo[] committedByExecuteAt,
                                                  int maxAppliedWriteByExecuteAt,
                                                  Object[] loadingPruned,
-                                                 RedundantBefore.Entry boundsInfo,
+                                                 QuickBounds bounds,
                                                  boolean isNewBoundsInfo,
                                                  @Nullable TxnInfo curInfo,
                                                  @Nullable TxnInfo newInfo)
     {
         // TODO (expected): can we relax this to shardRedundantBefore?
-        TxnId redundantBefore = boundsInfo.gcBefore();
-        TxnId bootstrappedAt = boundsInfo.bootstrappedAt;
+        TxnId redundantBefore = bounds.gcBefore;
+        TxnId bootstrappedAt = bounds.bootstrappedAt;
         if (bootstrappedAt.compareTo(redundantBefore) <= 0) bootstrappedAt = null;
 
         PostProcess notifier = null;
@@ -308,7 +308,7 @@ abstract class PostProcess
                 int firstApply = findFirstApply(unmanageds);
                 {   // process unmanaged waiting on applies that may now not occur
                     int start = firstApply;
-                    while (start > 0 && unmanageds[start - 1].waitingUntil.epoch() >= boundsInfo.endOwnershipEpoch)
+                    while (start > 0 && unmanageds[start - 1].waitingUntil.epoch() >= bounds.endEpoch)
                         --start;
 
                     if (start != firstApply)

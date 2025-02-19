@@ -204,25 +204,26 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             else
                             {
                                 known = full.knownFor(txnId, trySendTo, trySendTo);
-                                Invariants.require(known.isDefinitionKnown() && known.isExecuteAtKnown() && known.outcome() == Apply);
-
-                                if (!known.is(DepsKnown))
+                                if (known.isDefinitionKnown() && known.is(ApplyAtKnown) && known.outcome() == Apply)
                                 {
-                                    Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                    Participants<?> haveStable = full.map.knownFor(Known.DepsOnly, route);
-                                    Route<?> haveUnstable = route.without(haveStable);
-                                    Deps stable = full.stableDeps.reconstitutePartial(haveStable).asFullUnsafe();
+                                    if (!known.is(DepsKnown))
+                                    {
+                                        Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
+                                        Participants<?> haveStable = full.map.knownFor(Known.DepsOnly, route);
+                                        Route<?> haveUnstable = route.without(haveStable);
+                                        Deps stable = full.stableDeps.reconstitutePartial(haveStable).asFullUnsafe();
 
-                                    LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, route, callback, deps -> {
-                                        Deps stableDeps = deps.intersecting(trySendTo);
-                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, null);
-                                    });
-                                }
-                                else
-                                {
-                                    Invariants.require(full.stableDeps.covers(trySendTo));
-                                    Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                    node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, null);
+                                        LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, route, callback, deps -> {
+                                            Deps stableDeps = deps.intersecting(trySendTo);
+                                            node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, null);
+                                        });
+                                    }
+                                    else
+                                    {
+                                        Invariants.require(full.stableDeps.covers(trySendTo));
+                                        Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
+                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, null);
+                                    }
                                 }
                             }
                             propagate = full;

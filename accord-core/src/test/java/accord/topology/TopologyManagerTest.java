@@ -351,6 +351,8 @@ public class TopologyManagerTest
 
     /**
      * The ABA problem is a problem with registers where you set the value A, then B, then A again; when you observe you see A... which A?
+     *
+     * TODO (required): we don't want to support this. Ranges should be one use - if you want to create new ranges again, use a different prefix.
      */
     @Test
     void aba()

@@ -406,9 +406,8 @@ public class BurnTestBase
         BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, ListAgent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should enver get a stale event");
-        }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null));
+        }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
         Verifier verifier = createVerifier(keyCount * prefixCount);
-        Function<CommandStore, AsyncExecutor> executor = ignore -> globalExecutor;
 
         MessageListener listener = MessageListener.get();
 
@@ -417,7 +416,7 @@ public class BurnTestBase
         Arrays.sort(prefixes);
 
         int[] keys = IntStream.range(0, keyCount).toArray();
-        Packet[] requests = toArray(generate(random, listener, executor, clients, nodes, keys, operations), Packet[]::new);
+        Packet[] requests = toArray(generate(random, listener, Function.identity(), clients, nodes, keys, operations), Packet[]::new);
         int[] starts = new int[requests.length];
         Packet[] replies = new Packet[requests.length];
 

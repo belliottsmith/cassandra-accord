@@ -115,6 +115,12 @@ public abstract class PrefixedIntHashKey implements RoutableKey
         {
             super(prefix, key, hash);
         }
+
+        @Override
+        public Object suffix()
+        {
+            return hash + ":" + key;
+        }
     }
 
     public static abstract class PrefixedIntRoutingKey extends PrefixedIntHashKey implements RoutingKey
@@ -174,6 +180,12 @@ public abstract class PrefixedIntHashKey implements RoutableKey
         {
             return this;
         }
+
+        @Override
+        public Object suffix()
+        {
+            return isMin ? "-Inf" : "+Inf";
+        }
     }
 
     public static final class Hash extends PrefixedIntRoutingKey
@@ -196,6 +208,12 @@ public abstract class PrefixedIntHashKey implements RoutableKey
         public RoutingKey asRoutingKey()
         {
             return this;
+        }
+
+        @Override
+        public Object suffix()
+        {
+            return hash;
         }
     }
 

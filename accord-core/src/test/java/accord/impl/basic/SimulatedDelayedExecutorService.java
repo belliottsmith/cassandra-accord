@@ -26,6 +26,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+import javax.annotation.Nullable;
+
 import accord.api.Agent;
 import accord.local.AgentExecutor;
 
@@ -33,19 +35,36 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public class SimulatedDelayedExecutorService extends TaskExecutorService implements ScheduledExecutorService
 {
-    private class ScheduledTask<T> extends Task<T> implements ScheduledFuture<T>
+    public static class RegularTask<T> extends Task<T>
+    {
+        private final Object owner;
+
+        public RegularTask(Callable<T> fn, Object owner)
+        {
+            super(fn);
+            this.owner = owner;
+        }
+
+        @Override
+        public Object owner()
+        {
+            return owner;
+        }
+    }
+
+    private class ScheduledTask<T> extends RegularTask<T> implements ScheduledFuture<T>
     {
         private final long sequenceNumber;
         private final long periodMillis;
         private long nextExecuteAtMillis;
         private boolean canceled = false;
 
-        private ScheduledTask(long sequenceNumber, long initialDelay, long value, TimeUnit unit, Callable<T> fn)
+        private ScheduledTask(Object owner, long sequenceNumber, long initialDelay, long value, TimeUnit unit, Callable<T> fn)
         {
-            super(fn);
+            super(fn, owner);
             this.sequenceNumber = sequenceNumber;
-            periodMillis = unit.toMillis(value);
-            nextExecuteAtMillis = triggerTime(initialDelay, unit);
+            this.periodMillis = unit.toMillis(value);
+            this.nextExecuteAtMillis = triggerTime(initialDelay, unit);
         }
 
         private long triggerTime(long delay, TimeUnit unit)
@@ -133,19 +152,22 @@ public class SimulatedDelayedExecutorService extends TaskExecutorService impleme
     private final PendingQueue pending;
     private final Agent agent;
     private final AtomicLong sequenceNumber;
+    private final Object owner;
 
-    public SimulatedDelayedExecutorService(PendingQueue pending, Agent agent)
+    public SimulatedDelayedExecutorService(PendingQueue pending, Agent agent, @Nullable Object owner)
     {
         this.pending = pending;
         this.agent = agent;
+        this.owner = owner;
         sequenceNumber = new AtomicLong();
     }
 
-    private SimulatedDelayedExecutorService(PendingQueue pending, Agent agent, AtomicLong sequenceNumber)
+    private SimulatedDelayedExecutorService(PendingQueue pending, Agent agent, AtomicLong sequenceNumber, @Nullable Object owner)
     {
         this.pending = pending;
         this.agent = agent;
         this.sequenceNumber = sequenceNumber;
+        this.owner = owner;
     }
 
     @Override
@@ -166,9 +188,15 @@ public class SimulatedDelayedExecutorService extends TaskExecutorService impleme
     }
 
     @Override
+    protected <T> Task<T> newTaskFor(Callable<T> callable)
+    {
+        return new RegularTask<>(callable, owner);
+    }
+
+    @Override
     public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit)
     {
-        ScheduledTask<?> task = new ScheduledTask<>(sequenceNumber.incrementAndGet(), delay, 0, NANOSECONDS, Executors.callable(command));
+        ScheduledTask<?> task = new ScheduledTask<>(owner, sequenceNumber.incrementAndGet(), delay, 0, NANOSECONDS, Executors.callable(command));
         schedule(task, delay, unit);
         return task;
     }
@@ -176,7 +204,7 @@ public class SimulatedDelayedExecutorService extends TaskExecutorService impleme
     @Override
     public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit)
     {
-        ScheduledTask<V> task = new ScheduledTask<>(sequenceNumber.incrementAndGet(), delay, 0, NANOSECONDS, callable);
+        ScheduledTask<V> task = new ScheduledTask<>(owner, sequenceNumber.incrementAndGet(), delay, 0, NANOSECONDS, callable);
         schedule(task, delay, unit);
         return task;
     }
@@ -184,7 +212,7 @@ public class SimulatedDelayedExecutorService extends TaskExecutorService impleme
     @Override
     public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit)
     {
-        ScheduledTask<?> task = new ScheduledTask<>(sequenceNumber.incrementAndGet(), initialDelay, period, unit, Executors.callable(command));
+        ScheduledTask<?> task = new ScheduledTask<>(owner, sequenceNumber.incrementAndGet(), initialDelay, period, unit, Executors.callable(command));
         schedule(task, initialDelay, unit);
         return task;
     }
@@ -193,13 +221,13 @@ public class SimulatedDelayedExecutorService extends TaskExecutorService impleme
     @Override
     public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit)
     {
-        ScheduledTask<?> task = new ScheduledTask<>(sequenceNumber.incrementAndGet(), initialDelay, -delay, unit, Executors.callable(command));
+        ScheduledTask<?> task = new ScheduledTask<>(owner, sequenceNumber.incrementAndGet(), initialDelay, -delay, unit, Executors.callable(command));
         schedule(task, initialDelay, unit);
         return task;
     }
 
     public AgentExecutor withAgent(Agent agent)
     {
-        return new SimulatedDelayedExecutorService(pending, agent, sequenceNumber);
+        return new SimulatedDelayedExecutorService(pending, agent, sequenceNumber, owner);
     }
 }

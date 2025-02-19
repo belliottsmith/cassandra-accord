@@ -140,7 +140,10 @@ public class ListStore implements DataStore
         }
     }
 
+    public static class SnapshotAborted extends RuntimeException { SnapshotAborted() { super("Snapshot aborted due to earlier snapshot being restored"); } }
+
     static final boolean VERIFY_ACCESS = Boolean.getBoolean(System.getProperty("accord.test.verify_liststore_access", "true"));
+
     static final Timestamped<int[]> EMPTY = new Timestamped<>(Timestamp.NONE, new int[0], Arrays::toString);
     final NavigableMap<RoutableKey, Timestamped<int[]>> data = new TreeMap<>();
     final Scheduler scheduler;
@@ -226,7 +229,7 @@ public class ListStore implements DataStore
             }
             else
             {
-                result.setFailure(new RuntimeException("Snapshot aborted due to earlier snapshot being restored"));
+                result.setFailure(new SnapshotAborted());
             }
         }));
 

@@ -21,7 +21,7 @@ package accord.local.cfk;
 import java.util.Arrays;
 import java.util.List;
 
-import accord.local.RedundantBefore;
+import accord.local.RedundantBefore.QuickBounds;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -45,6 +45,7 @@ import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.CommandsForKey.redundantBefore;
 import static accord.local.cfk.Updating.nextUndecided;
+import static accord.local.cfk.Updating.recomputeMaxAppliedPreBootstrapWriteById;
 import static accord.local.cfk.Utils.removeRedundantMissing;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.Write;
@@ -181,12 +182,12 @@ public class Pruning
     /**
      * Return true if {@code waitingId} is waiting for any transaction with a lower TxnId than waitingExecuteAt
      */
-    static boolean isWaitingOnPruned(Object[] loadingPruned, TxnId waitingId, Timestamp waitingExecuteAt, RedundantBefore.Entry boundsInfo)
+    static boolean isWaitingOnPruned(Object[] loadingPruned, TxnId waitingId, Timestamp waitingExecuteAt, QuickBounds bounds)
     {
         if (BTree.isEmpty(loadingPruned))
             return false;
 
-        int startIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, boundsInfo.bootstrappedAt);
+        int startIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, bounds.bootstrappedAt);
         int endIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, waitingExecuteAt);
         // TODO (desired): this is O(n.lg n), whereas we could import the accumulate function and perform in O(max(m, lg n))
         for (int i = startIndex; i < endIndex; ++i)
@@ -260,10 +261,14 @@ public class Pruning
                 if (!txn.is(PRUNED))
                     newById[count++] = txn;
             }
+            int newMinUndecidedById = nextUndecided(newById, 0, cfk);
+            int newMaxAppliedPreBootstrapWriteById = recomputeMaxAppliedPreBootstrapWriteById(cfk.bounds, newById, cfk.maxAppliedPreBootstrapWriteById);
             int newPrunedBeforeId = cfk.prunedBeforeById - prunedCount;
-            return new CommandsForKey(cfk.key, cfk.boundsInfo, false, newById, cfk.committedByExecuteAt,
-                                      nextUndecided(newById, 0, cfk), cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc,
-                                      cfk.loadingPruned, newPrunedBeforeId, cfk.unmanageds);
+            return new CommandsForKey(cfk.key, cfk.bounds, false, newById,
+                                      newMinUndecidedById, newMaxAppliedPreBootstrapWriteById,
+                                      cfk.committedByExecuteAt, cfk.maxAppliedWriteByExecuteAt,
+                                      cfk.maxUniqueHlc, cfk.loadingPruned, newPrunedBeforeId,
+                                      cfk.unmanageds);
         }
         int pos = cfk.insertPos(pruneBefore);
         if (pos == 0)
@@ -290,9 +295,11 @@ public class Pruning
             return null;
 
         TxnInfo newPrunedBefore = cfk.committedByExecuteAt[i];
-        if (newPrunedBefore.compareTo(cfk.prunedBefore()) <= 0)
+        if (newPrunedBefore.compareSimultaneousEpochAndHlc(cfk.prunedBefore()) <= 0)
             return null;
-        return newPrunedBefore;
+        if (newPrunedBefore.executeAt.compareSimultaneousEpochAndHlc(cfk.prunedBefore().executeAt) <= 0)
+            return null;
+        return null;
     }
 
     /**
@@ -307,7 +314,8 @@ public class Pruning
      */
     static CommandsForKey pruneBefore(CommandsForKey cfk, TxnInfo newPrunedBefore, int pos)
     {
-        Invariants.requireArgument(newPrunedBefore.compareTo(cfk.prunedBefore()) >= 0, "Expect new prunedBefore to be ahead of existing one");
+        Invariants.requireArgument(newPrunedBefore.compareSimultaneousEpochAndHlc(cfk.prunedBefore()) > 0, "Expect new prunedBefore to have > HLC and >= epoch (%s vs %s)", newPrunedBefore, cfk.prunedBefore());
+        Invariants.requireArgument(newPrunedBefore.executeAt.compareSimultaneousEpochAndHlc(cfk.prunedBefore().executeAt) > 0, "Expect new prunedBefore.executeAt to have > HLC and >= epoch (%s vs %s)", newPrunedBefore.executeAt, cfk.prunedBefore().executeAt);
         Invariants.requireArgument(newPrunedBefore.mayExecute());
 
         TxnInfo[] byId = cfk.byId;
@@ -359,6 +367,7 @@ public class Pruning
                     case TRANSITIVE_VISIBLE:
                     case PREACCEPTED_WITHOUT_DEPS:
                     case PREACCEPTED_WITH_DEPS:
+                    case PREACCEPTED_COORD_NO_FAST_COMMIT:
                     case NOTACCEPTED:
                     case ACCEPTED:
                         newByIdBuffer[pos - ++retainCount] = txn;
@@ -474,8 +483,9 @@ public class Pruning
 
         cachedAny().forceDiscard(removedExecuteAts, removedExecuteAtCount);
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
+        int newMaxAppliedPreBootstrapWriteById = recomputeMaxAppliedPreBootstrapWriteById(cfk.bounds, newById, cfk.maxAppliedPreBootstrapWriteById);
         Invariants.require(newById[retainCount] == newPrunedBefore);
-        return new CommandsForKey(cfk.key, cfk.boundsInfo, newById, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds);
+        return new CommandsForKey(cfk.key, cfk.bounds, newById, minUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds);
     }
 
     /**
@@ -517,12 +527,12 @@ public class Pruning
         return epochPrunedBefores;
     }
 
-    static TxnInfo[] pruneById(TxnInfo[] byId, RedundantBefore.Entry prevBoundsInfo, RedundantBefore.Entry newBoundsInfo)
+    static TxnInfo[] removeRedundantById(TxnInfo[] byId, QuickBounds prevBounds, QuickBounds newBounds)
     {
-        TxnId newRedundantBefore = redundantBefore(newBoundsInfo);
-        TxnId newBootstrappedAt = bootstrappedAt(newBoundsInfo);
-        TxnId prevRedundantBefore = redundantBefore(prevBoundsInfo);
-        TxnId prevBootstrappedAt = bootstrappedAt(prevBoundsInfo);
+        TxnId newRedundantBefore = redundantBefore(newBounds);
+        TxnId newBootstrappedAt = bootstrappedAt(newBounds);
+        TxnId prevRedundantBefore = redundantBefore(prevBounds);
+        TxnId prevBootstrappedAt = bootstrappedAt(prevBounds);
         Invariants.requireArgument(newRedundantBefore.compareTo(prevRedundantBefore) >= 0, "Expect new RedundantBefore.Entry locallyAppliedOrInvalidatedBefore to be ahead of existing one");
         Invariants.requireArgument(prevBootstrappedAt == null || newRedundantBefore.compareTo(prevBootstrappedAt) >= 0 || (newBootstrappedAt != null && newBootstrappedAt.compareTo(prevBootstrappedAt) >= 0), "Expect new RedundantBefore.Entry bootstrappedAt to be ahead of existing one");
 
@@ -548,14 +558,14 @@ public class Pruning
             }
         }
 
-        if (newBoundsInfo.startOwnershipEpoch != prevBoundsInfo.startOwnershipEpoch
-            || newBoundsInfo.endOwnershipEpoch != prevBoundsInfo.endOwnershipEpoch
-            || !newBoundsInfo.bootstrappedAt.equals(prevBoundsInfo.bootstrappedAt))
+        if (newBounds.startEpoch != prevBounds.startEpoch
+            || newBounds.endEpoch != prevBounds.endEpoch
+            || !newBounds.bootstrappedAt.equals(prevBounds.bootstrappedAt))
         {
             for (int i = 0 ; i < newById.length ; ++i)
             {
                 TxnInfo txn = newById[i];
-                txn = txn.withMayExecute(mayExecute(newBoundsInfo, txn));
+                txn = txn.withMayExecute(mayExecute(newBounds, txn));
                 if (txn != newById[i])
                     newById[i] = txn;
             }

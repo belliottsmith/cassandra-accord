@@ -85,6 +85,7 @@ import accord.impl.list.ListAgent;
 import accord.impl.list.ListStore;
 import accord.impl.progresslog.DefaultProgressLogs;
 import accord.local.AgentExecutor;
+import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
@@ -131,6 +132,9 @@ import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
 import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
 import static accord.impl.basic.NodeSink.Action.DELIVER;
 import static accord.impl.basic.NodeSink.Action.DROP;
+import static accord.local.Cleanup.EXPUNGE;
+import static accord.local.Cleanup.INVALIDATE;
+import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.utils.AccordGens.keysInsideRanges;
@@ -430,7 +434,7 @@ public class Cluster
         BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, ListAgent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should never get a stale event");
-        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null));
+        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
         TopologyFactory topologyFactory = new TopologyFactory(initialTopology.maxRf(), initialTopology.ranges().stream().toArray(Range[]::new))
         {
             @Override
@@ -590,7 +594,7 @@ public class Cluster
                     command = command.updateParticipants(command.participants().filter(LOAD, commandStore.unsafeGetRedundantBefore(), command.txnId(), command.executeAtIfKnown()));
                     // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
                     Command reconstructed = journal.loadCommand(commandStore.id(), command.txnId(), commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
-                    if (isWrite && reconstructed.saveStatus().hasBeen(Status.Truncated))
+                    if (reconstructed.saveStatus().hasBeen(Status.Truncated))
                         return;
 
                     List<ReflectionUtils.Difference<?>> diff = ReflectionUtils.recursiveEquals(command, reconstructed);
@@ -748,7 +752,7 @@ public class Cluster
                     return;
 
                 CommandStores stores = nodeMap.get(id).commandStores();
-                while (sinks.drain(getPendingPredicate(id.id, stores.all()))) ;
+                while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
 
                 trace.debug("Triggering store cleanup and journal replay for node " + id);
                 CommandsForKey.disableLinearizabilityViolationsReporting();
@@ -784,7 +788,7 @@ public class Cluster
                 journal.replay(stores);
 
                 // Re-enable safety checks
-                while (sinks.drain(getPendingPredicate(id.id, stores.all()))) ;
+                while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
                 CommandsForKey.enableLinearizabilityViolationsReporting();
                 verifyConsistentRestore(beforeStores, stores.all());
                 // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
@@ -929,8 +933,8 @@ public class Cluster
                 if (afterCommand.hasBeen(Status.Truncated))
                 {
                     if (afterCommand.is(Status.Invalidated))
-                        Invariants.require(beforeCommand.hasBeen(Status.Truncated) || !beforeCommand.hasBeen(Status.PreCommitted)
-                                                                                      && store.unsafeGetRedundantBefore().max(beforeCommand.participants().touches(), RedundantBefore.Entry::shardRedundantBefore).compareTo(beforeCommand.txnId()) >= 0);
+                        Invariants.require(beforeCommand.hasBeen(Status.Truncated) || (!beforeCommand.hasBeen(Status.PreCommitted)
+                               && Cleanup.shouldCleanup(FULL, s.agent(), e.getKey(), beforeCommand.executeAtIfKnown(), beforeCommand.saveStatus(), beforeCommand.durability(), beforeCommand.participants(), store.unsafeGetRedundantBefore(), store.durableBefore()).compareTo(INVALIDATE) >= 0));
                     continue;
                 }
                 if (beforeCommand.hasBeen(Status.Truncated))
@@ -962,13 +966,16 @@ public class Cluster
                         if (beforeCommand.saveStatus() == SaveStatus.Erased)
                             continue;
 
-                        if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Entry::shardRedundantBefore).compareTo(txnId) > 0)
+                        if (Cleanup.shouldCleanup(FULL, s.agent(), beforeCommand, store.unsafeGetRedundantBefore(), store.durableBefore()) == EXPUNGE)
+                            continue;
+
+                        if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::shardRedundantBefore).compareTo(txnId) > 0)
                             continue;
 
                         if (beforeCommand.participants().owns().isEmpty() && store.durableBefore().min(txnId).compareTo(Status.Durability.MajorityOrInvalidated) >= 0)
                             continue;
 
-                        if (!beforeCommand.saveStatus().hasBeen(Status.PreCommitted) && store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Entry::locallyRedundantBefore).compareTo(txnId) > 0)
+                        if (!beforeCommand.saveStatus().hasBeen(Status.PreCommitted) && store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::locallyRedundantBefore).compareTo(txnId) > 0)
                             continue;
 
                         Invariants.require(false, "Found a command in an unexpected state: %s", beforeCommand);
@@ -996,21 +1003,29 @@ public class Cluster
         return false;
     }
 
-    private static Predicate<Pending> getPendingPredicate(int nodeId, CommandStore[] stores)
+    private static Predicate<Pending> getPendingPredicate(Id nodeId, CommandStore[] stores)
     {
         Set<CommandStore> nodeStores = new HashSet<>(Arrays.asList(stores));
         return item -> {
-            if (item instanceof DelayedCommandStore.DelayedTask)
+            if (item instanceof DelayedCommandStore.DelayedTask<?>)
             {
                 DelayedCommandStore.DelayedTask<?> task = (DelayedCommandStore.DelayedTask<?>) item;
-                if (nodeStores.contains(task.parent()))
+                if (nodeStores.contains(task.owner()))
+                    return true;
+                item = item.origin();
+            }
+            if (item instanceof SimulatedDelayedExecutorService.RegularTask<?>)
+            {
+                SimulatedDelayedExecutorService.RegularTask<?> task = (SimulatedDelayedExecutorService.RegularTask<?>) item;
+                Object owner = task.owner();
+                if (owner != null && owner.equals(nodeId))
                     return true;
                 item = item.origin();
             }
             if (item instanceof RecurringPendingRunnable)
             {
                 RecurringPendingRunnable recurring = (RecurringPendingRunnable) item;
-                return recurring.source == nodeId && (!recurring.isRecurring || recurring.origin() != recurring);
+                return recurring.source == nodeId.id && (!recurring.isRecurring || recurring.origin() != recurring);
             }
             return false;
         };

@@ -218,6 +218,7 @@ public class CheckpointIntervalArray<Ranges, Range, Key>
         return end;
     }
 
+    // TODO (expected): forEachScanOrCheckpoint should be redundant for key lookups
     @Inline
     public <P1, P2, P3, P4> int forEachKey(Key key, IndexedQuadConsumer<P1, P2, P3, P4> forEachScanOrCheckpoint, IndexedRangeQuadConsumer<P1, P2, P3, P4> forEachRange, P1 p1, P2 p2, P3 p3, P4 p4, int minIndex)
     {

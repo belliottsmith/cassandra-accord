@@ -73,7 +73,6 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         }
     }
 
-
     public final PartialTxn partialTxn;
     public final Ballot ballot;
     public final FullRoute<?> route;

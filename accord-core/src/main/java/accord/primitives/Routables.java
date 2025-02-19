@@ -200,18 +200,6 @@ public interface Routables<K extends Routable> extends Iterable<K>
 
     /**
      * Fold-left over the {@code inputs} that intersect with {@code matching} in ascending order.
-     * If the inputs are ranges, narrow them to the parts the intersect with {@code matching}, so that we never visit
-     * any portion of a {@code Range} that is not in {@code matching} (See {@link Slice#Minimal}).
-     * Terminate once we hit {@code terminalValue}.
-     */
-    @Inline
-    static <T> T foldlMinimal(Seekables<?, ?> inputs, AbstractRanges matching, IndexedFold<? super Seekable, T> fold, T initialValue)
-    {
-        return Helper.foldlMinimal(inputs, matching, fold, initialValue);
-    }
-
-    /**
-     * Fold-left over the {@code inputs} that intersect with {@code matching} in ascending order.
      * Terminate once we hit {@code terminalValue}.
      */
     @Inline

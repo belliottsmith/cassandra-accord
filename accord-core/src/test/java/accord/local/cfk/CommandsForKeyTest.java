@@ -757,6 +757,8 @@ public class CommandsForKeyTest
             return getInternal(txnId);
         }
 
+        @Override protected void persistFieldUpdates() {}
+
         @Override
         protected SafeCommandsForKey getInternal(RoutingKey key)
         {
@@ -808,6 +810,7 @@ public class CommandsForKeyTest
         {
             unsafeUpsertRedundantBefore(addRedundantBefore);
         }
+
 
         @Override
         protected SafeCommandsForKey ifLoadedInternal(RoutingKey key)

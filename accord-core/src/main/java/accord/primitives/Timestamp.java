@@ -22,7 +22,10 @@ import accord.local.Node.Id;
 import accord.utils.Invariants;
 import javax.annotation.Nonnull;
 
+import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
+import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
+import static accord.primitives.Timestamp.Flag.UNSTABLE;
 
 /**
  * TxnId flag bits:
@@ -64,6 +67,14 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
          * might take a lower HLC must have been witnessed.
          */
         HLC_BOUND(0x0400),
+
+        /**
+         * An ExclusiveSyncPoint that has applied at the shard and is reported as a lower dependency bound has this bit set. If
+         * the TxnId is included as a dependency receiving replicas can use this bound to filter other transactions,
+         * but more importantly replicas processing another RX for transitive dependencies MUST report this (or a higher)
+         * SHARD_BOUND in their own dependency calculations.
+         */
+        SHARD_BOUND(0x0200),
         ;
         public final int bit;
 
@@ -78,7 +89,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
      * Today this is only the REJECTED_FLAG, but we may include additional flags in future (such as Committed, Applied..)
      * which we may also want to retain when merging in other contexts (such as in Deps).
      */
-    static final int MERGE_FLAGS = 0x0800;
+    static final int MERGE_FLAGS = REJECTED.bit | UNSTABLE.bit | HLC_BOUND.bit | SHARD_BOUND.bit;
     public static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF00FFL;
     public static final int IDENTITY_FLAGS = 0x00000000_000000FF;
     public static final int KIND_AND_DOMAIN_FLAGS = 0x00000000_0000000F;
@@ -277,16 +288,25 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return c;
     }
 
-    public boolean isAtLeastByEpochAndHlc(@Nonnull Timestamp that)
+    // a non-zero result means that EPOCH and HLC are BOTH greater-equal,
+    // and at least one of (epoch, hlc, node, flag) is strictly greater.
+    public final int compareSimultaneousEpochAndHlc(@Nonnull Timestamp that)
     {
-        if (this == that) return true;
+        if (this == that) return 0;
         int cmpEpoch = Long.compare(this.epoch(), that.epoch());
         int cmpHlc = Long.compare(this.hlc(), that.hlc());
-        if (cmpEpoch < 0 || cmpHlc < 0) return false;
-        if (cmpEpoch > 0 || cmpHlc > 0) return true;
+        if (cmpEpoch != 0)
+        {
+            return cmpEpoch < 0 ? cmpHlc <= 0 ? -1 : 0
+                                : cmpHlc >= 0 ? 1 : 0;
+        }
+        else if (cmpHlc != 0)
+        {
+            return cmpHlc;
+        }
         int c = Long.compare(this.lsb & IDENTITY_FLAGS, that.lsb & IDENTITY_FLAGS);
         if (c == 0) c = this.node.compareTo(that.node);
-        return c >= 0;
+        return c;
     }
 
     public static int compareMsb(long msbA, long msbB)

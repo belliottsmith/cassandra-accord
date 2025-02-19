@@ -227,6 +227,11 @@ public class Known
         return txnId.epoch();
     }
 
+    public Known with(KnownRoute newKnownRoute)
+    {
+        return withEncoded((this.encoded & ~ROUTE_MASK) | newKnownRoute.ordinal());
+    }
+
     public Known with(Outcome newOutcome)
     {
         return withEncoded((this.encoded & ~OUTCOME_MASK) | newOutcome.ordinal() << OUTCOME_SHIFT);
@@ -355,7 +360,8 @@ public class Known
 
     public String toString()
     {
-        return Stream.of(definition().isKnown() ? "Definition" : null,
+        return Stream.of(route() == FullRoute ? "Route" : null,
+                         definition().isKnown() ? "Definition" : null,
                          executeAt() == ExecuteAtKnown ? "ExecuteAt" : executeAt() == ApplyAtKnown ? "ApplyAt" : null,
                          deps().hasDecidedDeps() ? "Deps" : null,
                          outcome().isDecided() ? outcome().toString() : null

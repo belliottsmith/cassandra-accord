@@ -23,7 +23,6 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.local.CommandStores.RangesForEpoch;
-import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
@@ -51,35 +50,40 @@ public class StoreParticipants
     static class FullStoreParticipants extends StoreParticipants
     {
         @Nullable private final Participants<?> executes;
+        @Nullable private final Participants<?> waitsOn;
         private final Participants<?> touches;
         private final Participants<?> hasTouched;
 
-        FullStoreParticipants(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, Participants<?> touches, Participants<?> hasTouched)
+        FullStoreParticipants(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, @Nullable Participants<?> waitsOn, Participants<?> touches, Participants<?> hasTouched)
         {
             super(route, owns, executes == null);
             this.executes = executes;
+            this.waitsOn = waitsOn;
             this.touches = touches;
             this.hasTouched = hasTouched;
-            Invariants.requireArgument(route != null || (!Route.isRoute(owns) && !Route.isRoute(executes) && !Route.isRoute(touches) && !Route.isRoute(hasTouched)));
-            Routable.Domain domain = owns.domain();
-            Invariants.paranoid(route == null || route.containsAll(owns));
-            Invariants.paranoid(touches.containsAll(owns));
-            Invariants.requireArgument(route == null || domain == route.domain());
-            Invariants.requireArgument(domain == touches.domain());
-            Invariants.requireArgument(domain == hasTouched.domain());
+            if (Invariants.isParanoid())
+            {
+                Invariants.requireArgument(route != null || (!Route.isRoute(owns) && !Route.isRoute(executes) && !Route.isRoute(waitsOn) && !Route.isRoute(touches) && !Route.isRoute(hasTouched)));
+                Routable.Domain domain = owns.domain();
+                Invariants.paranoid(route == null || route.containsAll(owns));
+                Invariants.paranoid(touches.containsAll(owns));
+                Invariants.requireArgument(route == null || domain == route.domain());
+                Invariants.requireArgument(domain == touches.domain());
+                Invariants.requireArgument(domain == hasTouched.domain());
+            }
         }
 
-        @Nullable public Participants<?> executes()
+        @Nullable public final Participants<?> executes()
         {
             return executes;
         }
 
-        @Nullable public Participants<?> stillExecutes()
+        @Nullable public final Participants<?> waitsOn()
         {
-            return executes;
+            return waitsOn;
         }
 
-        public Participants<?> touches()
+        public final Participants<?> touches()
         {
             return touches;
         }
@@ -89,22 +93,31 @@ public class StoreParticipants
             return hasTouched;
         }
 
-        public boolean touchesOnlyOwned()
+        public final boolean touchesOnlyOwned()
         {
             return touches.equals(owns());
         }
     }
 
-    public static class FilteredStoreParticipants extends FullStoreParticipants
+    public static final class FilteredStoreParticipants extends FullStoreParticipants
     {
-        final Participants<?> stillOwns, stillTouches, stillExecutes;
+        final Participants<?> stillOwns, stillTouches, stillExecutes, stillWaitsOn;
 
-        FilteredStoreParticipants(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, Participants<?> touches, Participants<?> hasTouched, Participants<?> stillOwns, Participants<?> stillTouches, Participants<?> stillExecutes)
+        FilteredStoreParticipants(@Nullable Route<?> route,
+                                  Participants<?> owns, @Nullable Participants<?> executes, @Nullable Participants<?> waitsOn, Participants<?> touches, Participants<?> hasTouched,
+                                  Participants<?> stillOwns, @Nullable Participants<?> stillExecutes, @Nullable Participants<?> stillWaitsOn, Participants<?> stillTouches)
         {
-            super(route, owns, executes, touches, hasTouched);
+            super(route, owns, executes, waitsOn, touches, hasTouched);
             this.stillOwns = stillOwns;
-            this.stillTouches = stillTouches;
             this.stillExecutes = stillExecutes;
+            this.stillWaitsOn = stillWaitsOn;
+            this.stillTouches = stillTouches;
+            if (Invariants.isParanoid())
+            {
+                Invariants.require(stillWaitsOn == null || stillTouches.containsAll(stillWaitsOn));
+                Invariants.require(stillExecutes == null || stillOwns.containsAll(stillExecutes));
+                Invariants.require(stillTouches.containsAll(stillOwns));
+            }
         }
 
         @Override
@@ -125,14 +138,20 @@ public class StoreParticipants
             return stillExecutes;
         }
 
-        StoreParticipants update(Route<?> route, Participants<?> hasTouched)
+        @Override
+        public Participants<?> stillWaitsOn()
         {
-            return new FilteredStoreParticipants(route, owns(), executes(), touches(), hasTouched, stillOwns, stillTouches, stillExecutes);
+            return stillWaitsOn;
         }
 
-        StoreParticipants update(Route<?> route, Participants<?> owns, Participants<?> executes, Participants<?> touches, Participants<?> hasTouched)
+        StoreParticipants update(Route<?> route, Participants<?> hasTouched)
         {
-            return new FilteredStoreParticipants(route, owns, executes, touches, hasTouched, stillOwns, stillTouches, stillExecutes);
+            return new FilteredStoreParticipants(route, owns(), executes(), waitsOn(), touches(), hasTouched, stillOwns, stillExecutes, stillWaitsOn, stillTouches);
+        }
+
+        StoreParticipants update(Route<?> route, Participants<?> owns, Participants<?> executes, Participants<?> waitsOn, Participants<?> touches, Participants<?> hasTouched)
+        {
+            return new FilteredStoreParticipants(route, owns, executes, waitsOn, touches, hasTouched, stillOwns, stillExecutes, stillWaitsOn, stillTouches);
         }
     }
 
@@ -158,16 +177,16 @@ public class StoreParticipants
         Invariants.requireArgument(route == null || domain == route.domain());
     }
 
-    public static StoreParticipants create(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, Participants<?> touches, Participants<?> hasTouched)
+    public static StoreParticipants create(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, @Nullable Participants<?> waitsOn, Participants<?> touches, Participants<?> hasTouched)
     {
-        return create(route, owns, executes, touches, hasTouched, true);
+        return create(route, owns, executes, waitsOn, touches, hasTouched, true);
     }
 
-    public static StoreParticipants create(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, Participants<?> touches, Participants<?> hasTouched, boolean dedup)
+    public static StoreParticipants create(@Nullable Route<?> route, Participants<?> owns, @Nullable Participants<?> executes, @Nullable Participants<?> waitsOn, Participants<?> touches, Participants<?> hasTouched, boolean dedup)
     {
-        if ((executes == null || owns == executes) && owns == touches && owns == hasTouched)
+        if ((executes == null || (owns == executes && owns == waitsOn)) && owns == touches && owns == hasTouched)
             return new StoreParticipants(route, owns, executes == null);
-        return new FullStoreParticipants(route, owns, executes, touches, hasTouched);
+        return new FullStoreParticipants(route, owns, executes, waitsOn, touches, hasTouched);
     }
 
     public final boolean hasFullRoute()
@@ -192,18 +211,6 @@ public class StoreParticipants
     public final Participants<?> owns()
     {
         return owns;
-    }
-
-    /**
-     * Everything that the replica is known by all other replicas to own and participate in the coordination or execution of,
-     * plus any additional keys that we expect to execute locally.
-     *
-     * This distinction only matters for ExclusiveSyncPoints which close out and retire old epochs, and so execute on
-     * all un-retired epochs they intersect with.
-     */
-    public final Participants<?> ownsOrExecutes(TxnId txnId)
-    {
-        return txnId.is(ExclusiveSyncPoint) ? touches() : owns;
     }
 
     /**
@@ -252,7 +259,7 @@ public class StoreParticipants
     }
 
     /**
-     * If set, the keys we are known to execute (i.e. excluding any that are pre-bootstrap or stale)
+     * If set, the keys we are known to execute
      * @return
      */
     public @Nullable Participants<?> executes()
@@ -261,15 +268,33 @@ public class StoreParticipants
     }
 
     /**
-     * If set, the keys we are known to execute (i.e. excluding any that are pre-bootstrap or stale)
+     * If set, the keys we are known to still execute (i.e. excluding any that are pre-bootstrap or stale)
      * @return
      */
     public @Nullable Participants<?> stillExecutes()
     {
+        return executes();
+    }
+
+    /**
+     * If set, the keys we are known to locally waitOn for execution
+     * @return
+     */
+    public @Nullable Participants<?> waitsOn()
+    {
         return executesIsNull ? null : owns;
     }
 
-    public Participants<?> stillOwnsOrMayExecute(TxnId txnId)
+    /**
+     * If set, the keys we are known to still locally waitOn (i.e. excluding any that are pre-bootstrap or stale)
+     * @return
+     */
+    public @Nullable Participants<?> stillWaitsOn()
+    {
+        return waitsOn();
+    }
+
+    public Participants<?> stillOwnsOrWaitsOn(TxnId txnId)
     {
         return txnId.is(ExclusiveSyncPoint) ? stillTouches() : stillOwns();
     }
@@ -278,45 +303,59 @@ public class StoreParticipants
      * Do not invoke this method on a participants we will use to query esp. e.g. for calculateDeps.
      * TODO (required): create separate Query object that cannot be filtered or used to update a Command
      */
-    public StoreParticipants filter(Filter filter, SafeCommandStore safeStore, TxnId txnId, @Nullable EpochSupplier executeAt)
+    public StoreParticipants filter(Filter filter, SafeCommandStore safeStore, TxnId txnId, @Nullable Timestamp executeAtIfKnown)
     {
-        return filter(filter, safeStore.redundantBefore(), txnId, executeAt);
+        return filter(filter, safeStore.redundantBefore(), txnId, executeAtIfKnown);
     }
 
     /**
      * Do not invoke this method on a participants we will use to query esp. e.g. for calculateDeps.
      * TODO (desired): create separate Query object that cannot be filtered or used to update a Command
      */
-    public StoreParticipants filter(Filter filter, RedundantBefore redundantBefore, TxnId txnId, @Nullable EpochSupplier executeAt)
+    static int count = 0;
+    public StoreParticipants filter(Filter filter, RedundantBefore redundantBefore, TxnId txnId, @Nullable Timestamp executeAtIfKnown)
     {
         if (filter == QUERY)
             return this;
 
-        if (!redundantBefore.mayFilter(txnId, stillTouches()))
+        if (!redundantBefore.mayFilter(txnId, executeAtIfKnown, stillTouches()))
             return this;
 
         Participants<?> curStillOwns = stillOwns();
-        Participants<?> stillOwns = redundantBefore.expectToOwn(txnId, executeAt, curStillOwns);
+        Participants<?> stillOwns = redundantBefore.expectToOwn(txnId, executeAtIfKnown, curStillOwns);
 
         Participants<?> curStillExecutes = stillExecutes(), stillExecutes = curStillExecutes;
+        Participants<?> curStillWaitsOn = null, stillWaitsOn = null;
         if (stillExecutes != null)
-            stillExecutes = redundantBefore.expectToExecute(txnId, executeAt, stillExecutes);
+        {
+            stillExecutes = redundantBefore.expectToExecute(txnId, executeAtIfKnown, stillExecutes);
+            if (txnId.is(ExclusiveSyncPoint))
+            {
+                curStillWaitsOn = stillWaitsOn();
+                stillWaitsOn = redundantBefore.expectToWaitOn(txnId, executeAtIfKnown, curStillWaitsOn);
+            }
+            else
+            {
+                curStillWaitsOn = curStillExecutes;
+                stillWaitsOn = stillExecutes;
+            }
+        }
 
         Participants<?> curTouches = touches();
         Participants<?> touches = curTouches;
         if (filter == UPDATE)
-            touches = redundantBefore.expectToCalculateDependenciesOrConsultOnRecovery(txnId, curTouches);
+            touches = redundantBefore.expectToCalculateDependenciesOrConsultOnRecovery(txnId, executeAtIfKnown, curTouches);
 
         Participants<?> curStillTouches = stillTouches();
-        Participants<?> stillTouches = redundantBefore.expectToOwnOrExecuteOrConsultOnRecovery(txnId, curStillTouches);
+        Participants<?> stillTouches = redundantBefore.expectToOwnOrExecuteOrConsultOnRecovery(txnId, executeAtIfKnown, curStillTouches);
         if (stillTouches != curStillTouches && owns() == curStillTouches && stillTouches.equals(owns))
             stillTouches = owns;
 
-        if (curStillOwns != stillOwns || curStillTouches != stillTouches || curStillExecutes != stillExecutes)
-            return new FilteredStoreParticipants(route, owns, executes(), touches, hasTouched(), stillOwns, stillTouches, stillExecutes);
+        if (curStillOwns != stillOwns || curStillTouches != stillTouches || curStillExecutes != stillExecutes || curStillWaitsOn != stillWaitsOn)
+            return new FilteredStoreParticipants(route, owns, executes(), waitsOn(), touches, hasTouched(), stillOwns, stillExecutes, stillWaitsOn, stillTouches);
 
         if (curTouches != touches)
-            return update(route, owns, executes(), touches, hasTouched());
+            return update(route, owns, executes(), waitsOn(), touches, hasTouched());
 
         return this;
     }
@@ -341,14 +380,14 @@ public class StoreParticipants
         Participants<?> hasTouched = hasTouched();
         Participants<?> newHasTouched = Participants.merge(hasTouched, (Participants)addTouched);
         if (hasTouched == newHasTouched) return this;
-        return update(route, owns(), executes(), touches(), newHasTouched);
+        return update(route, owns(), executes(), waitsOn(), touches(), newHasTouched);
     }
 
     public final StoreParticipants supplement(Route<?> route)
     {
         route = Route.merge(this.route(), (Route)route);
         if (route == this.route()) return this;
-        return create(route, owns(), executes(), touches(), hasTouched());
+        return create(route, owns(), executes(), waitsOn(), touches(), hasTouched());
     }
 
     public final StoreParticipants supplement(@Nullable StoreParticipants that)
@@ -401,25 +440,25 @@ public class StoreParticipants
         Participants<?> curTouches = touches(), curHasTouched = hasTouched();
         touches = Participants.merge(curTouches, (Participants) touches);
         hasTouched = Participants.merge(curHasTouched, (Participants) hasTouched);
-        return this.route == route && this.owns == owns && touches == curTouches && hasTouched == curHasTouched ? this : update(route, owns, executes(), touches, hasTouched);
+        return this.route == route && this.owns == owns && touches == curTouches && hasTouched == curHasTouched ? this : update(route, owns, executes(), waitsOn(), touches, hasTouched);
     }
 
     StoreParticipants update(Route<?> route, Participants<?> hasTouched)
     {
-        return new FullStoreParticipants(route, owns, executes(), touches(), hasTouched);
+        return new FullStoreParticipants(route, owns, executes(), waitsOn(), touches(), hasTouched);
     }
 
-    StoreParticipants update(Route<?> route, Participants<?> owns, Participants<?> executes, Participants<?> touches, Participants<?> hasTouched)
+    StoreParticipants update(Route<?> route, Participants<?> owns, Participants<?> executes, Participants<?> waitsOn, Participants<?> touches, Participants<?> hasTouched)
     {
-        return new FullStoreParticipants(route, owns, executes, touches, hasTouched);
+        return new FullStoreParticipants(route, owns, executes, waitsOn, touches, hasTouched);
     }
 
-    public StoreParticipants withExecutes(Participants<?> executes, Participants<?> stillExecutes)
+    public StoreParticipants withExecutes(Participants<?> executes, Participants<?> stillExecutes, Participants<?> waitsOn, Participants<?> stillWaitsOn)
     {
-        if (executes == stillExecutes)
-            return update(route, owns, executes, touches(), hasTouched());
+        if (executes == stillExecutes && waitsOn == stillWaitsOn)
+            return update(route, owns, executes, waitsOn, touches(), hasTouched());
 
-        return new FilteredStoreParticipants(route, owns, executes, touches(), hasTouched(), stillOwns(), stillTouches(), stillExecutes);
+        return new FilteredStoreParticipants(route, owns, executes, waitsOn, touches(), hasTouched(), stillOwns(), stillExecutes, stillWaitsOn, stillTouches());
     }
 
     // TODO (required): retire this method, merge with executes()
@@ -443,6 +482,11 @@ public class StoreParticipants
         return route.slice(safeStore.ranges().allBetween(fromEpoch, toEpoch), Minimal);
     }
 
+    public boolean isPureOwns()
+    {
+        return getClass() == StoreParticipants.class;
+    }
+
     @Override
     public boolean equals(Object obj)
     {
@@ -464,7 +508,7 @@ public class StoreParticipants
     public static StoreParticipants read(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId)
     {
         Participants<?> owns = participants.slice(safeStore.ranges().allAt(txnId.epoch()), Minimal);
-        return create(tryCastToRoute(participants), owns, null, owns, owns);
+        return create(tryCastToRoute(participants), owns, null, null, owns, owns);
     }
 
     public static StoreParticipants read(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, long epoch)
@@ -497,7 +541,7 @@ public class StoreParticipants
             return new StoreParticipants(Route.tryCastToRoute(participants), owns);
 
         Participants<?> touches = participants.slice(touchesRanges, Minimal);
-        return create(tryCastToRoute(participants), owns, null, touches, touches);
+        return create(tryCastToRoute(participants), owns, null, null, touches, touches);
     }
 
     public static StoreParticipants update(SafeCommandStore safeStore, Participants<?> participants, long minEpoch, TxnId txnId, long executeAtEpoch)
@@ -522,17 +566,14 @@ public class StoreParticipants
         Participants<?> owns = participants.slice(ownedRanges, Minimal);
         Ranges touchesRanges = storeRanges.extend(ownedRanges, txnId.epoch(), executeAtEpoch, minEpoch, highEpoch);
         Participants<?> touches = ownedRanges == touchesRanges || owns == participants ? owns : participants.slice(touchesRanges, Minimal);
-        Participants<?> executes = null;
+        Participants<?> executes = null, waitsOn = null;
         if (execute)
         {
-            if (txnId.is(ExclusiveSyncPoint)) executes = touches;
-            else
-            {
-                Ranges executeRanges = storeRanges.allAt(executeAtEpoch);
-                executes = executeRanges == ownedRanges ? owns : participants.slice(executeRanges, Minimal);
-            }
+            Ranges executeRanges = storeRanges.allAt(executeAtEpoch);
+            executes = executeRanges == ownedRanges ? owns : participants.slice(executeRanges, Minimal);
+            waitsOn = txnId.is(ExclusiveSyncPoint) ? touches : executes;
         }
-        return create(tryCastToRoute(participants), owns, executes, touches, touches);
+        return create(tryCastToRoute(participants), owns, executes, waitsOn, touches, touches);
     }
 
     public static StoreParticipants notAccept(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId)
@@ -543,7 +584,7 @@ public class StoreParticipants
         Ranges touchesRanges = storeRanges.all();
         Participants<?> owns = participants.slice(ownedRanges, Minimal);
         Participants<?> touches = ownedRanges == touchesRanges || owns == participants ? owns : participants.slice(touchesRanges, Minimal);
-        return create(tryCastToRoute(participants), owns, null, touches, touches);
+        return create(tryCastToRoute(participants), owns, null, null, touches, touches);
     }
 
     public static StoreParticipants empty(Routable.Domain domain)
@@ -572,4 +613,5 @@ public class StoreParticipants
     {
         return new StoreParticipants(route, route, false);
     }
+
 }

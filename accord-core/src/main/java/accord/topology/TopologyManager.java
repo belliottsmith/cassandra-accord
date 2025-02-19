@@ -34,9 +34,6 @@ import javax.annotation.concurrent.GuardedBy;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.Agent;
 import accord.api.ConfigurationService;
 import accord.api.ConfigurationService.EpochReady;
@@ -91,7 +88,6 @@ import static accord.utils.Invariants.nonNull;
 public class TopologyManager
 {
     private static final FutureEpoch SUCCESS;
-    private static final Logger logger = LoggerFactory.getLogger(TopologyManager.class);
 
     static
     {
@@ -247,6 +243,7 @@ public class TopologyManager
         // list of promises to be completed as newer epochs become active. This is to support processes that
         // are waiting on future epochs to begin (ie: txn requests from futures epochs). Index 0 is for
         // currentEpoch + 1
+        // NOTE: this is NOT copy-on-write. This is mutated in place!
         private final List<FutureEpoch> futureEpochs;
 
         private Epochs(EpochState[] epochs, List<Notifications> pending, List<FutureEpoch> futureEpochs)
@@ -258,8 +255,8 @@ public class TopologyManager
                 Invariants.require(futureEpochs.get(0).epoch == currentEpoch + 1);
 
             for (int i = 1; i < futureEpochs.size(); i++)
-                Invariants.requireArgument(futureEpochs.get(i).epoch == futureEpochs.get(i - 1).epoch - 1);
-            for (int i=1; i<epochs.length; i++)
+                Invariants.requireArgument(futureEpochs.get(i).epoch == futureEpochs.get(i - 1).epoch + 1);
+            for (int i = 1; i < epochs.length; i++)
                 Invariants.requireArgument(epochs[i].epoch() == epochs[i - 1].epoch() - 1);
             this.epochs = epochs;
         }
@@ -276,17 +273,17 @@ public class TopologyManager
 
             long now = time.elapsed(TimeUnit.MILLISECONDS);
             long deadline = now + localConfig.epochFetchInitialTimeout().toMillis();
-            int diff = (int) (epoch - currentEpoch);
-            long epochIndex = epoch - diff + 1;
-            while (futureEpochs.size() < diff)
+            int expectedIndex = (int) (epoch - (1 + currentEpoch));
+            while (futureEpochs.size() <= expectedIndex)
             {
-                FutureEpoch futureEpoch = new FutureEpoch(epochIndex++, deadline);
+                long addEpoch = currentEpoch + futureEpochs.size() + 1;
+                FutureEpoch futureEpoch = new FutureEpoch(addEpoch, deadline);
                 futureEpochs.add(futureEpoch);
                 // Always make a topology timeout visible
                 futureEpoch.future.addCallback(agent);
             }
 
-            return futureEpochs.get(diff - 1);
+            return futureEpochs.get(expectedIndex);
         }
 
         public long nextEpoch()
@@ -655,7 +652,7 @@ public class TopologyManager
 
     public AsyncChain<Void> awaitEpoch(long epoch)
     {
-        AsyncResult<Void> result = null;
+        AsyncResult<Void> result;
         synchronized (this)
         {
             result = epochs.awaitEpoch(epoch, agent, time, localConfig).future;

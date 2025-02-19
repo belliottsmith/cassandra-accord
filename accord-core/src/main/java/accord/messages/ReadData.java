@@ -354,12 +354,12 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
     }
 
-    protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Ranges unavailable)
+    protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> execute)
     {
         if (this.executeAt == null) this.executeAt = executeAt;
         else if (txnId.awaitsOnlyDeps()) this.executeAt = Timestamp.max(this.executeAt, executeAt);
         else Invariants.require(executeAt.equals(this.executeAt));
-        return txn.read(safeStore, executeAt, unavailable);
+        return txn.read(safeStore, executeAt, execute);
     }
 
     static Ranges unavailable(SafeCommandStore safeStore, Command command)
@@ -391,18 +391,26 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
 
         CommandStore unsafeStore = safeStore.commandStore();
-        beginRead(safeStore, command.executeAt(), command.partialTxn(), unavailable).begin((next, throwable) -> {
-            if (throwable != null)
-            {
-                if (logger.isTraceEnabled())
-                    logger.trace("{}: read failed for {}", txnId, unsafeStore, throwable);
-                onFailure(null, throwable);
-            }
-            else
-            {
-                readComplete(unsafeStore, next, unavailable);
-            }
-        });
+        Participants<?> executes = command.participants().stillExecutes().without(unavailable);
+        if (executes.isEmpty())
+        {
+            readComplete(unsafeStore, null, unavailable);
+        }
+        else
+        {
+            beginRead(safeStore, command.executeAt(), command.partialTxn(), executes).begin((next, throwable) -> {
+                if (throwable != null)
+                {
+                    if (logger.isTraceEnabled())
+                        logger.trace("{}: read failed for {}", txnId, unsafeStore, throwable);
+                    onFailure(null, throwable);
+                }
+                else
+                {
+                    readComplete(unsafeStore, next, unavailable);
+                }
+            });
+        }
     }
 
     protected void readComplete(CommandStore commandStore, @Nullable Data result, @Nullable Ranges unavailable)
@@ -436,7 +444,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         if (storeId >= 0)
         {
             boolean removed = waitingOn.remove(storeId);
-            Invariants.require(removed, "Txn %s's reading not contain store %d; waitingOn=%s", txnId, storeId, waitingOn);
+            Invariants.require(removed, "%s not waiting on store %d; waitingOn=%s", txnId, storeId, waitingOn);
         }
 
         if (newUnavailable != null && !newUnavailable.isEmpty())

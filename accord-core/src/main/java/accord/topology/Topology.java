@@ -87,9 +87,9 @@ public class Topology
     @Nullable
     final Topology global;
 
-    static class NodeInfo
+    public static class NodeInfo
     {
-        final Ranges ranges;
+        public final Ranges ranges;
         final int[] supersetIndexes;
 
         NodeInfo(Ranges ranges, int[] supersetIndexes)
@@ -113,6 +113,17 @@ public class Topology
             Ranges ranges = Ranges.ofSortedAndDeoverlapped(Utils.toArray(matchedRanges, Range[]::new));
             int[] supersetIndexes = matches.toIntArray();
             return new NodeInfo(ranges, supersetIndexes);
+        }
+
+        public boolean anyMatch(Topology topology, Predicate<Shard> predicate)
+        {
+            for (int supersetIndex : supersetIndexes)
+            {
+                Shard shard = topology.shards[supersetIndex];
+                if (predicate.test(shard))
+                    return true;
+            }
+            return false;
         }
 
         @Override
@@ -249,6 +260,11 @@ public class Topology
     {
         NodeInfo info = nodeLookup.get(node.id);
         return info != null ? info.ranges : Ranges.EMPTY;
+    }
+
+    public NodeInfo nodeInfo(Id node)
+    {
+        return nodeLookup.get(node.id);
     }
 
     // TODO (low priority, efficiency): optimised HomeKey concept containing the Key, Shard and Topology to avoid lookups when topology hasn't changed

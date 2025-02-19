@@ -39,7 +39,7 @@ public class TinyEnumSet<E extends Enum<E>>
         this.bitset = 0;
     }
 
-    protected TinyEnumSet(int bitset)
+    public TinyEnumSet(int bitset)
     {
         this.bitset = bitset;
     }
@@ -85,6 +85,11 @@ public class TinyEnumSet<E extends Enum<E>>
         return or(this, or, TinyEnumSet::new);
     }
 
+    public TinyEnumSet<E> with(E flag)
+    {
+        return new TinyEnumSet<>(bitset | encode(flag));
+    }
+
     public static <S extends TinyEnumSet<?>> S or(S a, S b, IntFunction<S> constructor)
     {
         int newBitset = a.bitset | b.bitset;
@@ -99,6 +104,16 @@ public class TinyEnumSet<E extends Enum<E>>
     public boolean testOrdinal(int ordinal)
     {
         return 0 != (bitset & (1 << ordinal));
+    }
+
+    public boolean equals(Object that)
+    {
+        return that != null && that.getClass() == TinyEnumSet.class && ((TinyEnumSet<?>) that).bitset == bitset;
+    }
+
+    public int bitset()
+    {
+        return bitset;
     }
 }
 

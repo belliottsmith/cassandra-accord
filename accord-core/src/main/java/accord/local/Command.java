@@ -1121,7 +1121,7 @@ public abstract class Command implements ICommand
                         ranges = safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
                         if (!ranges.isEmpty())
                         {
-                            deps.rangeDeps.forEach(participants.stillExecutes().slice(ranges, Slice.Minimal), initialise, (upd, idx) -> {
+                            deps.rangeDeps.forEach(participants.stillWaitsOn().slice(ranges, Slice.Minimal), initialise, (upd, idx) -> {
                                 TxnId id = upd.txnId(idx);
                                 // because we use RX as RedundantBefore bounds, we must not let an RX on a closing range
                                 // get ahead of one that isn't closed but has overlapping transactions (else we may erroneously treat as redundant)
@@ -1144,7 +1144,7 @@ public abstract class Command implements ICommand
                 {
                     Ranges executeRanges = participants.executeRanges(safeStore, txnId, executeAt);
                     // TODO (expected): refactor this to operate only on participants, not ranges
-                    deps.rangeDeps.forEach(participants.stillExecutes(), initialise, Update::initialise);
+                    deps.rangeDeps.forEach(participants.stillWaitsOn(), initialise, Update::initialise);
                     deps.directKeyDeps.forEach(executeRanges, 0, deps.directKeyDeps.txnIdCount(), initialise, deps.rangeDeps, (upd, rdeps, index) -> upd.initialise(index + rdeps.txnIdCount()));
                     deps.keyDeps.keys().forEach(executeRanges, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
                     return initialise;
@@ -1689,7 +1689,7 @@ public abstract class Command implements ICommand
                     Invariants.require(partialTxn == null, "partialTxn is defined %s", validate);
                     break;
                 case DefinitionKnown:
-                    Invariants.require(partialTxn != null || validate.participants().owns().isEmpty(), "partialTxn is null");
+                    Invariants.require(partialTxn != null || validate.participants().stillOwns().isEmpty(), "partialTxn is null");
                     break;
             }
         }

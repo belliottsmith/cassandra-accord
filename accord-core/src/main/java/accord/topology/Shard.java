@@ -29,6 +29,7 @@ import accord.primitives.TxnId;
 import accord.primitives.TxnId.FastPath;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
+import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -39,12 +40,19 @@ public class Shard
 {
     public static class SerializerSupport
     {
-        public static Shard create(Range range, SortedArrayList<Id> nodes, SortedArrayList<Id> notInFastPath, SortedArrayList<Id> joining, boolean pendingRemoval)
+        public static Shard create(Range range, SortedArrayList<Id> nodes, SortedArrayList<Id> notInFastPath, SortedArrayList<Id> joining, TinyEnumSet<Flag> flags)
         {
-            return new Shard(range, nodes, notInFastPath, joining, pendingRemoval);
+            return new Shard(range, nodes, notInFastPath, joining, flags);
         }
     }
 
+    public enum Flag
+    {
+        PENDING_REMOVAL,
+        MUST_WITNESS
+    }
+
+    public static final TinyEnumSet<Flag> NO_FLAGS = new TinyEnumSet<>();
     private static final SortedArrayList<Id> NO_NODES = SortedArrayList.ofSorted(new Id[0]);
 
     public final Range range;
@@ -52,16 +60,18 @@ public class Shard
     public final SortedArrayList<Id> notInFastPath;
     public final SortedArrayList<Id> joining;
     public final short rf;
-    public final short maxFailures;
     public final short fastPathElectorateSize;
+
+    public final short maxFailures;
     public final short simpleFastQuorumSize;
     public final short privilegedWithoutDepsFastQuorumSize;
     public final short privilegedWithDepsFastQuorumSize;
     public final short slowQuorumSize;
     public final short recoveryQuorumSize;
-    public final boolean pendingRemoval;
 
-    Shard(Range range, SortedArrayList<Id> nodes, SortedArrayList<Id> notInFastPath, SortedArrayList<Id> joining, boolean pendingRemoval)
+    private final int flags;
+
+    Shard(Range range, SortedArrayList<Id> nodes, SortedArrayList<Id> notInFastPath, SortedArrayList<Id> joining, TinyEnumSet<Flag> flags)
     {
         this.range = range;
         this.nodes = nodes;
@@ -69,38 +79,38 @@ public class Shard
         this.joining = Invariants.requireArgument(joining, nodes.containsAll(joining),
                                                   "joining nodes must also be present in nodes; joining=%s, nodes=%s", joining, nodes);
         this.rf = Shorts.saturatedCast(nodes.size());
-        this.maxFailures = Shorts.saturatedCast(maxToleratedFailures(rf));
         this.fastPathElectorateSize = Shorts.saturatedCast(nodes.size() - notInFastPath.size());
+        this.maxFailures = Shorts.saturatedCast(maxToleratedFailures(rf));
         this.slowQuorumSize = Shorts.saturatedCast(slowQuorumSize(nodes.size()));
         this.recoveryQuorumSize = slowQuorumSize;
         this.simpleFastQuorumSize = Shorts.saturatedCast(simpleFastQuorumSize(rf, fastPathElectorateSize, recoveryQuorumSize));
         this.privilegedWithoutDepsFastQuorumSize = Shorts.saturatedCast(privilegedWithoutDepsFastQuorumSize(rf, fastPathElectorateSize, recoveryQuorumSize));
         this.privilegedWithDepsFastQuorumSize = Shorts.saturatedCast(privilegedWithDepsFastQuorumSize(rf, fastPathElectorateSize, recoveryQuorumSize));
-        this.pendingRemoval = pendingRemoval;
+        this.flags = flags.bitset();
     }
 
     public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, Set<Id> joining)
     {
-        return create(range, nodes, fastPathElectorate, joining, false);
+        return create(range, nodes, fastPathElectorate, joining, NO_FLAGS);
     }
 
     public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate)
     {
-        return create(range, nodes, fastPathElectorate, false);
+        return create(range, nodes, fastPathElectorate, NO_FLAGS);
     }
 
-    public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, boolean pendingRemoval)
+    public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, TinyEnumSet<Flag> flags)
     {
-        return create(range, nodes, fastPathElectorate, NO_NODES, pendingRemoval);
+        return create(range, nodes, fastPathElectorate, NO_NODES, flags);
     }
 
 
-    public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, Set<Id> joining, boolean pendingRemoval)
+    public static Shard create(Range range, SortedArrayList<Id> nodes, Set<Id> fastPathElectorate, Set<Id> joining, TinyEnumSet<Flag> flags)
     {
         Invariants.requireArgument(nodes.containsAll(fastPathElectorate));
         return new Shard(range, nodes, nodes.without(fastPathElectorate::contains),
                          joining instanceof SortedArrayList<?> ? (SortedArrayList<Id>) joining : SortedArrayList.copyUnsorted(joining, Id[]::new),
-                         pendingRemoval);
+                         flags);
     }
 
     public boolean electorateIsSubset()
@@ -180,6 +190,16 @@ public class Shard
         return s;
     }
 
+    public TinyEnumSet<Flag> flags()
+    {
+        return new TinyEnumSet<>(flags);
+    }
+
+    public boolean is(Flag flag)
+    {
+        return TinyEnumSet.contains(flags, flag);
+    }
+
     public boolean contains(Id id)
     {
         return nodes.find(id) >= 0;
@@ -187,9 +207,9 @@ public class Shard
 
     public boolean containsAll(List<Id> ids)
     {
-        for (int i = 0, max = ids.size() ; i < max ; ++i)
+        for (Id id : ids)
         {
-            if (!contains(ids.get(i)))
+            if (!contains(id))
                 return false;
         }
         return true;

@@ -39,8 +39,12 @@ public interface RoutableKey extends Routable, Comparable<RoutableKey>
 
     /**
      * Some suffix that, combined with prefix(), uniquely identifies the Key.
+     *
+     * TODO (expected): distinguish this from printableSuffix
      */
-    default Object suffix() { return toString(); }
+    Object suffix();
+
+    default Object printableSuffix() { return suffix(); }
 
     @Override default RoutingKey someIntersectingRoutingKey(@Nullable Ranges ranges)
     {

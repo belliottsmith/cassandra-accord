@@ -129,6 +129,12 @@ public abstract class MaelstromKey implements RoutableKey
         {
             super(value);
         }
+
+        @Override
+        public Object suffix()
+        {
+            return datum.value;
+        }
     }
 
     public static class Routing extends MaelstromKey implements accord.api.RoutingKey
@@ -161,6 +167,12 @@ public abstract class MaelstromKey implements RoutableKey
         public RangeFactory rangeFactory()
         {
             return Range::new;
+        }
+
+        @Override
+        public Object suffix()
+        {
+            return datum.hashCode();
         }
     }
 

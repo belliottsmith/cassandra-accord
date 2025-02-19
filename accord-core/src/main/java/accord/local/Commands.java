@@ -689,8 +689,8 @@ public class Commands
     {
         RedundantBefore redundantBefore = safeStore.redundantBefore();
         TxnId minWaitingOnTxnId = initialise.minWaitingOnTxnId();
-        if (minWaitingOnTxnId != null && redundantBefore.hasLocallyRedundantDependencies(initialise.minWaitingOnTxnId(), executeAt, waiting.participants().executes()))
-            redundantBefore.removeRedundantDependencies(waiting.participants().executes(), initialise);
+        if (minWaitingOnTxnId != null && redundantBefore.hasLocallyRedundantDependencies(initialise.minWaitingOnTxnId(), executeAt, waiting.participants().waitsOn()))
+            redundantBefore.removeRedundantDependencies(waiting.participants().waitsOn(), initialise);
 
         initialise.forEachWaitingOnId(safeStore, initialise, waiting, executeAt, (store, upd, w, exec, i) -> {
             // we don't want cleanup to transitively invoke a listener we've registered,
@@ -726,8 +726,9 @@ public class Commands
                 case TruncatedApply:
                 case TruncatedUnapplied:
                     Invariants.require(dependency.executeAt().compareTo(waitingExecuteAt) < 0
+                                       || !dependencyId.witnesses(waitingId)
                                        || waitingId.awaitsOnlyDeps()
-                                       || waiting.participants().stillExecutes().isEmpty()
+                                       || waiting.participants().stillWaitsOn().isEmpty()
                                        || !markStaleIfCannotExecute(dependencyId)
                                        || safeStore.redundantBefore().status(dependencyId, null,
                                                  waiting.partialDeps().participants(dependencyId)).all(LOCALLY_DEFUNCT)
@@ -760,8 +761,8 @@ public class Commands
         else
         {
             Participants<?> participants = waiting.partialDeps().participants(dependency.txnId());
-            Participants<?> executes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
-            RedundantStatus status = safeStore.redundantBefore().status(dependencyId, waitingExecuteAt, executes);
+            Participants<?> waitsOn = participants.intersecting(waiting.participants().stillWaitsOn(), Minimal);
+            RedundantStatus status = safeStore.redundantBefore().status(dependencyId, waitingExecuteAt, waitsOn);
 
             if (status.get(LOCALLY_DEFUNCT) == ALL)
                 return false;
@@ -963,14 +964,15 @@ public class Commands
         RedundantStatus status = redundantBefore.status(txnId, null, participants.route());
         if (status.any(SHARD_AND_LOCALLY_APPLIED))
         {
-            Invariants.paranoid(command.participants().stillExecutes().isEmpty());
+            Invariants.paranoid(participants.stillTouches().isEmpty() ||
+                                (participants.stillWaitsOn() != null && participants.stillWaitsOn().isEmpty()));
             return true;
         }
 
         if (status.all(SHARD_APPLIED_AND_LOCALLY_REDUNDANT) || status.all(PRE_BOOTSTRAP_OR_STALE))
             return true;
 
-        if (force && participants.executes() != null && participants.stillExecutes().isEmpty())
+        if (force && participants.waitsOn() != null && participants.stillWaitsOn().isEmpty())
             return true;
 
         return false;
@@ -1324,8 +1326,8 @@ public class Commands
         if ((newParticipants.executes() != null && cur.executes() == null) || (!cur.hasFullRoute() && newParticipants.hasFullRoute()))
         {
             StoreParticipants result = cur;
-            if (newParticipants.executes() != null)
-                result = result.withExecutes(newParticipants.executes(), newParticipants.stillExecutes());
+            if (newParticipants.waitsOn() != null)
+                result = result.withExecutes(newParticipants.executes(), newParticipants.stillExecutes(), newParticipants.waitsOn(), newParticipants.stillWaitsOn());
             if (!cur.hasFullRoute() && newParticipants.hasFullRoute())
                 result = result.supplement(newParticipants.route());
             return result;

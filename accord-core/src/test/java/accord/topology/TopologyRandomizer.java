@@ -182,8 +182,8 @@ public class TopologyRandomizer
         Shard[] result = new Shard[shards.length + 1];
         System.arraycopy(shards, 0, result, 0, idx);
         System.arraycopy(shards, idx, result, idx + 1, shards.length - idx);
-        result[idx] = new Shard(PrefixedIntHashKey.range(minBound, newBound), split.nodes, split.notInFastPath, split.joining, split.pendingRemoval);
-        result[idx+1] = new Shard(PrefixedIntHashKey.range(newBound, maxBound), split.nodes, split.notInFastPath, split.joining, split.pendingRemoval);
+        result[idx] = new Shard(PrefixedIntHashKey.range(minBound, newBound), split.nodes, split.notInFastPath, split.joining, split.flags());
+        result[idx+1] = new Shard(PrefixedIntHashKey.range(newBound, maxBound), split.nodes, split.notInFastPath, split.joining, split.flags());
         logger.debug("Split boundary on {} & {} {} to {} {}", idx, idx + 1, split,
                      result[idx].toString(true), result[idx + 1].toString(true));
 

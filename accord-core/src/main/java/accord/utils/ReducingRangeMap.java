@@ -290,7 +290,10 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     private <V2, P1, P2> V2 foldlWithDefault(AbstractRanges ranges, ReduceFunction<V, V2, P1, P2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
     {
-        if (values.length == 0 || ranges.isEmpty())
+        if (ranges.isEmpty())
+            return accumulator;
+
+        if (values.length == 0)
             return fold.apply(defaultValue, accumulator, p1, p2, 0, ranges.size(), 0);
 
         int j = ranges.find(starts[0], FAST);

@@ -26,6 +26,7 @@ import java.util.Map;
 import accord.local.Command;
 import accord.local.SafeCommandStore;
 import accord.messages.ReadData;
+import accord.primitives.Participants;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import org.slf4j.Logger;
@@ -53,7 +54,6 @@ import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import static accord.messages.ReadData.CommitOrReadNack.Redundant;
@@ -263,13 +263,13 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         }
 
         @Override
-        protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Ranges unavailable)
+        protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> executes)
         {
-            return read.read(safeStore, executeAt, unavailable);
+            return read.read(safeStore, executeAt, executes);
         }
 
         // must be invoked by implementations some time after the read has started OR must override safeToReadAt()
-        protected void readStarted(SafeCommandStore safeStore, Ranges unavailable)
+        protected void readStarted(SafeCommandStore safeStore)
         {
             safeToReadAfter = Timestamp.nonNullOrMax(Timestamp.NONE, Timestamp.nonNullOrMax(safeToReadAfter, safeStore.commandStore().unsafeGetMaxConflicts().foldl(Timestamp::nonNullOrMax)));
         }
@@ -321,10 +321,11 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         // only null if retryInFutureEpoch is set
         public final @Nullable Timestamp safeToReadAfter;
 
-        public FetchResponse(@Nullable Ranges unavailable, @Nullable Data data, @Nonnull Timestamp safeToReadAfter)
+        public FetchResponse(@Nullable Ranges unavailable, @Nullable Data data, @Nullable Timestamp safeToReadAfter)
         {
             super(unavailable, data);
             this.safeToReadAfter = safeToReadAfter;
+            Invariants.require(safeToReadAfter != null || (unavailable != null && data == null));
         }
 
         @Override

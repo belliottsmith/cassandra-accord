@@ -27,6 +27,7 @@ import accord.utils.MapReduceConsume;
 import accord.utils.async.Cancellable;
 
 import static accord.messages.SimpleReply.Ok;
+import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 
 public class SetShardDurable extends AbstractRequest<SimpleReply>
         implements Request, PreLoadContext, MapReduceConsume<SafeCommandStore, SimpleReply>
@@ -39,10 +40,15 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
         this.exclusiveSyncPoint = exclusiveSyncPoint;
     }
 
+    private TxnId syncIdWithFlags()
+    {
+        return ((TxnId) exclusiveSyncPoint.executeAt).addFlag(SHARD_BOUND);
+    }
+
     @Override
     public Cancellable submit()
     {
-        TxnId syncIdWithFlags = (TxnId) exclusiveSyncPoint.executeAt;
+        TxnId syncIdWithFlags = syncIdWithFlags();
         node.markDurable(exclusiveSyncPoint.route.toRanges(), syncIdWithFlags, syncIdWithFlags)
         .addCallback((success, fail) -> {
             if (fail != null) node.reply(replyTo, replyContext, null, fail);
@@ -54,7 +60,7 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
     @Override
     public SimpleReply apply(SafeCommandStore safeStore)
     {
-        safeStore.commandStore().markShardDurable(safeStore, exclusiveSyncPoint.syncId, ((AbstractRanges) exclusiveSyncPoint.route).toRanges());
+        safeStore.commandStore().markShardDurable(safeStore, syncIdWithFlags(), ((AbstractRanges) exclusiveSyncPoint.route).toRanges());
         return Ok;
     }
 

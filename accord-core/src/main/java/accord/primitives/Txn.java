@@ -450,14 +450,13 @@ public interface Txn
         return new Writes(txnId, executeAt, update.keys(), update.apply(executeAt, data));
     }
 
-    default AsyncChain<Data> read(SafeCommandStore safeStore, Timestamp executeAt, Ranges unavailable)
+    default AsyncChain<Data> read(SafeCommandStore safeStore, Timestamp executeAt, Participants<?> execute)
     {
-        Ranges ranges = safeStore.ranges().allAt(executeAt).without(unavailable);
-        List<AsyncChain<Data>> chains = Routables.foldlMinimal(read().keys(), ranges, (key, accumulate, index) -> {
-            AsyncChain<Data> result = read().read(key, safeStore, executeAt, safeStore.dataStore());
-            accumulate.add(result);
-            return accumulate;
-        }, new ArrayList<>());
+        Seekables<?, ?> keys = read().keys().intersecting(execute, Minimal);
+        List<AsyncChain<Data>> chains = new ArrayList<>(keys.size());
+        Read read = read();
+        for (int i = 0, mi = keys.size() ; i < mi ; ++i)
+            chains.add(read.read(keys.get(i), safeStore, executeAt, safeStore.dataStore()));
 
         if (chains.isEmpty())
             return AsyncChains.success(null);

@@ -33,7 +33,7 @@ import accord.utils.async.AsyncResults;
 
 public abstract class TaskExecutorService extends AbstractExecutorService implements AgentExecutor
 {
-    public static class Task<T> extends AsyncResults.RunnableResult<T> implements Pending, RunnableFuture<T>
+    static abstract class Task<T> extends AsyncResults.RunnableResult<T> implements Pending, RunnableFuture<T>
     {
         final Pending origin;
         public Task(Callable<T> fn)
@@ -51,6 +51,7 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
         {
             return origin;
         }
+        public Object owner() { return null; }
 
         @Override
         public boolean cancel(boolean mayInterruptIfRunning)
@@ -84,10 +85,7 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    protected <T> Task<T> newTaskFor(Callable<T> callable)
-    {
-        return new Task<>(callable);
-    }
+    protected abstract <T> Task<T> newTaskFor(Callable<T> callable);
 
     private Task<?> newTaskFor(Runnable command)
     {
@@ -116,7 +114,7 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
 
     @Override
     public <T> Task<T> build(Callable<T> task)
-    {
+    {   // TODO (required): we should be returning an AsyncChain here, not a Task, so we can simulate correctly.
         return (Task<T>) super.submit(task);
     }
 

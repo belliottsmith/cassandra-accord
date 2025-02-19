@@ -204,6 +204,11 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         return NotDurable;
     }
 
+    public long maxEpoch()
+    {
+        return foldl((e, v) -> TxnId.max(v, TxnId.max(e.majorityBefore, e.universalBefore)), TxnId.NONE, i -> false).epoch();
+    }
+
     private static Durability notDurableIfNull(Durability status)
     {
         return status == null ? NotDurable : status;
@@ -223,7 +228,7 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         }
     }
 
-    public static final PersistentField.Persister<DurableBefore, DurableBefore> NOOP_PERSISTER = new PersistentField.Persister<DurableBefore, DurableBefore>()
+    public static final PersistentField.Persister<DurableBefore, DurableBefore> NOOP_PERSISTER = new PersistentField.Persister<>()
     {
         @Override public AsyncResult<?> persist(DurableBefore addValue, DurableBefore newValue) { return AsyncResults.success(null); }
         @Override public DurableBefore load() { return DurableBefore.EMPTY; }

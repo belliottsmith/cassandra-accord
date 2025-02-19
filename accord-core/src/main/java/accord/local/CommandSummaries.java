@@ -24,6 +24,7 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import accord.local.RedundantBefore.Bounds;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
@@ -128,7 +129,7 @@ public interface CommandSummaries
 
             public static <L extends Loader> L loader(RedundantBefore redundantBefore, @Nullable TxnId primaryTxnId, KeyHistory keyHistory, Unseekables<?> keysOrRanges, Factory<L> factory)
             {
-                TxnId minTxnId = redundantBefore.min(keysOrRanges, e -> e.gcBefore);
+                TxnId minTxnId = redundantBefore.min(keysOrRanges, Bounds::gcBefore);
                 Timestamp maxTxnId = primaryTxnId == null || keyHistory == KeyHistory.RECOVER || !primaryTxnId.is(ExclusiveSyncPoint) ? Timestamp.MAX : primaryTxnId;
                 TxnId findAsDep = primaryTxnId != null && keyHistory == KeyHistory.RECOVER ? primaryTxnId : null;
                 Kinds kinds = primaryTxnId == null ? AnyGloballyVisible : primaryTxnId.witnesses().or(keyHistory == KeyHistory.RECOVER ? primaryTxnId.witnessedBy() : Nothing);

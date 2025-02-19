@@ -35,6 +35,7 @@ import accord.local.cfk.UpdateUnmanagedMode;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.KeyDeps;
 import accord.primitives.Participants;
+import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
@@ -50,12 +51,15 @@ import accord.utils.async.AsyncChain;
 
 import static accord.local.KeyHistory.INCR;
 import static accord.local.KeyHistory.NONE;
+import static accord.local.RedundantStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
-import static accord.local.RedundantStatus.Property.SHARD_APPLIED_ONLY;
+import static accord.local.RedundantStatus.Property.SHARD_ONLY_APPLIED;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Range;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.Uninitialised;
+import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.Invariants.illegalState;
 
@@ -178,9 +182,9 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     protected SafeCommandsForKey maybeCleanup(SafeCommandsForKey safeCfk)
     {
-        RedundantBefore.Entry entry = redundantBefore().get(safeCfk.key().toUnseekable());
-        if (entry != null)
-            safeCfk.updateRedundantBefore(this, entry);
+        RedundantBefore.Bounds bounds = redundantBefore().get(safeCfk.key().toUnseekable());
+        if (bounds != null)
+            safeCfk.updateRedundantBefore(this, bounds);
         return safeCfk;
     }
 
@@ -261,6 +265,28 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             TxnId txnIdWithFlags = (TxnId)updated.executeAt();
             commandStore().markExclusiveSyncPointLocallyApplied(this, txnIdWithFlags, ranges);
         }
+
+        if (updated.partialDeps() != null)
+        {
+            RedundantBefore addRedundantBefore = RedundantBefore.EMPTY;
+            RangeDeps deps = updated.partialDeps().rangeDeps;
+            for (int i = 0 ; i < deps.txnIdCount() ; ++i)
+            {
+                TxnId txnId = deps.txnIdWithFlags(i);
+                if (txnId.is(SHARD_BOUND))
+                {
+                    Ranges ranges = deps.ranges(txnId).slice(ranges().all(), Minimal);
+                    addRedundantBefore = RedundantBefore.merge(addRedundantBefore, RedundantBefore.create(ranges, txnId, LOCALLY_WITNESSED_ONLY));
+                }
+            }
+            // TODO (expected): we should be able to use unsafeUpsertRedundantBefore here as the implementation will replay deps
+            //  BUT the implementation may not replay all versions of the partialDeps we report here.
+            //  This is likely to still be fine, as we don't imply anything for GC, but we won't do it for the moment.
+            //  We might instead prefer to report these deps only once we are certain they won't change (i.e. when Stable),
+            //  BUT in this case we cannot update waitingOnSync until then either (also probably fine)
+            if (addRedundantBefore != RedundantBefore.EMPTY)
+                upsertRedundantBefore(addRedundantBefore);
+        }
     }
 
     public void updateMaxConflicts(Command prev, Command updated)
@@ -322,6 +348,8 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 //            updateUnmanagedCommandsForKey(this, next, REGISTER_DEPS_ONLY);
     }
 
+    abstract protected void persistFieldUpdates();
+
     private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command prev, Command next)
     {
         StoreParticipants participants = next.participants().supplement(prev.participants());
@@ -329,7 +357,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (update.isEmpty())
             return;
 
-        // TODO (required): we don't want to insert any dependencies for those we only touch; we just need to record them as decided/applied for execution
+        // TODO (expected): we don't want to insert any dependencies for those we only touch; we just need to record them as decided/applied for execution
         PreLoadContext context = PreLoadContext.contextFor(next.txnId(), update, INCR);
         PreLoadContext execute = safeStore.canExecute(context);
         if (execute != null)
@@ -390,7 +418,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 TxnId maxTxnId = txnIdsForKey.get(txnIdsForKey.size() - 1);
                 // TODO (desired): convert to O(n) merge
                 RedundantStatus status = redundantBefore.status(maxTxnId, null, key);
-                if (!status.all(SHARD_APPLIED_ONLY) || !status.all(LOCALLY_REDUNDANT))
+                if (!status.all(SHARD_ONLY_APPLIED) || !status.all(LOCALLY_REDUNDANT))
                     select.set(i);
             }
             if (select.getSetBitCount() != keys.size())

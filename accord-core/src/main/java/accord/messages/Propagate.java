@@ -63,6 +63,7 @@ import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_SY
 import static accord.local.StoreParticipants.Filter.UPDATE;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
+import static accord.primitives.Known.KnownRoute.FullRoute;
 import static accord.primitives.Known.Nothing;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.NotDefined;
@@ -207,7 +208,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         participants = participants.supplement(command.participants())
                                    .filter(UPDATE, safeStore, txnId, executeAtIfKnown);
+
         Known found = known.knownFor(participants.stillOwns(), participants.stillTouches());
+        Known currentlyKnown = command.known();
+        if (!currentlyKnown.has(FullRoute) && Route.isFullRoute(command.route()))
+            currentlyKnown = currentlyKnown.with(FullRoute);
 
         PartialTxn partialTxn = null;
         if (found.hasDefinition())
@@ -244,7 +249,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 }
             }
 
-            Participants<?> txnNeeds = participants.stillOwnsOrMayExecute(txnId);
+            Participants<?> txnNeeds = participants.stillOwnsOrWaitsOn(txnId);
             if (found.isDefinitionKnown() && partialTxn == null && this.partialTxn != null)
             {
                 PartialTxn existing = command.partialTxn();
@@ -254,8 +259,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             }
         }
 
-        SaveStatus propagate = found.atLeast(command.known()).propagatesSaveStatus();
-        if (propagate.known.isSatisfiedBy(command.known()))
+        SaveStatus propagate = found.atLeast(currentlyKnown).propagatesSaveStatus();
+        if (propagate.known.isSatisfiedBy(currentlyKnown))
         {
             updateFetchResult(found, participants.owns());
             return updateDurability(safeStore, safeCommand, participants);
@@ -368,30 +373,41 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         Known required = PreApplied.minKnown;
         Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
 
-        Participants<?> stillOwnsOrMayExecute = participants.stillOwnsOrMayExecute(txnId);
-        Participants<?> notStaleTouches = known.knownFor(Nothing.with(requireExtra.deps()), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
+        Participants<?> stillOwnsOrMayExecute = participants.stillOwnsOrWaitsOn(txnId);
+        Participants<?> notStaleTouches = known.knownFor(Nothing.with(requireExtra.deps()), stillTouches); // the ranges for which we can already successfully achieve this
         Participants<?> notStaleOwnsOrMayExecutes = known.knownFor(requireExtra.with(DepsUnknown), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
 
         // any ranges we execute but cannot achieve the pre-applied status for have been left behind and are stale
         Participants<?> staleTouches = stillTouches.without(notStaleTouches);
-        Participants<?> staleOwnsOrMayExecutes = stillOwnsOrMayExecute.without(notStaleOwnsOrMayExecutes);
-        if (staleOwnsOrMayExecutes.isEmpty() && staleTouches.isEmpty())
+        Participants<?> staleOwnsOrMayExecute = stillOwnsOrMayExecute.without(notStaleOwnsOrMayExecutes);
+        if (staleOwnsOrMayExecute.isEmpty())
         {
-            Invariants.require(notStaleTouches.containsAll(stillTouches));
-            Invariants.require(notStaleOwnsOrMayExecutes.containsAll(stillOwnsOrMayExecute));
-            return required;
+            if (staleTouches.isEmpty())
+            {
+                Invariants.require(notStaleTouches.containsAll(stillTouches));
+                Invariants.require(notStaleOwnsOrMayExecutes.containsAll(stillOwnsOrMayExecute));
+                return required;
+            }
+
+            if (stillOwnsOrMayExecute.isEmpty() && known.hasFullyTruncated(staleTouches))
+            {
+                Commands.setTruncatedApplyOrErasedVestigial(safeStore, safeCommand, participants, executeAtIfKnown);
+                return null;
+            }
         }
 
-        if (!known.hasFullyTruncated(staleOwnsOrMayExecutes) || !known.hasFullyTruncated(staleTouches))
+        Participants<?> stale = staleTouches.with((Participants) staleOwnsOrMayExecute);
+        if (!known.hasFullyTruncated(stale))
             return null;
 
-        Participants<?> stale = staleTouches.with((Participants) staleOwnsOrMayExecutes);
         // TODO (expected): trigger a refresh of redundantBefore; should be available on a peer
         // wait until we know the shard is ahead and we are behind
-        if (!safeStore.redundantBefore().isShardOnlyRedundant(txnId, stale))
+        if (!safeStore.redundantBefore().isShardOnlyApplied(txnId, stale))
             return null;
 
-        // TODO (expected): if the above last ditch doesn't work, see if only the stale ranges can't apply and so some shenanigans to apply partially and move on
+        Participants<?> staleOnlyTouches = staleTouches.without(staleOwnsOrMayExecute);
+        Invariants.expect(txnId.awaitsPreviouslyOwned() || staleOnlyTouches.isEmpty(), "%s is SHARD_ONLY_APPLIED, so we expect it to have been filtered from StoreParticipants", staleOnlyTouches);
+        // TODO (expected): if the above last ditch doesn't work, see if only the stale ranges can't apply and do some shenanigans to apply partially and move on
         if (ProtocolModifiers.Toggles.markStaleIfCannotExecute(txnId))
         {
             safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown == null ? txnId : executeAtIfKnown, stale.toRanges(), true);

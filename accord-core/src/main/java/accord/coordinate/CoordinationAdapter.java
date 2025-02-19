@@ -290,12 +290,12 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void persist(Node node, Topologies ignore, Route<?> require, Route<?> participants, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback)
+            public void persist(Node node, Topologies ignore, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback)
             {
-                Topologies all = forExecution(node, participants, SHARE, txnId, executeAt, deps);
+                Topologies all = forExecution(node, sendTo, selectNodeOwnership, txnId, executeAt, deps);
 
                 invokeSuccess(node, route, txnId, executeAt, txn, deps, callback);
-                new PersistSyncPoint(node, all, txnId, route, txn, executeAt, deps, writes, result)
+                new PersistSyncPoint(node, all, txnId, sendTo, txn, executeAt, deps, writes, result, route)
                 .start(Maximal, all, writes, result);
             }
         }
@@ -367,7 +367,7 @@ public interface CoordinationAdapter<R>
             @Override
             Topologies forExecution(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt, Deps deps)
             {
-                return node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
+                return node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), selectNodeOwnership);
             }
         }
 
@@ -416,7 +416,7 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void persist(Node node, Topologies any, Route<?> require, Route<?> participants, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            public void persist(Node node, Topologies any, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super SyncPoint<U>, Throwable> callback)
             {
                 throw new UnsupportedOperationException();
             }
@@ -431,7 +431,8 @@ public interface CoordinationAdapter<R>
             @Override
             void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super Result, Throwable> callback)
             {
-                callback.accept(txn.result(txnId, executeAt, null), null);
+                if (callback != null)
+                    callback.accept(txn.result(txnId, executeAt, null), null);
             }
         }
     }

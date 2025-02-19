@@ -101,7 +101,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         update(safeStore, null, prevCfk, prevCfk.registerUnmanaged(unmanaged, mode));
     }
 
-    public void updateRedundantBefore(SafeCommandStore safeStore, RedundantBefore.Entry redundantBefore)
+    public void updateRedundantBefore(SafeCommandStore safeStore, RedundantBefore.Bounds redundantBefore)
     {
         CommandsForKey prevCfk = current();
         update(safeStore, null, prevCfk, prevCfk.withRedundantBeforeAtLeast(redundantBefore));

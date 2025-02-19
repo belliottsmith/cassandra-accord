@@ -409,7 +409,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
                 owns = blockedOnRoute.slice(coordinateRanges, Minimal);
                 touches = owns;
             }
-            blockedOnStoreParticipants2 = StoreParticipants.create(blockedOnRoute, owns, null, touches, touches);
+            blockedOnStoreParticipants2 = StoreParticipants.create(blockedOnRoute, owns, null, null, touches, touches);
         }
 
         // first save the route/participant info into the Command if it isn't already there
@@ -760,12 +760,12 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     public static class ImmutableView
     {
-        private final int storeId;
+        private final int commandStoreId;
         private final Object[] snapshot;
 
-        ImmutableView(int storeId, Object[] snapshot)
+        ImmutableView(int commandStoreId, Object[] snapshot)
         {
-            this.storeId = storeId;
+            this.commandStoreId = commandStoreId;
             this.snapshot = snapshot;
         }
 
@@ -792,9 +792,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             return true;
         }
 
-        public int storeId()
+        public int commandStoreId()
         {
-            return storeId;
+            return commandStoreId;
         }
 
         @Nonnull

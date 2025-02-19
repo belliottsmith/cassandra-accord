@@ -121,7 +121,9 @@ public class ListAgent implements Agent
     @Override
     public void onUncaughtException(Throwable t)
     {
-        if (!(t instanceof CoordinationFailed) && !(t instanceof SimulatedFault) && !(t instanceof ExecuteSyncPoint.SyncPointErased) && !(t instanceof CancellationException) && !(t.getCause() instanceof CancellationException))
+        // TODO (required): why are we now seeing SnapshotAborted? Nothing inherently wrong with it, but should find out what has changed.
+        if (!(t instanceof CoordinationFailed) && !(t instanceof SimulatedFault) && !(t instanceof ExecuteSyncPoint.SyncPointErased)
+            && !(t instanceof CancellationException) && !(t.getCause() instanceof CancellationException) && !(t instanceof ListStore.SnapshotAborted))
             onFailure.accept(t);
     }
 

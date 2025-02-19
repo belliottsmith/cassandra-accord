@@ -121,6 +121,12 @@ public abstract class IntKey implements RoutableKey
         {
             return new Range(new Routing(key - 1), new Routing(key));
         }
+
+        @Override
+        public Object suffix()
+        {
+            return key;
+        }
     }
 
     public static class Routing extends IntKey implements accord.api.RoutingKey
@@ -146,6 +152,12 @@ public abstract class IntKey implements RoutableKey
         public RangeFactory rangeFactory()
         {
             return (s, e) -> new Range((Routing)s, (Routing)e);
+        }
+
+        @Override
+        public Object suffix()
+        {
+            return key;
         }
     }
 

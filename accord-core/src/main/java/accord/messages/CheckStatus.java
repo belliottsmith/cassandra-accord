@@ -168,8 +168,14 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     private KnownMap foundKnown(Command command, StoreParticipants query)
     {
         SaveStatus saveStatus = command.saveStatus();
-        if (query.owns() == command.participants().stillTouches() || (!saveStatus.known.deps().hasProposedOrDecidedDeps() && saveStatus.known.definition() != DefinitionKnown))
-            return KnownMap.create(query.owns(), saveStatus.known);
+        if (command.participants().isPureOwns() || (!saveStatus.known.deps().hasProposedOrDecidedDeps() && saveStatus.known.definition() != DefinitionKnown))
+        {
+            Participants<?> validFor = query.owns().intersecting(command.participants().owns());
+            KnownMap result = KnownMap.create(validFor, saveStatus.known);
+            if (validFor != query.owns())
+                result = KnownMap.merge(result, KnownMap.create(query.owns(), saveStatus.known.validForAll()));
+            return result;
+        }
 
         Known known = saveStatus.known;
         KnownMap result = KnownMap.EMPTY;
@@ -181,9 +187,13 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         }
         if (known.definition() == DefinitionKnown && !txnId.isSystemTxn())
         {
-            Participants<?> participants = command.partialTxn().keys().toParticipants();
-            Invariants.require(command.participants().owns().containsAll(participants));
-            result = KnownMap.merge(result, KnownMap.create(participants, Known.DefinitionOnly));
+            if (command.partialTxn() != null)
+            {
+                Participants<?> participants = command.partialTxn().keys().toParticipants();
+                Invariants.require(command.participants().owns().containsAll(participants));
+                result = KnownMap.merge(result, KnownMap.create(participants, Known.DefinitionOnly));
+            }
+            else Invariants.require(command.participants().stillOwns().isEmpty());
             known = known.with(DefinitionUnknown);
         }
         result = KnownMap.merge(result, KnownMap.create(query.owns(), known));
@@ -613,7 +623,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         public Known knownFor(TxnId txnId, Unseekables<?> owns, Unseekables<?> touches)
         {
             Known known = super.knownFor(txnId, owns, touches);
-            Invariants.require(!known.hasDefinition() || txnId.isSystemTxn() || (partialTxn != null && partialTxn.covers(owns)));
+            Invariants.require(!known.hasDefinition() || txnId.isSystemTxn() || owns.isEmpty() || (partialTxn != null && partialTxn.covers(owns)));
             Invariants.require(!known.hasDecidedDeps() || (stableDeps != null && stableDeps.covers(touches)));
             return known;
         }
