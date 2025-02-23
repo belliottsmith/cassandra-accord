@@ -391,7 +391,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
             if (stillOwnsOrMayExecute.isEmpty() && known.hasFullyTruncated(staleTouches))
             {
-                Commands.setTruncatedApplyOrErasedVestigial(safeStore, safeCommand, participants, executeAtIfKnown);
+                Commands.setTruncatedOrVestigial(safeStore, safeCommand, participants);
                 return null;
             }
         }
@@ -416,7 +416,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         }
 
         // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition
-        Commands.setTruncatedApplyOrErasedVestigial(safeStore, safeCommand, participants, executeAtIfKnown);
+        Commands.setTruncatedOrVestigial(safeStore, safeCommand, participants);
         return null;
     }
 

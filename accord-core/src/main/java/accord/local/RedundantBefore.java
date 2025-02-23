@@ -994,7 +994,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
     private boolean mayFilterStaleOrPreBootstrapOrRetiredOrNotOwned(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
     {
-        return (minLocallyRetiredEpoch < txnId.epoch() && locallyRetiredRanges.intersects(participants))
+        return (minLocallyRetiredEpoch <= txnId.epoch() && locallyRetiredRanges.intersects(participants))
                || (executeAt != null && executeAt.epoch() < maxStartEpoch)
                || mayFilterStaleOrPreBootstrap(txnId, participants);
     }

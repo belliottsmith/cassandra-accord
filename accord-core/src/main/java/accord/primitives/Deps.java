@@ -20,6 +20,7 @@ package accord.primitives;
 
 import accord.api.RoutingKey;
 import accord.local.cfk.CommandsForKey;
+import accord.primitives.Routable.Domain;
 import accord.utils.IndexedFunction;
 import accord.utils.Invariants;
 import accord.utils.MergeFewDisjointSortedListsCursor;
@@ -27,15 +28,20 @@ import accord.utils.RelationMultiMap;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedList;
 import accord.utils.SortedList.MergeCursor;
+import accord.utils.TriFunction;
+import accord.utils.UnhandledEnum;
 
 import java.util.AbstractList;
 import java.util.List;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
+import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -101,7 +107,7 @@ public class Deps
         public AbstractBuilder<T> addNormalise(Unseekable keyOrRange, TxnId txnId)
         {
             if (keyOrRange.domain() == txnId.domain()) add(keyOrRange, txnId);
-            else if (keyOrRange.domain() == Routable.Domain.Key) add(keyOrRange.asRange(), txnId);
+            else if (keyOrRange.domain() == Domain.Key) add(keyOrRange.asRange(), txnId);
             else throw illegalState();
             return this;
         }
@@ -113,7 +119,7 @@ public class Deps
             {
                 default: throw new AssertionError();
                 case Key:
-                    if (CommandsForKey.managesExecution(txnId))
+                    if (managesExecution(txnId))
                     {
                         keyBuilder.add(keyOrRange.asRoutingKey(), txnId);
                     }
@@ -195,26 +201,12 @@ public class Deps
 
     public boolean contains(TxnId txnId)
     {
-        Routable.Domain domain = txnId.domain();
-        if (domain.isRange())
-            return rangeDeps.contains(txnId);
-
-        if (CommandsForKey.managesExecution(txnId))
-            return keyDeps.contains(txnId);
-
-        return directKeyDeps.contains(txnId);
+        return applyToId(txnId, KeyOrRangeDeps::contains);
     }
 
     public boolean intersects(TxnId txnId, Ranges ranges)
     {
-        Routable.Domain domain = txnId.domain();
-        if (domain.isRange())
-            return rangeDeps.intersects(txnId, ranges);
-
-        if (CommandsForKey.managesExecution(txnId))
-            return keyDeps.intersects(txnId, ranges);
-
-        return directKeyDeps.intersects(txnId, ranges);
+        return applyToId(txnId, ranges, KeyOrRangeDeps::intersects);
     }
 
     public MergeCursor<TxnId, DepList> txnIds(RoutingKey key)
@@ -293,23 +285,9 @@ public class Deps
         return keyDeps.txnIdCount() + rangeDeps.txnIdCount() + directKeyDeps.txnIdCount();
     }
 
-    public TxnId txnId(int i)
+    public TxnId txnId(int index)
     {
-        {
-            int keyDepsLimit = keyDeps.txnIdCount();
-            if (i < keyDepsLimit)
-                return keyDeps.txnId(i);
-            i -= keyDepsLimit;
-        }
-
-        {
-            int directKeyDepsLimit = directKeyDeps.txnIdCount();
-            if (i < directKeyDepsLimit)
-                return directKeyDeps.txnId(i);
-            i -= directKeyDepsLimit;
-        }
-
-        return rangeDeps.txnId(i);
+        return applyToIndex(index, KeyOrRangeDeps::txnId);
     }
 
     public List<TxnId> txnIds()
@@ -326,13 +304,72 @@ public class Deps
         };
     }
 
-    public Participants<?> participants(TxnId txnId)
+    public int indexOf(TxnId txnId)
     {
         switch (txnId.domain())
         {
-            default:    throw new AssertionError();
-            case Key:   return CommandsForKey.managesExecution(txnId) ? keyDeps.participants(txnId) : directKeyDeps.participants(txnId);
-            case Range: return rangeDeps.participants(txnId);
+            default: throw new UnhandledEnum(txnId.domain());
+            case Key:
+            {
+                if (managesExecution(txnId))
+                    return keyDeps.indexOf(txnId);
+                int index = directKeyDeps.indexOf(txnId);
+                return index < 0 ? -1 : keyDeps.txnIdCount() + index;
+            }
+            case Range:
+            {
+                int index = rangeDeps.indexOf(txnId);
+                return index < 0 ? -1 : keyDeps.txnIdCount() + directKeyDeps.txnIdCount() + index;
+            }
+        }
+    }
+
+    public Participants<?> participants(TxnId txnId)
+    {
+        return applyToId(txnId, KeyOrRangeDeps::participants);
+    }
+
+    public Participants<?> participants(int index)
+    {
+        return applyToIndex(index, KeyOrRangeDeps::participants);
+    }
+
+    public boolean isStable(int index)
+    {
+        return !applyToIndex(index, KeyOrRangeDeps::txnIdWithFlags).is(UNSTABLE);
+    }
+
+    private <T> T applyToIndex(int index, IndexedFunction<KeyOrRangeDeps, T> apply)
+    {
+        int keyDepsLimit = keyDeps.txnIdCount();
+        if (index < keyDepsLimit)
+            return apply.apply(keyDeps, index);
+        index -= keyDepsLimit;
+
+        int directKeyDepsLimit = directKeyDeps.txnIdCount();
+        if (index < directKeyDepsLimit)
+            return apply.apply(directKeyDeps, index);
+        index -= directKeyDepsLimit;
+
+        return apply.apply(rangeDeps, index);
+    }
+
+    private <T> T applyToId(TxnId txnId, BiFunction<KeyOrRangeDeps, TxnId, T> apply)
+    {
+        return applyToId(txnId, apply, (d, id, f) -> f.apply(d, id));
+    }
+
+    private <P, T> T applyToId(TxnId txnId, P p, TriFunction<KeyOrRangeDeps, TxnId, P, T> apply)
+    {
+        switch (txnId.domain())
+        {
+            default: throw new UnhandledEnum(txnId.domain());
+            case Key:
+                if (managesExecution(txnId))
+                    return apply.apply(keyDeps, txnId, p);
+                return apply.apply(directKeyDeps, txnId, p);
+            case Range:
+                return apply.apply(rangeDeps, txnId, p);
         }
     }
 

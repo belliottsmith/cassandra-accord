@@ -831,7 +831,6 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public enum InternalStatus
     {
-        // TODO (expected): use TRANSITIVE instead of TRANSITIVE_VISIBLE when we don't need to sync dependencies
         TRANSITIVE                             (SummaryStatus.NOT_DIRECTLY_WITNESSED, false, false, false, false),
         TRANSITIVE_VISIBLE                     (SummaryStatus.NOT_DIRECTLY_WITNESSED, false, false, false, false),
         PREACCEPTED_WITHOUT_DEPS               (SummaryStatus.PREACCEPTED,            false, false, true,  false),
@@ -883,6 +882,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             FROM_SAVE_STATUS.put(SaveStatus.PreApplied, STABLE);
             FROM_SAVE_STATUS.put(SaveStatus.Applying, STABLE);
             FROM_SAVE_STATUS.put(SaveStatus.Applied, APPLIED_NOT_DURABLE);
+            FROM_SAVE_STATUS.put(SaveStatus.TruncatedApplyWithOutcomeAndDeps, APPLIED_DURABLE);
             // We don't map TruncatedApplyX or Erased as we want to retain them as APPLIED
             // esp. to support pruning where we expect the prunedBefore entr*ies* to be APPLIED
             // Note importantly that we have multiple logical pruned befores - the last APPLIED

@@ -104,7 +104,9 @@ public enum SaveStatus
     Applying                        (Status.PreApplied,                                                                                              LocalExecution.Applying),
     // similar to Truncated, but doesn't imply we have any global knowledge about application
     Applied                         (Status.Applied,                                                                                                 LocalExecution.Applied),
-    // TruncatedApplyWithDeps is a state never adopted within a single replica; it is however a useful state we may enter by combining state from multiple replicas
+    // TruncatedApplyWithOutcomeAndDeps exists to support re-populating CommandsForKey on replay with any dependencies needed for computing recovery superseding-rejects decisions
+    // TODO (expected): test replay
+    TruncatedApplyWithOutcomeAndDeps(Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsKnown,          Apply,   CleaningUp),
     TruncatedApplyWithOutcome       (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         Apply,   CleaningUp),
     TruncatedApply                  (Status.Truncated,              MaybeRoute, DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
     TruncatedUnapplied              (Status.Truncated,              MaybeRoute, DefinitionErased,   ExecuteAtKnown,     DepsErased,         WasApply,CleaningUp),
@@ -364,27 +366,28 @@ public enum SaveStatus
                 switch (status)
                 {
                     default: throw new AssertionError("Unexpected status: " + status);
+                    case Erased:
                     case Vestigial:
                         if (known.outcome().isInvalidated())
                             return Invalidated;
 
-                        if (!known.outcome().isOrWasApply() || known.is(ExecuteAtKnown))
-                            return Vestigial;
-
-                    case Erased:
                         if (!known.outcome().isOrWasApply() || !known.is(ExecuteAtKnown))
-                            return Erased;
+                            return status;
 
                     case TruncatedUnapplied:
                         if (!known.is(ApplyAtKnown))
                             return TruncatedUnapplied;
 
                     case TruncatedApply:
-                        if (known.outcome() != Apply)
+                        if (!known.is(Outcome.Apply))
                             return TruncatedApply;
 
                     case TruncatedApplyWithOutcome:
-                        if (known.deps() != DepsKnown)
+                        if (!known.is(DepsKnown))
+                            return TruncatedApplyWithOutcome;
+
+                    case TruncatedApplyWithOutcomeAndDeps:
+                        if (!known.is(DefinitionKnown))
                             return TruncatedApplyWithOutcome;
 
                         return Applied;

@@ -256,9 +256,17 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                     {
                         Participants<?> hasDeps = full.map.knownFor(Known.DepsOnly, route);
                         missingDeps = route.without(hasDeps);
-                        // convert to plain Deps as when we merge with latest deps we may erroneously keep the
-                        // PartialDeps if e.g. an empty range of deps is found
-                        deps = new Deps(full.stableDeps.reconstitutePartial(hasDeps));
+                        if (full.stableDeps == null)
+                        {
+                            Invariants.require(hasDeps.isEmpty());
+                            deps = Deps.NONE;
+                        }
+                        else
+                        {
+                            // convert to plain Deps as when we merge with latest deps we may erroneously keep the
+                            // PartialDeps if e.g. an empty range of deps is found
+                            deps = new Deps(full.stableDeps.reconstitutePartial(hasDeps));
+                        }
                     }
                     LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, deps, missingDeps, route, SHARE, route, callback, mergedDeps -> {
                         node.withEpoch(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {

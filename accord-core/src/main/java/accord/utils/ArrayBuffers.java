@@ -30,6 +30,8 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.function.IntFunction;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -428,12 +430,15 @@ public class ArrayBuffers
      * A very simple cache that simply stores the largest {@code maxCount} arrays smaller than {@code maxSize}.
      * Works on both primitive and Object arrays.
      */
-    private static abstract class AbstractBufferCache<B>
+    @VisibleForTesting
+    static abstract class AbstractBufferCache<B>
     {
         interface Clear<B>
         {
             void clear(B array, int usedSize);
         }
+
+        static final int MIN_SIZE = 8;
 
         final IntFunction<B> allocator;
         final Clear<B> clear;
@@ -444,7 +449,7 @@ public class ArrayBuffers
         AbstractBufferCache(IntFunction<B> allocator, Clear<B> clear, int maxCount, int maxSize)
         {
             this.allocator = allocator;
-            this.maxSize = maxSize;
+            this.maxSize = Math.max(MIN_SIZE, maxSize);
             this.cached = (B[])new Object[maxCount];
             this.empty = allocator.apply(0);
             this.clear = clear;
@@ -458,6 +463,7 @@ public class ArrayBuffers
             if (minSize > maxSize)
                 return allocator.apply(minSize);
 
+            minSize = Math.max(minSize, MIN_SIZE);
             for (int i = 0 ; i < cached.length ; ++i)
             {
                 if (cached[i] != null && Array.getLength(cached[i]) >= minSize)
@@ -476,6 +482,9 @@ public class ArrayBuffers
             if (bufferSize == 0 || bufferSize > maxSize)
                 return true;
 
+            Invariants.require(bufferSize >= MIN_SIZE,
+                               "Trying to return an array of size %d we cannot have allocated, suggesting a logic bug that could lead to overwriting an in-use array.",
+                               bufferSize);
             if (bufferSize == usedSize && !force)
                 return false;
 

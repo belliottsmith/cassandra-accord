@@ -31,6 +31,7 @@ import accord.primitives.RoutableKey;
 import accord.utils.CRCUtils;
 import accord.utils.Invariants;
 
+import static accord.primitives.Range.AntiRangeMarker.ANTI_RANGE;
 import static accord.utils.Utils.toArray;
 
 public abstract class PrefixedIntHashKey implements RoutableKey
@@ -147,7 +148,7 @@ public abstract class PrefixedIntHashKey implements RoutableKey
                 @Override
                 public accord.primitives.Range newAntiRange(RoutingKey s, RoutingKey e)
                 {
-                    return new Range((PrefixedIntRoutingKey) s, (PrefixedIntRoutingKey) e);
+                    return new Range((PrefixedIntRoutingKey) s, (PrefixedIntRoutingKey) e, ANTI_RANGE);
                 }
             };
         }
@@ -222,6 +223,11 @@ public abstract class PrefixedIntHashKey implements RoutableKey
         private Range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end)
         {
             super(start, end);
+        }
+
+        private Range(PrefixedIntRoutingKey start, PrefixedIntRoutingKey end, AntiRangeMarker antiRange)
+        {
+            super(start, end, antiRange);
         }
 
         @Override

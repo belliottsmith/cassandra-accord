@@ -32,6 +32,7 @@ import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.KeyDeps;
 import accord.primitives.Known;
+import accord.primitives.Known.Outcome;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
@@ -61,6 +62,7 @@ import com.google.common.annotations.VisibleForTesting;
 import static accord.local.Command.Committed.committed;
 import static accord.local.Command.Executed.executed;
 import static accord.local.Command.NotAcceptedWithoutDefinition.notAccepted;
+import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Routable.Domain.Key;
@@ -68,6 +70,8 @@ import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
 import static accord.primitives.SaveStatus.TruncatedApply;
+import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
+import static accord.primitives.SaveStatus.TruncatedApplyWithOutcomeAndDeps;
 import static accord.primitives.SaveStatus.TruncatedUnapplied;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.ReadyToExecute;
@@ -76,7 +80,6 @@ import static accord.primitives.Status.Durability.Local;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.ShardUniversal;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
-import static accord.primitives.Status.Stable;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.Paranoia.NONE;
@@ -414,7 +417,7 @@ public abstract class Command implements ICommand
 
         public static Truncated erased(TxnId txnId, Status.Durability durability, StoreParticipants participants)
         {
-            return validate(new Truncated(txnId, SaveStatus.Erased, durability, participants, null, null, null));
+            return validate(new Truncated(txnId, SaveStatus.Erased, durability, participants, null, null, null, null));
         }
 
         public static Truncated vestigial(Command command)
@@ -429,7 +432,7 @@ public abstract class Command implements ICommand
 
         public static Truncated vestigial(TxnId txnId, StoreParticipants participants)
         {
-            return validate(new Truncated(txnId, SaveStatus.Vestigial, NotDurable, participants, null, null, null));
+            return validate(new Truncated(txnId, SaveStatus.Vestigial, NotDurable, participants, null, null, null, null));
         }
 
         public static Truncated truncated(Command command)
@@ -442,13 +445,17 @@ public abstract class Command implements ICommand
             Invariants.requireArgument(command.known().isExecuteAtKnown());
             // TODO (expected): centralise this translation so applied consistently
             SaveStatus newSaveStatus = command.known().is(ApplyAtKnown) ? TruncatedApply : TruncatedUnapplied;
-            Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
-            if (command.txnId().awaitsOnlyDeps())
-            {
-                Timestamp executesAtLeast = command.hasBeen(Stable) ? command.executesAtLeast() : null;
-                return validate(new TruncatedAwaitsOnlyDeps(command.txnId(), newSaveStatus, durability, participants, command.executeAt(), null, null, executesAtLeast));
-            }
-            return validate(new Truncated(command.txnId(), newSaveStatus, durability, participants, command.executeAt(), null, null));
+            return truncated(command, participants, newSaveStatus);
+        }
+
+        public static Truncated truncatedApplyWithOutcomeAndDeps(Executed command)
+        {
+            return truncatedApplyWithOutcomeAndDeps(command, command.participants());
+        }
+
+        public static Truncated truncatedApplyWithOutcomeAndDeps(Executed command, StoreParticipants participants)
+        {
+            return truncated(command, participants, TruncatedApplyWithOutcomeAndDeps);
         }
 
         public static Truncated truncatedApplyWithOutcome(Executed command)
@@ -458,44 +465,50 @@ public abstract class Command implements ICommand
 
         public static Truncated truncatedApplyWithOutcome(Executed command, StoreParticipants participants)
         {
-            Durability durability = Durability.mergeAtLeast(command.durability(), ShardUniversal);
-            if (command.txnId().awaitsOnlyDeps())
-                return validate(new TruncatedAwaitsOnlyDeps(command.txnId(), SaveStatus.TruncatedApplyWithOutcome, durability, command.participants(), command.executeAt(), command.writes, command.result, command.executesAtLeast()));
-            return validate(new Truncated(command.txnId(), SaveStatus.TruncatedApplyWithOutcome, durability, participants, command.executeAt(), command.writes, command.result));
+            return truncated(command, participants, TruncatedApplyWithOutcome);
         }
 
-        public static Truncated truncated(ICommand common, SaveStatus saveStatus, Timestamp executeAt, Writes writes, Result result)
-        {
-            return truncated(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, writes, result);
-        }
-
-        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, Writes writes, Result result)
+        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, Result result)
         {
             Invariants.requireArgument(!txnId.awaitsOnlyDeps());
             durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
-            return validate(new Truncated(txnId, saveStatus, durability, participants, executeAt, writes, result));
+            return validate(new Truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result));
         }
 
-        public static Truncated truncated(ICommand common, SaveStatus saveStatus, Timestamp executeAt, Writes writes, Result result, @Nullable Timestamp dependencyExecutesAt)
+        public static Truncated truncated(Command command, StoreParticipants participants, SaveStatus newSaveStatus)
         {
-            return truncated(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, writes, result, dependencyExecutesAt);
+            Timestamp executesAtLeast = command.executesAtLeast();
+            PartialDeps partialDeps = newSaveStatus.known.is(DepsKnown) ? command.partialDeps : null;
+            Writes writes = null;
+            Result result = null;
+            if (newSaveStatus.known.is(Outcome.Apply))
+            {
+                writes = command.writes();
+                result = command.result();
+            }
+            return truncated(command.txnId(), newSaveStatus, command.durability(), participants, command.executeAt, partialDeps, writes, result, executesAtLeast);
         }
 
-        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, Writes writes, Result result, @Nullable Timestamp dependencyExecutesAt)
+        public static Truncated truncated(ICommand common, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable Result result, @Nullable Timestamp executesAtLeast)
         {
+            return truncated(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, partialDeps, writes, result, executesAtLeast);
+        }
+
+        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Writes writes, Result result, @Nullable Timestamp executesAtLeast)
+        {
+            durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
             if (!txnId.awaitsOnlyDeps())
             {
-                Invariants.require(dependencyExecutesAt == null);
-                return truncated(txnId, saveStatus, durability, participants, executeAt, writes, result);
+                Invariants.require(executesAtLeast == null);
+                return truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result);
             }
-            durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
-            return validate(new TruncatedAwaitsOnlyDeps(txnId, saveStatus, durability, participants, executeAt, writes, result, dependencyExecutesAt));
+            return validate(new TruncatedAwaitsOnlyDeps(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result, executesAtLeast));
         }
 
         private static Durability checkTruncatedApplyInvariants(Durability durability, SaveStatus saveStatus, Timestamp executeAt)
         {
             Invariants.requireArgument(executeAt != null);
-            Invariants.requireArgument(saveStatus == SaveStatus.TruncatedApply || saveStatus == SaveStatus.TruncatedUnapplied || saveStatus == SaveStatus.TruncatedApplyWithOutcome);
+            Invariants.requireArgument(saveStatus.status == Status.Truncated);
             return Durability.mergeAtLeast(durability, ShardUniversal);
         }
 
@@ -514,7 +527,7 @@ public abstract class Command implements ICommand
         {
             // NOTE: we *must* save participants here so that on replay we properly repopulate CommandsForKey
             // (otherwise we may see this as a transitive transaction, but never mark it invalidated)
-            return validate(new Truncated(txnId, SaveStatus.Invalidated, UniversalOrInvalidated, participants, Timestamp.NONE, null, null));
+            return validate(new Truncated(txnId, SaveStatus.Invalidated, UniversalOrInvalidated, participants, Timestamp.NONE, null, null, null));
         }
 
         @Nullable final Writes writes;
@@ -527,9 +540,9 @@ public abstract class Command implements ICommand
             this.result = copy.result();
         }
 
-        public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable Writes writes, @Nullable Result result)
+        public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable Result result)
         {
-            super(txnId, saveStatus, durability, participants, Ballot.MAX, executeAt, null, null, Ballot.MAX);
+            super(txnId, saveStatus, durability, participants, Ballot.MAX, executeAt, null, partialDeps, Ballot.MAX);
             this.writes = writes;
             this.result = result;
         }
@@ -560,7 +573,7 @@ public abstract class Command implements ICommand
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            return validate(new Truncated(txnId(), saveStatus(), durability, participants, executeAt(), writes, result));
+            return validate(new Truncated(txnId(), saveStatus(), durability, participants, executeAt(), partialDeps(), writes, result));
         }
     }
 
@@ -578,9 +591,9 @@ public abstract class Command implements ICommand
             this.executesAtLeast = executesAtLeast;
         }
 
-        public TruncatedAwaitsOnlyDeps(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable Writes writes, @Nullable Result result, @Nullable Timestamp executesAtLeast)
+        public TruncatedAwaitsOnlyDeps(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable Result result, @Nullable Timestamp executesAtLeast)
         {
-            super(txnId, saveStatus, durability, participants, executeAt, writes, result);
+            super(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result);
             this.executesAtLeast = executesAtLeast;
         }
 
@@ -599,7 +612,7 @@ public abstract class Command implements ICommand
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            return validate(new TruncatedAwaitsOnlyDeps(txnId(), saveStatus(), durability, participants, executeAt(), writes, result, executesAtLeast));
+            return validate(new TruncatedAwaitsOnlyDeps(txnId(), saveStatus(), durability, participants, executeAt(), partialDeps(), writes, result, executesAtLeast));
         }
     }
 
@@ -1652,9 +1665,10 @@ public abstract class Command implements ICommand
             case Applying:
             case Applied:
                 return validateCommandClass(status, Executed.class, klass);
-            case TruncatedApply:
             case TruncatedUnapplied:
+            case TruncatedApply:
             case TruncatedApplyWithOutcome:
+            case TruncatedApplyWithOutcomeAndDeps:
                 if (txnId.awaitsOnlyDeps())
                     return validateCommandClass(status, TruncatedAwaitsOnlyDeps.class, klass);
             case Erased:

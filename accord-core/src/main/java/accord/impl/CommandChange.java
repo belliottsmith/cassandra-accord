@@ -268,6 +268,8 @@ public class CommandChange
             if (saveStatus == null || participants == null)
                 return Cleanup.NO;
 
+            Status.Durability durability = this.durability;
+            if (durability == null) durability = NotDurable;
             Cleanup cleanup = Cleanup.shouldCleanup(input, agent, txnId, executeAt, saveStatus, durability, participants, redundantBefore, durableBefore);
             if (this.cleanup != null && this.cleanup.compareTo(cleanup) > 0)
                 cleanup = this.cleanup;
@@ -340,6 +342,7 @@ public class CommandChange
             this.result = newValue;
         }
 
+        // TODO (expected): we shouldn't need to filter participants here, we will do it anyway before using in SafeCommandStore
         public Command construct(RedundantBefore redundantBefore)
         {
             if (!nextCalled)
@@ -378,21 +381,22 @@ public class CommandChange
                     return executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result);
                 case Truncated:
                 case Invalidated:
-                    return truncated(txnId, saveStatus, durability, participants, executeAt, executesAtLeast, writes, result);
+                    return truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, executesAtLeast, writes, result);
                 default:
                     throw new UnhandledEnum(saveStatus.status);
             }
         }
 
-        private static Command.Truncated truncated(TxnId txnId, SaveStatus status, Status.Durability durability, StoreParticipants participants, Timestamp executeAt, Timestamp executesAtLeast, Writes writes, Result result)
+        private static Command.Truncated truncated(TxnId txnId, SaveStatus status, Status.Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Timestamp executesAtLeast, Writes writes, Result result)
         {
             switch (status)
             {
                 default: throw new UnhandledEnum(status);
+                case TruncatedApplyWithOutcomeAndDeps:
                 case TruncatedApplyWithOutcome:
                 case TruncatedApply:
                 case TruncatedUnapplied:
-                    return Command.Truncated.truncated(txnId, status, durability, participants, executeAt, writes, result, executesAtLeast);
+                    return Command.Truncated.truncated(txnId, status, durability, participants, executeAt, partialDeps, writes, result, executesAtLeast);
                 case Vestigial:
                     return vestigial(txnId, participants);
                 case Erased:

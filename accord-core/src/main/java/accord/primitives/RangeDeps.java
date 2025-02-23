@@ -88,7 +88,7 @@ import static accord.utils.SortedArrays.Search.FAST;
  * TODO (testing): confirm we are de-overlapping ranges per txnId
  * TODO (testing): randomised testing of all iteration methods
  */
-public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
+public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeDeps
 {
     public static class SerializerSupport
     {
@@ -469,6 +469,11 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>
     public Ranges participants(TxnId txnId)
     {
         return ranges(txnId);
+    }
+
+    public Ranges participants(int indexOf)
+    {
+        return ranges(indexOf);
     }
 
     public Ranges ranges(TxnId txnId)

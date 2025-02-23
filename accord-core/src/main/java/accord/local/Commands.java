@@ -69,7 +69,6 @@ import static accord.local.Cleanup.shouldCleanup;
 import static accord.local.Command.Truncated.erased;
 import static accord.local.Command.Truncated.invalidated;
 import static accord.local.Command.Truncated.truncated;
-import static accord.local.Command.Truncated.truncatedApplyWithOutcome;
 import static accord.local.Command.Truncated.vestigial;
 import static accord.local.Commands.Validated.INSUFFICIENT;
 import static accord.local.Commands.Validated.UPDATE_TXN_IGNORE_DEPS;
@@ -120,6 +119,7 @@ import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 public class Commands
 {
@@ -554,15 +554,17 @@ public class Commands
         }
     }
 
-    protected static void postApply(SafeCommandStore safeStore, Command command)
+    protected static void postApply(SafeCommandStore safeStore, TxnId txnId, long t0)
     {
+        SafeCommand safeCommand = safeStore.get(txnId);
+        Command command = safeCommand.current();
         logger.trace("{} applied, setting status to Applied and notifying listeners", command);
-        if (!command.hasBeen(Applied))
-        {
-            SafeCommand safeCommand = safeStore.get(command.txnId());
-            safeCommand.applied(safeStore);
-            safeStore.notifyListeners(safeCommand, command);
-        }
+        if (command.hasBeen(Applied))
+            return;
+
+        safeCommand.applied(safeStore);
+        safeStore.notifyListeners(safeCommand, command);
+        if (t0 >= 0) safeStore.agent().metricsEventsListener().onApplied(command, t0);
     }
 
     /**
@@ -584,16 +586,13 @@ public class Commands
         // TODO (required, API): do we care about tracking the write persistence latency, when this is just a memtable write?
         //  the only reason it will be slow is because Memtable flushes are backed-up (which will be reported elsewhere)
         // TODO (required): this is anyway non-monotonic and milliseconds granularity
-        long t0 = safeStore.node().now();
+        long t0 = safeStore.node().elapsed(MICROSECONDS);
         TxnId txnId = command.txnId();
         Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
         return command.writes().apply(safeStore, executes, command.partialTxn())
                       // TODO (expected): once we guarantee execution order KeyHistory can be ASYNC
                .flatMap(unused -> unsafeStore.build(contextFor(txnId, executes, SYNC), ss -> {
-                   Command cmd = ss.get(txnId).current();
-                   if (!cmd.hasBeen(Applied))
-                       ss.agent().metricsEventsListener().onApplied(cmd, t0);
-                   postApply(ss, command);
+                   postApply(ss, txnId, t0);
                    return null;
                }));
     }
@@ -604,14 +603,15 @@ public class Commands
         CommandStore unsafeStore = safeStore.commandStore();
         Command.Executed executed = command.asExecuted();
         Participants<?> executes = executed.participants().stillExecutes();
-        if (!executes.isEmpty())
-            return command.writes().apply(safeStore, executes, command.partialTxn())
-                          .flatMap(unused -> unsafeStore.build(context, ss -> {
-                              postApply(ss, command);
-                              return null;
-                          }));
-        else
+        if (executes.isEmpty())
             return AsyncChains.success(null);
+
+        TxnId txnId = command.txnId();
+        return command.writes().apply(safeStore, executes, command.partialTxn())
+                      .flatMap(unused -> unsafeStore.build(context, ss -> {
+                          postApply(ss, txnId, -1);
+                          return null;
+                      }));
     }
 
     public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, boolean alwaysNotifyListeners, boolean notifyWaitingOn)
@@ -722,6 +722,7 @@ public class Commands
             switch (dependency.saveStatus())
             {
                 default: throw new AssertionError("Unhandled saveStatus: " + dependency.saveStatus());
+                case TruncatedApplyWithOutcomeAndDeps:
                 case TruncatedApplyWithOutcome:
                 case TruncatedApply:
                 case TruncatedUnapplied:
@@ -826,32 +827,22 @@ public class Commands
             maybeExecute(safeStore, safeCommand, false, true);
     }
 
-    public static void setTruncatedApplyOrErasedVestigial(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, @Nullable Timestamp executeAt)
+    public static void setTruncatedOrVestigial(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
     {
         Command command = safeCommand.current();
         SaveStatus saveStatus = command.saveStatus();
         if (saveStatus.compareTo(TruncatedApply) >= 0) return;
         participants = command.participants().supplementOrMerge(saveStatus, participants);
-        if (executeAt == null) executeAt = command.executeAtIfKnown();
+        Timestamp executeAt = command.executeAtIfKnown();
         if (participants.route() == null || executeAt == null)
         {
-            safeCommand.update(safeStore, Command.Truncated.vestigial(command));
+            safeCommand.update(safeStore, vestigial(command));
             if (participants.route() != null && !safeStore.coordinateRanges(command.txnId()).contains(participants.route().homeKey()))
                 safeStore.progressLog().clear(command.txnId());
         }
         else
         {
-            command = command.updateParticipants(participants);
-            if (!safeCommand.txnId().awaitsOnlyDeps())
-            {
-                safeCommand.update(safeStore, Command.Truncated.truncated(command, TruncatedApply, executeAt, null, null));
-            }
-            else if (safeCommand.current().saveStatus().hasBeen(Applied))
-            {
-                Timestamp executesAtLeast = safeCommand.current().executesAtLeast();
-                if (executesAtLeast == null) safeCommand.update(safeStore, erased(command));
-                else safeCommand.update(safeStore, Command.Truncated.truncated(command, TruncatedApply, executeAt, null, null, executesAtLeast));
-            }
+            safeCommand.update(safeStore, truncated(command, participants));
             safeStore.progressLog().clear(command.txnId());
         }
     }
@@ -929,11 +920,11 @@ public class Commands
                 result = invalidated(command, newParticipants);
                 break;
 
+            case TRUNCATE_WITH_OUTCOME_AND_DEPS:
             case TRUNCATE_WITH_OUTCOME:
-                Invariants.requireArgument(!command.hasBeen(Truncated), "%s", command);
                 Invariants.requireArgument(command.known().is(Apply));
                 Invariants.requireArgument(command.known().is(ApplyAtKnown));
-                result = truncatedApplyWithOutcome(command.asExecuted());
+                result = truncated(command, newParticipants, cleanup.appliesIfNot);
                 break;
 
             case TRUNCATE:

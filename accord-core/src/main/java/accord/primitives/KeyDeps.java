@@ -54,7 +54,7 @@ import static accord.utils.SortedArrays.Search.FAST;
  * A collection of dependencies for a transaction, organised by the key the dependency is adopted via.
  * An inverse map from TxnId to Key may also be constructed and stored in this collection.
  */
-public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>
+public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRangeDeps
 {
     public static final KeyDeps NONE = new KeyDeps(RoutingKeys.EMPTY, NO_TXNIDS, NO_INTS);
 

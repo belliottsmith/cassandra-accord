@@ -219,12 +219,14 @@ public interface CommandSummaries
                     }
                     else
                     {
-                        boolean isStable = summaryStatus.compareTo(ACCEPTED) >= 0;
-                        // this should be in same domain as intersecting, as will be taken from relevant Deps entry
-                        Participants<?> participants = partialDeps.participants(findAsDep);
-                        isDep = participants != null && participants.containsAll(intersecting)
-                                ? (isStable ? IsDep.IS_STABLE_DEP     : IsDep.IS_COORD_DEP)
-                                : (isStable ? IsDep.IS_NOT_STABLE_DEP : IsDep.IS_NOT_COORD_DEP);
+                        boolean isCoordDeps = summaryStatus.compareTo(ACCEPTED) < 0;
+                        int index = partialDeps.indexOf(findAsDep);
+                        // TODO (desired): don't construct participants, pass intersecting as parameter
+                        boolean isAnyDep = index >= 0 && partialDeps.isStable(index)
+                                              && partialDeps.participants(index).containsAll(intersecting);
+
+                        isDep = isAnyDep ? (isCoordDeps ? IsDep.IS_COORD_DEP     : IsDep.IS_STABLE_DEP)
+                                         : (isCoordDeps ? IsDep.IS_NOT_COORD_DEP : IsDep.IS_NOT_STABLE_DEP);
                     }
                 }
 

@@ -336,7 +336,8 @@ public interface CoordinationAdapter<R>
             @Override
             void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super Result, Throwable> callback)
             {
-                callback.accept(txn.result(txnId, executeAt, null), null);
+                if (callback != null)
+                    callback.accept(txn.result(txnId, executeAt, null), null);
             }
         }
 
@@ -347,7 +348,8 @@ public interface CoordinationAdapter<R>
             @Override
             void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
             {
-                callback.accept(new SyncPoint<>(txnId, executeAt, deps, (FullRoute<U>)route), null);
+                if (callback != null)
+                    callback.accept(new SyncPoint<>(txnId, executeAt, deps, (FullRoute<U>)route), null);
             }
         }
 

@@ -43,6 +43,11 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
             super(start, end);
         }
 
+        public EndInclusive(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
+        {
+            super(start, end, antiRange);
+        }
+
         @Override
         public int compareTo(RoutableKey key)
         {
@@ -91,6 +96,11 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         public StartInclusive(RoutingKey start, RoutingKey end)
         {
             super(start, end);
+        }
+
+        public StartInclusive(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
+        {
+            super(start, end, antiRange);
         }
 
         @Override
@@ -202,6 +212,9 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         };
     }
 
+    // used to construct an unsafe Range used only for representing an absence of information. Imposes weaker invariants.
+    public enum AntiRangeMarker { ANTI_RANGE };
+
     private final RoutingKey start;
     private final RoutingKey end;
 
@@ -210,6 +223,15 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         // TODO (expected): should we at least relax to permit an empty Range?
         Invariants.requireArgument(start.compareTo(end) < 0, "%s >= %s", start, end);
         Invariants.requireArgument(Objects.equals(start.prefix(), end.prefix()), "Range bounds must share their prefix: %s vs %s", start, end);
+        Invariants.require(startInclusive() != endInclusive(), "Range must have one side inclusive, and the other exclusive. Range of different types should not be mixed.");
+        this.start = start;
+        this.end = end;
+    }
+
+    private Range(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
+    {
+        // TODO (expected): should we at least relax to permit an empty Range?
+        Invariants.requireArgument(start.compareTo(end) < 0, "%s >= %s", start, end);
         Invariants.require(startInclusive() != endInclusive(), "Range must have one side inclusive, and the other exclusive. Range of different types should not be mixed.");
         this.start = start;
         this.end = end;

@@ -51,6 +51,7 @@ import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.Invalidated;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
+import static accord.primitives.SaveStatus.TruncatedApplyWithOutcomeAndDeps;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
@@ -69,8 +70,7 @@ import static accord.primitives.TxnId.Cardinality.Any;
 public enum Cleanup
 {
     NO(Uninitialised),
-    // we don't know if the command has been applied or invalidated as we have incomplete information
-    // so erase what information we don't need in future to decide this
+    TRUNCATE_WITH_OUTCOME_AND_DEPS(TruncatedApplyWithOutcomeAndDeps),
     TRUNCATE_WITH_OUTCOME(TruncatedApplyWithOutcome),
     TRUNCATE(TruncatedApply),
     VESTIGIAL(Vestigial),
@@ -177,6 +177,9 @@ public enum Cleanup
         if (ifUndecided != null)
             return ifUndecided;
 
+        if (!redundant.all(SHARD_ONLY_APPLIED))
+            return truncateWithOutcomeAndDeps(txnId);
+
         if (input == FULL)
         {
             Participants<?> waitsOn = participants.waitsOn();
@@ -198,7 +201,7 @@ public enum Cleanup
             case Local:
             case NotDurable:
             case ShardUniversal:
-                return truncateWithOutcome();
+                return truncateWithOutcome(txnId);
 
             case MajorityOrInvalidated:
             case Majority:
@@ -290,7 +293,14 @@ public enum Cleanup
     {
         return INVALIDATE;
     }
-    private static Cleanup truncateWithOutcome() { return TRUNCATE_WITH_OUTCOME; }
+    private static Cleanup truncateWithOutcomeAndDeps(TxnId txnId)
+    {
+        return TRUNCATE_WITH_OUTCOME_AND_DEPS;
+    }
+    private static Cleanup truncateWithOutcome(TxnId txnId)
+    {
+        return TRUNCATE_WITH_OUTCOME;
+    }
     private static Cleanup truncate(TxnId txnId)
     {
         return TRUNCATE;

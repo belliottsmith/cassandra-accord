@@ -326,11 +326,11 @@ public class RelationMultiMap
     {
         final MergeAdapter<K, V> adapter;
         final PassThroughObjectBuffers<K> keyBuffers;
-        K[] bufKeys;
-        V[] bufValues;
-        int[] buf = null;
-        int bufKeysLength, bufValuesLength = 0, bufLength = 0;
-        T from = null;
+        K[] prevKeys, nextKeys;
+        V[] prevValues, nextValues;
+        int[] prevKeysToValues, nextKeysToValues;
+        int prevKeysLength, prevValuesLength, prevKeysToValuesLength;
+        T prev, next;
 
         public LinearMerger(MergeAdapter<K, V> adapter)
         {
@@ -340,110 +340,108 @@ public class RelationMultiMap
         }
 
         @Override
-        public Object construct(K[] keys, int keysLength, V[] txnIds, int txnIdsLength, int[] out, int outLength)
+        public Object construct(K[] keys, int keysLength, V[] values, int valuesLength, int[] out, int outLength)
         {
-            if (from == null)
+            boolean isNext = true, isPrev = true;
+            if (keys != prevKeys)
             {
-                // if our input buffers were themselves buffers, we want to discard them unless they have been returned back to us
-                discard(keys, txnIds, out);
+                Invariants.require(len(prevKeys, prevKeysLength) != keysLength);
+                if (prevKeysLength >= 0)
+                    keyBuffers.realDiscard(prevKeys, prevKeysLength);
+                prevKeys = keys;
+                prevKeysLength = keys == nextKeys ? -1 : keysLength;
+                isNext = keysLength == nextKeys.length;
+                isPrev = false;
             }
-            else if (buf != out)
+            if (values != prevValues)
             {
-                // the output is not equal to a prior input
-                from = null;
+                if (prevValuesLength >= 0)
+                    realDiscard(prevValues, prevValuesLength);
+                prevValues = values;
+                prevValuesLength = values == nextValues ? -1 : valuesLength;
+                isNext &= valuesLength == nextValues.length;
+                isPrev = false;
+            }
+            if (out != prevKeysToValues)
+            {
+                if (prevKeysToValuesLength >= 0)
+                    realDiscard(prevKeysToValues, prevKeysToValuesLength);
+                prevKeysToValues = out;
+                prevKeysToValuesLength = out == nextKeysToValues ? -1 : outLength;
+                isNext &= out == nextKeysToValues;
+                isPrev = false;
             }
 
-            if (from == null)
-            {
-                bufKeys = keys;
-                bufKeysLength = keysLength;
-                bufValues = txnIds;
-                bufValuesLength = txnIdsLength;
-                buf = out;
-                bufLength = outLength;
-            }
-            else
-            {
-                Invariants.require(keys == bufKeys && keysLength == bufKeysLength);
-                Invariants.require(txnIds == bufValues && txnIdsLength == bufValuesLength);
-                Invariants.require(outLength == bufLength);
-            }
+            if (!isPrev)
+                prev = isNext ? next : null;
+
             return null;
         }
 
         public void update(T merge, K[] keys, V[] values, int[] keysToValues)
         {
-            if (buf == null)
+            if (prevKeysToValues == null)
             {
-                bufKeys = keys;
-                bufKeysLength = keys.length;
-                bufValues = values;
-                bufValuesLength = values.length;
-                buf = keysToValues;
-                bufLength = keysToValues.length;
-                from = merge;
+                prevKeys = keys;
+                prevKeysLength = -1;
+                prevValues = values;
+                prevValuesLength = -1;
+                prevKeysToValues = keysToValues;
+                prevKeysToValuesLength = -1;
+                prev = merge;
                 return;
             }
 
+            nextKeys = keys;
+            nextValues = values;
+            nextKeysToValues = keysToValues;
+            next = merge;
             linearUnion(
-                    bufKeys, bufKeysLength, bufValues, bufValuesLength, buf, bufLength,
-                    keys, keys.length, values, values.length, keysToValues, keysToValues.length,
-                    adapter.keyComparator(), adapter.valueComparator(),
-                    adapter.keyMerger(), adapter.valueMerger(),
-                    keyBuffers, this, this, this
+                prevKeys, len(prevKeys, prevKeysLength), prevValues, len(prevValues, prevValuesLength), prevKeysToValues, len(prevKeysToValues, prevKeysToValuesLength),
+                keys, keys.length, values, values.length, keysToValues, keysToValues.length,
+                adapter.keyComparator(), adapter.valueComparator(),
+                adapter.keyMerger(), adapter.valueMerger(),
+                keyBuffers, this, this, this
             );
-            if (buf == keysToValues)
-            {
-                Invariants.require(keys == bufKeys && keys.length == bufKeysLength);
-                Invariants.require(values == bufValues && values.length == bufValuesLength);
-                Invariants.require(keysToValues.length == bufLength);
-                from = merge;
-            }
+        }
+
+        private static int len(Object[] prev, int prevLength)
+        {
+            return prevLength < 0 ? prev.length : prevLength;
+        }
+
+        private static int len(int[] prev, int prevLength)
+        {
+            return prevLength < 0 ? prev.length : prevLength;
         }
 
         public T get(SimpleConstructor<K[], V[], T> constructor, T none)
         {
-            if (buf == null)
+            if (prevKeysToValues == null)
                 return none;
 
-            if (from != null)
-                return from;
+            if (prev != null)
+                return prev;
 
-            return constructor.construct(keyBuffers.realComplete(bufKeys, bufKeysLength),
-                    realComplete(bufValues, bufValuesLength),
-                    realComplete(buf, bufLength));
-        }
-
-        /**
-         * Free buffers unless they are equal to the corresponding parameter
-         */
-        void discard(K[] freeKeysIfNot, V[] freeValuesIfNot, int[] freeBufIfNot)
-        {
-            if (from != null)
-                return;
-
-            if (bufKeys != freeKeysIfNot)
-            {
-                keyBuffers.realDiscard(bufKeys, bufKeysLength);
-                bufKeys = null;
-            }
-            if (bufValues != freeValuesIfNot)
-            {
-                realDiscard(bufValues, bufValuesLength);
-                bufValues = null;
-            }
-            if (buf != freeBufIfNot)
-            {
-                realDiscard(buf, bufLength);
-                buf = null;
-            }
+            K[] keys = prevKeysLength < 0 ? prevKeys : keyBuffers.realComplete(prevKeys, prevKeysLength);
+            V[] values = prevValuesLength < 0 ? prevValues : realComplete(prevValues, prevValuesLength);
+            int[] keysToValues = prevKeysToValuesLength < 0 ? prevKeysToValues : realComplete(prevKeysToValues, prevKeysToValuesLength);
+            return constructor.construct(keys, values, keysToValues);
         }
 
         @Override
         public void close()
         {
-            if (from == null)
-                discard(null, null, null);
+            if (prevKeysLength >= 0 && prevKeys != null)
+                keyBuffers.realDiscard(prevKeys, prevKeysLength);
+            if (prevValuesLength >= 0 && prevValues != null)
+                realDiscard(prevValues, prevValuesLength);
+            if (prevKeysToValuesLength >= 0 && prevKeysToValues != null)
+                realDiscard(prevKeysToValues, prevKeysToValuesLength);
+            prevKeys = nextKeys = null;
+            prevValues = nextValues = null;
+            prevKeysToValues = nextKeysToValues = null;
+            next = prev = null;
         }
     }
 
@@ -624,17 +622,15 @@ public class RelationMultiMap
                   @Nullable BiFunction<? super K, ? super K, ? extends K> keyMerger, @Nullable BiFunction<? super V, ? super V, ? extends V> valueMerger,
                   ObjectBuffers<K> keyBuffers, ObjectBuffers<V> valueBuffers, IntBuffers intBuffers, Constructor<K, V, T> constructor)
     {
-        K[] outKeys = null;
-        V[] outValues = null;
         int[] remapLeft = null, remapRight = null, out = null;
         int outLength = 0, outKeysLength = 0, outValuesLength = 0;
 
         try
         {
-            outKeys = SortedArrays.linearUnion(leftKeys, 0, leftKeysLength, rightKeys, 0, rightKeysLength, keyComparator, keyMerger, keyBuffers);
+            K[] outKeys = SortedArrays.linearUnion(leftKeys, 0, leftKeysLength, rightKeys, 0, rightKeysLength, keyComparator, keyMerger, keyBuffers);
             outKeysLength = keyBuffers.sizeOfLast(outKeys);
 
-            outValues = SortedArrays.linearUnion(leftValues, 0, leftValuesLength, rightValues, 0, rightValuesLength, valueComparator, valueMerger, valueBuffers);
+            V[] outValues = SortedArrays.linearUnion(leftValues, 0, leftValuesLength, rightValues, 0, rightValuesLength, valueComparator, valueMerger, valueBuffers);
             outValuesLength = valueBuffers.sizeOfLast(outValues);
 
             remapLeft = remapToSuperset(leftValues, leftValuesLength, outValues, outValuesLength, valueComparator, intBuffers);
@@ -862,10 +858,6 @@ public class RelationMultiMap
         }
         finally
         {
-            if (outKeys != null)
-                keyBuffers.discard(outKeys, outKeysLength);
-            if (outValues != null)
-                valueBuffers.discard(outValues, outValuesLength);
             if (out != null)
                 intBuffers.discard(out, outLength);
             if (remapLeft != null)

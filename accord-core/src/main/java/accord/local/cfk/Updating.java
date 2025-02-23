@@ -52,11 +52,13 @@ import accord.utils.RelationMultiMap;
 import accord.utils.SortedArrays;
 import accord.utils.SortedList.MergeCursor;
 
+import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE_VISIBLE;
 import static accord.local.cfk.CommandsForKey.NOT_LOADING_PRUNED;
 import static accord.local.cfk.CommandsForKey.NO_INFOS;
@@ -329,6 +331,10 @@ class Updating
             int c = t.compareTo(d);
             if (c == 0)
             {
+                // TODO (expected): if plainTxnId implies TRANSITIVE_VISIBLE dependencies,
+                //  we should ensure any existing TRANSITIVE entries are upgraded.
+                // OR we should remove TRANSITIVE for simplicity,
+                // OR document/enforce that TRANSITIVE_VISIBLE can only be applied to dependencies of unmanaged transactions
                 if (d.is(UNSTABLE) && t.compareTo(COMMITTED) < 0 && t.witnesses(d))
                 {
                     if (missingCount == missing.length)
@@ -872,7 +878,7 @@ class Updating
         // used only to decide if an executeAt is included _on the assumption the TxnId is_. For ?[EX] this is all timestamps
         Timestamp compareExecuteAt = waitingTxnId.awaitsOnlyDeps() ? Timestamp.MAX : command.executeAt();
 
-        TxnInfo[] byId = cfk.byId;
+        TxnInfo[] byId = cfk.byId, newById = null;
         RelationMultiMap.SortedRelationList<TxnId> txnIds = command.partialDeps().keyDeps.txnIdsWithFlags(cfk.key());
         TxnId[] missing = NO_TXNIDS;
         int missingCount = 0;
@@ -968,7 +974,16 @@ class Updating
                                 effectiveExecutesAt = Timestamp.nonNullOrMax(effectiveExecutesAt, txn.executeAt);
                             }
                         }
-                        if (c == 0) ++i;
+                        if (c == 0)
+                        {
+                            if (txn.is(TRANSITIVE) && isTransitiveDependencyVisible(waitingTxnId))
+                            {
+                                if (newById == null)
+                                    newById = byId.clone();
+                                newById[j] = TxnInfo.create(txn, TRANSITIVE_VISIBLE, txn.mayExecute(), txn.statusOverrides(), txn.executeAt, txn.missing(), txn.ballot());
+                            }
+                            ++i;
+                        }
                     }
                     ++j;
                 }
@@ -1022,7 +1037,8 @@ class Updating
             waitingToExecuteAt = updateExecuteAtLeast(waitingToExecuteAt, effectiveExecutesAt, safeCommand);
             if (!readyToApply || missingCount > 0)
             {
-                TxnInfo[] newById = byId, newCommittedByExecuteAt = cfk.committedByExecuteAt;
+                if (newById == null) newById = byId;
+                TxnInfo[] newCommittedByExecuteAt = cfk.committedByExecuteAt;
                 int newMinUndecidedById = cfk.minUndecidedById;
                 int newMaxAppliedPreBootstrapWriteById = cfk.maxAppliedPreBootstrapWriteById;
                 Object[] newLoadingPruned = cfk.loadingPruned;
@@ -1050,8 +1066,9 @@ class Updating
                             ++minUndecidedMissingIndex;
                         TxnId minUndecidedMissing = minUndecidedMissingIndex == missingCount ? null : missing[minUndecidedMissingIndex];
                         TxnId minUndecided = TxnId.nonNullOrMin(minUndecidedMissing, cfk.minUndecided());
+                        TxnInfo[] copyById = newById;
                         newById = new TxnInfo[byId.length + missingCount];
-                        newCommittedByExecuteAt = insertAdditionsOnly(byId, cfk.committedByExecuteAt, newById, missing, missingCount, cfk.bounds, waitingTxnId);
+                        newCommittedByExecuteAt = insertAdditionsOnly(copyById, cfk.committedByExecuteAt, newById, missing, missingCount, cfk.bounds, waitingTxnId);
                         // we can safely use missing[prunedIndex] here because we only fill missing with transactions for which we manage execution
                         if (minUndecided != null)
                             newMinUndecidedById = Arrays.binarySearch(newById, minUndecided);
