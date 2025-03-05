@@ -25,6 +25,7 @@ import accord.utils.IndexedFunction;
 import accord.utils.Invariants;
 import accord.utils.MergeFewDisjointSortedListsCursor;
 import accord.utils.RelationMultiMap;
+import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedList;
 import accord.utils.SortedList.MergeCursor;
@@ -32,6 +33,7 @@ import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 
 import java.util.AbstractList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -113,7 +115,7 @@ public class Deps
 
         public AbstractBuilder<T> add(Unseekable keyOrRange, TxnId txnId)
         {
-            Invariants.requireArgument(keyOrRange.domain() == txnId.domain(), keyOrRange + " is not same domain as " + txnId);
+            Invariants.requireArgument(keyOrRange.domain() == txnId.domain(), "%s is not same domain as %s", keyOrRange,  txnId);
             switch (txnId.domain())
             {
                 default: throw new AssertionError();
@@ -280,6 +282,26 @@ public class Deps
                 return txnIdCount();
             }
         };
+    }
+
+    public Deps intersectStable(Deps that, TxnId until)
+    {
+        return new Deps(keyDeps.withTxnIds(intersectStable(keyDeps.txnIds, that.keyDeps.txnIds, until)),
+                        rangeDeps.withTxnIds(intersectStable(rangeDeps.txnIds, that.rangeDeps.txnIds, until)));
+    }
+
+    static TxnId[] intersectStable(TxnId[] keep, TxnId[] intersectStable, TxnId until)
+    {
+        if (keep.length == 0)
+            return keep;
+
+        int updateEnd = keep.length;
+        if (keep[updateEnd - 1].compareTo(until) >= 0)
+        {
+            updateEnd = Arrays.binarySearch(keep, until);
+            if (updateEnd < 0) updateEnd = -1 - updateEnd;
+        }
+        return SortedArrays.linearUpdate(keep, 0, updateEnd, keep.length, intersectStable, 0, intersectStable.length, TxnId::compareTo, TxnId::propagateUnstable, TxnId[]::new);
     }
 
     public int indexOf(TxnId txnId)

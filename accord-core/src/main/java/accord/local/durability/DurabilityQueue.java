@@ -48,6 +48,7 @@ import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.SyncPoint;
 import accord.primitives.TxnId;
+import accord.topology.TopologyManager;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncResult;
 import org.agrona.collections.ObjectHashSet;
@@ -257,12 +258,14 @@ public class DurabilityQueue
                 if (fail != null)
                 {
                     if (logger.isTraceEnabled()) logger.trace("{}: failed awaiting durability for {}{}.", txnId, ranges, requestor, fail);
-                    if (fail.getClass() == SyncPointErased.class)
+                    if (fail instanceof SyncPointErased || fail instanceof TopologyManager.TopologyRetiredException)
                     {
                         // we can't succeed. if this was requested, and the request is still waiting, submit another coordination request
                         // TODO (required): add back-off and expand this to all unknown exception outcomes
                         if (request != null)
                             node.durability().shards().request(request, request.stillWaiting(exclusiveSyncPoint.route));
+                        success();
+                        return;
                     }
                 }
                 if (success == null || (success.achievedRemote.compareTo(request == null ? All : request.remote) < 0))

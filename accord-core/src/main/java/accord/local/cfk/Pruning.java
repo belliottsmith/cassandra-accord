@@ -544,7 +544,7 @@ public class Pruning
             {
                 int startPos = prevBootstrappedAt == null ? 0 : insertPos(byId, prevBootstrappedAt);
                 for (int i = startPos ; i < pos ; ++i)
-                    Invariants.require(byId[i].isNot(COMMITTED), "%s expected to be applied or undecided, as marked redundant", byId[i]);
+                    Invariants.require(byId[i].isNot(COMMITTED) || !byId[i].mayExecute(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
             }
 
             newById = Arrays.copyOfRange(byId, pos, byId.length);

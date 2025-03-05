@@ -31,6 +31,7 @@ import accord.primitives.Txn.Kind.Kinds;
 import accord.utils.Invariants;
 import accord.utils.TinyEnumSet;
 
+import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
@@ -392,6 +393,11 @@ public class TxnId extends Timestamp implements PreLoadContext
     public TxnId addFlag(Flag flag)
     {
         return addFlags(flag.bit);
+    }
+
+    public TxnId propagateUnstable(@Nullable TxnId ifNullOrUnstable)
+    {
+        return ifNullOrUnstable == null || ifNullOrUnstable.is(UNSTABLE) ? addFlag(UNSTABLE) : this;
     }
 
     public final TxnId addFlags(TxnId merge)

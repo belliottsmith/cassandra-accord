@@ -32,8 +32,6 @@ import java.util.List;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
-import static accord.local.KeyHistory.ASYNC;
-import static accord.local.KeyHistory.INCR;
 import static accord.local.KeyHistory.NONE;
 import static accord.local.KeyHistory.SYNC;
 
@@ -116,9 +114,9 @@ public interface PreLoadContext
             KeyHistory requiredHistory = keyHistory();
             if (requiredHistory != NONE)
             {
-                if (requiredHistory == INCR || requiredHistory == ASYNC)
+                if (requiredHistory.compareTo(SYNC) < 0)
                     requiredHistory = SYNC;
-                if (requiredHistory != superset.keyHistory())
+                if (requiredHistory.compareTo(superset.keyHistory()) < 0)
                     return false;
             }
 

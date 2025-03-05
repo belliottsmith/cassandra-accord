@@ -390,6 +390,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
     }
 
+    static int counter = 0;
     public static class DelayedSafeStore extends InMemoryCommandStore.InMemorySafeStore
     {
         private final DelayedCommandStore commandStore;
@@ -405,6 +406,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             super(commandStore, ranges, context, commands, commandsForKey);
             this.commandStore = commandStore;
             this.cacheLoading = cacheLoading;
+            ++counter;
         }
 
         @Override

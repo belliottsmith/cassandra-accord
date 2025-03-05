@@ -28,9 +28,11 @@ import accord.api.Agent;
 
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.RedundantBefore.Bounds;
+import accord.local.RedundantStatus.SomeStatus;
 import accord.primitives.RangeDeps;
 import accord.primitives.Routables;
 import accord.primitives.Route;
+import accord.primitives.Status.Durability;
 import accord.primitives.Unseekables;
 import accord.utils.async.AsyncChain;
 
@@ -66,11 +68,12 @@ import org.agrona.collections.LongHashSet;
 import static accord.api.ConfigurationService.EpochReady.DONE;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.PreLoadContext.empty;
-import static accord.local.RedundantStatus.GC_BEFORE_AND_LOCALLY_APPLIED;
-import static accord.local.RedundantStatus.LOCALLY_APPLIED_ONLY;
-import static accord.local.RedundantStatus.LOCALLY_WITNESSED_ONLY;
-import static accord.local.RedundantStatus.PRE_BOOTSTRAP_ONLY;
-import static accord.local.RedundantStatus.SHARD_ONLY_APPLIED_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.SomeStatus.LOCALLY_APPLIED_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.MAJORITY_APPLIED_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.PRE_BOOTSTRAP_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.SHARD_APPLIED_ONLY;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
@@ -108,7 +111,7 @@ public abstract class CommandStore implements AgentExecutor
 
         public void remove(long epoch, RangesForEpoch newRangesForEpoch, Ranges removeRanges)
         {
-            RedundantBefore addRedundantBefore = RedundantBefore.create(removeRanges, Long.MIN_VALUE, epoch, TxnId.NONE, RedundantStatus.NONE);
+            RedundantBefore addRedundantBefore = RedundantBefore.create(removeRanges, Long.MIN_VALUE, epoch, TxnId.NONE, SomeStatus.NONE);
             update(newRangesForEpoch, addRedundantBefore);
         }
 
@@ -650,14 +653,20 @@ public abstract class CommandStore implements AgentExecutor
     }
 
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
-    public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges)
+    public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges, Durability durability)
     {
+        if (durability.compareTo(Durability.MajorityOrInvalidated) < 0)
+            return;
+
+        SomeStatus status = durability.compareTo(Durability.UniversalOrInvalidated) >= 0 ? SHARD_APPLIED_ONLY : MAJORITY_APPLIED_ONLY;
         final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
         TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, Bounds::maxLocallyAppliedBefore);
-        RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, globalSyncId, SHARD_ONLY_APPLIED_ONLY);
+        RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, globalSyncId, status);
         safeStore.upsertRedundantBefore(addShardRedundant);
         updatedRedundantBefore(safeStore, globalSyncId, slicedRanges);
-        safeStore = safeStore; // make unusable in lambda
+
+        if (status != SHARD_APPLIED_ONLY)
+            return;
 
         if (locallyRedundantBefore.compareTo(globalSyncId) < 0)
         {
@@ -673,6 +682,7 @@ public abstract class CommandStore implements AgentExecutor
         // TODO (desired): not all systems care about HLC_BOUND for GC, make configurable
         if (globalSyncId.is(HLC_BOUND) || !requiresUniqueHlcs())
         {
+            safeStore = safeStore; // make unusable in lambda
             safeStore.dataStore().snapshot(slicedRanges, globalSyncId).begin((success, fail) -> {
                 if (fail != null)
                 {
@@ -690,7 +700,7 @@ public abstract class CommandStore implements AgentExecutor
 
     protected void updatedRedundantBefore(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
-        TxnId clearWaitingBefore = redundantBefore.minShardRedundantBefore();
+        TxnId clearWaitingBefore = redundantBefore.minShardAndLocallyAppliedBefore();
         TxnId clearAnyBefore = durableBefore().min.majorityBefore;
         progressLog.clearBefore(safeStore, clearWaitingBefore, clearAnyBefore);
         listeners.clearBefore(this, clearWaitingBefore);

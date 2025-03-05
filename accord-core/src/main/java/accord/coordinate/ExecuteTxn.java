@@ -25,6 +25,7 @@ import accord.api.Result;
 import accord.api.Timeouts;
 import accord.local.CommandStore;
 import accord.local.Commands;
+import accord.local.Commands.CommitOutcome;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
@@ -70,7 +71,6 @@ import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
 import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Phase.Execute;
-import static accord.primitives.Status.PreAccepted;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (expected): return Waiting from ReadData if not ready to execute, and do not submit more than one speculative retry in this case
@@ -295,9 +295,9 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
         @Override
         protected CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
         {
-            if (txnId.hasPrivilegedCoordinator() && path == FAST && (!safeCommand.current().promised().equals(Ballot.ZERO) || safeCommand.current().status() != PreAccepted))
+            if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind()))
                 return CommitOrReadNack.Rejected;
-            Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind());
+
             return super.apply(safeStore, safeCommand, participants);
         }
 

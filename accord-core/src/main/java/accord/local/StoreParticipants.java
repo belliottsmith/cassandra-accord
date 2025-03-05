@@ -114,9 +114,12 @@ public class StoreParticipants
             this.stillTouches = stillTouches;
             if (Invariants.isParanoid())
             {
-                Invariants.require(stillWaitsOn == null || stillTouches.containsAll(stillWaitsOn));
-                Invariants.require(stillExecutes == null || stillOwns.containsAll(stillExecutes));
-                Invariants.require(stillTouches.containsAll(stillOwns));
+                Invariants.requireArgument(stillWaitsOn == null || stillTouches.containsAll(stillWaitsOn));
+                Invariants.requireArgument(stillExecutes == null || stillOwns.containsAll(stillExecutes));
+                Invariants.requireArgument(executes == null || executes.containsAll(stillExecutes));
+                Invariants.requireArgument(touches.containsAll(stillTouches));
+                Invariants.requireArgument(owns.containsAll(stillOwns));
+                Invariants.requireArgument(stillTouches.containsAll(stillOwns));
             }
         }
 
@@ -267,6 +270,12 @@ public class StoreParticipants
         return executesIsNull ? null : owns;
     }
 
+    public final boolean doesStillExecute()
+    {
+        Participants<?> executes = stillExecutes();
+        return executes != null && !executes.isEmpty();
+    }
+
     /**
      * If set, the keys we are known to still execute (i.e. excluding any that are pre-bootstrap or stale)
      * @return
@@ -344,12 +353,10 @@ public class StoreParticipants
         Participants<?> curTouches = touches();
         Participants<?> touches = curTouches;
         if (filter == UPDATE)
-            touches = redundantBefore.expectToCalculateDependenciesOrConsultOnRecovery(txnId, executeAtIfKnown, curTouches);
+            touches = filterTouches(txnId, redundantBefore, owns, touches);
 
         Participants<?> curStillTouches = stillTouches();
-        Participants<?> stillTouches = redundantBefore.expectToOwnOrExecuteOrConsultOnRecovery(txnId, executeAtIfKnown, curStillTouches);
-        if (stillTouches != curStillTouches && owns() == curStillTouches && stillTouches.equals(owns))
-            stillTouches = owns;
+        Participants<?> stillTouches = filterTouches(txnId, redundantBefore, stillOwns, curStillTouches);
 
         if (curStillOwns != stillOwns || curStillTouches != stillTouches || curStillExecutes != stillExecutes || curStillWaitsOn != stillWaitsOn)
             return new FilteredStoreParticipants(route, owns, executes(), waitsOn(), touches, hasTouched(), stillOwns, stillExecutes, stillWaitsOn, stillTouches);
@@ -358,6 +365,22 @@ public class StoreParticipants
             return update(route, owns, executes(), waitsOn(), touches, hasTouched());
 
         return this;
+    }
+
+    private static Participants<?> filterTouches(TxnId txnId, RedundantBefore redundantBefore, Participants<?> owns, Participants<?> touches)
+    {
+        if (touches != owns)
+        {
+            Participants<?> extraTouches = touches.without(owns);
+            if (!extraTouches.isEmpty())
+            {
+                Participants<?> filteredExtra = redundantBefore.withoutShardApplied(txnId, extraTouches);
+                if (extraTouches != filteredExtra)
+                    touches = owns.with((Participants)filteredExtra);
+            }
+        }
+
+        return touches;
     }
 
     public final boolean touches(RoutingKey key)
@@ -496,6 +519,7 @@ public class StoreParticipants
         return Objects.equals(route(), that.route())
                && owns().equals(that.owns())
                && Objects.equals(executes(), that.executes())
+               && Objects.equals(waitsOn(), that.waitsOn())
                && touches().equals(that.touches())
                && hasTouched().equals(that.hasTouched());
     }

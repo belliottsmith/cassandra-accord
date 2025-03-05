@@ -61,6 +61,7 @@ import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
+import static accord.local.Cleanup.EXPUNGE;
 import static accord.local.Cleanup.NO;
 import static accord.local.Command.Accepted.accepted;
 import static accord.local.Command.Committed.committed;
@@ -299,9 +300,6 @@ public class CommandChange
             if (!nextCalled)
                 return NO;
 
-            if (saveStatus == null || participants == null)
-                return Cleanup.NO;
-
             Durability durability = this.durability;
             if (durability == null) durability = NotDurable;
             Cleanup cleanup = Cleanup.shouldCleanup(input, agent, txnId, executeAt, saveStatus, durability, participants, redundantBefore, durableBefore);
@@ -310,30 +308,31 @@ public class CommandChange
             return cleanup;
         }
 
-        public boolean maybeCleanup(Input input, Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore)
+        public Cleanup maybeCleanup(Input input, Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore)
         {
             Cleanup cleanup = shouldCleanup(input, agent, redundantBefore, durableBefore);
             return maybeCleanup(input, cleanup);
         }
 
-        public boolean maybeCleanup(Input input, Cleanup cleanup)
+        public Cleanup maybeCleanup(Input input, Cleanup cleanup)
         {
-            if (saveStatus == null || cleanup == NO)
-                return false;
+            if (cleanup == NO || cleanup == EXPUNGE)
+                return cleanup;
 
             SaveStatus newSaveStatus = cleanup.appliesIfNot;
-            if (saveStatus.compareTo(newSaveStatus) >= 0)
-                return false;
-
-            forceSetNulls(eraseKnownFieldsMask[newSaveStatus.ordinal()]);
-            if (input == Input.FULL)
+            if (saveStatus == null || saveStatus.compareTo(newSaveStatus) < 0)
             {
-                // TODO (expected): this special-casing shouldn't be necessary
-                if (newSaveStatus == SaveStatus.TruncatedApply && !saveStatus.known.is(ApplyAtKnown))
-                    newSaveStatus = SaveStatus.TruncatedUnapplied;
-                saveStatus = newSaveStatus;
+                if (input == Input.FULL)
+                {
+                    // TODO (expected): this special-casing should be declared in Cleanup
+                    if (newSaveStatus == SaveStatus.TruncatedApply && (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)))
+                        newSaveStatus = SaveStatus.TruncatedUnapplied;
+                    saveStatus = newSaveStatus;
+                }
+                forceSetNulls(eraseKnownFieldsMask[newSaveStatus.ordinal()]);
             }
-            return true;
+
+            return cleanup;
         }
 
         protected void setNulls(int mask)
@@ -436,7 +435,6 @@ public class CommandChange
             switch (status)
             {
                 default: throw new UnhandledEnum(status);
-                case TruncatedApplyWithOutcomeAndDeps:
                 case TruncatedApplyWithOutcome:
                 case TruncatedApply:
                 case TruncatedUnapplied:
@@ -542,8 +540,9 @@ public class CommandChange
         flags = collectFlags(before, after, Command::result, false, RESULT, flags);
 
         // make sure we have enough information to decide whether to expunge timestamps (for unique ApplyAt HLC guarantees)
-        if (isChanged(EXECUTE_AT, flags) && after.saveStatus().known.is(ApplyAtKnown))
+        if (after.saveStatus().known.is(ApplyAtKnown) && (before == null || !before.saveStatus().known.is(ApplyAtKnown)))
         {
+            flags = setChanged(EXECUTE_AT, flags);
             flags = setChanged(PARTICIPANTS, flags);
             flags = setChanged(SAVE_STATUS, flags);
         }

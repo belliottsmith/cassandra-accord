@@ -582,11 +582,6 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public enum CommitOrReadNack implements ReadData.ReadReply
     {
         /**
-         * The commit has been rejected due to stale ballot.
-         */
-        Rejected("CommitRejected", true),
-
-        /**
          * Either not committed, or not stable
          */
         Insufficient("CommitInsufficient", false),
@@ -596,7 +591,13 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
          */
         Waiting("ReadOrApplyWaiting", false),
 
-        Redundant("CommitOrReadRedundant", true);
+        Redundant("CommitOrReadRedundant", true),
+
+        /**
+         * The commit has been rejected due to stale ballot.
+         */
+        Rejected("CommitRejected", true),
+        ;
 
         final String fullname;
         final boolean isFinal;

@@ -69,7 +69,6 @@ import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
-import static accord.primitives.SaveStatus.TruncatedApplyWithOutcomeAndDeps;
 import static accord.primitives.SaveStatus.TruncatedUnapplied;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.ReadyToExecute;
@@ -444,26 +443,6 @@ public abstract class Command implements ICommand
             // TODO (expected): centralise this translation so applied consistently
             SaveStatus newSaveStatus = command.known().is(ApplyAtKnown) ? TruncatedApply : TruncatedUnapplied;
             return truncated(command, participants, newSaveStatus);
-        }
-
-        public static Truncated truncatedApplyWithOutcomeAndDeps(Executed command)
-        {
-            return truncatedApplyWithOutcomeAndDeps(command, command.participants());
-        }
-
-        public static Truncated truncatedApplyWithOutcomeAndDeps(Executed command, StoreParticipants participants)
-        {
-            return truncated(command, participants, TruncatedApplyWithOutcomeAndDeps);
-        }
-
-        public static Truncated truncatedApplyWithOutcome(Executed command)
-        {
-            return truncatedApplyWithOutcome(command, command.participants());
-        }
-
-        public static Truncated truncatedApplyWithOutcome(Executed command, StoreParticipants participants)
-        {
-            return truncated(command, participants, TruncatedApplyWithOutcome);
         }
 
         public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, Result result)
@@ -1589,7 +1568,6 @@ public abstract class Command implements ICommand
             case TruncatedUnapplied:
             case TruncatedApply:
             case TruncatedApplyWithOutcome:
-            case TruncatedApplyWithOutcomeAndDeps:
                 if (txnId.awaitsOnlyDeps())
                     return validateCommandClass(status, TruncatedAwaitsOnlyDeps.class, klass);
             case Erased:

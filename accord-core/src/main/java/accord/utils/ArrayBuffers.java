@@ -57,6 +57,7 @@ public class ArrayBuffers
     private static final boolean FULLY_UNCACHED = true;
 
     // TODO (low priority, efficiency): we should periodically clear the thread locals to ensure we aren't slowly accumulating unnecessarily large objects on every thread
+    private static final ThreadLocal<ShortBufferCache> SHORTS = ThreadLocal.withInitial(() -> new ShortBufferCache(4, 1 << 10));
     private static final ThreadLocal<IntBufferCache> INTS = ThreadLocal.withInitial(() -> new IntBufferCache(4, 1 << 14));
     private static final ThreadLocal<LongBufferCache> LONGS = ThreadLocal.withInitial(() -> new LongBufferCache(4, 1 << 14));
     private static final ThreadLocal<ObjectBufferCache<Key>> KEYS = ThreadLocal.withInitial(() -> new ObjectBufferCache<>(3, 1 << 9, Key[]::new));
@@ -65,6 +66,10 @@ public class ArrayBuffers
     private static final ThreadLocal<ObjectBufferCache<TxnId>> TXN_IDS = ThreadLocal.withInitial(() -> new ObjectBufferCache<>(3, 1 << 12, TxnId[]::new));
     private static final ThreadLocal<ObjectBufferCache<Object>> OBJECTS = ThreadLocal.withInitial(() -> new ObjectBufferCache<>(3, 1 << 12, Object[]::new));
 
+    public static ShortBuffers cachedShorts()
+    {
+        return SHORTS.get();
+    }
     public static IntBuffers cachedInts()
     {
         return INTS.get();
@@ -108,6 +113,73 @@ public class ArrayBuffers
     public static <T> ObjectBuffers<T> uncached(IntFunction<T[]> allocator) { return new UncachedObjectBuffers<>(allocator); }
 
     public static IntBuffers uncachedInts() { return UncachedIntBuffers.INSTANCE; }
+
+    public interface ShortBufferAllocator
+    {
+        /**
+         * Return an {@code short[]} of size at least {@code minSize}, possibly from a pool.
+         * This array may not be zero initialized, and its contents should be treated as random.
+         */
+        short[] getShorts(int minSize);
+    }
+
+    public interface ShortBuffers extends ShortBufferAllocator
+    {
+        /**
+         * Return an {@code int[]} of size at least {@code minSize}, possibly from a pool,
+         * and copy the contents of {@code copyAndDiscard} into it.
+         *
+         * The remainder of the array may not be zero-initialized, and should be assumed to contain random data.
+         *
+         * The parameter will be returned to the pool, if eligible.
+         */
+        default short[] resize(short[] copyAndDiscard, int usedSize, int minSize)
+        {
+            short[] newBuf = getShorts(minSize);
+            System.arraycopy(copyAndDiscard, 0, newBuf, 0, usedSize);
+            forceDiscard(copyAndDiscard);
+            return newBuf;
+        }
+
+        /**
+         * To be invoked on the result buffer with the number of elements contained;
+         * either the buffer will be returned and the size optionally captured, or else the result may be
+         * shrunk to the size of the contents, depending on implementation.
+         */
+        short[] complete(short[] buffer, int usedSize);
+
+        /**
+         * The buffer is no longer needed by the caller, which is discarding the array;
+         * if {@link #complete(short[], int)} returned the buffer as its result this buffer should NOT be
+         * returned to any pool.
+         *
+         * Note that this method assumes {@link #complete(short[], int)} was invoked on this buffer previously.
+         * However, it is guaranteed that a failure to do so does not leak memory or pool space, only produces some
+         * additional garbage.
+         *
+         * @return true if the buffer is discarded (and discard-able), false if it was retained or is believed to be in use
+         */
+        boolean discard(short[] buffer, int usedSize);
+
+        /**
+         * Equivalent to
+         *   int[] result = complete(buffer, usedSize);
+         *   discard(buffer, usedSize);
+         *   return result;
+         */
+        default short[] completeAndDiscard(short[] buffer, int usedSize)
+        {
+            short[] result = complete(buffer, usedSize);
+            discard(buffer, usedSize);
+            return result;
+        }
+
+        /**
+         * Indicate this buffer is definitely unused, and return it to a pool if possible
+         * @return true if the buffer is discarded (and discard-able), false if it was retained
+         */
+        boolean forceDiscard(short[] buffer);
+    }
 
     public interface IntBufferAllocator
     {
@@ -499,6 +571,41 @@ public class ArrayBuffers
             }
 
             return true;
+        }
+    }
+
+    public static class ShortBufferCache extends AbstractBufferCache<short[]> implements ShortBuffers
+    {
+        ShortBufferCache(int maxCount, int maxSize)
+        {
+            super(short[]::new, (array, size) -> {}, maxCount, maxSize);
+        }
+
+        @Override
+        public short[] complete(short[] buffer, int usedSize)
+        {
+            if (usedSize == buffer.length)
+                return buffer;
+
+            return Arrays.copyOf(buffer, usedSize);
+        }
+
+        @Override
+        public boolean discard(short[] buffer, int usedSize)
+        {
+            return discardInternal(buffer, buffer.length, usedSize, false);
+        }
+
+        @Override
+        public boolean forceDiscard(short[] buffer)
+        {
+            return discardInternal(buffer, buffer.length, -1, true);
+        }
+
+        @Override
+        public short[] getShorts(int minSize)
+        {
+            return getInternal(minSize);
         }
     }
 

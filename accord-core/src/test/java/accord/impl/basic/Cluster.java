@@ -581,7 +581,7 @@ public class Cluster
                     command = command.updateParticipants(command.participants().filter(LOAD, commandStore.unsafeGetRedundantBefore(), command.txnId(), command.executeAtIfKnown()));
                     // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
                     Command reconstructed = journal.loadCommand(commandStore.id(), command.txnId(), commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
-                    if (reconstructed.saveStatus().hasBeen(Status.Truncated))
+                    if (reconstructed == null || reconstructed.saveStatus().hasBeen(Status.Truncated))
                         return;
 
                     List<ReflectionUtils.Difference<?>> diff = ReflectionUtils.recursiveEquals(command, reconstructed);
@@ -957,7 +957,7 @@ public class Cluster
                         if (Cleanup.shouldCleanup(FULL, s.agent(), beforeCommand, store.unsafeGetRedundantBefore(), store.durableBefore()) == EXPUNGE)
                             continue;
 
-                        if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::shardRedundantBefore).compareTo(txnId) > 0)
+                        if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::shardAndLocallyRedundantBefore).compareTo(txnId) > 0)
                             continue;
 
                         if (beforeCommand.participants().owns().isEmpty() && store.durableBefore().min(txnId).compareTo(Status.Durability.MajorityOrInvalidated) >= 0)

@@ -229,28 +229,22 @@ public class Invalidate implements Callback<InvalidateReply>
 
         if (max != maxNotTruncated || max.maxStatus != max.maxKnowledgeStatus)
         {
+            // note: this may all be out of date given other evolutions (and it was previously buggy)
+            // TODO (required): revisit this logic some more
+            //   this exists because if we have truncated a range we cannot seek votes to advance the state machine, so we may not be able to reach a quorum
+            //   but, equally, we may not propagate the GC point to all replicas.
+            //   the current logic has pitfalls when *some* replica has a GC point that others cannot reach.
+            //   we should reconsider and at least
+            //      1) ensure GC points can be propagated between nodes;
+            //      2) broaden cases where we can derive that the command has not been decided and send invalidated/erased to everyone
+            // TODO (required): we have another edge cases to consider here only when we don't have a FullRoute and
+            //    we report that the outcome is durable - which may not be the case for all of the shards.
+            //    The home shard will stop attempting to recover the transaction in this case.
+            //    This is perhaps not even a problem, and requires that no healthy home shard even has the FullRoute.
+            //    Other shards would be expected to coordinate the invalidation of this transaction themselves.
             Invariants.require(maxNotTruncated == null || !maxNotTruncated.maxKnowledgeStatus.hasBeen(Status.PreCommitted));
             isDone = true;
-            if (!tracker.isAnyNotTruncated()) // TODO (required): this check may be insufficient unless we do not permit shards to truncate when e.g. pre-bootstrap. If we require this, document it!
-            {
-                commitInvalidate();
-            }
-            else
-            {
-                // TODO (required): revisit this logic some more
-                //   this exists because if we have truncated a range we cannot seek votes to advance the state machine, so we may not be able to reach a quorum
-                //   but, equally, we may not propagate the GC point to all replicas.
-                //   the current logic has pitfalls when *some* replica has a GC point that others cannot reach.
-                //   we should reconsider and at least
-                //      1) ensure GC points can be propagated between nodes;
-                //      2) broaden cases where we can derive that the command has not been decided and send invalidated/erased to everyone
-                // TODO (required): we have another edge cases to consider here only when we don't have a FullRoute and
-                //    we report that the outcome is durable - which may not be the case for all of the shards.
-                //    The home shard will stop attempting to recover the transaction in this case.
-                //    This is perhaps not even a problem, and requires that no healthy home shard even has the FullRoute.
-                //    Other shards would be expected to coordinate the invalidation of this transaction themselves.
-                callback.accept(TRUNCATED_DURABLE_OR_INVALIDATED, null);
-            }
+            callback.accept(TRUNCATED_DURABLE_OR_INVALIDATED, null);
             return;
         }
 

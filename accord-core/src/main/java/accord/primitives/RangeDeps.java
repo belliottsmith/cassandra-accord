@@ -665,6 +665,14 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         }
     }
 
+    public RangeDeps withTxnIds(TxnId[] txnIds)
+    {
+        if (txnIds == this.txnIds)
+            return this;
+        Invariants.require(txnIds.length == this.txnIds.length);
+        return new RangeDeps(ranges, txnIds, rangesToTxnIds, txnIdsToRanges);
+    }
+
     private RangeDeps build(RangeAndMapCollector collector)
     {
         if (collector.rangesCount == 0)

@@ -30,6 +30,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 import accord.api.RoutingKey;
+import accord.local.RedundantStatus.SomeStatus;
 import accord.local.RedundantStatus.Property;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
@@ -44,16 +45,9 @@ import org.assertj.core.api.Assertions;
 import static accord.impl.IntKey.routing;
 import static accord.local.RedundantStatus.ONLY_LE_MASK;
 import static accord.local.RedundantStatus.PRE_BOOTSTRAP_MERGE_MASK;
-import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
-import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
-import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
-import static accord.local.RedundantStatus.Property.SHARD_AND_LOCALLY_APPLIED;
-import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_REDUNDANT;
-import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_SYNCED;
-import static accord.local.RedundantStatus.Property.SHARD_ONLY_APPLIED;
-import static accord.local.RedundantStatus.any;
 import static accord.local.RedundantStatus.selectOrCreate;
+import static accord.local.RedundantStatus.toAll;
 
 public class RedundantBeforeTest
 {
@@ -87,9 +81,9 @@ public class RedundantBeforeTest
     static class CanonStatus
     {
         final List<Unmerged> unmerged;
-        RedundantStatus mergedLt, mergedLe;
+        SomeStatus mergedLt, mergedLe;
 
-        CanonStatus(List<Unmerged> unmerged, RedundantStatus mergedLt, RedundantStatus mergedLe)
+        CanonStatus(List<Unmerged> unmerged, SomeStatus mergedLt, SomeStatus mergedLe)
         {
             this.unmerged = unmerged;
             this.mergedLt = mergedLt;
@@ -101,8 +95,8 @@ public class RedundantBeforeTest
             List<Unmerged> unmerged = new ArrayList<>();
             unmerged.addAll(this.unmerged);
             unmerged.addAll(add.unmerged);
-            RedundantStatus lt = merge(filter(add.mergedLt, mergedLt), mergedLt);
-            RedundantStatus le = merge(filter(add.mergedLe, mergedLe), mergedLe);
+            SomeStatus lt = merge(filter(add.mergedLt, mergedLt), mergedLt);
+            SomeStatus le = merge(filter(add.mergedLe, mergedLe), mergedLe);
             return new CanonStatus(unmerged, lt, le);
         }
 
@@ -142,9 +136,9 @@ public class RedundantBeforeTest
             int ignore = 0;
             for (int j = 0 ; j < innerLoop ; ++j)
             {
-                RedundantStatus status = RedundantStatus.oneSlow(picker.get());
+                SomeStatus status = RedundantStatus.oneSlow(picker.get());
                 TxnId txnId = txnIdSupplier.get();
-                if (status.any(Property.GC_BEFORE))
+                if (status.is(Property.GC_BEFORE))
                     txnId = txnId.addFlag(Timestamp.Flag.SHARD_BOUND);
 
                 RoutingKey key = keys[rs.nextInt(keys.length)];
@@ -159,7 +153,7 @@ public class RedundantBeforeTest
                 TxnId txnId = txnIdSupplier.get();
                 RoutingKey key = keys[rs.nextInt(keys.length)];
 
-                RedundantStatus canonStatus = getCanon(txnId, canon.get(key));
+                RedundantStatus canonStatus = toAll(getCanon(txnId, canon.get(key)));
                 RedundantBefore.Bounds bounds = redundantBefore.get(key);
                 RedundantStatus status = bounds == null ? RedundantStatus.NONE : bounds.getIgnoringOwnership(txnId, null);
                 Assertions.assertThat(status).isEqualTo(canonStatus);
@@ -167,17 +161,17 @@ public class RedundantBeforeTest
         }
     }
 
-    static void addCanon(TxnId txnId, RedundantStatus status, TreeMap<TxnId, CanonStatus> map)
+    static void addCanon(TxnId txnId, SomeStatus status, TreeMap<TxnId, CanonStatus> map)
     {
-        RedundantStatus add;
+        SomeStatus add;
         {
             Map.Entry<TxnId, CanonStatus> e = map.ceilingEntry(txnId);
-            RedundantStatus mergele, mergelt;
-            if (e == null) mergele = mergelt = RedundantStatus.NONE;
+            SomeStatus mergele, mergelt;
+            if (e == null) mergele = mergelt = SomeStatus.NONE;
             else if (e.getKey().equals(txnId)) { mergele = e.getValue().mergedLe; mergelt = e.getValue().mergedLt; }
             else mergele = mergelt = e.getValue().mergedLt;
-            RedundantStatus le = merge(filter(le(status), mergele), mergele);
-            RedundantStatus lt = merge(filter(status, mergelt), mergelt);
+            SomeStatus le = merge(filter(le(status), mergele), mergele);
+            SomeStatus lt = merge(filter(status, mergelt), mergelt);
             add = map.merge(txnId, new CanonStatus(Collections.singletonList(new Unmerged(status.encoded, map.size())), lt, le), CanonStatus::add).mergedLt;
         }
 
@@ -193,48 +187,34 @@ public class RedundantBeforeTest
         }
     }
 
-    private static RedundantStatus getCanon(TxnId txnId, TreeMap<TxnId, CanonStatus> canon)
+    private static SomeStatus getCanon(TxnId txnId, TreeMap<TxnId, CanonStatus> canon)
     {
         Map.Entry<TxnId, CanonStatus> e = canon.ceilingEntry(txnId);
-        if (e == null) return RedundantStatus.NONE;
+        if (e == null) return SomeStatus.NONE;
         else if (e.getKey().equals(txnId)) return e.getValue().mergedLe;
         else return e.getValue().mergedLt;
     }
 
-    private static int enrich(int encoded)
+    private static short merge(short a, short b)
     {
-        if (!any(encoded, SHARD_ONLY_APPLIED))
-            return encoded;
-
-        if (any(encoded, LOCALLY_REDUNDANT))
-            encoded |= RedundantStatus.encode(SHARD_APPLIED_AND_LOCALLY_REDUNDANT);
-        if (any(encoded, LOCALLY_SYNCED))
-            encoded |= RedundantStatus.encode(SHARD_APPLIED_AND_LOCALLY_SYNCED);
-        if (any(encoded, LOCALLY_APPLIED))
-            encoded |= RedundantStatus.encode(SHARD_AND_LOCALLY_APPLIED);
-        return encoded;
+        return (short) (a | b);
     }
 
-    private static int merge(int a, int b)
-    {
-        return enrich(a | b);
-    }
-
-    private static RedundantStatus merge(RedundantStatus a, RedundantStatus b)
+    private static SomeStatus merge(SomeStatus a, SomeStatus b)
     {
         return RedundantStatus.selectOrCreate(merge(a.encoded, b.encoded), a, b);
     }
 
-    private static RedundantStatus filter(RedundantStatus a, RedundantStatus history)
+    private static SomeStatus filter(SomeStatus a, SomeStatus history)
     {
-        if (history.any(PRE_BOOTSTRAP_OR_STALE))
-            return selectOrCreate(a.encoded & PRE_BOOTSTRAP_MERGE_MASK, a, history);
+        if (history.is(PRE_BOOTSTRAP_OR_STALE))
+            return selectOrCreate((short) (a.encoded & PRE_BOOTSTRAP_MERGE_MASK), a, history);
         return a;
     }
 
-    private static RedundantStatus le(RedundantStatus le)
+    private static SomeStatus le(SomeStatus le)
     {
-        int masked = le.encoded & ONLY_LE_MASK;
-        return masked == le.encoded ? le : new RedundantStatus(masked);
+        short masked = (short) (le.encoded & ONLY_LE_MASK);
+        return masked == le.encoded ? le : new SomeStatus(masked);
     }
 }

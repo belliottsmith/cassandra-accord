@@ -999,7 +999,7 @@ public class TopologyManager
 
     public <U extends Participants<?>> @Nullable U unsyncedOnly(U select, long beforeEpoch)
     {
-        return extra(select, 0, beforeEpoch - 1, cur -> cur.synced, (UnsyncedSelector<U>)UnsyncedSelector.INSTANCE);
+        return extra(select, 0, beforeEpoch, cur -> cur.synced, (UnsyncedSelector<U>)UnsyncedSelector.INSTANCE);
     }
 
     public Topologies withUnsyncedEpochs(Unseekables<?> select, long minEpoch, long maxEpoch)
@@ -1044,6 +1044,8 @@ public class TopologyManager
     {
         Invariants.requireArgument(minEpoch <= maxEpoch);
         Epochs snapshot = epochs;
+        if (maxEpoch < snapshot.minEpoch())
+            throw new TopologyRetiredException(maxEpoch, snapshot.minEpoch());
 
         if (maxEpoch == Long.MAX_VALUE) maxEpoch = snapshot.currentEpoch;
         else Invariants.require(snapshot.currentEpoch >= maxEpoch, "current epoch %d < max %d", snapshot.currentEpoch, maxEpoch);
@@ -1160,17 +1162,14 @@ public class TopologyManager
         Epochs snapshot = epochs;
 
         minEpoch = Math.max(snapshot.minEpoch(), minEpoch);
-        if (maxEpoch < minEpoch)
-            return collectors.none();
         maxEpoch = validateMax(maxEpoch, snapshot);
+        if (maxEpoch == minEpoch)
+            return collectors.none();
 
         EpochState cur = nonNull(snapshot.get(maxEpoch));
         select = (K) select.without(remove.apply(cur));
         if (select.isEmpty())
             return collectors.none();
-
-        if (minEpoch == maxEpoch)
-            return collectors.one(cur, select, true);
 
         int i = (int)(snapshot.currentEpoch - maxEpoch);
         int maxi = (int)(Math.min(1 + snapshot.currentEpoch - minEpoch, snapshot.epochs.length));

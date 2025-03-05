@@ -47,14 +47,16 @@ import accord.utils.SortedListMap;
 import accord.utils.UnhandledEnum;
 import accord.utils.WrappableException;
 import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
 import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;
+import static accord.primitives.Status.Durability.Majority;
+import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implements Callback<ReadReply>
 {
-
     public static class SyncPointErased extends Throwable implements WrappableException<SyncPointErased>
     {
         public SyncPointErased() {}
@@ -184,7 +186,11 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
             if (result.achievedRemote == SyncRemote.All)
             {
                 node.configService().reportEpochRetired(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
-                node.send(tracker.nodes(), new SetShardDurable(syncPoint));
+                node.send(tracker.nodes(), new SetShardDurable(syncPoint, UniversalOrInvalidated));
+            }
+            else if (result.achievedRemote == SyncRemote.Quorum)
+            {
+                node.send(tracker.nodes(), new SetShardDurable(syncPoint, Majority));
             }
             node.durability().report(result);
             trySuccess(result);
@@ -227,9 +233,16 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
 
     public static AsyncResult<DurabilityResult> coordinate(Node node, Function<Topologies, Set<Node.Id>> excludeSuccess, SyncPoint<Range> exclusiveSyncPoint, AgentExecutor executor, int attempt)
     {
-        ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, exclusiveSyncPoint, excludeSuccess, executor, attempt);
-        coordinate.start();
-        return coordinate;
+        try
+        {
+            ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, exclusiveSyncPoint, excludeSuccess, executor, attempt);
+            coordinate.start();
+            return coordinate;
+        }
+        catch (Throwable t)
+        {
+            return AsyncResults.failure(t);
+        }
     }
 
     protected void start()
