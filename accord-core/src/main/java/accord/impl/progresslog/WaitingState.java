@@ -261,10 +261,8 @@ abstract class WaitingState extends BaseTxnState
         if (command.known().deps().hasPreAcceptedOrProposedOrDecidedDeps() && participants.touchesOnlyOwned())
             return txnIdEpoch;
 
-        if (participants.route() == null)
-            return txnIdEpoch;
-
-        Participants<?> unsynced = safeStore.node().topology().unsyncedOnly(participants.route(), txnIdEpoch);
+        // note: we use hasTouched rather than route here, to account for cases route is null and we have already "touched" some key in an earlier epoch
+        Participants<?> unsynced = safeStore.node().topology().unsyncedOnly(participants.hasTouched(), txnIdEpoch);
         if (unsynced == null || unsynced.isEmpty())
             return txnIdEpoch;
 

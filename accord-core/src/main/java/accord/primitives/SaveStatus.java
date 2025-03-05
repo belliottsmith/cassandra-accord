@@ -106,7 +106,6 @@ public enum SaveStatus
     Applied                         (Status.Applied,                                                                                                 LocalExecution.Applied),
     // TruncatedApplyWithOutcomeAndDeps exists to support re-populating CommandsForKey on replay with any dependencies needed for computing recovery superseding-rejects decisions
     // TODO (expected): test replay
-    TruncatedApplyWithOutcomeAndDeps(Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsKnown,          Apply,   CleaningUp),
     TruncatedApplyWithOutcome       (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         Apply,   CleaningUp),
     TruncatedApply                  (Status.Truncated,              MaybeRoute, DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
     TruncatedUnapplied              (Status.Truncated,              MaybeRoute, DefinitionErased,   ExecuteAtKnown,     DepsErased,         WasApply,CleaningUp),
@@ -384,10 +383,6 @@ public enum SaveStatus
 
                     case TruncatedApplyWithOutcome:
                         if (!known.is(DepsKnown))
-                            return TruncatedApplyWithOutcome;
-
-                    case TruncatedApplyWithOutcomeAndDeps:
-                        if (!known.is(DefinitionKnown))
                             return TruncatedApplyWithOutcome;
 
                         return Applied;

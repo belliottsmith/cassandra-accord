@@ -19,11 +19,11 @@
 package accord.local;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import accord.api.Agent;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
-import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
@@ -33,28 +33,21 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
-import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.Input.PARTIAL;
-import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.RedundantStatus.Property.GC_BEFORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.NOT_OWNED;
-import static accord.local.RedundantStatus.Property.SHARD_AND_LOCALLY_APPLIED;
-import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_REDUNDANT;
-import static accord.local.RedundantStatus.Property.SHARD_ONLY_APPLIED;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.Property.TRUNCATE_BEFORE;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
-import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.Invalidated;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
-import static accord.primitives.SaveStatus.TruncatedApplyWithOutcomeAndDeps;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.SaveStatus.Vestigial;
-import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Status.Truncated;
@@ -70,7 +63,6 @@ import static accord.primitives.TxnId.Cardinality.Any;
 public enum Cleanup
 {
     NO(Uninitialised),
-    TRUNCATE_WITH_OUTCOME_AND_DEPS(TruncatedApplyWithOutcomeAndDeps),
     TRUNCATE_WITH_OUTCOME(TruncatedApplyWithOutcome),
     TRUNCATE(TruncatedApply),
     VESTIGIAL(Vestigial),
@@ -90,7 +82,7 @@ public enum Cleanup
 
     public final Cleanup filter(SaveStatus saveStatus)
     {
-        return saveStatus.compareTo(appliesIfNot) >= 0 ? NO : this;
+        return saveStatus != null && saveStatus.compareTo(appliesIfNot) >= 0 && this != EXPUNGE ? NO : this;
     }
 
     public enum Input { PARTIAL, FULL }
@@ -145,7 +137,7 @@ public enum Cleanup
      * we pessimistically assume the whole cluster may need to see its outcome
      * TODO (expected): we should be able to rely on replicas to infer Invalidated from an Erased record
      */
-    private static Cleanup shouldCleanupInternal(Input input, Agent agent, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    private static Cleanup shouldCleanupInternal(Input input, Agent agent, TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, Durability durability, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         if (txnId.kind() == EphemeralRead)
             return NO;
@@ -153,7 +145,7 @@ public enum Cleanup
         if (expunge(txnId, executeAt, saveStatus, participants, redundantBefore, durableBefore))
             return expunge();
 
-        if (participants == null)
+        if (saveStatus == null || participants == null)
             return NO;
 
         if (participants.hasFullRoute())
@@ -166,34 +158,25 @@ public enum Cleanup
         // We first check if the command is redundant locally, i.e. whether it has been applied to all non-faulty replicas of the local shard
         // If not, we don't want to truncate its state else we may make catching up for these other replicas much harder
         FullRoute<?> route = Route.castToFullRoute(participants.route());
-        if (!saveStatus.known.is(ApplyAtKnown)) executeAt = null;
-        RedundantStatus redundant = redundantBefore.status(txnId, executeAt, route);
+        RedundantStatus redundant = redundantBefore.status(txnId, saveStatus.known.is(ApplyAtKnown) ? executeAt : null, route);
         Invariants.require(redundant.none(NOT_OWNED),"Command " + txnId + " that is being loaded is not owned by this shard on route " + route);
 
         if (redundant.none(LOCALLY_REDUNDANT))
             return NO;
 
-        Cleanup ifUndecided = cleanupIfUndecidedOrDefunctWithFullRoute(input, txnId, saveStatus, redundant, redundant.all(TRUNCATE_BEFORE) ? null : NO);
+        Cleanup ifUndecided = cleanupIfUndecidedWithFullRoute(input, txnId, saveStatus, redundant);
         if (ifUndecided != null)
             return ifUndecided;
 
-        if (!redundant.all(SHARD_ONLY_APPLIED))
-            return truncateWithOutcomeAndDeps(txnId);
-
-        if (input == FULL)
+        if (!redundant.all(TRUNCATE_BEFORE))
         {
-            Participants<?> waitsOn = participants.waitsOn();
-            if (!saveStatus.hasBeen(Applied) && (waitsOn == null || (!waitsOn.isEmpty() && redundantBefore.preBootstrapOrStale(txnId, waitsOn) != ALL)))
-            {
-                // if we should execute this transaction locally, and we have not done so by the time we reach a GC point, something has gone wrong
-                TxnId supersededBy = redundantBefore.max(participants.route(), e -> e.maxBound(SHARD_AND_LOCALLY_APPLIED));
-                Participants<?> on = waitsOn.slice(redundantBefore.foldl(participants.route(), (e, r, s) -> s.equals(e.maxBound(SHARD_AND_LOCALLY_APPLIED)) ? r.with(Ranges.of(e.range)) : r, Ranges.EMPTY, supersededBy), Minimal);
-                String message = "Loading " + redundant + " command " + txnId + " with status " + saveStatus + " (that should have been Applied). Expected to be witnessed and executed by " + supersededBy + ".";
-                agent.onViolation(message, on, txnId, executeAt, supersededBy, supersededBy);
+            // TODO (expected): see if we can improve our invariants so we can remove this special-case
+            if (input != PARTIAL && redundant.all(SHARD_APPLIED) && redundant.all(LOCALLY_DEFUNCT) && !redundant.any(LOCALLY_APPLIED))
                 return truncate(txnId);
-            }
+            return NO;
         }
 
+        Invariants.paranoid(redundant.all(SHARD_APPLIED));
         Durability test = Durability.max(durability, durableBefore.min(txnId, participants.route()));
         switch (test)
         {
@@ -201,7 +184,10 @@ public enum Cleanup
             case Local:
             case NotDurable:
             case ShardUniversal:
-                return truncateWithOutcome(txnId);
+                // TODO (required): consider how we guarantee not to break recovery of other shards if a majority on this shard are PRE_BOOTSTRAP
+                //   (if the condition is false and we fall through to removing Outcome)
+                if (participants.doesStillExecute())
+                    return truncateWithOutcome(txnId);
 
             case MajorityOrInvalidated:
             case Majority:
@@ -209,7 +195,7 @@ public enum Cleanup
 
             case UniversalOrInvalidated:
             case Universal:
-                if (redundant.get(GC_BEFORE) == ALL)
+                if (redundant.all(GC_BEFORE))
                     return erase();
                 return truncate(txnId);
         }
@@ -228,7 +214,7 @@ public enum Cleanup
             if (saveStatus == Uninitialised)
                 return NO;
 
-            if (txnId.compareTo(redundantBefore.minShardRedundantBefore()) >= 0)
+            if (txnId.compareTo(redundantBefore.minShardAndLocallyAppliedBefore()) >= 0)
                 return NO;
 
             return vestigial(txnId);
@@ -238,17 +224,10 @@ public enum Cleanup
         return cleanupUndecided(txnId, redundant);
     }
 
-    private static Cleanup cleanupIfUndecidedOrDefunctWithFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, RedundantStatus redundantStatus, Cleanup ifDecided)
+    private static Cleanup cleanupIfUndecidedWithFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, RedundantStatus redundantStatus)
     {
         if (saveStatus.hasBeen(PreCommitted))
-        {
-            // TODO (required): consider more the invariants we're guaranteeing here, particularly with respect to other shards
-            //  also consider whether we interfere with stronger cleanup that would run after in cleanupWithFullRoute
-            // This branch may primarily exist for complying with invariants that could also be weakened
-            if (input != PARTIAL && redundantStatus.all(SHARD_ONLY_APPLIED) && !redundantStatus.any(LOCALLY_APPLIED) && redundantStatus.all(LOCALLY_DEFUNCT))
-                return truncate(txnId);
-            return ifDecided;
-        }
+            return null;
 
         if (input == PARTIAL)
             return NO;
@@ -261,13 +240,13 @@ public enum Cleanup
         if (redundantStatus.any(LOCALLY_APPLIED))
             return invalidate(txnId);
 
-        if (redundantStatus.all(SHARD_APPLIED_AND_LOCALLY_REDUNDANT))
+        if (redundantStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
             return vestigial(txnId);
 
         return NO;
     }
 
-    private static boolean expunge(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    private static boolean expunge(TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         if (txnId.is(Any) && durableBefore.min(txnId) != UniversalOrInvalidated)
             return false;
@@ -278,10 +257,13 @@ public enum Cleanup
             return false;
 
         if (!requiresUniqueHlcs() || !txnId.is(Write)) return true;
-        if (!saveStatus.known.is(ApplyAtKnown)) return true;
+        if (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)) return true;
         if (executeAt == null) return true;
         if (minGcBefore.is(HLC_BOUND) && executeAt.uniqueHlc() < minGcBefore.hlc()) return true;
-        return participants.waitsOn().isEmpty();
+        if (participants == null)
+            return true;
+        Participants<?> waitsOn = participants.waitsOn();
+        return waitsOn == null || waitsOn.isEmpty();
     }
 
     public static Cleanup forOrdinal(int ordinal)
@@ -293,10 +275,6 @@ public enum Cleanup
     private static Cleanup invalidate(TxnId txnId)
     {
         return INVALIDATE;
-    }
-    private static Cleanup truncateWithOutcomeAndDeps(TxnId txnId)
-    {
-        return TRUNCATE_WITH_OUTCOME_AND_DEPS;
     }
     private static Cleanup truncateWithOutcome(TxnId txnId)
     {

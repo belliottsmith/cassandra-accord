@@ -30,6 +30,7 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantStatus;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.Known.Outcome;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Known;
@@ -59,7 +60,8 @@ import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.VESTIGIAL;
 import static accord.local.Commands.purge;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
-import static accord.local.RedundantStatus.Property.SHARD_APPLIED_AND_LOCALLY_SYNCED;
+import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.StoreParticipants.Filter.UPDATE;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
@@ -225,7 +227,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         boolean isShardTruncated = withQuorum == HasQuorum && known.hasAnyFullyTruncated(participants.stillTouches());
         if (isShardTruncated)
         {
-            found = tryUpgradeTruncated(safeStore, safeCommand, participants, command, executeAtIfKnown);
+            found = tryUpgradeTruncated(safeStore, safeCommand, participants, command, executeAtIfKnown, found);
             if (found == null)
             {
                 // TODO (expected): should be ownsOrExecutes()?
@@ -353,7 +355,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     }
 
     // if can only propagate Truncated, we might be stale; try to upgrade for this command store only, even partially if necessary
-    private Known tryUpgradeTruncated(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Command command, Timestamp executeAtIfKnown)
+    private Known tryUpgradeTruncated(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Command command, Timestamp executeAtIfKnown, Known found)
     {
         // if our peers have truncated this command, then either:
         // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
@@ -382,18 +384,19 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         Participants<?> staleOwnsOrMayExecute = stillOwnsOrMayExecute.without(notStaleOwnsOrMayExecutes);
         if (staleOwnsOrMayExecute.isEmpty())
         {
-            if (staleTouches.isEmpty())
+            if (staleTouches.isEmpty() && found.is(Outcome.Apply))
             {
                 Invariants.require(notStaleTouches.containsAll(stillTouches));
                 Invariants.require(notStaleOwnsOrMayExecutes.containsAll(stillOwnsOrMayExecute));
                 return required;
             }
 
-            if (stillOwnsOrMayExecute.isEmpty() && known.hasFullyTruncated(staleTouches))
+            if (stillOwnsOrMayExecute.isEmpty() && (!found.is(Outcome.Apply) || known.hasFullyTruncated(staleTouches)))
             {
                 Commands.setTruncatedOrVestigial(safeStore, safeCommand, participants);
                 return null;
             }
+            Invariants.require(!staleTouches.isEmpty());
         }
 
         Participants<?> stale = staleTouches.with((Participants) staleOwnsOrMayExecute);
@@ -422,7 +425,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
     private boolean tryPurge(SafeCommandStore safeStore, SafeCommand safeCommand, RedundantStatus status)
     {
-        if (!status.all(SHARD_APPLIED_AND_LOCALLY_SYNCED))
+        if (!status.all(SHARD_APPLIED, LOCALLY_SYNCED))
             return false;
 
         Cleanup cleanup = status.all(LOCALLY_DEFUNCT) ? VESTIGIAL : ERASE;

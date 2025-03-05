@@ -447,6 +447,86 @@ public class SortedArrays
         }
     }
 
+    // applies the update function to all entries in left, and any matching entries in right
+    public static <O, T extends O> O[] linearUpdate(T[] left, int leftStart, int leftUpdateEnd, int leftEnd, T[] right, int rightStart, int rightEnd, AsymmetricComparator<? super T, ? super T> comparator, BiFunction<? super T, ? super T, ? extends T> update, IntFunction<T[]> allocate)
+    {
+        int leftIdx = leftStart;
+        int rightIdx = rightStart;
+
+        T nextKey = null;
+        while (leftIdx < leftUpdateEnd && rightIdx < rightEnd)
+        {
+            T leftKey = left[leftIdx];
+            T rightKey = right[rightIdx];
+            int cmp = leftKey == rightKey ? 0 : comparator.compare(leftKey, rightKey);
+            if (cmp > 0)
+            {
+                ++rightIdx;
+                continue;
+            }
+
+            if (cmp < 0) rightKey = null;
+            else ++rightIdx;
+
+            T testKey = update.apply(leftKey, rightKey);
+            if (testKey != leftKey)
+            {
+                nextKey = testKey;
+                break;
+            }
+            ++leftIdx;
+        }
+
+        if (nextKey == null)
+        {
+            while (leftIdx < leftUpdateEnd)
+            {
+                T leftKey = left[leftIdx];
+                T testKey = update.apply(left[leftIdx], null);
+                if (testKey != leftKey)
+                {
+                    nextKey = testKey;
+                    break;
+                }
+                ++leftIdx;
+            }
+
+            if (nextKey == null)
+                return left;
+        }
+
+        O[] result = allocate.apply(leftEnd - leftStart);
+        int resultSize = leftIdx - leftStart;
+        System.arraycopy(left, leftStart, result, 0, resultSize);
+        result[resultSize++] = nextKey;
+        ++leftIdx;
+
+        while (leftIdx < leftUpdateEnd && rightIdx < rightEnd)
+        {
+            T leftKey = left[leftIdx];
+            T rightKey = right[rightIdx];
+            int cmp = leftKey == rightKey ? 0 : comparator.compare(leftKey, rightKey);
+
+            if (cmp > 0)
+            {
+                ++rightIdx;
+                continue;
+            }
+
+            if (cmp < 0) rightKey = null;
+            else ++rightIdx;
+            ++leftIdx;
+
+            result[resultSize++] = update.apply(leftKey, rightKey);
+        }
+
+        while (leftIdx < leftUpdateEnd)
+            result[resultSize++] = update.apply(left[leftIdx++], null);
+
+        System.arraycopy(left, leftUpdateEnd, result, resultSize, leftEnd - leftUpdateEnd);
+        return result;
+    }
+
     /**
      * {@link #linearIntersection(Comparable[], int, Comparable[], int, ObjectBuffers)}
      */

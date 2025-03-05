@@ -91,7 +91,11 @@ public class StableThenRead extends ReadData
         Route<?> route = this.route == null ? (Route)scope : this.route;
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, Ballot.ZERO, txnId, route, partialTxn, executeAt, partialDeps, kind);
+        if (Commands.CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, Ballot.ZERO, txnId, route, partialTxn, executeAt, partialDeps, kind))
+        {
+            cancel();
+            return CommitOrReadNack.Rejected;
+        }
         if (participants.executes().isEmpty())
             return null;
         return super.apply(safeStore, safeCommand, participants);

@@ -49,7 +49,6 @@ public abstract class AbstractLoader implements Journal.Loader
                 case NO:
                     break;
                 case INVALIDATE:
-                case TRUNCATE_WITH_OUTCOME_AND_DEPS:
                 case TRUNCATE_WITH_OUTCOME:
                 case TRUNCATE:
                 case ERASE:

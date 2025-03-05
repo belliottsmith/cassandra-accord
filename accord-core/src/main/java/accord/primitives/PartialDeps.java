@@ -107,6 +107,12 @@ public class PartialDeps extends Deps
         return new PartialDeps(this.covering.intersecting(participants, Minimal), keyDeps.intersecting(participants), rangeDeps.intersecting(participants));
     }
 
+    public PartialDeps intersectStable(Deps that, TxnId until)
+    {
+        return new PartialDeps(covering, keyDeps.withTxnIds(intersectStable(keyDeps.txnIds, that.keyDeps.txnIds, until)),
+                               rangeDeps.withTxnIds(intersectStable(rangeDeps.txnIds, that.rangeDeps.txnIds, until)));
+    }
+
     public Deps asFullUnsafe()
     {
         return new Deps(keyDeps, rangeDeps);

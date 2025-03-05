@@ -25,6 +25,7 @@ import accord.utils.IndexedBiConsumer;
 import accord.utils.IndexedConsumer;
 import accord.utils.IndexedFunction;
 import accord.utils.IndexedTriConsumer;
+import accord.utils.Invariants;
 import accord.utils.RelationMultiMap;
 import accord.utils.SimpleBitSet;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -208,6 +209,14 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
     {
         AbstractUnseekableKeys select = keys.intersecting(participants);
         return select(toRoutingKeys(select));
+    }
+
+    KeyDeps withTxnIds(TxnId[] txnIds)
+    {
+        if (txnIds == this.txnIds)
+            return this;
+        Invariants.require(txnIds.length == this.txnIds.length);
+        return new KeyDeps(keys, txnIds, keysToTxnIds, txnIdsToKeys);
     }
 
     public @Nullable TxnId minTxnId(Unseekables<?> participants)

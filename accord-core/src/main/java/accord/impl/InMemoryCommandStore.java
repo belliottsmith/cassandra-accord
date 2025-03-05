@@ -91,6 +91,7 @@ import static accord.local.Cleanup.Input.FULL;
 import static accord.local.KeyHistory.ASYNC;
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.RedundantStatus.Coverage.ALL;
+import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
@@ -103,6 +104,7 @@ import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
 import static accord.primitives.Status.Durability.NotDurable;
+import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.primitives.Txn.Kind.EphemeralRead;
@@ -279,14 +281,15 @@ public abstract class InMemoryCommandStore extends CommandStore
                 }
             });
         });
-        TxnId clearProgressLogBefore = unsafeGetRedundantBefore().minShardRedundantBefore();
+        TxnId clearProgressLogBefore = unsafeGetRedundantBefore().minShardAndLocallyAppliedBefore();
         List<TxnId> clearing = ((DefaultProgressLog) progressLog).activeBefore(clearProgressLogBefore);
         for (TxnId txnId : clearing)
         {
             GlobalCommand globalCommand = commands.get(txnId);
             Invariants.require(globalCommand != null && !globalCommand.isEmpty());
             Command command = globalCommand.value();
-            Cleanup cleanup = Cleanup.shouldCleanup(FULL, agent, txnId, command.executeAt(), command.saveStatus(), command.durability(), command.participants(), unsafeGetRedundantBefore(), durableBefore());
+            StoreParticipants participants = command.participants().filter(LOAD, safeStore, txnId, command.executeAtIfKnown());
+            Cleanup cleanup = Cleanup.shouldCleanup(FULL, agent, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
             Invariants.require(command.hasBeen(Applied)
                                || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
                                || (durableBefore().min(txnId) == NotDurable &&
@@ -297,10 +300,11 @@ public abstract class InMemoryCommandStore extends CommandStore
     }
 
     @Override
-    public void markShardDurable(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
+    public void markShardDurable(SafeCommandStore safeStore, TxnId syncId, Ranges ranges, Status.Durability durability)
     {
-        super.markShardDurable(safeStore, syncId, ranges);
-        markShardDurable(syncId, ranges);
+        super.markShardDurable(safeStore, syncId, ranges, durability);
+        if (durability.compareTo(UniversalOrInvalidated) >= 0)
+            markShardDurable(syncId, ranges);
     }
 
     private void markShardDurable(TxnId syncId, Ranges ranges)
@@ -396,34 +400,25 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
     }
 
-    private <T> T executeInContext(InMemoryCommandStore commandStore, PreLoadContext preLoadContext, Function<? super SafeCommandStore, T> function, boolean isDirectCall)
+    protected <T> T executeInContext(InMemoryCommandStore commandStore, PreLoadContext preLoadContext, Function<? super SafeCommandStore, T> function)
     {
         SafeCommandStore safeStore = commandStore.beginOperation(preLoadContext);
         try
         {
             return function.apply(safeStore);
         }
-        catch (Throwable t)
-        {
-            if (isDirectCall) logger.error("Uncaught exception", t);
-            throw new RuntimeException("Caught exception in command store " + this, t);
-        }
+        // for history: we don't want to wrap exceptions here as we can't then handle the specific exception effectively
         finally
         {
             commandStore.completeOperation(safeStore);
         }
     }
 
-    protected <T> T executeInContext(InMemoryCommandStore commandStore, PreLoadContext context, Function<? super SafeCommandStore, T> function)
-    {
-        return executeInContext(commandStore, context, function, true);
-    }
-
     protected <T> void executeInContext(InMemoryCommandStore commandStore, PreLoadContext context, Function<? super SafeCommandStore, T> function, BiConsumer<? super T, Throwable> callback)
     {
         try
         {
-            T result = executeInContext(commandStore, context, function, false);
+            T result = executeInContext(commandStore, context, function);
             callback.accept(result, null);
         }
         catch (Throwable t)
@@ -802,7 +797,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (txnId.is(EphemeralRead)) continue;
                 Participants<?> intersecting = (txnId.is(ExclusiveSyncPoint) ? command.participants().owns(): command.participants().stillWaitsOn()).intersecting(covering, Minimal);
                 if (intersecting.isEmpty()) continue;
-                if (commandStore().unsafeGetRedundantBefore().preBootstrapOrStale(command.txnId(), intersecting) == ALL) continue;
+                if (commandStore().unsafeGetRedundantBefore().locallyDefunct(command.txnId(), intersecting) == ALL) continue;
                 if (txnId.is(Key))
                 {
                     // TODO (required): document our invariants around this scenario, where a transaction with a higher txnId
@@ -1209,6 +1204,8 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return apply(commandStore.command(txnId).value());
 
             Command command = commandStore.journal.loadCommand(commandStore.id, txnId, commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
+            if (command == null)
+                return AsyncChains.success(null);
             return load(command).flatMap(this::apply);
         }
     }

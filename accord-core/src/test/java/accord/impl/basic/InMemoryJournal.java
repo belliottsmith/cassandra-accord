@@ -100,7 +100,6 @@ import static accord.local.Cleanup.Input.PARTIAL;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.TRUNCATE;
 import static accord.local.Cleanup.TRUNCATE_WITH_OUTCOME;
-import static accord.local.Cleanup.TRUNCATE_WITH_OUTCOME_AND_DEPS;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
@@ -137,7 +136,12 @@ public class InMemoryJournal implements Journal
             return null;
 
         Builder builder = reconstruct(saved, ALL);
-        builder.maybeCleanup(FULL, agent, redundantBefore, durableBefore);
+        if (builder == null)
+            return null;
+
+        Cleanup cleanup = builder.maybeCleanup(FULL, agent, redundantBefore, durableBefore);
+        if (cleanup == EXPUNGE)
+            return null;
         return builder.construct(redundantBefore);
     }
 
@@ -310,6 +314,7 @@ public class InMemoryJournal implements Journal
             onFlush.run();
     }
 
+    static int counter = 0;
     @Override
     public void purge(CommandStores commandStores, EpochSupplier minEpoch)
     {
@@ -326,37 +331,38 @@ public class InMemoryJournal implements Journal
             for (Map.Entry<TxnId, List<Diff>> e2 : localJournal.entrySet())
             {
                 List<Diff> diffs = e2.getValue();
-                int from = 0;
+                int from;
                 if (diffs.isEmpty()) continue;
+                List<Diff> subset = diffs;
                 if (isPartialCompaction)
                 {
-                    List<Diff> copy = new ArrayList<>();
+                    subset = new ArrayList<>();
                     int tmp1 = random.nextInt(diffs.size());
                     int tmp2 = random.nextInt(diffs.size());
                     from = Math.min(tmp1, tmp2);
                     int max = Math.max(tmp1, tmp2);
                     for (int i = from; i < max; i++)
-                        copy.add(diffs.get(i));
-
-                    if (copy.isEmpty())
-                        continue;
-                    diffs = copy;
+                        subset.add(diffs.get(i));
                 }
-                InMemoryJournal.Builder builder = reconstruct(diffs, ALL);
-                if (builder.saveStatus() == null)
+
+                InMemoryJournal.Builder builder = reconstruct(subset, ALL);
+                if (builder == null || builder.saveStatus() == null)
                     continue; // Partial compaction, no save status present
 
                 if (builder.saveStatus().status == Truncated || builder.saveStatus().status == Invalidated)
                     continue; // Already truncated
 
                 Input input = isPartialCompaction ? PARTIAL : FULL;
+                ++counter;
                 Cleanup cleanup = builder.shouldCleanup(input, store.agent(),store.unsafeGetRedundantBefore(), store.durableBefore());
-
-                if (builder.maybeCleanup(input, cleanup))
+                cleanup = builder.maybeCleanup(input, cleanup);
+                if (cleanup != NO)
                 {
-                    Invariants.require(cleanup != NO);
                     if (cleanup == EXPUNGE)
-                        e2.setValue(new PurgedList());
+                    {
+                        if (input == FULL) e2.setValue(new PurgedList());
+                        else diffs.removeAll(subset);
+                    }
                     else
                     {
                         int flags = CommandChange.eraseKnownFieldsMask(cleanup.appliesIfNot);
@@ -375,7 +381,6 @@ public class InMemoryJournal implements Journal
                         }
                         values.put(SAVE_STATUS, cleanup.appliesIfNot);
                         values.put(CLEANUP, cleanup);
-
                         flags = setChanged(SAVE_STATUS, flags);
                         flags = setChanged(CLEANUP, flags);
 
@@ -383,9 +388,17 @@ public class InMemoryJournal implements Journal
                         // During partial compaction, we can only append_to the existing list, removing items that got compacted away
                         if (isPartialCompaction)
                         {
-                            List<Diff> newDiffs = new ArrayList<>(e2.getValue());
-                            newDiffs.removeIf(diffs::contains);
+                            int i = 0, j = 0;
+                            while (i < diffs.size() && j < subset.size())
+                            {
+                                if (subset.get(j) == diffs.get(i))
+                                    ++j;
+                                ++i;
+                            }
+
+                            List<Diff> newDiffs = new ArrayList<>(diffs.subList(0, i));
                             newDiffs.add(diff);
+                            newDiffs.addAll(diffs.subList(i, diffs.size()));
                             e2.setValue(newDiffs);
                         }
                         // During full compaction, we erase all previous records, replacing them with new image
@@ -452,7 +465,8 @@ public class InMemoryJournal implements Journal
         @Override
         public boolean add(Diff diff)
         {
-            if (diff.changes.get(SAVE_STATUS) == Erased)
+            // TODO (expected): we shouldn't really be saving updates (such as durability updates) to Erased commands
+            if (diff.changes.get(SAVE_STATUS) == Erased || diff.changes.get(SAVE_STATUS) == null)
                 return false;
             throw illegalState();
         }
@@ -552,10 +566,6 @@ public class InMemoryJournal implements Journal
                         {
                             switch (after.saveStatus())
                             {
-                                case TruncatedApplyWithOutcomeAndDeps:
-                                    changes.put(CLEANUP, TRUNCATE_WITH_OUTCOME_AND_DEPS);
-                                    flags = setChanged(CLEANUP, unsetFieldIsNull(CLEANUP, flags));
-                                    break;
                                 case TruncatedApplyWithOutcome:
                                     changes.put(CLEANUP, TRUNCATE_WITH_OUTCOME);
                                     flags = setChanged(CLEANUP, unsetFieldIsNull(CLEANUP, flags));

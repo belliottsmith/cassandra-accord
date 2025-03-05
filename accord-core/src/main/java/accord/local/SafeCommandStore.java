@@ -51,9 +51,9 @@ import accord.utils.async.AsyncChain;
 
 import static accord.local.KeyHistory.INCR;
 import static accord.local.KeyHistory.NONE;
-import static accord.local.RedundantStatus.LOCALLY_WITNESSED_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
-import static accord.local.RedundantStatus.Property.SHARD_ONLY_APPLIED;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -418,7 +418,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 TxnId maxTxnId = txnIdsForKey.get(txnIdsForKey.size() - 1);
                 // TODO (desired): convert to O(n) merge
                 RedundantStatus status = redundantBefore.status(maxTxnId, null, key);
-                if (!status.all(SHARD_ONLY_APPLIED) || !status.all(LOCALLY_REDUNDANT))
+                if (!status.all(SHARD_APPLIED) || !status.all(LOCALLY_REDUNDANT))
                     select.set(i);
             }
             if (select.getSetBitCount() != keys.size())

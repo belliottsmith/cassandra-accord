@@ -21,6 +21,7 @@ package accord.messages;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.AbstractRanges;
+import accord.primitives.Status.Durability;
 import accord.primitives.SyncPoint;
 import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
@@ -34,11 +35,13 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
         implements Request, PreLoadContext, MapReduceConsume<SafeCommandStore, SimpleReply>
 {
     public final SyncPoint exclusiveSyncPoint;
+    public final Durability durability;
 
-    public SetShardDurable(SyncPoint exclusiveSyncPoint)
+    public SetShardDurable(SyncPoint exclusiveSyncPoint, Durability durability)
     {
         super(exclusiveSyncPoint.syncId);
         this.exclusiveSyncPoint = exclusiveSyncPoint;
+        this.durability = durability;
     }
 
     private TxnId syncIdWithFlags()
@@ -61,7 +64,7 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
     @Override
     public SimpleReply apply(SafeCommandStore safeStore)
     {
-        safeStore.commandStore().markShardDurable(safeStore, syncIdWithFlags(), ((AbstractRanges) exclusiveSyncPoint.route).toRanges());
+        safeStore.commandStore().markShardDurable(safeStore, syncIdWithFlags(), ((AbstractRanges) exclusiveSyncPoint.route).toRanges(), durability);
         return Ok;
     }
 

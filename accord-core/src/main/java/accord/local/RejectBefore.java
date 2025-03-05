@@ -22,16 +22,18 @@ import java.util.Objects;
 
 import accord.api.RoutingKey;
 import accord.primitives.AbstractRanges;
+import accord.primitives.Ranges;
 import accord.primitives.Routables;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
 
-public class RejectBefore extends ReducingRangeMap<TxnId>
+public class RejectBefore extends ReducingRangeMap<Timestamp>
 {
     public static class SerializerSupport
     {
-        public static RejectBefore create(boolean inclusiveEnds, RoutingKey[] ends, TxnId[] values)
+        public static RejectBefore create(boolean inclusiveEnds, RoutingKey[] ends, Timestamp[] values)
         {
             return new RejectBefore(inclusiveEnds, ends, values);
         }
@@ -42,12 +44,12 @@ public class RejectBefore extends ReducingRangeMap<TxnId>
         super();
     }
 
-    protected RejectBefore(boolean inclusiveEnds, RoutingKey[] starts, TxnId[] values)
+    protected RejectBefore(boolean inclusiveEnds, RoutingKey[] starts, Timestamp[] values)
     {
         super(inclusiveEnds, starts, values);
     }
 
-    public static RejectBefore add(RejectBefore existing, AbstractRanges ranges, TxnId value)
+    public static RejectBefore add(RejectBefore existing, Ranges ranges, TxnId value)
     {
         RejectBefore add = create(ranges, value);
         return merge(existing, add);
@@ -58,17 +60,17 @@ public class RejectBefore extends ReducingRangeMap<TxnId>
         return null == foldl(participants, (rejectIfBefore, test) -> rejects(rejectIfBefore, test) ? null : test, txnId, Objects::isNull);
     }
 
-    private static boolean rejects(TxnId rejectIfBefore, TxnId test)
+    private static boolean rejects(Timestamp rejectIfBefore, TxnId test)
     {
         return rejectIfBefore.compareSimultaneousEpochAndHlc(test) >= 0;
     }
 
     public static RejectBefore merge(RejectBefore historyLeft, RejectBefore historyRight)
     {
-        return ReducingIntervalMap.merge(historyLeft, historyRight, TxnId::max, Builder::new);
+        return ReducingIntervalMap.merge(historyLeft, historyRight, Timestamp::mergeMax, Builder::new);
     }
 
-    public static RejectBefore create(AbstractRanges ranges, TxnId value)
+    public static RejectBefore create(AbstractRanges ranges, Timestamp value)
     {
         if (value == null)
             throw new IllegalArgumentException("value is null");
@@ -79,7 +81,7 @@ public class RejectBefore extends ReducingRangeMap<TxnId>
         return create(ranges, value, Builder::new);
     }
 
-    static class Builder extends AbstractBoundariesBuilder<RoutingKey, TxnId, RejectBefore>
+    static class Builder extends AbstractBoundariesBuilder<RoutingKey, Timestamp, RejectBefore>
     {
         protected Builder(boolean inclusiveEnds, int capacity)
         {
@@ -89,7 +91,7 @@ public class RejectBefore extends ReducingRangeMap<TxnId>
         @Override
         protected RejectBefore buildInternal()
         {
-            return new RejectBefore(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new TxnId[0]));
+            return new RejectBefore(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new Timestamp[0]));
         }
     }
 }

@@ -40,6 +40,7 @@
     <logger name="accord.local.durability.DurabilityQueue" level="ERROR"/>
     <logger name="accord.local.durability.ShardDurability" level="ERROR"/>
     <logger name="accord.local.durability.GlobalDurability" level="ERROR"/>
+    <logger name="accord.local.CommandStore" level="ERROR"/>
 
     <root level="INFO">
         <appender-ref ref="FILE"/>

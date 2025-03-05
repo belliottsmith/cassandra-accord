@@ -885,7 +885,6 @@ public class CommandsForKey extends CommandsForKeyUpdate
             FROM_SAVE_STATUS.put(SaveStatus.PreApplied, STABLE);
             FROM_SAVE_STATUS.put(SaveStatus.Applying, STABLE);
             FROM_SAVE_STATUS.put(SaveStatus.Applied, APPLIED_NOT_DURABLE);
-            FROM_SAVE_STATUS.put(SaveStatus.TruncatedApplyWithOutcomeAndDeps, APPLIED_DURABLE);
             // We don't map TruncatedApplyX or Erased as we want to retain them as APPLIED
             // esp. to support pruning where we expect the prunedBefore entr*ies* to be APPLIED
             // Note importantly that we have multiple logical pruned befores - the last APPLIED
