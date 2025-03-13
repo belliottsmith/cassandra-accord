@@ -21,7 +21,6 @@ package accord.local;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.api.Agent;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
 import accord.primitives.Route;
@@ -33,6 +32,7 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
+import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.Input.PARTIAL;
 import static accord.local.RedundantStatus.Property.GC_BEFORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
@@ -48,6 +48,7 @@ import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.SaveStatus.Vestigial;
+import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Status.Truncated;
@@ -73,21 +74,38 @@ public enum Cleanup
 
     private static final Cleanup[] VALUES = values();
 
-    public final SaveStatus appliesIfNot;
+    public final SaveStatus newStatus;
 
-    Cleanup(SaveStatus appliesIfNot)
+    Cleanup(SaveStatus newStatus)
     {
-        this.appliesIfNot = appliesIfNot;
+        this.newStatus = newStatus;
+    }
+
+    public final Cleanup atLeast(Cleanup that)
+    {
+        return compareTo(that) >= 0 ? this : that;
+    }
+
+    public final boolean appliesTo(SaveStatus saveStatus)
+    {
+        if (saveStatus == null)
+            return this != NO;
+
+        switch (this)
+        {
+            case EXPUNGE: return true;
+            case ERASE: return saveStatus != Erased;
+            default: return saveStatus.compareTo(newStatus) < 0;
+        }
     }
 
     public final Cleanup filter(SaveStatus saveStatus)
     {
-        return saveStatus != null && saveStatus.compareTo(appliesIfNot) >= 0 && this != EXPUNGE ? NO : this;
+        return appliesTo(saveStatus) ? this : NO;
     }
 
     public enum Input { PARTIAL, FULL }
 
-    // TODO (required): simulate compaction of log records in burn test
     public static Cleanup shouldCleanup(Input input, SafeCommandStore safeStore, Command command)
     {
         return shouldCleanup(input, safeStore, command, command.participants());
@@ -95,19 +113,19 @@ public enum Cleanup
 
     public static Cleanup shouldCleanup(Input input, SafeCommandStore safeStore, Command command, @Nonnull StoreParticipants participants)
     {
-        return shouldCleanup(input, safeStore.agent(), command.txnId(), command.executeAt(), command.saveStatus(), command.durability(), participants,
+        return shouldCleanup(input, command.txnId(), command.executeAt(), command.saveStatus(), command.durability(), participants,
                              safeStore.redundantBefore(), safeStore.durableBefore());
     }
 
-    public static Cleanup shouldCleanup(Input input, Agent agent, Command command, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    public static Cleanup shouldCleanup(Input input, Command command, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        return shouldCleanup(input, agent, command.txnId(), command.executeAt(), command.saveStatus(), command.durability(), command.participants(),
+        return shouldCleanup(input, command.txnId(), command.executeAt(), command.saveStatus(), command.durability(), command.participants(),
                              redundantBefore, durableBefore);
     }
 
-    public static Cleanup shouldCleanup(Input input, Agent agent, TxnId txnId, Timestamp executeAt, SaveStatus status, Durability durability, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    public static Cleanup shouldCleanup(Input input, TxnId txnId, Timestamp executeAt, SaveStatus status, Durability durability, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        Cleanup cleanup = shouldCleanupInternal(input, agent, txnId, executeAt, status, durability, participants, redundantBefore, durableBefore);
+        Cleanup cleanup = shouldCleanupInternal(input, txnId, executeAt, status, durability, participants, redundantBefore, durableBefore);
         return cleanup.filter(status);
     }
 
@@ -137,47 +155,57 @@ public enum Cleanup
      * we pessimistically assume the whole cluster may need to see its outcome
      * TODO (expected): we should be able to rely on replicas to infer Invalidated from an Erased record
      */
-    private static Cleanup shouldCleanupInternal(Input input, Agent agent, TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, Durability durability, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    private static Cleanup shouldCleanupInternal(Input input, TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, Durability durability, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         if (txnId.kind() == EphemeralRead)
             return NO;
 
         if (expunge(txnId, executeAt, saveStatus, participants, redundantBefore, durableBefore))
-            return expunge();
+            return expunge(txnId);
 
         if (saveStatus == null || participants == null)
             return NO;
 
         if (participants.hasFullRoute())
-            return cleanupWithFullRoute(input, agent, participants, txnId, executeAt, saveStatus, durability, redundantBefore, durableBefore);
+            return cleanupWithFullRoute(input, participants, txnId, executeAt, saveStatus, durability, redundantBefore, durableBefore);
         return cleanupWithoutFullRoute(input, txnId, saveStatus, participants, redundantBefore, durableBefore);
     }
 
-    private static Cleanup cleanupWithFullRoute(Input input, Agent agent, StoreParticipants participants, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    private static Cleanup cleanupWithFullRoute(Input input, StoreParticipants participants, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         // We first check if the command is redundant locally, i.e. whether it has been applied to all non-faulty replicas of the local shard
         // If not, we don't want to truncate its state else we may make catching up for these other replicas much harder
         FullRoute<?> route = Route.castToFullRoute(participants.route());
-        RedundantStatus redundant = redundantBefore.status(txnId, saveStatus.known.is(ApplyAtKnown) ? executeAt : null, route);
-        Invariants.require(redundant.none(NOT_OWNED),"Command " + txnId + " that is being loaded is not owned by this shard on route " + route);
+        // we must not use executeAt here if input == PARTIAL because with partial compaction we might be merging the combination of some old executeAt with a later partial status
+        RedundantStatus redundant = redundantBefore.status(txnId, input == FULL && saveStatus.known.is(ApplyAtKnown) ? executeAt : null, route);
+        Invariants.require(redundant.none(NOT_OWNED),"Command %s that is being loaded is not owned by this shard on route %s", txnId, route);
 
         if (redundant.none(LOCALLY_REDUNDANT))
             return NO;
 
-        Cleanup ifUndecided = cleanupIfUndecidedWithFullRoute(input, txnId, saveStatus, redundant);
-        if (ifUndecided != null)
-            return ifUndecided;
-
+        Cleanup min = cleanupIfUndecidedWithFullRoute(input, txnId, saveStatus, redundant);
         if (!redundant.all(TRUNCATE_BEFORE))
         {
             // TODO (expected): see if we can improve our invariants so we can remove this special-case
             if (input != PARTIAL && redundant.all(SHARD_APPLIED) && redundant.all(LOCALLY_DEFUNCT) && !redundant.any(LOCALLY_APPLIED))
-                return truncate(txnId);
-            return NO;
+                return truncate(txnId, min);
+            return min;
         }
 
         Invariants.paranoid(redundant.all(SHARD_APPLIED));
-        Durability test = Durability.max(durability, durableBefore.min(txnId, participants.route()));
+
+        if (saveStatus.compareTo(Vestigial) >= 0)
+        {
+            // we can't use durability from an Invalidated record to decide if we can erase/expunge,
+            // as we don't know that this has been persisted at all shards.
+            // Similarly, vestigial/erased records don't know their etymology, and may derive from Invalidate
+            durability = NotDurable;
+        }
+
+        Durability test;
+        if (durability.compareTo(UniversalOrInvalidated) >= 0) test = durability;
+        else test = Durability.max(durability, durableBefore.min(txnId, participants.route()));
+
         switch (test)
         {
             default: throw new UnhandledEnum(durability);
@@ -187,17 +215,17 @@ public enum Cleanup
                 // TODO (required): consider how we guarantee not to break recovery of other shards if a majority on this shard are PRE_BOOTSTRAP
                 //   (if the condition is false and we fall through to removing Outcome)
                 if (participants.doesStillExecute())
-                    return truncateWithOutcome(txnId);
+                    return min.atLeast(truncateWithOutcome(txnId, min));
 
             case MajorityOrInvalidated:
             case Majority:
-                return truncate(txnId);
+                return min.atLeast(truncate(txnId, min));
 
             case UniversalOrInvalidated:
             case Universal:
                 if (redundant.all(GC_BEFORE))
-                    return erase();
-                return truncate(txnId);
+                    return erase(txnId, min);
+                return truncate(txnId, min);
         }
     }
 
@@ -226,10 +254,7 @@ public enum Cleanup
 
     private static Cleanup cleanupIfUndecidedWithFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, RedundantStatus redundantStatus)
     {
-        if (saveStatus.hasBeen(PreCommitted))
-            return null;
-
-        if (input == PARTIAL)
+        if (input == PARTIAL || saveStatus.hasBeen(PreCommitted))
             return NO;
 
         return cleanupUndecided(txnId, redundantStatus);
@@ -258,6 +283,8 @@ public enum Cleanup
 
         if (!requiresUniqueHlcs() || !txnId.is(Write)) return true;
         if (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)) return true;
+        // note, it is safe to use ApplyAtKnown even with PARTIAL input here, because we are only discarding information,
+        // and we can safely discard any stale executeAt
         if (executeAt == null) return true;
         if (minGcBefore.is(HLC_BOUND) && executeAt.uniqueHlc() < minGcBefore.hlc()) return true;
         if (participants == null)
@@ -276,18 +303,29 @@ public enum Cleanup
     {
         return INVALIDATE;
     }
-    private static Cleanup truncateWithOutcome(TxnId txnId)
+
+    private static Cleanup truncateWithOutcome(TxnId txnId, Cleanup atLeast)
     {
-        return TRUNCATE_WITH_OUTCOME;
+        return atLeast.compareTo(TRUNCATE_WITH_OUTCOME) > 0 ? atLeast : TRUNCATE_WITH_OUTCOME;
     }
-    private static Cleanup truncate(TxnId txnId)
+
+    private static Cleanup truncate(TxnId txnId, Cleanup atLeast)
     {
-        return TRUNCATE;
+        return atLeast.compareTo(TRUNCATE) > 0 ? atLeast : TRUNCATE;
     }
+
     private static Cleanup vestigial(TxnId txnId)
     {
         return VESTIGIAL;
     }
-    private static Cleanup erase() { return ERASE; }
-    private static Cleanup expunge() { return EXPUNGE; }
+
+    private static Cleanup erase(TxnId txnId, Cleanup atLeast)
+    {
+        return atLeast != EXPUNGE ? ERASE : EXPUNGE;
+    }
+
+    private static Cleanup expunge(TxnId txnId)
+    {
+        return EXPUNGE;
+    }
 }

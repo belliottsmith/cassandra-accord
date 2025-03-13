@@ -321,7 +321,6 @@ public class StoreParticipants
      * Do not invoke this method on a participants we will use to query esp. e.g. for calculateDeps.
      * TODO (desired): create separate Query object that cannot be filtered or used to update a Command
      */
-    static int count = 0;
     public StoreParticipants filter(Filter filter, RedundantBefore redundantBefore, TxnId txnId, @Nullable Timestamp executeAtIfKnown)
     {
         if (filter == QUERY)
@@ -374,7 +373,9 @@ public class StoreParticipants
             Participants<?> extraTouches = touches.without(owns);
             if (!extraTouches.isEmpty())
             {
-                Participants<?> filteredExtra = redundantBefore.withoutShardApplied(txnId, extraTouches);
+                Participants<?> filteredExtra = txnId.is(ExclusiveSyncPoint)
+                                                ? redundantBefore.withoutShardAppliedLocallySynced(txnId, extraTouches)
+                                                : redundantBefore.withoutShardApplied(txnId, extraTouches);
                 if (extraTouches != filteredExtra)
                     touches = owns.with((Participants)filteredExtra);
             }

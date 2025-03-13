@@ -557,7 +557,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
             // TODO (required): audit each of these methods
             if (bounds.is(txnId, SHARD_APPLIED)
-                && ((bounds.endEpoch <= txnId.epoch() && (!txnId.awaitsPreviouslyOwned() || bounds.isLocallyRetired()))
+                && ((bounds.endEpoch <= txnId.epoch() && bounds.isLocallyRetired())
                     || (executeAtIfKnown != null && executeAtIfKnown.epoch() < bounds.startEpoch)
                     || bounds.is(txnId, PRE_BOOTSTRAP_OR_STALE)))
                 return execute.without(Ranges.of(bounds.range));
@@ -579,15 +579,26 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return ownedOrNotRedundant;
         }
 
-        static Participants<?> withoutShardAppliedBefore(Bounds bounds, @Nonnull Participants<?> notShardApplied, TxnId txnId)
+        static Participants<?> withoutShardApplied(Bounds bounds, @Nonnull Participants<?> notShardApplied, TxnId txnId)
         {
             if (bounds == null)
                 return notShardApplied;
 
-            if (txnId.compareTo(bounds.maxBound(SHARD_APPLIED)) <= 0)
+            if (bounds.is(txnId, SHARD_APPLIED))
                 return notShardApplied.without(Ranges.of(bounds.range));
 
             return notShardApplied;
+        }
+
+        static Participants<?> withoutShardAppliedLocallySynced(Bounds bounds, @Nonnull Participants<?> notShardAppliedLocallyDefunct, TxnId txnId)
+        {
+            if (bounds == null)
+                return notShardAppliedLocallyDefunct;
+
+            if (bounds.is(txnId, SHARD_APPLIED, LOCALLY_SYNCED))
+                return notShardAppliedLocallyDefunct.without(Ranges.of(bounds.range));
+
+            return notShardAppliedLocallyDefunct;
         }
 
         static Ranges withoutBeforeGc(Bounds entry, @Nonnull Ranges notGarbage, TxnId txnId, @Nullable Timestamp executeAt)
@@ -1077,7 +1088,17 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     {
         if (participants.isEmpty() || maxShardAppliedBefore.compareTo(txnId) < 0)
             return participants;
-        return foldl(participants, Bounds::withoutShardAppliedBefore, participants, txnId);
+        return foldl(participants, Bounds::withoutShardApplied, participants, txnId);
+    }
+
+    /**
+     * Subtract any ranges we consider stale, pre-bootstrap, or that were previously owned and have been retired
+     */
+    public Participants<?> withoutShardAppliedLocallySynced(TxnId txnId, Participants<?> participants)
+    {
+        if (participants.isEmpty() || maxShardAppliedBefore.compareTo(txnId) < 0)
+            return participants;
+        return foldl(participants, Bounds::withoutShardAppliedLocallySynced, participants, txnId);
     }
 
     public static class Builder extends AbstractIntervalBuilder<RoutingKey, Bounds, RedundantBefore>

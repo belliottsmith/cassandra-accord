@@ -133,7 +133,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         MessageSink messageSink = messageSinkFactory.apply(id, this);
         MockConfigurationService configurationService = new MockConfigurationService(messageSink, onFetchTopology, topology);
         Agent agent = new TestAgent();
-        Journal journal = new InMemoryJournal(id, agent, random.fork());
+        Journal journal = new InMemoryJournal(id, random.fork());
         ThreadPoolScheduler scheduler = new ThreadPoolScheduler();
         Node node = new Node(id,
                              messageSink,
@@ -153,6 +153,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
                              journal);
+        journal.start(node);
         awaitUninterruptibly(node.unsafeStart());
         node.onTopologyUpdate(topology, false, true);
         return node;

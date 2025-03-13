@@ -2002,7 +2002,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
         TxnInfo[] newById = removeRedundantById(byId, bounds, newBounds);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBounds));
-        Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
+        Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.gcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
         Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBounds));
 
         long maxUniqueHlc = this.maxUniqueHlc;

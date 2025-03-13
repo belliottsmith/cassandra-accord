@@ -380,6 +380,18 @@ public class Invariants
             illegalArgument(format(fmt, p1, p2));
     }
 
+    public static void requireArgument(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable Object p3)
+    {
+        if (!condition)
+            illegalArgument(format(fmt, p1, p2, p3));
+    }
+
+    public static void requireArgument(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable Object p3, @Nullable Object p4)
+    {
+        if (!condition)
+            illegalArgument(format(fmt, p1, p2, p3, p4));
+    }
+
     public static void requireArgument(boolean condition, String fmt, Object... args)
     {
         if (!condition)

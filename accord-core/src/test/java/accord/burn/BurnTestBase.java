@@ -52,7 +52,6 @@ import java.util.zip.CRC32;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Key;
 import accord.api.ProtocolModifiers.Toggles;
@@ -98,7 +97,6 @@ import accord.utils.DefaultRandom;
 import accord.utils.Gen;
 import accord.utils.Gens;
 import accord.utils.RandomSource;
-import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.Utils;
 import accord.utils.async.AsyncExecutor;
@@ -369,7 +367,7 @@ public class BurnTestBase
         f2.get();
     }
 
-    public static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency, PendingQueue pendingQueue, TriFunction<Id, Agent, RandomSource, Journal> journalFactory)
+    public static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency, PendingQueue pendingQueue, BiFunction<Node.Id, RandomSource, Journal> journalFactory)
     {
         List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
         Thread.currentThread().setUncaughtExceptionHandler((th, fail) -> {

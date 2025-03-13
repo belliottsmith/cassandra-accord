@@ -18,14 +18,15 @@
 
 package accord.impl;
 
+import java.util.Objects;
 import java.util.function.BiPredicate;
-import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.ToLongFunction;
+
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
-import accord.api.Agent;
 import accord.api.Result;
 import accord.local.Cleanup;
 import accord.local.Cleanup.Input;
@@ -90,18 +91,18 @@ public class CommandChange
     {
         PARTICIPANTS, // stored first so we can index it
         SAVE_STATUS,
-        PARTIAL_DEPS,
-        EXECUTE_AT,
-        EXECUTES_AT_LEAST,
-        MIN_UNIQUE_HLC,
         DURABILITY,
-        ACCEPTED,
+        EXECUTE_AT,
         PROMISED,
-        WAITING_ON,
+        ACCEPTED,
         PARTIAL_TXN,
+        PARTIAL_DEPS,
+        WAITING_ON,
+        MIN_UNIQUE_HLC,
+        EXECUTES_AT_LEAST,
         WRITES,
-        CLEANUP,
         RESULT,
+        CLEANUP,
         ;
 
         public static final Field[] FIELDS = values();
@@ -160,25 +161,27 @@ public class CommandChange
 
         protected TxnId txnId;
 
-        protected Timestamp executeAt;
-        protected Timestamp executesAtLeast;
-        protected long minUniqueHlc;
+        protected StoreParticipants participants;
         protected SaveStatus saveStatus;
         protected Durability durability;
+        protected Timestamp executeAt;
 
-        protected Ballot acceptedOrCommitted;
         protected Ballot promised;
+        protected Ballot acceptedOrCommitted;
 
-        protected StoreParticipants participants;
         protected PartialTxn partialTxn;
         protected PartialDeps partialDeps;
 
         protected CommandChange.WaitingOnProvider waitingOn;
+        protected long minUniqueHlc;
+        protected Timestamp executesAtLeast;
+
         protected Writes writes;
         protected Result result;
+
         protected Cleanup cleanup;
 
-        protected boolean nextCalled;
+        protected boolean hasUpdate;
         protected int count;
 
         public Builder(TxnId txnId, Load load)
@@ -226,17 +229,17 @@ public class CommandChange
         {
             switch (field)
             {
-                case EXECUTE_AT: return executeAt;
-                case EXECUTES_AT_LEAST: return executesAtLeast;
-                case MIN_UNIQUE_HLC: return minUniqueHlc;
+                case PARTICIPANTS: return participants;
                 case SAVE_STATUS: return saveStatus;
                 case DURABILITY: return durability;
-                case ACCEPTED: return acceptedOrCommitted;
+                case EXECUTE_AT: return executeAt;
                 case PROMISED: return promised;
-                case PARTICIPANTS: return participants;
+                case ACCEPTED: return acceptedOrCommitted;
                 case PARTIAL_TXN: return partialTxn;
                 case PARTIAL_DEPS: return partialDeps;
                 case WAITING_ON: return waitingOn;
+                case MIN_UNIQUE_HLC: return minUniqueHlc;
+                case EXECUTES_AT_LEAST: return executesAtLeast;
                 case WRITES: return writes;
                 case RESULT: return result;
                 default: throw new UnhandledEnum(field);
@@ -248,25 +251,26 @@ public class CommandChange
             flags = 0;
             txnId = null;
 
-            executeAt = null;
-            executesAtLeast = null;
-            minUniqueHlc = 0;
+            participants = null;
             saveStatus = null;
             durability = null;
+            executeAt = null;
 
-            acceptedOrCommitted = null;
             promised = null;
+            acceptedOrCommitted = null;
 
-            participants = null;
             partialTxn = null;
             partialDeps = null;
 
             waitingOn = null;
+            minUniqueHlc = 0;
+            executesAtLeast = null;
+
             writes = null;
             result = null;
             cleanup = null;
 
-            nextCalled = false;
+            hasUpdate = false;
             count = 0;
         }
 
@@ -287,7 +291,12 @@ public class CommandChange
 
         public boolean isEmpty()
         {
-            return !nextCalled;
+            return !hasUpdate;
+        }
+
+        public int flags()
+        {
+            return flags;
         }
 
         public int count()
@@ -295,31 +304,38 @@ public class CommandChange
             return count;
         }
 
-        public Cleanup shouldCleanup(Input input, Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore)
+        public Cleanup shouldCleanup(Input input, RedundantBefore redundantBefore, DurableBefore durableBefore)
         {
-            if (!nextCalled)
+            if (!hasUpdate)
                 return NO;
 
             Durability durability = this.durability;
             if (durability == null) durability = NotDurable;
-            Cleanup cleanup = Cleanup.shouldCleanup(input, agent, txnId, executeAt, saveStatus, durability, participants, redundantBefore, durableBefore);
+            StoreParticipants participants = this.participants;
+            // TODO (expected): we need to filter participants to correctly compute doesStillExecute in Cleanup.shouldCleanup;
+            //  would be better to break this dependency, or otherwise encode it better.
+            //  In particular it would be nice to avoid doing this twice for each command on load, as we also do this in SafeCommandStore.
+            //  Perhaps we can special-case loading, and simply update the participants here so we can avoid doing it again on access
+            if (input == Input.FULL && participants != null)
+                participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus != null && saveStatus.known.isExecuteAtKnown() ? executeAt : null);
+            Cleanup cleanup = Cleanup.shouldCleanup(input, txnId, executeAt, saveStatus, durability, participants, redundantBefore, durableBefore);
             if (this.cleanup != null && this.cleanup.compareTo(cleanup) > 0)
                 cleanup = this.cleanup;
             return cleanup;
         }
 
-        public Cleanup maybeCleanup(Input input, Agent agent, RedundantBefore redundantBefore, DurableBefore durableBefore)
+        public Cleanup maybeCleanup(boolean clearFields, Input input, RedundantBefore redundantBefore, DurableBefore durableBefore)
         {
-            Cleanup cleanup = shouldCleanup(input, agent, redundantBefore, durableBefore);
-            return maybeCleanup(input, cleanup);
+            Cleanup cleanup = shouldCleanup(input, redundantBefore, durableBefore);
+            return maybeCleanup(clearFields, input, cleanup);
         }
 
-        public Cleanup maybeCleanup(Input input, Cleanup cleanup)
+        public Cleanup maybeCleanup(boolean clearFields, Input input, Cleanup cleanup)
         {
             if (cleanup == NO || cleanup == EXPUNGE)
                 return cleanup;
 
-            SaveStatus newSaveStatus = cleanup.appliesIfNot;
+            SaveStatus newSaveStatus = cleanup.newStatus;
             if (saveStatus == null || saveStatus.compareTo(newSaveStatus) < 0)
             {
                 if (input == Input.FULL)
@@ -329,23 +345,38 @@ public class CommandChange
                         newSaveStatus = SaveStatus.TruncatedUnapplied;
                     saveStatus = newSaveStatus;
                 }
-                forceSetNulls(eraseKnownFieldsMask[newSaveStatus.ordinal()]);
+                forceSetNulls(clearFields, eraseKnownFieldsMask[newSaveStatus.ordinal()]);
             }
 
+            this.cleanup = cleanup;
             return cleanup;
         }
 
-        protected void setNulls(int mask)
+        protected void setNulls(boolean clearFields, int newFlags)
         {
-            mask &= ~(flags >>> 16); // limit ourselves to those fields that have not already been set (high 16 bits are those already-set fields)
-            forceSetNulls(mask);
+            newFlags &= ~(flags >>> 16); // limit ourselves to those fields that have not already been set (high 16 bits are those already-set fields)
+            forceSetNulls(clearFields, newFlags);
         }
 
-        protected void forceSetNulls(int mask)
+        protected boolean forceSetNulls(boolean clearFields, int newFlags)
         {
-            mask &= ~nullMask(flags); // limit ourselves to those fields that are not already null
-            mask = nullMask(mask); // limit ourselves to those fields that are now being set to null
-            int iterable = toIterableSetFields(mask);
+            newFlags &= ~nulls(flags); // limit ourselves to those fields that are not already null
+            newFlags = nulls(newFlags); // limit ourselves to those fields that are now being set to null
+            if (newFlags == 0)
+                return false;
+
+            if (clearFields)
+                clearFields(newFlags);
+
+            flags |= newFlags;
+            return true;
+        }
+
+        // clears any field with a CHANGED flag NOT limited only to NULL
+        private void clearFields(int newFlags)
+        {
+            newFlags &= notNulls(flags); // limit ourselves to those fields that are not already null
+            int iterable = toIterableSetFields(newFlags);
             for (Field next = nextSetField(iterable); next != null; iterable = unsetIterable(next, iterable), next = nextSetField(iterable))
             {
                 switch (next)
@@ -367,12 +398,112 @@ public class CommandChange
                     case RESULT:            result = null;                           break;
                 }
             }
-            flags |= mask;
         }
 
-        static int nullMask(int mask)
+        // only populate regular fields that are not already set, but apply any Cleanup if it is stronger than any already present
+        public boolean fillInMissingOrCleanup(boolean clearFields, Builder add)
         {
-            return (mask & 0xffff) | (mask << 16);
+            hasUpdate = true;
+            count++;
+
+            int addFlags = notAlreadySet(not(CLEANUP, add.flags), flags);
+            if (addFlags == 0)
+                return addCleanup(clearFields, add.cleanup);
+
+            setNulls(false, addFlags);
+            int iterable = toIterableSetFields(notNulls(addFlags));
+            for (Field next = nextSetField(iterable) ; next != null; next = nextSetField(iterable = unsetIterable(next, iterable)))
+            {
+                switch (next)
+                {
+                    default: throw new UnhandledEnum(next);
+                    case PARTICIPANTS:      participants = add.participants;               break;
+                    case SAVE_STATUS:       saveStatus = add.saveStatus;                   break;
+                    case DURABILITY:        durability = add.durability;                   break;
+                    case EXECUTE_AT:        executeAt = add.executeAt;                     break;
+                    case PROMISED:          promised = add.promised;                       break;
+                    case ACCEPTED:          acceptedOrCommitted = add.acceptedOrCommitted; break;
+                    case PARTIAL_TXN:       partialTxn = add.partialTxn;                   break;
+                    case PARTIAL_DEPS:      partialDeps = add.partialDeps;                 break;
+                    case WAITING_ON:        waitingOn = add.waitingOn;                     break;
+                    case MIN_UNIQUE_HLC:    minUniqueHlc = add.minUniqueHlc;               break;
+                    case EXECUTES_AT_LEAST: executesAtLeast = add.executesAtLeast;         break;
+                    case WRITES:            writes = add.writes;                           break;
+                    case RESULT:            result = add.result;                           break;
+                }
+            }
+            flags |= addFlags;
+            addCleanup(clearFields, add.cleanup);
+            return true;
+        }
+
+        // returns true if we made a material update to the Builder;
+        // that is, if we cleared a non-null field or if we are already mask-only
+        public boolean clearSuperseded(boolean clearFields, Builder superseding)
+        {
+            int unset = flags & setFieldsMask(superseding.flags);
+            if (notNulls(unset) == 0 && notNulls(flags) != 0)
+                return false;
+
+            if (clearFields)
+                clearFields(unset);
+            flags ^= unset;
+            return true;
+        }
+
+        public boolean addCleanup(boolean clearFields, Cleanup addCleanup)
+        {
+            if (addCleanup == null || addCleanup == NO)
+                return false;
+
+            if (cleanup != null && addCleanup.compareTo(cleanup) <= 0)
+                return false;
+
+            cleanup = addCleanup;
+            if (!cleanup.appliesTo(saveStatus))
+                return false;
+            return forceSetNulls(clearFields, eraseKnownFieldsMask[cleanup.newStatus.ordinal()]);
+        }
+
+        public boolean cleanup(boolean clearFields, Cleanup apply)
+        {
+            int unsetFields = eraseKnownFieldsMask[apply.newStatus.ordinal()];
+            unsetFields &= flags;
+            if (unsetFields == 0)
+                return false;
+
+            if (clearFields)
+                clearFields(unsetFields);
+            flags ^= unsetFields;
+            return true;
+        }
+
+        protected static int nulls(int flags)
+        {
+            return (flags & 0xffff) | (flags << 16);
+        }
+
+        protected static int notNulls(int flags)
+        {
+            return flags & (~flags << 16);
+        }
+
+        protected static int not(Field field, int flags)
+        {
+            return flags & ~(0x10001 << field.ordinal());
+        }
+
+        protected static int notAlreadySet(int newFlags, int oldFlags)
+        {
+            return newFlags & ~setFieldsMask(oldFlags);
+        }
+
+        // result has both null and changed flag bits set for any changed field;
+        // can be used to limit another flags to those that were set bu these flags, or if inverted to those not set by these flags
+        protected static int setFieldsMask(int flags)
+        {
+            int mask = flags & 0xffff0000;
+            return mask | (mask >>> 16);
         }
 
         public Command.Minimal asMinimal()
@@ -388,7 +519,7 @@ public class CommandChange
         // TODO (expected): we shouldn't need to filter participants here, we will do it anyway before using in SafeCommandStore
         public Command construct(RedundantBefore redundantBefore)
         {
-            if (!nextCalled)
+            if (!hasUpdate)
                 return null;
 
             Invariants.require(txnId != null);
@@ -453,17 +584,17 @@ public class CommandChange
         {
             return "Builder {" +
                    "txnId=" + txnId
-                   + (isChanged(EXECUTE_AT, flags)        ? ", executeAt=" + executeAt : "")
-                   + (isChanged(EXECUTES_AT_LEAST, flags) ? ", executesAtLeast=" + executesAtLeast : "")
-                   + (isChanged(MIN_UNIQUE_HLC, flags)    ? ", minUniqueHlc=" + minUniqueHlc : "")
+                   + (isChanged(PARTICIPANTS, flags)      ? ", participants=" + participants : "")
                    + (isChanged(SAVE_STATUS, flags)       ? ", saveStatus=" + saveStatus : "")
                    + (isChanged(DURABILITY, flags)        ? ", durability=" + durability : "")
-                   + (isChanged(ACCEPTED, flags)          ? ", acceptedOrCommitted=" + acceptedOrCommitted : "")
+                   + (isChanged(EXECUTE_AT, flags)        ? ", executeAt=" + executeAt : "")
                    + (isChanged(PROMISED, flags)          ? ", promised=" + promised : "")
-                   + (isChanged(PARTICIPANTS, flags)      ? ", participants=" + participants : "")
-                   + (isChanged(PARTIAL_DEPS, flags)      ? ", partialTxn=" + partialTxn : "")
+                   + (isChanged(ACCEPTED, flags)          ? ", acceptedOrCommitted=" + acceptedOrCommitted : "")
+                   + (isChanged(PARTIAL_TXN, flags)      ? ", partialTxn=" + partialTxn : "")
                    + (isChanged(PARTIAL_DEPS, flags)      ? ", partialDeps=" + partialDeps : "")
                    + (isChanged(WAITING_ON, flags)        ? ", waitingOn=" + waitingOn : "")
+                   + (isChanged(MIN_UNIQUE_HLC, flags)    ? ", minUniqueHlc=" + minUniqueHlc : "")
+                   + (isChanged(EXECUTES_AT_LEAST, flags) ? ", executesAtLeast=" + executesAtLeast : "")
                    + (isChanged(WRITES, flags)            ? ", writes=" + writes : "")
                    + (isChanged(RESULT, flags)            ? ", result=" + result : "")
                    + (isChanged(CLEANUP, flags)           ? ", cleanup=" + cleanup : "") +
@@ -514,73 +645,86 @@ public class CommandChange
      */
 
     @VisibleForTesting
-    public static int getFlags(Command before, Command after)
+    public static int getFlags(@Nullable Command before, @Nonnull Command after)
     {
         int flags = 0;
-        if (before == null && after == null)
-            return flags;
-
-        // TODO (expected): derive this from precomputed bit masking on Known, only testing equality of objects we can't infer directly
-        flags = collectFlags(before, after, Command::executeAt, Timestamp::equalsStrict, true, EXECUTE_AT, flags);
-        flags = collectFlags(before, after, Command::executesAtLeast, true, EXECUTES_AT_LEAST, flags);
-        flags = collectFlags(before, after, CommandChange::getMinUniqueHlc, MIN_UNIQUE_HLC, flags);
-
-        flags = collectFlags(before, after, Command::saveStatus, false, SAVE_STATUS, flags);
-        flags = collectFlags(before, after, Command::durability, false, DURABILITY, flags);
-
-        flags = collectFlags(before, after, Command::acceptedOrCommitted, false, ACCEPTED, flags);
-        flags = collectFlags(before, after, Command::promised, false, PROMISED, flags);
-
-        flags = collectFlags(before, after, Command::participants, true, PARTICIPANTS, flags);
-        flags = collectFlags(before, after, Command::partialTxn, false, PARTIAL_TXN, flags);
-        flags = collectFlags(before, after, Command::partialDeps, false, PARTIAL_DEPS, flags);
-        flags = collectFlags(before, after, Command::waitingOn, WaitingOn::equalBitSets, true, WAITING_ON, flags);
-
-        flags = collectFlags(before, after, Command::writes, false, WRITES, flags);
-        flags = collectFlags(before, after, Command::result, false, RESULT, flags);
+        SaveStatus saveStatus = after.saveStatus();
+        if (before == null)
+        {
+            flags |= addIdentityFlags(null, after.participants(), PARTICIPANTS);
+            flags |= addIdentityFlags(null, saveStatus, SAVE_STATUS);
+            flags |= addIdentityFlags(null, after.durability(), DURABILITY);
+            flags |= addIdentityFlags(null, after.executeAt(), EXECUTE_AT);
+            flags |= addIdentityFlags(null, after.promised(), PROMISED);
+            flags |= addIdentityFlags(null, after.acceptedOrCommitted(), ACCEPTED);
+            flags |= addIdentityFlags(null, after.partialTxn(), PARTIAL_TXN);
+            flags |= addIdentityFlags(null, after.partialDeps(), PARTIAL_DEPS);
+            if (after.waitingOn() != null)
+            {
+                flags |= setChanged(WAITING_ON, 0);
+                flags |= addIdentityFlags(0, getMinUniqueHlc(after), MIN_UNIQUE_HLC);
+            }
+            flags |= addIdentityFlags(null, after.executesAtLeast(), EXECUTES_AT_LEAST);
+            flags |= addIdentityFlags(null, after.writes(), WRITES);
+            flags |= addIdentityFlags(null, after.result(), RESULT);
+        }
+        else
+        {
+            flags |= addEqualityFlags(before.participants(), after.participants(), PARTICIPANTS);
+            flags |= addIdentityFlags(before.saveStatus(), saveStatus, SAVE_STATUS);
+            flags |= addIdentityFlags(before.durability(), after.durability(), DURABILITY);
+            flags |= addFlags(before.executeAt(), after.executeAt(), Timestamp::equalsStrict, EXECUTE_AT);
+            flags |= addEqualityFlags(before.promised(), after.promised(), PROMISED);
+            flags |= addEqualityFlags(before.acceptedOrCommitted(), after.acceptedOrCommitted(), ACCEPTED);
+            flags |= addIdentityFlags(before.partialTxn(), after.partialTxn(), PARTIAL_TXN);
+            flags |= addIdentityFlags(before.partialDeps(), after.partialDeps(), PARTIAL_DEPS);
+            if (before.waitingOn() != after.waitingOn())
+            {
+                flags |= setChanged(WAITING_ON);
+                flags |= addIdentityFlags(getMinUniqueHlc(before), getMinUniqueHlc(after), MIN_UNIQUE_HLC);
+            }
+            flags |= addEqualityFlags(before.executesAtLeast(), after.executesAtLeast(), EXECUTES_AT_LEAST);
+            flags |= addIdentityFlags(before.writes(), after.writes(), WRITES);
+            flags |= addIdentityFlags(before.result(), after.result(), RESULT);
+        }
 
         // make sure we have enough information to decide whether to expunge timestamps (for unique ApplyAt HLC guarantees)
-        if (after.saveStatus().known.is(ApplyAtKnown) && (before == null || !before.saveStatus().known.is(ApplyAtKnown)))
+        if (saveStatus.known.is(ApplyAtKnown) && (before == null || !before.saveStatus().known.is(ApplyAtKnown)))
         {
             flags = setChanged(EXECUTE_AT, flags);
             flags = setChanged(PARTICIPANTS, flags);
             flags = setChanged(SAVE_STATUS, flags);
         }
 
-        flags |= eraseKnownFieldsMask[after.saveStatus().ordinal()];
-
+        flags |= eraseKnownFieldsMask[saveStatus.ordinal()];
         return flags;
     }
 
-    private static <OBJ, VAL> int collectFlags(OBJ lo, OBJ ro, Function<OBJ, VAL> convert, boolean allowClassMismatch, Field field, int flags)
+    private static int addIdentityFlags(Object l, Object r, Field field)
     {
-        return collectFlags(lo, ro, convert, Object::equals, allowClassMismatch, field, flags);
+        if (l == r) return 0;
+        if (r == null) return setIsNullAndChanged(field);
+        return setChanged(field);
     }
 
-    private static <OBJ, VAL> int collectFlags(OBJ lo, OBJ ro, Function<OBJ, VAL> convert, BiPredicate<VAL, VAL> equals, boolean allowClassMismatch, Field field, int flags)
+    private static <T> int addEqualityFlags(T l, T r, Field field)
     {
-        VAL l = null;
-        VAL r = null;
-        if (lo != null) l = convert.apply(lo);
-        if (ro != null) r = convert.apply(ro);
-
-        if (l == r) return flags; // no change
-        if (r == null) return setIsNullAndChanged(field, flags);
-        if (l == null) return setChanged(field, flags);
-        Invariants.require(allowClassMismatch || l.getClass() == r.getClass(), "%s != %s", l.getClass(), r.getClass());
-        if (equals.test(l, r)) return flags; // no change
-        return setChanged(field, flags);
+        return addFlags(l, r, Objects::equals, field);
     }
 
-    private static <OBJ> int collectFlags(OBJ lo, OBJ ro, ToLongFunction<OBJ> convert, Field field, int flags)
+    private static <T> int addFlags(T l, T r, BiPredicate<T, T> equality, Field field)
     {
-        long l = 0, r = 0;
-        if (lo != null) l = convert.applyAsLong(lo);
-        if (ro != null) r = convert.applyAsLong(ro);
+        if (l == r) return 0;
+        if (r == null) return setIsNullAndChanged(field);
+        if (l == null) return setChanged(field);
+        if (equality.test(l, r)) return 0;
+        return setChanged(field);
+    }
 
-        return l == r ? flags:
-                r == 0 ? setIsNullAndChanged(field, flags)
-                       : setChanged(field, flags);
+    private static int addIdentityFlags(long l, long r, Field field)
+    {
+        if (l == r) return 0;
+        return setChanged(field);
     }
 
     public static boolean anyFieldChanged(int flags)
@@ -597,6 +741,16 @@ public class CommandChange
     public static int setChanged(Field field, int oldFlags)
     {
         return oldFlags | (0x10000 << field.ordinal());
+    }
+
+    public static int setChanged(Field field)
+    {
+        return 0x10000 << field.ordinal();
+    }
+
+    public static int setIsNullAndChanged(Field field)
+    {
+        return 0x10001 << field.ordinal();
     }
 
     @VisibleForTesting

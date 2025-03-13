@@ -201,7 +201,7 @@ public class Utils
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
-                             new InMemoryJournal(nodeId, agent, randomSource));
+                             new InMemoryJournal(nodeId, randomSource));
         awaitUninterruptibly(node.unsafeStart());
         return node;
     }

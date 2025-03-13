@@ -31,6 +31,7 @@ import accord.api.Journal;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
+import accord.local.Node;
 import accord.local.RedundantBefore;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Ranges;
@@ -71,6 +72,13 @@ public class LoggingJournal implements Journal
         {
             // ignore
         }
+    }
+
+    @Override
+
+    public Journal start(Node node)
+    {
+        return this;
     }
 
     @Override

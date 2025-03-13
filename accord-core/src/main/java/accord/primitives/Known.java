@@ -30,6 +30,7 @@ import accord.utils.UnhandledEnum;
 
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.KnownExecuteAt.IS_EXECUTE_AT_KNOWN;
+import static accord.primitives.Known.Outcome.WasApply;
 import static accord.primitives.Known.PrivilegedVote.VotePreAccept;
 import static accord.primitives.Known.PrivilegedVote.NoVote;
 import static accord.primitives.Known.Definition.DefinitionErased;
@@ -533,6 +534,11 @@ public class Known
     public Outcome outcome()
     {
         return Outcome.VALUES[outcomeOrdinal()];
+    }
+
+    public boolean isOrWasApply()
+    {
+        return is(Outcome.Apply) || is(WasApply);
     }
 
     public boolean is(Outcome outcome)

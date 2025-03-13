@@ -24,6 +24,7 @@ import accord.primitives.AbstractRanges;
 import accord.primitives.Status.Durability;
 import accord.primitives.SyncPoint;
 import accord.primitives.TxnId;
+import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.Cancellable;
 
@@ -42,6 +43,7 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
         super(exclusiveSyncPoint.syncId);
         this.exclusiveSyncPoint = exclusiveSyncPoint;
         this.durability = durability;
+        Invariants.require(durability.compareTo(Durability.MajorityOrInvalidated) >= 0);
     }
 
     private TxnId syncIdWithFlags()
@@ -52,8 +54,9 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
     @Override
     public Cancellable submit()
     {
+        Invariants.require(durability.compareTo(Durability.MajorityOrInvalidated) >= 0);
         TxnId syncIdWithFlags = syncIdWithFlags();
-        node.markDurable(exclusiveSyncPoint.route.toRanges(), syncIdWithFlags, syncIdWithFlags)
+        node.markDurable(exclusiveSyncPoint.route.toRanges(), syncIdWithFlags, durability.compareTo(Durability.UniversalOrInvalidated) >= 0 ? syncIdWithFlags : TxnId.NONE)
         .addCallback((success, fail) -> {
             if (fail != null) node.reply(replyTo, replyContext, null, fail);
             else node.mapReduceConsumeLocal(this, exclusiveSyncPoint.route, waitForEpoch(), waitForEpoch(), this);
