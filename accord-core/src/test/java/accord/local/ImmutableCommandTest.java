@@ -112,7 +112,7 @@ public class ImmutableCommandTest
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
-                             new InMemoryJournal(id, agent, random.fork()));
+                             new InMemoryJournal(id, random.fork()));
         awaitUninterruptibly(node.unsafeStart());
         node.onTopologyUpdate(storeSupport.local.get(), false, true);
         return node;

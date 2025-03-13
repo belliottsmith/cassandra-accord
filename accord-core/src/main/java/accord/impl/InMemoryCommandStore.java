@@ -289,7 +289,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             Invariants.require(globalCommand != null && !globalCommand.isEmpty());
             Command command = globalCommand.value();
             StoreParticipants participants = command.participants().filter(LOAD, safeStore, txnId, command.executeAtIfKnown());
-            Cleanup cleanup = Cleanup.shouldCleanup(FULL, agent, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
+            Cleanup cleanup = Cleanup.shouldCleanup(FULL, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
             Invariants.require(command.hasBeen(Applied)
                                || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
                                || (durableBefore().min(txnId) == NotDurable &&

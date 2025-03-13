@@ -52,7 +52,6 @@ import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.RoutingKey;
@@ -616,7 +615,7 @@ public class Cluster
                                               Supplier<RandomSource> randomSupplier,
                                               Supplier<TimeService> timeServiceSupplier,
                                               TopologyFactory topologyFactory, Supplier<Packet> in, Consumer<Runnable> noMoreWorkSignal,
-                                              Consumer<Map<Id, Node>> readySignal, TriFunction<Node.Id, Agent, RandomSource, Journal> journalFactory)
+                                              Consumer<Map<Id, Node>> readySignal, BiFunction<Node.Id, RandomSource, Journal> journalFactory)
     {
         Topology topology = topologyFactory.toTopology(nodes);
         Map<Id, Node> nodeMap = new LinkedHashMap<>();
@@ -677,7 +676,7 @@ public class Cluster
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
                 AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale, timeouts);
                 executorMap.put(id, nodeExecutor);
-                Journal journal = journalFactory.apply(id, nodeExecutor.agent(), random);
+                Journal journal = journalFactory.apply(id, random);
                 journalMap.put(id, journal);
                 BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
                 DelayedCommandStores.CacheLoading cacheLoading = new RandomLoader(random).newLoader(journal);
@@ -687,6 +686,7 @@ public class Cluster
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
                                      DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
                                      DurableBefore.NOOP_PERSISTER, journal);
+                journal.start(node);
                 DurabilityService durability = node.durability();
                 // TODO (desired): randomise
                 durability.shards().setShardCycleTime(30, SECONDS);
@@ -922,7 +922,7 @@ public class Cluster
                 {
                     if (afterCommand.is(Status.Invalidated))
                         Invariants.require(beforeCommand.hasBeen(Status.Truncated) || (!beforeCommand.hasBeen(Status.PreCommitted)
-                               && Cleanup.shouldCleanup(FULL, s.agent(), e.getKey(), beforeCommand.executeAtIfKnown(), beforeCommand.saveStatus(), beforeCommand.durability(), beforeCommand.participants(), store.unsafeGetRedundantBefore(), store.durableBefore()).compareTo(INVALIDATE) >= 0));
+                               && Cleanup.shouldCleanup(FULL, e.getKey(), beforeCommand.executeAtIfKnown(), beforeCommand.saveStatus(), beforeCommand.durability(), afterCommand.participants(), store.unsafeGetRedundantBefore(), store.durableBefore()).compareTo(INVALIDATE) >= 0));
                     continue;
                 }
                 if (beforeCommand.hasBeen(Status.Truncated))
@@ -954,7 +954,7 @@ public class Cluster
                         if (beforeCommand.saveStatus() == SaveStatus.Erased)
                             continue;
 
-                        if (Cleanup.shouldCleanup(FULL, s.agent(), beforeCommand, store.unsafeGetRedundantBefore(), store.durableBefore()) == EXPUNGE)
+                        if (Cleanup.shouldCleanup(FULL, beforeCommand, store.unsafeGetRedundantBefore(), store.durableBefore()) == EXPUNGE)
                             continue;
 
                         if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::shardAndLocallyRedundantBefore).compareTo(txnId) > 0)

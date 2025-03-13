@@ -925,7 +925,7 @@ public class Commands
             case TRUNCATE_WITH_OUTCOME:
                 Invariants.requireArgument(command.known().is(Apply));
                 Invariants.requireArgument(command.known().is(ApplyAtKnown));
-                result = truncated(command, newParticipants, cleanup.appliesIfNot);
+                result = truncated(command, newParticipants, cleanup.newStatus);
                 break;
 
             case TRUNCATE:
@@ -938,7 +938,8 @@ public class Commands
                 break;
 
             case ERASE:
-                Invariants.require(command.saveStatus().compareTo(Erased) < 0);
+                Invariants.require(command.saveStatus() != Erased);
+
             case EXPUNGE:
                 result = erased(command, newParticipants);
                 break;
@@ -983,7 +984,7 @@ public class Commands
             return true;
         }
 
-        Invariants.require(cleanup == EXPUNGE || command.saveStatus().compareTo(cleanup.appliesIfNot) < 0);
+        Invariants.require(cleanup.appliesTo(command.saveStatus()));
         purge(safeStore, safeCommand, command, cleanupParticipants, cleanup, true);
         return true;
     }

@@ -27,6 +27,7 @@ import javax.annotation.Nullable;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
+import accord.local.Node;
 import accord.local.RedundantBefore;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Ranges;
@@ -42,6 +43,8 @@ import org.agrona.collections.Int2ObjectHashMap;
  */
 public interface Journal
 {
+    Journal start(Node node);
+
     Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     Command.Minimal loadMinimal(int store, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
 

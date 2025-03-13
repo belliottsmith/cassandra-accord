@@ -306,8 +306,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     @Override
     public void clearBefore(SafeCommandStore safeStore, TxnId clearWaitingBefore, TxnId clearAllBefore)
     {
-        if (clearAllBefore.compareTo(clearWaitingBefore) >= 0)
-            clearWaitingBefore = clearAllBefore;
+        Invariants.require(clearAllBefore.compareTo(clearWaitingBefore) <= 0);
 
         int index = 0;
         while (index < BTree.size(stateMap))

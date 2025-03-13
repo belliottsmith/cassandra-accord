@@ -31,7 +31,6 @@ import accord.primitives.TxnId;
 
 import static accord.local.Cleanup.Input.FULL;
 import static accord.primitives.SaveStatus.PreApplied;
-import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.primitives.Txn.Kind.Write;
@@ -41,20 +40,9 @@ public abstract class AbstractLoader implements Journal.Loader
     protected Command loadInternal(Command command, SafeCommandStore safeStore)
     {
         TxnId txnId = command.txnId();
-        if (command.status() != Truncated && command.status() != Invalidated)
-        {
-            Cleanup cleanup = Cleanup.shouldCleanup(FULL, safeStore, command, command.participants());
-            switch (cleanup)
-            {
-                case NO:
-                    break;
-                case INVALIDATE:
-                case TRUNCATE_WITH_OUTCOME:
-                case TRUNCATE:
-                case ERASE:
-                    command = Commands.purge(safeStore, command, cleanup);
-            }
-        }
+        Cleanup cleanup = Cleanup.shouldCleanup(FULL, safeStore, command, command.participants());
+        if (cleanup != Cleanup.NO)
+            command = Commands.purge(safeStore, command, cleanup);
 
         return safeStore.unsafeGetNoCleanup(txnId).update(safeStore, command);
     }

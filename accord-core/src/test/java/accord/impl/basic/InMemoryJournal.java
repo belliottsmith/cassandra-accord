@@ -27,6 +27,8 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 
+import javax.annotation.Nonnull;
+
 import com.google.common.collect.ImmutableSortedMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -101,7 +103,7 @@ import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.TRUNCATE;
 import static accord.local.Cleanup.TRUNCATE_WITH_OUTCOME;
 import static accord.primitives.SaveStatus.Erased;
-import static accord.primitives.Status.Invalidated;
+import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Truncated;
 import static accord.utils.Invariants.illegalState;
 
@@ -112,15 +114,20 @@ public class InMemoryJournal implements Journal
     private final List<TopologyUpdate> topologyUpdates = new ArrayList<>();
     private final Int2ObjectHashMap<FieldUpdates> fieldStates = new Int2ObjectHashMap<>();
 
-    private final Node.Id id;
-    private final Agent agent;
+    private Node node;
+    private Agent agent;
     private final RandomSource random;
 
-    public InMemoryJournal(Node.Id id, Agent agent, RandomSource random)
+    public InMemoryJournal(Node.Id id, RandomSource random)
     {
-        this.id = id;
-        this.agent = agent;
         this.random = random;
+    }
+
+    public Journal start(Node node)
+    {
+        this.node = node;
+        this.agent = node.agent();
+        return this;
     }
 
     @Override
@@ -139,7 +146,7 @@ public class InMemoryJournal implements Journal
         if (builder == null)
             return null;
 
-        Cleanup cleanup = builder.maybeCleanup(FULL, agent, redundantBefore, durableBefore);
+        Cleanup cleanup = builder.maybeCleanup(true, FULL, redundantBefore, durableBefore);
         if (cleanup == EXPUNGE)
             return null;
         return builder.construct(redundantBefore);
@@ -152,7 +159,7 @@ public class InMemoryJournal implements Journal
         if (builder == null || builder.isEmpty())
             return null;
 
-        Cleanup cleanup = builder.shouldCleanup(FULL, agent, redundantBefore, durableBefore);
+        Cleanup cleanup = builder.shouldCleanup(FULL, redundantBefore, durableBefore);
         switch (cleanup)
         {
             case VESTIGIAL:
@@ -184,6 +191,8 @@ public class InMemoryJournal implements Journal
         for (int i = saved.size() - 1; i >= 0; i--)
         {
             Diff diff = saved.get(i);
+            if (diff == null)
+                continue;
             if (builder == null)
                 builder = new Builder(diff.txnId, load);
             builder.apply(diff);
@@ -331,81 +340,89 @@ public class InMemoryJournal implements Journal
             for (Map.Entry<TxnId, List<Diff>> e2 : localJournal.entrySet())
             {
                 List<Diff> diffs = e2.getValue();
-                int from;
+
                 if (diffs.isEmpty()) continue;
                 List<Diff> subset = diffs;
-                if (isPartialCompaction)
+                if (diffs.size() > 1 && isPartialCompaction)
                 {
-                    subset = new ArrayList<>();
-                    int tmp1 = random.nextInt(diffs.size());
-                    int tmp2 = random.nextInt(diffs.size());
-                    from = Math.min(tmp1, tmp2);
-                    int max = Math.max(tmp1, tmp2);
-                    for (int i = from; i < max; i++)
-                        subset.add(diffs.get(i));
+                    int removeCount = 1 + random.nextInt(diffs.size() - 1);
+                    int count = diffs.size();
+                    subset = new ArrayList<>(diffs);
+                    while (removeCount-- > 0)
+                    {
+                        int removeIndex = random.nextInt(diffs.size());
+                        if (subset.get(removeIndex) == null)
+                            continue;
+                        subset.set(removeIndex, null);
+                        --count;
+                    }
+
+                    if (count == 0)
+                        continue;
                 }
 
-                InMemoryJournal.Builder builder = reconstruct(subset, ALL);
-                if (builder == null || builder.saveStatus() == null)
-                    continue; // Partial compaction, no save status present
+                Builder[] builders = new Builder[diffs.size()];
+                for (int i = 0 ; i < subset.size() ; ++i)
+                {
+                    if (subset.get(i) == null) continue;
+                    Builder builder = new Builder(e2.getKey(), ALL);
+                    builder.apply(subset.get(i));
+                    builders[i] = builder;
+                }
 
-                if (builder.saveStatus().status == Truncated || builder.saveStatus().status == Invalidated)
-                    continue; // Already truncated
+                Builder builder = new Builder(e2.getKey(), ALL);
+                for (int i = builders.length - 1; i >= 0 ; --i)
+                {
+                    Builder current = builders[i];
+                    if (current == null)
+                        continue;
+                    current.clearSuperseded(false, builder);
+                    builder.fillInMissingOrCleanup(false, current);
+                }
 
                 Input input = isPartialCompaction ? PARTIAL : FULL;
                 ++counter;
-                Cleanup cleanup = builder.shouldCleanup(input, store.agent(),store.unsafeGetRedundantBefore(), store.durableBefore());
-                cleanup = builder.maybeCleanup(input, cleanup);
+                Cleanup cleanup = builder.shouldCleanup(input, store.unsafeGetRedundantBefore(), store.durableBefore());
+                cleanup = builder.maybeCleanup(true, input, cleanup);
                 if (cleanup != NO)
                 {
                     if (cleanup == EXPUNGE)
                     {
-                        if (input == FULL) e2.setValue(new PurgedList());
+                        if (input == FULL || subset == diffs) e2.setValue(new PurgedList());
                         else diffs.removeAll(subset);
+                        continue;
                     }
                     else
                     {
-                        int flags = CommandChange.eraseKnownFieldsMask(cleanup.appliesIfNot);
-                        EnumMap<Field, Object> values = new EnumMap<>(Field.class);
-                        int iterator = toIterableSetFields(~flags) & 0x3FFF; // limit ourselves to 14 bits
-                        for (Field field = nextSetField(iterator); field != null; iterator = unsetIterable(field, iterator), field = nextSetField(iterator))
-                        {
-                            if (field == CLEANUP || field == SAVE_STATUS)
-                                continue;
-                            Object v = builder.get(field);
-                            if (v != null)
-                            {
-                                flags = setChanged(field, flags);
-                                values.put(field, v);
-                            }
-                        }
-                        values.put(SAVE_STATUS, cleanup.appliesIfNot);
-                        values.put(CLEANUP, cleanup);
-                        flags = setChanged(SAVE_STATUS, flags);
-                        flags = setChanged(CLEANUP, flags);
-
-                        Diff diff = new Diff(builder.txnId(), flags, values);
-                        // During partial compaction, we can only append_to the existing list, removing items that got compacted away
                         if (isPartialCompaction)
                         {
-                            int i = 0, j = 0;
-                            while (i < diffs.size() && j < subset.size())
+                            boolean saveCleanup = true;
+                            for (int i = builders.length - 1; i >= 0 ; --i)
                             {
-                                if (subset.get(j) == diffs.get(i))
-                                    ++j;
-                                ++i;
+                                if (builders[i] != null)
+                                {
+                                    if (saveCleanup) builders[i].addCleanup(false, cleanup);
+                                    else builders[i].cleanup(false, cleanup);
+                                    saveCleanup = false;
+                                }
                             }
-
-                            List<Diff> newDiffs = new ArrayList<>(diffs.subList(0, i));
-                            newDiffs.add(diff);
-                            newDiffs.addAll(diffs.subList(i, diffs.size()));
-                            e2.setValue(newDiffs);
                         }
                         // During full compaction, we erase all previous records, replacing them with new image
                         else
                         {
+                            Diff diff = builder.toDiff();
                             e2.setValue(cleanup == ERASE ? new ErasedList(diff) : new TruncatedList(diff));
+                            continue;
                         }
+                    }
+                }
+
+                for (int i = 0 ; i < builders.length ; ++i)
+                {
+                    if (builders[i] != null)
+                    {
+                        Diff diff = builders[i].toDiff();
+                        diffs.set(i, diff.flags == 0 ? null : diff);
                     }
                 }
             }
@@ -440,11 +457,11 @@ public class InMemoryJournal implements Journal
 
     private static class ErasedList extends AbstractList<Diff>
     {
-        final Diff erased;
+        private Diff erased;
 
         ErasedList(Diff erased)
         {
-            Invariants.requireArgument(erased.changes.get(SAVE_STATUS) == Erased);
+            Invariants.requireArgument(erased.changes.get(SAVE_STATUS) == Erased || erased.changes.get(CLEANUP) == ERASE);
             this.erased = erased;
         }
 
@@ -466,9 +483,20 @@ public class InMemoryJournal implements Journal
         public boolean add(Diff diff)
         {
             // TODO (expected): we shouldn't really be saving updates (such as durability updates) to Erased commands
-            if (diff.changes.get(SAVE_STATUS) == Erased || diff.changes.get(SAVE_STATUS) == null)
+            if (diff.changes.get(SAVE_STATUS) == Erased || diff.changes.get(SAVE_STATUS) == null || diff.changes.get(CLEANUP) == ERASE)
                 return false;
             throw illegalState();
+        }
+
+        @Override
+        public Diff set(int index, Diff diff)
+        {
+            if (diff.changes.get(SAVE_STATUS) == Erased || diff.changes.get(CLEANUP) == ERASE)
+            {
+                erased = diff;
+                return erased;
+            }
+            return super.set(index, diff);
         }
     }
 
@@ -504,13 +532,19 @@ public class InMemoryJournal implements Journal
         }
     }
 
-    private static Diff toDiff(CommandUpdate update)
+    private static Diff toDiff(@Nonnull CommandUpdate update)
     {
-        if (update == null
-            || update.before == update.after
-            || update.after == null
-            || update.after.saveStatus() == SaveStatus.Uninitialised)
-            return null;
+        if (update.before == null)
+        {
+            if (update.after.saveStatus() == Uninitialised)
+                return null;
+        }
+        else
+        {
+            Invariants.require(update.after.saveStatus() != Uninitialised);
+            if (update.before.saveStatus() == Erased)
+                return null;
+        }
 
         int flags = validateFlags(getFlags(update.before, update.after));
         if (!anyFieldChanged(flags))
@@ -650,11 +684,35 @@ public class InMemoryJournal implements Journal
             return executeAt;
         }
 
+        Diff toDiff()
+        {
+            int flags = this.flags;
+            EnumMap<Field, Object> values = new EnumMap<>(Field.class);
+
+            int iterator = toIterableSetFields(notNulls(flags)); // limit ourselves to 14 bits
+            for (Field field = nextSetField(iterator); field != null; iterator = unsetIterable(field, iterator), field = nextSetField(iterator))
+            {
+                if (field == CLEANUP)
+                    continue;
+                Object v = Invariants.nonNull(get(field));
+                values.put(field, v);
+            }
+
+            if (cleanup != null)
+            {
+                flags |= CommandChange.eraseKnownFieldsMask(cleanup.newStatus);
+                values.put(CLEANUP, cleanup);
+                flags = setChanged(CLEANUP, flags);
+            }
+
+            return new Diff(txnId(), flags, values);
+        }
+
         private void apply(Diff diff)
         {
             Invariants.require(diff.txnId != null);
             Invariants.require(diff.flags != 0);
-            nextCalled = true;
+            hasUpdate = true;
             count++;
 
             int iterable = toIterableSetFields(diff.flags);

@@ -701,8 +701,8 @@ public abstract class CommandStore implements AgentExecutor
     protected void updatedRedundantBefore(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
         TxnId clearWaitingBefore = redundantBefore.minShardAndLocallyAppliedBefore();
-        TxnId clearAnyBefore = durableBefore().min.majorityBefore;
-        progressLog.clearBefore(safeStore, clearWaitingBefore, clearAnyBefore);
+        TxnId clearAllBefore = TxnId.min(clearWaitingBefore, durableBefore().min.majorityBefore);
+        progressLog.clearBefore(safeStore, clearWaitingBefore, clearAllBefore);
         listeners.clearBefore(this, clearWaitingBefore);
     }
 
