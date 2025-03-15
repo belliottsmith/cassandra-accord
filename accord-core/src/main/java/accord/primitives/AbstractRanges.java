@@ -223,6 +223,12 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     }
 
     @Override
+    public final int indexOf(Range find)
+    {
+        return Arrays.binarySearch(ranges, 0, size(), find, Range::compare);
+    }
+
+    @Override
     public final int findNext(int thisIndex, Range find, SortedArrays.Search search)
     {
         return SortedArrays.exponentialSearch(ranges, thisIndex, size(), find, Range::compareIntersecting, search);
@@ -648,6 +654,8 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     @Override
     public boolean equals(Object that)
     {
+        if (this == that)
+            return true;
         if (that == null || this.getClass() != that.getClass())
             return false;
         return Arrays.equals(this.ranges, ((AbstractRanges) that).ranges);

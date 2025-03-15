@@ -27,13 +27,8 @@ import java.util.function.Function;
 
 import javax.annotation.Nullable;
 
-import com.google.common.util.concurrent.ListenableFuture;
-
 public interface AsyncChain<V>
 {
-    /**
-     * Support {@link com.google.common.util.concurrent.Futures#transform(ListenableFuture, com.google.common.base.Function, Executor)} natively
-     */
     <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper);
 
     default <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper, Executor executor)
@@ -41,9 +36,6 @@ public interface AsyncChain<V>
         return AsyncChains.map(this, mapper, executor);
     }
 
-    /**
-     * Support {@link com.google.common.util.concurrent.Futures#transform(ListenableFuture, com.google.common.base.Function, Executor)} natively
-     */
     <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper);
 
     default <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper, Executor executor)
@@ -78,19 +70,19 @@ public interface AsyncChain<V>
      */
     AsyncChain<V> recover(Function<? super Throwable, ? extends AsyncChain<V>> mapper);
 
-    default AsyncChain<Void> accept(Consumer<? super V> action)
+    default AsyncChain<V> invokeIfSuccess(Consumer<? super V> action)
     {
         return map(r -> {
             action.accept(r);
-            return null;
+            return r;
         });
     }
 
-    default AsyncChain<Void> accept(Consumer<? super V> action, Executor executor)
+    default AsyncChain<V> invokeIfSuccess(Consumer<? super V> action, Executor executor)
     {
         return map(r -> {
             action.accept(r);
-            return null;
+            return r;
         }, executor);
     }
 
@@ -101,27 +93,29 @@ public interface AsyncChain<V>
         return map(a -> a, e);
     }
 
-    /**
-     * Support {@link com.google.common.util.concurrent.Futures#addCallback} natively
-     */
-    AsyncChain<V> addCallback(BiConsumer<? super V, Throwable> callback);
+    AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback);
 
     /**
-     * Adds a callback that only listens to the successful case, a failed chain will not trigger the callback
+     * Adds a callback that fires on success only
      */
-    default AsyncChain<V> addCallback(Runnable runnable)
+    default AsyncChain<V> invokeIfSuccess(Runnable runnable)
     {
-        return addCallback(AsyncCallbacks.toCallback(runnable));
+        return invoke((success, fail) -> {
+            if (fail == null) runnable.run();
+        });
     }
 
-    default AsyncChain<V> addCallback(BiConsumer<? super V, Throwable> callback, ExecutorService es)
+    /**
+     * Adds a callback that fires on either success or failure
+     */
+    default AsyncChain<V> invoke(Runnable runnable)
     {
-        return addCallback(AsyncCallbacks.inExecutorService(callback, es));
+        return invoke((success, fail) -> runnable.run());
     }
 
-    default AsyncChain<V> addCallback(Runnable runnable, ExecutorService es)
+    default AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback, ExecutorService es)
     {
-        return addCallback(AsyncCallbacks.inExecutorService(runnable, es));
+        return invoke(AsyncCallbacks.inExecutorService(callback, es));
     }
 
     /**

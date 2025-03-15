@@ -90,7 +90,7 @@ public class AsyncChainsTest
         ResultCallback<Integer> intermediateCallback = new ResultCallback<>();
 
         AsyncChain<Integer> chain = AsyncChains.ofCallable(MoreExecutors.directExecutor(), () -> 5);
-        chain = chain.addCallback(intermediateCallback);
+        chain = chain.invoke(intermediateCallback);
 
         chain = chain.map(i -> i + 2);
         chain.begin(finalCallback);
@@ -129,10 +129,10 @@ public class AsyncChainsTest
         AsyncChain<Integer> chain1 = AsyncChains.success(1);
         AsyncChain<Integer> chain2 = AsyncChains.success(2);
         AsyncChain<Integer> chain3 = AsyncChains.success(3);
-        AsyncChain<List<Integer>> reduced = AsyncChains.all(Lists.newArrayList(chain1, chain2, chain3));
+        AsyncChain<List<Integer>> reduced = AsyncChains.allOf(Lists.newArrayList(chain1, chain2, chain3));
         ResultCallback<List<Integer>> callback = new ResultCallback<>();
         reduced.begin(callback);
-        Assertions.assertEquals(Lists.newArrayList(1, 2, 3), callback.value());
+        Assertions.assertEquals(Arrays.asList(1, 2, 3), callback.value());
     }
 
     @Test
@@ -164,7 +164,7 @@ public class AsyncChainsTest
                 }, () -> {})
                 .map(ignore -> 1)
                 .beginAsResult()
-                .addCallback((success, failure) -> {
+                .invoke((success, failure) -> {
                     if (failure == null)
                         throw illegalState("Expected to fail");
                 });
@@ -243,7 +243,7 @@ public class AsyncChainsTest
         AtomicBoolean sawCallback = new AtomicBoolean(false);
         AsyncChains.failure(new NullPointerException("just kidding"))
                 .beginAsResult()
-                .addCallback(() -> sawCallback.set(true))
+                .invokeIfSuccess(() -> sawCallback.set(true))
                 .begin((success, failure) -> {
                     if (failure != null) sawFailure.set(true);
                     else sawFailure.set(false);

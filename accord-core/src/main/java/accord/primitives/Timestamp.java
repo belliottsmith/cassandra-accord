@@ -360,6 +360,9 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public boolean equals(Timestamp that)
     {
+        if (that == this)
+            return true;
+
         return that != null && this.msb == that.msb
                && ((this.lsb ^ that.lsb) & IDENTITY_LSB) == 0
                && this.node.equals(that.node);

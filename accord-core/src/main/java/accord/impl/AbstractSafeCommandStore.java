@@ -86,13 +86,13 @@ extends SafeCommandStore
 
         try (Caches caches = tryGetCaches())
         {
-            if (caches == null)
-                return with.isSubsetOf(this.context) ? with : null;
-
             for (TxnId txnId : with.txnIds())
             {
                 if (null != getInternal(txnId))
                     continue;
+
+                if (caches == null)
+                    return null;
 
                 C safeCommand = caches.acquireIfLoaded(txnId);
                 if (safeCommand == null)
@@ -116,11 +116,14 @@ extends SafeCommandStore
                 if (null != getInternal(key))
                     continue; // already in working set
 
-                CFK safeCfk = caches.acquireIfLoaded(key);
-                if (safeCfk != null)
+                if (caches != null)
                 {
-                    add(safeCfk, caches);
-                    continue;
+                    CFK safeCfk = caches.acquireIfLoaded(key);
+                    if (safeCfk != null)
+                    {
+                        add(safeCfk, caches);
+                        continue;
+                    }
                 }
                 if (unavailable == null)
                     unavailable = new ArrayList<>();

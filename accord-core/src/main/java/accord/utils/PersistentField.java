@@ -105,7 +105,7 @@ public class PersistentField<Input, Saved>
         pending.add(new Pending<>(id, newValue));
 
         AsyncResult<?> pendingWrite = persister.persist(inputValue, newValue);
-        pendingWrite.addCallback((success, fail) -> {
+        pendingWrite.invoke((success, fail) -> {
             synchronized (this)
             {
                 complete.add(id);

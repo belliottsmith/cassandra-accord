@@ -49,8 +49,6 @@ public class AsyncCallbacks
     }
 
     public static <T> BiConsumer<T, Throwable> toCallback(Runnable runnable) {
-        return (unused, failure) -> {
-            if (failure == null) runnable.run();
-        };
+        return (s, f) -> runnable.run();
     }
 }

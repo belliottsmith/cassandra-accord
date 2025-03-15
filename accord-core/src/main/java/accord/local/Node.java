@@ -238,7 +238,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public AsyncResult<Void> unsafeStart()
     {
         EpochReady ready = onTopologyUpdateInternal(configService.currentTopology(), false);
-        ready.coordinate.addCallback(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
+        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
         configService.acknowledgeEpoch(ready, false);
         return ready.metadata;
     }
@@ -357,7 +357,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         if (topology.epoch() <= this.topology.epoch())
             return AsyncResults.success(null);
         EpochReady ready = onTopologyUpdateInternal(topology, startSync);
-        ready.coordinate.addCallback(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
+        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
         configService.acknowledgeEpoch(ready, startSync);
         return ready.coordinate;
     }
@@ -790,7 +790,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     {
         AsyncResult<Result> result = withEpoch(Math.max(txnId.epoch(), minEpoch), () -> initiateCoordination(txnId, txn)).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
-        result.addCallback((success, fail) -> coordinating.remove(txnId, result));
+        result.invoke((success, fail) -> coordinating.remove(txnId, result));
         return result;
     }
 
@@ -855,7 +855,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             return future;
         }).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
-        result.addCallback((success, fail) -> coordinating.remove(txnId, result));
+        result.invoke((success, fail) -> coordinating.remove(txnId, result));
         return result;
     }
 
@@ -865,7 +865,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         if (waitForEpoch > topology.epoch())
         {
             configService.fetchTopologyForEpoch(waitForEpoch);
-            topology().awaitEpoch(waitForEpoch).addCallback((ignored, failure) -> {
+            topology().awaitEpoch(waitForEpoch).invoke((ignored, failure) -> {
                 if (failure != null)
                     agent().onUncaughtException(WrappableException.wrap(failure));
                 else

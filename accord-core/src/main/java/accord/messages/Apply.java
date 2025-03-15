@@ -52,9 +52,9 @@ public class Apply extends TxnRequest<ApplyReply>
     public static final Factory FACTORY = Apply::new;
     public static class SerializationSupport
     {
-        public static Apply create(TxnId txnId, Route<?> scope, long minEpoch, long waitForEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
+        public static Apply create(TxnId txnId, Route<?> scope, long minEpoch, long waitForEpoch, long maxEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
         {
-            return new Apply(kind, txnId, scope, minEpoch, waitForEpoch, executeAt, deps, txn, fullRoute, writes, result);
+            return new Apply(kind, txnId, scope, minEpoch, waitForEpoch, maxEpoch, executeAt, deps, txn, fullRoute, writes, result);
         }
     }
 
@@ -71,6 +71,7 @@ public class Apply extends TxnRequest<ApplyReply>
     public final @Nullable Writes writes;
     public final Result result;
     public final long minEpoch;
+    public final long maxEpoch;
 
     public enum Kind { Minimal, Maximal }
 
@@ -86,6 +87,7 @@ public class Apply extends TxnRequest<ApplyReply>
         this.writes = writes;
         this.result = result;
         this.minEpoch = participates.oldestEpoch();
+        this.maxEpoch = participates.currentEpoch();
     }
 
     public static Topologies participates(Node node, Unseekables<?> route, TxnId txnId, Timestamp executeAt, Topologies executes)
@@ -98,7 +100,7 @@ public class Apply extends TxnRequest<ApplyReply>
         return node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
     }
 
-    protected Apply(Kind kind, TxnId txnId, Route<?> route, long minEpoch, long waitForEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
+    protected Apply(Kind kind, TxnId txnId, Route<?> route, long minEpoch, long waitForEpoch, long maxEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
     {
         super(txnId, route, waitForEpoch);
         this.kind = kind;
@@ -109,19 +111,20 @@ public class Apply extends TxnRequest<ApplyReply>
         this.writes = writes;
         this.result = result;
         this.minEpoch = minEpoch;
+        this.maxEpoch = maxEpoch;
     }
 
     @Override
     public Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch, executeAt.epoch(), this);
+        return node.mapReduceConsumeLocal(this, minEpoch, maxEpoch, this);
     }
 
     @Override
     public ApplyReply apply(SafeCommandStore safeStore)
     {
         Route<?> route = fullRoute != null ? fullRoute : scope;
-        StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, executeAt.epoch());
+        StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, maxEpoch);
         return apply(safeStore, participants);
     }
 

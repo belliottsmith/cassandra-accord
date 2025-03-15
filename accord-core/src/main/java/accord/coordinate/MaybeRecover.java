@@ -122,7 +122,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     else
                     {
                         Invariants.require(Route.isFullRoute(someRoute), "Require a full route but given %s", full.route);
-                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportLowEpoch, reportHighEpoch).addCallback(callback);
+                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportLowEpoch, reportHighEpoch).invoke(callback);
                     }
                     break;
 

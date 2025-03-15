@@ -248,7 +248,7 @@ public class DurabilityQueue
         if (request != null)
             request.reportAttempt(exclusiveSyncPoint.syncId, node.elapsed(MICROSECONDS), coordinate);
 
-        coordinate.addCallback((success, fail) -> {
+        coordinate.invoke((success, fail) -> {
             synchronized (this)
             {
                 unregisterInProgress(exclusiveSyncPoint, coordinate);

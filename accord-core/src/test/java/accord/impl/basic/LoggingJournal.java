@@ -76,9 +76,9 @@ public class LoggingJournal implements Journal
 
     @Override
 
-    public Journal start(Node node)
+    public void start(Node node)
     {
-        return this;
+        delegate.start(node);
     }
 
     @Override

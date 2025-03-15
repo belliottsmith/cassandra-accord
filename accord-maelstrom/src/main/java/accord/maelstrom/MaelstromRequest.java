@@ -51,7 +51,7 @@ public class MaelstromRequest extends Body implements Request
     @Override
     public void process(Node node, Id client, ReplyContext replyContext)
     {
-        node.coordinate(txn).addCallback((success, fail) -> {
+        node.coordinate(txn).invoke((success, fail) -> {
             Reply reply = success != null ? new MaelstromReply(MaelstromReplyContext.messageIdFor(replyContext), (MaelstromResult) success) : null;
             node.reply(client, replyContext, reply, fail);
         });

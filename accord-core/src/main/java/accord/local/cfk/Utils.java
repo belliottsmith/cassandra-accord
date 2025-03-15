@@ -42,6 +42,7 @@ class Utils
 {
     static void validateMissing(TxnInfo[] byId, TxnId[] additions, int additionCount, TxnInfo curInfo, TxnInfo newInfo, @Nonnull TxnId[] shouldNotHaveMissing)
     {
+        int newInfoAdditionIndex = Arrays.binarySearch(additions, 0, additionCount, newInfo);
         for (TxnInfo txn : byId)
         {
             if (txn == newInfo) continue;
@@ -54,7 +55,7 @@ class Utils
             {
                 if (!txn.witnesses(additions[i])) continue;
                 j = SortedArrays.exponentialSearch(missing, j, missing.length, additions[i]);
-                if (shouldNotHaveMissing != NO_TXNIDS && Arrays.binarySearch(shouldNotHaveMissing, txn) >= 0) Invariants.require(j < 0);
+                if (shouldNotHaveMissing != NO_TXNIDS && i == newInfoAdditionIndex && Arrays.binarySearch(shouldNotHaveMissing, txn) >= 0) Invariants.require(j < 0);
                 else Invariants.require(j >= 0);
             }
             if (curInfo == null && newInfo.compareTo(COMMITTED) < 0 && txn.witnesses(newInfo) && txn.depsKnownBefore().compareTo(newInfo) > 0 && (shouldNotHaveMissing == NO_TXNIDS || Arrays.binarySearch(shouldNotHaveMissing, txn) < 0))
@@ -93,6 +94,40 @@ class Utils
         }
 
         removeFromMissingArraysById(byId, minSearchIndex, byId.length, removeTxnId);
+    }
+
+    /**
+     * {@code removeTxnId} no longer needs to be tracked in missing arrays;
+     * remove it from byId and committedByExecuteAt, ensuring both arrays still reference the same TxnInfo where updated
+     */
+    static void removeFromWitnessMissingArrays(TxnInfo[] byId, TxnInfo[] committedByExecuteAt, TxnId removeTxnId, TxnId[] witnessedBy)
+    {
+        if (witnessedBy.length == 0)
+            return;
+
+        int byIdIndex = Arrays.binarySearch(byId, witnessedBy[0]);
+        if (byIdIndex < 0)
+            byIdIndex = -1 - byIdIndex;
+
+        for (TxnId txnId : witnessedBy)
+        {
+            byIdIndex = SortedArrays.exponentialSearch(byId, byIdIndex, byId.length, txnId);
+            if (byIdIndex < 0)
+            {
+                byIdIndex = -1 - byIdIndex;
+                continue;
+            }
+            TxnInfo curTxn = byId[byIdIndex];
+            TxnId[] curMissing = curTxn.missing();
+            if (curMissing == NO_TXNIDS) continue;
+            TxnId[] newMissing = removeOneMissing(curMissing, removeTxnId);
+            if (newMissing == curMissing) continue;
+            TxnInfo newTxn = curTxn.withMissing(newMissing);
+            byId[byIdIndex] = newTxn;
+            if (!curTxn.isCommittedAndExecutes()) continue;
+            int byExecuteAtIndex = Arrays.binarySearch(committedByExecuteAt, curTxn, TxnInfo::compareExecuteAt);
+            committedByExecuteAt[byExecuteAtIndex] = newTxn;
+        }
     }
 
     /**

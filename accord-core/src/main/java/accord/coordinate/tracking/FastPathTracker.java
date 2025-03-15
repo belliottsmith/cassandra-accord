@@ -100,7 +100,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
                 ++fastPathFailures;
 
                 if (hasRejectedFastPath() && hasReachedQuorum())
-                    return complete(Success);
+                    return mediumOrSlowSuccess();
             }
 
             return NoChange;
@@ -116,7 +116,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
                 ++fastPathDelayed;
 
                 if (isFastPathDelayed() && hasReachedQuorum())
-                    return complete(Success);
+                    return mediumOrSlowSuccess();
             }
 
             return NoChange;
@@ -125,8 +125,13 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
         final ShardOutcome<? super FastPathTracker> quorumIfHasRejectedFastPath()
         {
             return hasReachedQuorum() && hasRejectedFastPath()
-                   ? hasMetMediumPathCriteria() ? complete(NewMediumPathSuccess) : complete(Success)
+                   ? mediumOrSlowSuccess()
                    : NoChange;
+        }
+
+        final ShardOutcome<? super FastPathTracker> mediumOrSlowSuccess()
+        {
+            return hasMetMediumPathCriteria() ? complete(NewMediumPathSuccess) : complete(Success);
         }
 
         final boolean isFastPathDelayed()

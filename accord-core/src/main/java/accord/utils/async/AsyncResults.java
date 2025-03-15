@@ -136,7 +136,7 @@ public class AsyncResults
                 @Override
                 protected Cancellable start(BiConsumer<? super V, Throwable> callback)
                 {
-                    AbstractResult.this.addCallback(callback);
+                    AbstractResult.this.invoke(callback);
                     return null;
                 }
             };
@@ -172,7 +172,7 @@ public class AsyncResults
         }
 
         @Override
-        public AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback)
+        public AsyncResult<V> invoke(BiConsumer<? super V, Throwable> callback)
         {
             Listener<V> listener = null;
             while (true)
@@ -290,7 +290,7 @@ public class AsyncResults
                 @Override
                 protected Cancellable start(BiConsumer<? super V, Throwable> callback)
                 {
-                    AsyncResults.Immediate.this.addCallback(callback);
+                    AsyncResults.Immediate.this.invoke(callback);
                     return null;
                 }
             };
@@ -315,7 +315,7 @@ public class AsyncResults
         }
 
         @Override
-        public AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback)
+        public AsyncResult<V> invoke(BiConsumer<? super V, Throwable> callback)
         {
             callback.accept(value, failure);
             return this;

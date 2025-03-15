@@ -1220,7 +1220,9 @@ public class TopologyManager
         Epochs snapshot = epochs;
         EpochState maxState = snapshot.get(maxEpoch);
 
-        Invariants.require(maxState != null, "Unable to find epoch %d; known epochs are %d -> %d", maxEpoch, snapshot.minEpoch(), snapshot.currentEpoch);
+        if (maxState == null)
+            throw new TopologyRetiredException(maxEpoch, snapshot.minEpoch());
+
         if (minEpoch == maxEpoch)
             return new Single(sorter, selectFunction.apply(snapshot.get(minEpoch).global, select, selectNodeOwnership));
 

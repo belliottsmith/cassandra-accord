@@ -519,7 +519,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             if (bounds == null)
                 return execute;
 
-            Invariants.require(executeAt == null ? !bounds.outOfBounds(txnId) : !bounds.outOfBounds(txnId, executeAt));
+            Invariants.require(txnId.isSyncPoint() || (executeAt == null ? !bounds.outOfBounds(txnId) : !bounds.outOfBounds(txnId, executeAt)));
             if (bounds.is(txnId, PRE_BOOTSTRAP_OR_STALE))
                 return without.apply(execute, Ranges.of(bounds.range));
 

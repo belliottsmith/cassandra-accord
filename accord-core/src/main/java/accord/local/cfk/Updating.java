@@ -47,6 +47,7 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.utils.ArrayBuffers.ObjectBuffers;
 import accord.utils.Invariants;
 import accord.utils.RelationMultiMap;
 import accord.utils.SortedArrays;
@@ -65,6 +66,7 @@ import static accord.local.cfk.CommandsForKey.NO_INFOS;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
 import static accord.local.cfk.CommandsForKey.executesIgnoringBootstrap;
+import static accord.local.cfk.CommandsForKey.manages;
 import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolation;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.Pruning.removeLoadingPruned;
@@ -120,7 +122,6 @@ class Updating
 
     static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, TxnInfo curInfo, InternalStatus newStatus, boolean mayExecute, Command command, @Nonnull TxnId[] witnessedBy)
     {
-        // TODO (expected): do not calculate any deps or additions if we're transitioning from Stable to Applied; wasted effort and might trigger LoadPruned
         Object newInfoObj = computeInfoAndAdditions(cfk, insertPos, updatePos, plainTxnId, newStatus, mayExecute, command);
         if (newInfoObj.getClass() != InfoWithAdditions.class)
             return insertOrUpdate(cfk, insertPos, plainTxnId, curInfo, (TxnInfo)newInfoObj, command, witnessedBy);
@@ -157,7 +158,7 @@ class Updating
         TxnInfo[] newById = new TxnInfo[byId.length + additionCount + (updatePos < 0 ? 1 : 0)];
         insertOrUpdateWithAdditions(byId, insertPos, updatePos, plainTxnId, newInfo, additions, additionCount, newById, newCommittedByExecuteAt, witnessedBy, cfk.bounds);
         if (testParanoia(SUPERLINEAR, NONE, LOW))
-            validateMissing(newById, additions, additionCount, curInfo, newInfo, NO_TXNIDS);
+            validateMissing(newById, additions, additionCount, curInfo, newInfo, witnessedBy);
 
         int newMinUndecidedById = updateMinUndecidedById(newInfo, insertPos, updatePos, cfk, byId, newById, additions, additionCount);
         // we don't insert anything before prunedBeforeById (we LoadPruned instead), so we can simply bump it by 0 or 1
@@ -299,14 +300,14 @@ class Updating
         MergeCursor<TxnId, DepList> deps = command.partialDeps().txnIds(cfk.key());
         deps.find(cfk.redundantBefore());
 
-        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, mayExecute, ballot, executeAt, depsKnownBefore, deps);
+        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, mayExecute, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
     }
 
     /**
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Ballot ballot, Timestamp executeAt, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -335,12 +336,8 @@ class Updating
                 //  we should ensure any existing TRANSITIVE entries are upgraded.
                 // OR we should remove TRANSITIVE for simplicity,
                 // OR document/enforce that TRANSITIVE_VISIBLE can only be applied to dependencies of unmanaged transactions
-                if (d.is(UNSTABLE) && t.compareTo(COMMITTED) < 0 && t.witnesses(d))
-                {
-                    if (missingCount == missing.length)
-                        missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount * 2));
-                    missing[missingCount++] = d;
-                }
+                if (d.is(UNSTABLE)  && txnIdsIndex < depsKnownBeforePos && t.compareTo(COMMITTED) < 0 && plainTxnId.witnesses(d))
+                    missing = append(missing, missingCount++, d, cachedTxnIds());
 
                 ++txnIdsIndex;
                 deps.advance();
@@ -350,21 +347,20 @@ class Updating
                 // we expect to be missing ourselves
                 // we also permit any transaction we have recorded as COMMITTED or later to be missing, as recovery will not need to consult our information
                 if (txnIdsIndex != updatePos && txnIdsIndex < depsKnownBeforePos && t.compareTo(COMMITTED) < 0 && plainTxnId.witnesses(t))
-                {
-                    if (missingCount == missing.length)
-                        missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount * 2));
-                    missing[missingCount++] = t.plainTxnId();
-                }
+                    missing = append(missing, missingCount++, t.plainTxnId(), cachedTxnIds());
                 txnIdsIndex++;
             }
             else
             {
                 if (plainTxnId.witnesses(d))
                 {
-                    if (additionCount >= additions.length)
-                        additions = cachedTxnIds().resize(additions, additionCount, Math.max(8, additionCount * 2));
-
-                    additions[additionCount++] = d;
+                    if (d.is(UNSTABLE))
+                    {
+                        if (d.compareTo(depsKnownBefore) < 0 && (manages(d) || d.compareTo(prunedBefore) > 0))
+                            missing = append(missing, missingCount++, d, cachedTxnIds());
+                        d = d.withoutNonIdentityFlags();
+                    }
+                    additions = append(additions, additionCount++, d, cachedTxnIds());
                 }
                 else
                 {
@@ -384,9 +380,13 @@ class Updating
                 TxnId d = deps.cur();
                 if (plainTxnId.witnesses(d))
                 {
-                    if (additionCount >= additions.length)
-                        additions = cachedTxnIds().resize(additions, additionCount, Math.max(8, additionCount * 2));
-                    additions[additionCount++] = deps.cur().withoutNonIdentityFlags();
+                    if (d.is(UNSTABLE))
+                    {
+                        if (d.compareTo(depsKnownBefore) < 0 && (manages(d) || d.compareTo(prunedBefore) > 0))
+                            missing = append(missing, missingCount++, d, cachedTxnIds());
+                        d = d.withoutNonIdentityFlags();
+                    }
+                    additions = append(additions, additionCount++, d, cachedTxnIds());
                 }
                 deps.advance();
             }
@@ -398,13 +398,9 @@ class Updating
             {
                 if (txnIdsIndex != updatePos && byId[txnIdsIndex].compareTo(COMMITTED) < 0)
                 {
-                    TxnId txnId = byId[txnIdsIndex].plainTxnId();
-                    if ((plainTxnId.witnesses(txnId)))
-                    {
-                        if (missingCount == missing.length)
-                            missing = cachedTxnIds().resize(missing, missingCount, Math.max(8, missingCount * 2));
-                        missing[missingCount++] = txnId;
-                    }
+                    TxnInfo txn = byId[txnIdsIndex];
+                    if (plainTxnId.witnesses(txn))
+                        missing = append(missing, missingCount++, txn.plainTxnId(), cachedTxnIds());
                 }
                 txnIdsIndex++;
             }
@@ -415,6 +411,14 @@ class Updating
             return info;
 
         return new InfoWithAdditions(info, additions, additionCount);
+    }
+
+    private static <T> T[] append(T[] array, int index, T add, ObjectBuffers<T> cached)
+    {
+        if (index == array.length)
+            array = cached.resize(array, index, Math.max(8, index * 2));
+        array[index] = add;
+        return array;
     }
 
     static CommandsForKeyUpdate insertOrUpdate(CommandsForKey cfk, int pos, TxnId plainTxnId, TxnInfo curInfo, TxnInfo newInfo, Command command, @Nullable TxnId[] witnessedBy)
@@ -475,6 +479,10 @@ class Updating
             // TODO (desired): for consistency, move this to insertOrUpdate (without additions), while maintaining the efficiency
             Utils.addToMissingArrays(newById, newCommittedByExecuteAt, newInfo, plainTxnId, witnessedBy);
         }
+        else if (witnessedBy != null && newInfo.compareTo(COMMITTED) >= 0)
+        {
+            Utils.removeFromWitnessMissingArrays(newById, newCommittedByExecuteAt, plainTxnId, witnessedBy);
+        }
 
         if (testParanoia(SUPERLINEAR, NONE, LOW) && curInfo == null && newInfo.compareTo(COMMITTED) < 0)
             validateMissing(newById, NO_TXNIDS, 0, curInfo, newInfo, witnessedBy);
@@ -499,7 +507,8 @@ class Updating
 
         // we may need to insert or remove ourselves, depending on the new and prior status
         boolean insertSelfMissing = sourceUpdatePos < 0 && newInfo.compareTo(COMMITTED) < 0;
-        boolean removeSelfMissing = sourceUpdatePos >= 0 && newInfo.compareTo(COMMITTED) >= 0 && byId[sourceUpdatePos].compareTo(COMMITTED) < 0;
+        boolean removeSelfMissing = newInfo.compareTo(COMMITTED) >= 0 && sourceUpdatePos >= 0 && byId[sourceUpdatePos].compareTo(COMMITTED) < 0;
+        boolean removeWitnessedMissing = newInfo.compareTo(COMMITTED) >= 0 && witnessedBy.length > 0;
         // missingSource starts as additions, but if we insertSelfMissing at the relevant moment it becomes the merge of additions and plainTxnId
         TxnId[] missingSource = additions;
 
@@ -536,20 +545,24 @@ class Updating
                     }
 
                     int to = missingTo(txn, depsKnownBefore, missingSource, missingCount, missingLimit);
-                    if (to > 0 || removeSelfMissing)
+                    if (to > 0 || removeSelfMissing || removeWitnessedMissing)
                     {
+                        int witnessedByIndex = -1;
+                        if (witnessedBy != NOT_LOADING_PRUNED && (to > 0 || !removeSelfMissing))
+                            witnessedByIndex = Arrays.binarySearch(witnessedBy, txn);
+
                         TxnId[] curMissing = txn.missing();
                         TxnId[] newMissing = curMissing;
                         if (to > 0)
                         {
                             TxnId skipInsertMissing = null;
-                            if (Arrays.binarySearch(witnessedBy, plainTxnId) >= 0)
+                            if (insertSelfMissing && witnessedByIndex >= 0)
                                 skipInsertMissing = plainTxnId;
 
                             newMissing = mergeAndFilterMissing(txn, curMissing, missingSource, to, skipInsertMissing);
                         }
 
-                        if (removeSelfMissing)
+                        if (removeSelfMissing || (removeWitnessedMissing && witnessedByIndex >= 0))
                             newMissing = removeOneMissing(newMissing, plainTxnId);
 
                         if (newMissing != curMissing)

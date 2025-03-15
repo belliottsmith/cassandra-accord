@@ -43,7 +43,7 @@ import org.agrona.collections.Int2ObjectHashMap;
  */
 public interface Journal
 {
-    Journal start(Node node);
+    void start(Node node);
 
     Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     Command.Minimal loadMinimal(int store, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);

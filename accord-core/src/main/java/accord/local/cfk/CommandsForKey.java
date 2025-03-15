@@ -660,7 +660,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             return encoded;
         }
 
-        private static int encode(TxnId txnId, InternalStatus internalStatus, boolean mayExecute)
+        static int encode(TxnId txnId, InternalStatus internalStatus, boolean mayExecute)
         {
             int encoded = internalStatus.txnInfoEncoded | (mayExecute ? MAY_EXECUTE : 0);
             if (txnId.is(Key)) encoded |= MANAGED;
@@ -1262,10 +1262,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
             int insertPos = Arrays.binarySearch(byId, testStartedAtTimestamp);
             if (insertPos < 0)
             {
-                loadingFor = NO_TXNIDS;
+                loadingFor = NOT_LOADING_PRUNED;
                 insertPos = -1 - insertPos;
                 if (computeIsDep != IGNORE && testTxnId.compareTo(prunedBefore) < 0)
-                    loadingFor = loadingPrunedFor(loadingPruned, testTxnId, NO_TXNIDS);
+                    loadingFor = loadingPrunedFor(loadingPruned, testTxnId, NOT_LOADING_PRUNED);
             }
 
             switch (testStartedAt)
@@ -1300,7 +1300,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                         TxnId[] missing = txn.missing();
                         hasAsDep = missing == NO_TXNIDS || Arrays.binarySearch(txn.missing(), testTxnId) < 0;
                     }
-                    else if (loadingFor == NO_TXNIDS)
+                    else if (loadingFor == NOT_LOADING_PRUNED)
                     {
                         hasAsDep = false;
                     }
@@ -1603,35 +1603,33 @@ public class CommandsForKey extends CommandsForKeyUpdate
         {
             // update
             TxnInfo cur = byId[pos];
-            if (cur != null)
+            int c = cur.compareTo(newStatus);
+            if (c > 0)
             {
-                int c = cur.compareTo(newStatus);
-                if (c > 0)
-                {
-                    // newStatus moves us backwards; we only permit this for (Pre)?(Not)?Accepted states
-                    if (cur.compareTo(COMMITTED) >= 0 || newStatus.compareTo(PREACCEPTED) <= 0)
-                        return this;
+                // newStatus moves us backwards; we only permit this for (Pre)?(Not)?Accepted states
+                if (cur.compareTo(COMMITTED) >= 0 || newStatus.compareTo(PREACCEPTED) <= 0)
+                    return this;
 
-                    // and only when the new ballot is strictly greater
-                    if (updated.acceptedOrCommitted().compareTo(cur.ballot()) <= 0)
-                        return this;
-                }
-                else if (c == 0)
-                {
-                    // we're updating to the same state; we only do this with a strictly greater ballot;
-                    // even so, if we have no executeAt or deps there's nothing to record
-                    if (updated.acceptedOrCommitted().compareTo(cur.ballot()) <= 0 || !newStatus.hasExecuteAtOrDeps())
-                        return this;
-                }
-                else
-                {
-                    // we're advancing to a higher status, but this is only permitted either if the new state is stable or the ballot is higher
-                    if (cur.compareTo(STABLE) < 0 && updated.acceptedOrCommitted().compareTo(cur.ballot()) < 0)
-                        return this;
-                }
+                // and only when the new ballot is strictly greater
+                if (updated.acceptedOrCommitted().compareTo(cur.ballot()) <= 0)
+                    return this;
+            }
+            else if (c == 0)
+            {
+                // we're updating to the same state; we only do this with a strictly greater ballot;
+                // even so, if we have no executeAt or deps there's nothing to record
+                if (updated.acceptedOrCommitted().compareTo(cur.ballot()) <= 0 || !newStatus.hasExecuteAtOrDeps())
+                    return this;
+            }
+            else
+            {
+                // we're advancing to a higher status, but this is only permitted either if the new state is stable or the ballot is higher
+                if (cur.compareTo(STABLE) < 0 && updated.acceptedOrCommitted().compareTo(cur.ballot()) < 0)
+                    return this;
             }
 
             if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, cur, newStatus, mayExecute, updated, witnessedBy);
+            else if (cur.compareTo(STABLE) >= 0) result = update(pos, txnId, cur, cur.withEncodedStatus(TxnInfo.encode(txnId, newStatus, cur.mayExecute(), cur.statusOverrides())), updated, witnessedBy);
             else if (newStatus.hasDeps()) result = update(pos, txnId, cur, newStatus, mayExecute, updated, witnessedBy);
             else result = update(pos, txnId, cur, TxnInfo.create(txnId, newStatus, mayExecute, updated), updated, witnessedBy);
         }
@@ -2000,10 +1998,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
             return new CommandsForKeyUpdateWithPostProcess(newCfk, newPostProcess);
         }
 
-        TxnInfo[] newById = removeRedundantById(byId, bounds, newBounds);
+        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBounds));
+        TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBounds));
         Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.gcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
-        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBounds));
 
         long maxUniqueHlc = this.maxUniqueHlc;
         if (maxUniqueHlc <= newBounds.gcBefore.hlc() && newBounds.gcBefore.is(HLC_BOUND))
@@ -2022,10 +2020,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
     {
         QuickBounds newBoundsInfo = bounds.withGcBeforeBeforeAtLeast(newRedundantBefore);
 
-        TxnInfo[] newById = removeRedundantById(byId, bounds, newBoundsInfo);
+        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newRedundantBefore);
+        TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBoundsInfo);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newRedundantBefore);
         Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
-        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newRedundantBefore);
 
         return reconstruct(key, newBoundsInfo, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds);
     }
@@ -2216,7 +2214,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                     {
                         Invariants.require(txn.witnesses(missingId));
                         TxnInfo missingInfo = get(missingId, byId);
-                        Invariants.require(missingInfo.status().compareTo(InternalStatus.COMMITTED) < 0);
+                        Invariants.require(missingInfo == null ? missingId.is(UNSTABLE) && find(loadingPruned, missingId) != null : missingInfo.status().compareTo(InternalStatus.COMMITTED) < 0);
                         Invariants.require(txn.depsKnownBefore().compareTo(missingId) >= 0);
                     }
                     if (txn.isCommittedAndExecutes())

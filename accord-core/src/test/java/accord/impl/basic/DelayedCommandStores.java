@@ -360,8 +360,8 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             if (next == null)
                 return;
 
-            next.addCallback(agent()); // used to track unexpected exceptions and notify simulations
-            next.addCallback(this::afterExecution);
+            next.invoke(agent()); // used to track unexpected exceptions and notify simulations
+            next.invoke(this::afterExecution);
             executor.execute(next);
         }
 

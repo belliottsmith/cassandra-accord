@@ -285,6 +285,12 @@ public class Invariants
             throw illegalState(format(fmt, p1, p2, p3));
     }
 
+    public static void require(boolean condition, String fmt, int p1, @Nullable Object p2, @Nullable Object p3)
+    {
+        if (!condition)
+            throw illegalState(format(fmt, p1, p2, p3));
+    }
+
     public static <P> void require(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable P p3, Function<? super P, Object> transformP3)
     {
         if (!condition)

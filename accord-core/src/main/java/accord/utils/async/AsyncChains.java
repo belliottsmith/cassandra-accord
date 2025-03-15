@@ -19,6 +19,7 @@
 package accord.utils.async;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
@@ -39,7 +40,6 @@ import java.util.function.Function;
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -129,7 +129,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
 
         @Override
-        public AsyncChain<V> addCallback(BiConsumer<? super V, Throwable> callback)
+        public AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback)
         {
             if (value == null || value.getClass() != FailureHolder.class)
                 callback.accept((V) value, null);
@@ -141,7 +141,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         @Override
         public Cancellable begin(BiConsumer<? super V, Throwable> callback)
         {
-            addCallback(callback);
+            invoke(callback);
             return null;
         }
     }
@@ -454,7 +454,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     }
 
     @Override
-    public AsyncChain<V> addCallback(BiConsumer<? super V, Throwable> callback)
+    public AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback)
     {
         return add(EncapsulatedCallback::new, callback);
     }
@@ -655,28 +655,45 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         });
     }
 
-    public static <V> AsyncChain<V[]> allOf(List<? extends AsyncChain<? extends V>> chains)
+    public static <V> AsyncChain<List<V>> allOf(List<? extends AsyncChain<? extends V>> chains)
     {
-        return new AsyncChainCombiner<>(chains);
+        return allOfInternal(chains).map(Arrays::asList);
     }
 
-    public static <V> AsyncChain<List<V>> all(List<? extends AsyncChain<? extends V>> chains)
+    // cannot expose this as we're actually providing an Object[] to the next in the chain
+    // which is not safe if receiver statically expecting the strongly typed array
+    private static <V> AsyncChain<V[]> allOfInternal(List<? extends AsyncChain<? extends V>> chains)
     {
-        return new AsyncChainCombiner<>(chains).map(Lists::newArrayList);
+        return new AsyncChainCombiner<>(chains);
     }
 
     public static <V> AsyncChain<V> reduce(List<? extends AsyncChain<? extends V>> chains, BiFunction<? super V, ? super V, ? extends V> reducer)
     {
         if (chains.size() == 1)
             return (AsyncChain<V>) chains.get(0);
-        return allOf(chains).map(r -> reduceArray(r, reducer));
+        return allOfInternal(chains).map(r -> reduceArray(r, reducer));
     }
 
-    private static <V> V reduceArray(V[] results, BiFunction<? super V, ? super V, ? extends V> reducer)
+    public static <I, O> AsyncChain<O> reduce(List<? extends AsyncChain<? extends I>> chains, BiFunction<? super I, ? super O, ? extends O> reducer, O identity)
     {
-        V result = results[0];
+        if (chains.size() == 1)
+            return chains.get(0).map(i -> reducer.apply(i, identity));
+        return allOfInternal(chains).map(r -> reduceArray(r, reducer, identity));
+    }
+
+    private static <V> V reduceArray(Object[] results, BiFunction<? super V, ? super V, ? extends V> reducer)
+    {
+        V result = (V) results[0];
         for (int i=1; i< results.length; i++)
-            result = reducer.apply(result, results[i]);
+            result = reducer.apply(result, (V)results[i]);
+        return result;
+    }
+
+    private static <I, O> O reduceArray(Object[] results, BiFunction<? super I, ? super O, ? extends O> reducer, O identity)
+    {
+        O result = identity;
+        for (int i=0; i< results.length; i++)
+            result = reducer.apply((I)results[i], identity);
         return result;
     }
 
@@ -710,7 +727,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
             case 0: return AsyncChains.success(identity);
             case 1: return chains.get(0).map(a -> reducer.apply(identity, a));
         }
-        return allOf(chains).map(results -> {
+        return allOfInternal(chains).map(results -> {
             B result = identity;
             for (A r : results)
                 result = reducer.apply(result, r);

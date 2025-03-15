@@ -40,7 +40,7 @@ public class SetGloballyDurable implements Request, PreLoadContext
     @Override
     public void process(Node node, Node.Id from, ReplyContext replyContext)
     {
-        node.markDurable(durableBefore).addCallback((success, fail) -> {
+        node.markDurable(durableBefore).invoke((success, fail) -> {
             node.reply(from, replyContext, fail == null ? Ok : null, fail);
         });
     }

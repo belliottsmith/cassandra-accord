@@ -31,13 +31,7 @@ import static accord.utils.Invariants.illegalState;
 public interface AsyncResult<V> extends AsyncChain<V>
 {
     @Override
-    AsyncResult<V> addCallback(BiConsumer<? super V, Throwable> callback);
-
-    @Override
-    default AsyncResult<V> addCallback(Runnable runnable)
-    {
-        return addCallback(AsyncCallbacks.toCallback(runnable));
-    }
+    AsyncResult<V> invoke(BiConsumer<? super V, Throwable> callback);
 
     boolean isDone();
     boolean isSuccess();
@@ -46,7 +40,7 @@ public interface AsyncResult<V> extends AsyncChain<V>
     default @Nullable Cancellable begin(BiConsumer<? super V, Throwable> callback)
     {
         //TODO chain shouldn't allow double calling, but should result allow?
-        addCallback(callback);
+        invoke(callback);
         return null;
     }
 

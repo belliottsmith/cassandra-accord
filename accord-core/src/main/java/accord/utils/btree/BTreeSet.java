@@ -31,8 +31,6 @@ import java.util.SortedSet;
 import java.util.Spliterator;
 import java.util.Spliterators;
 
-import com.google.common.collect.Ordering;
-
 import static accord.utils.btree.BTree.Dir;
 import static accord.utils.btree.BTree.findIndex;
 
@@ -76,7 +74,7 @@ public class BTreeSet<V> extends AbstractSet<V> implements NavigableSet<V>, List
      */
     public V get(int index)
     {
-        return BTree.<V>findByIndex(tree, index);
+        return BTree.findByIndex(tree, index);
     }
 
     public int lastIndexOf(Object o)
@@ -658,7 +656,7 @@ public class BTreeSet<V> extends AbstractSet<V> implements NavigableSet<V>, List
 
     public static <V extends Comparable<V>> BTreeSet<V> of(V value)
     {
-        return new BTreeSet<>(BTree.singleton(value), Ordering.<V>natural());
+        return new BTreeSet<>(BTree.singleton(value), Comparator.naturalOrder());
     }
 
     public static <V> BTreeSet<V> empty(Comparator<? super V> comparator)
