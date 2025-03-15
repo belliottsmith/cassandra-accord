@@ -173,7 +173,7 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         {
             node.withEpoch(retryInFutureEpoch, (ignore, failure) -> tryFailure(WrappableException.wrap(failure)), () -> {
                 ExecuteSyncPoint continuation = new ExecuteSyncPoint(node, syncPoint, node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE), excludeSuccess, executor, attempt, current());
-                continuation.addCallback((success, failure) -> {
+                continuation.invoke((success, failure) -> {
                     if (failure == null) trySuccess(success);
                     else tryFailure(failure);
                 });
@@ -249,6 +249,6 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
     {
         SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
         if (contact == null) tryFailure(new Exhausted(syncPoint.syncId, syncPoint.route.homeKey(), null));
-        else node.send(contact, to -> new WaitUntilApplied(to, tracker.topologies(), syncPoint.syncId, syncPoint.route, syncPoint.syncId.epoch()), executor, this);
+        else node.send(contact, to -> new WaitUntilApplied(to, tracker.topologies(), syncPoint.syncId, syncPoint.route, tracker.topologies().currentEpoch()), executor, this);
     }
 }

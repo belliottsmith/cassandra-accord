@@ -51,6 +51,7 @@ public interface Routables<K extends Routable> extends Iterable<K>
     }
 
     K get(int i);
+    int indexOf(K key);
     int size();
 
     boolean isEmpty();

@@ -334,9 +334,9 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         if (epochs.wasTruncated(ready.epoch))
             return;
 
-        ready.metadata.addCallback(() -> epochs.acknowledge(ready));
-        ready.coordinate.addCallback(() -> localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync));
-        ready.reads.addCallback(() ->  localBootstrapsComplete(epochs.getOrCreate(ready.epoch).topology));
+        ready.metadata.invokeIfSuccess(() -> epochs.acknowledge(ready));
+        ready.coordinate.invokeIfSuccess(() -> localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync));
+        ready.reads.invokeIfSuccess(() ->  localBootstrapsComplete(epochs.getOrCreate(ready.epoch).topology));
     }
 
     protected void topologyUpdatePostListenerNotify(Topology topology) {}
@@ -350,7 +350,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         if (lastReceived > 0 && topology.epoch() > lastReceived + 1)
         {
             logger.debug("Epoch {} received; waiting to receive {} before reporting", topology.epoch(), lastReceived + 1);
-            epochs.receiveFuture(lastReceived + 1).addCallback(() -> reportTopology(topology, isLoad, startSync));
+            epochs.receiveFuture(lastReceived + 1).invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync));
             fetchTopologyForEpoch(lastReceived + 1);
             return;
         }
@@ -359,14 +359,14 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         if (lastAcked == 0 && lastReceived > 0)
         {
             logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), epochs.minEpoch());
-            epochs.acknowledgeFuture(epochs.minEpoch()).addCallback(() -> reportTopology(topology, isLoad, startSync));
+            epochs.acknowledgeFuture(epochs.minEpoch()).invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync));
             return;
         }
 
         if (lastAcked > 0 && topology.epoch() > lastAcked + 1)
         {
             logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), lastAcked + 1);
-            epochs.acknowledgeFuture(lastAcked + 1).addCallback(() -> reportTopology(topology, isLoad, startSync));
+            epochs.acknowledgeFuture(lastAcked + 1).invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync));
             return;
         }
 

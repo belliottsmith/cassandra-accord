@@ -321,7 +321,7 @@ public class ShardDurability
                                 syncId -> node.withEpoch(syncId.epoch(),
                                     () -> syncPointControl.submit(
                                         () -> CoordinateSyncPoint.exclusive(node, syncId, (FullRoute<Range>) node.computeRoute(syncId, ranges))
-                                                                 .addCallback(logSyncPoint(syncId, ranges))
+                                                                 .invoke(logSyncPoint(syncId, ranges))
                             )))
                             .begin((success, fail) -> {
                                 scheduled = null;

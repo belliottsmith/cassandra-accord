@@ -915,7 +915,7 @@ public class Cluster
                 Command afterCommand = e.getValue().value();
                 if (beforeCommand == null)
                 {
-                    Invariants.requireArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus() == SaveStatus.Vestigial);
+                    Invariants.requireArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus().compareTo(SaveStatus.Vestigial) >= 0);
                     continue;
                 }
                 if (afterCommand.hasBeen(Status.Truncated))

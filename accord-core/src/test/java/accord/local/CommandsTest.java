@@ -101,7 +101,7 @@ class CommandsTest
                     for (Node n : nodeMap.values())
                         ((TestableConfigurationService) n.configService()).reportTopology(updatedTopology);
 
-                    node.coordinate(txnId, txn).addCallback((success, failure) -> {
+                    node.coordinate(txnId, txn).invoke((success, failure) -> {
                         if (failure == null)
                         {
                             node.agent().onUncaughtException(new AssertionError("Expected TopologyMismatch exception, but txn was success"));

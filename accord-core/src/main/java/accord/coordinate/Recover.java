@@ -67,6 +67,7 @@ import accord.utils.async.AsyncResults;
 
 import static accord.api.ProgressLog.BlockedUntil.CommittedOrNotFastPathCommit;
 import static accord.api.ProgressLog.BlockedUntil.HasCommittedDeps;
+import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecutePath.RECOVER;
@@ -253,61 +254,25 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
         if (acceptOrCommitNotTruncated != null)
         {
-            Status status = acceptOrCommitNotTruncated.status;
             Timestamp executeAt = acceptOrCommitNotTruncated.executeAt;
-            if (committedExecuteAt != null)
-            {
-                Invariants.require(acceptOrCommitNotTruncated.status.compareTo(Status.PreCommitted) < 0 || executeAt.equals(committedExecuteAt));
-                // if we know from a prior Accept attempt that this is committed we can go straight to the commit phase
-                if (status == AcceptedMedium || status == AcceptedSlow)
-                    status = Status.Committed;
+            Status status; {
+                Status tmp = acceptOrCommitNotTruncated.status;
+                if (committedExecuteAt != null)
+                {
+                    Invariants.require(acceptOrCommitNotTruncated.status.compareTo(Status.PreCommitted) < 0 || executeAt.equals(committedExecuteAt));
+                    // if we know from a prior Accept attempt that this is committed we can go straight to the commit phase
+                    if (tmp == AcceptedMedium || tmp == AcceptedSlow)
+                        tmp = Status.Committed;
+                }
+                status = tmp;
             }
+
             switch (status)
             {
-                default: throw new UnhandledEnum(status);
                 case Truncated: throw illegalState("Truncate should be filtered");
                 case Invalidated:
                 {
                     commitInvalidate(invalidateUntil(recoverOks));
-                    return;
-                }
-
-                case Applied:
-                case PreApplied:
-                {
-                    withStableDeps(recoverOkList, executeAt, (i, t) -> node.agent().acceptAndWrap(i, t), stableDeps -> {
-                        adapter.persist(node, tracker.topologies(), route, txnId, txn, executeAt, stableDeps, acceptOrCommitNotTruncated.writes, acceptOrCommitNotTruncated.result, (i, t) -> node.agent().acceptAndWrap(i, t));
-                    });
-                    accept(acceptOrCommitNotTruncated.result, null);
-                    return;
-                }
-
-                case Stable:
-                {
-                    withStableDeps(recoverOkList, executeAt, this, stableDeps -> {
-                        adapter.execute(node, tracker.topologies(), route, RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, stableDeps, this);
-                    });
-                    return;
-                }
-
-                case PreCommitted:
-                case Committed:
-                {
-                    withCommittedDeps(recoverOkList, executeAt, this, committedDeps -> {
-                        adapter.stabilise(node, tracker.topologies(), route, ballot, txnId, txn, executeAt, committedDeps, this);
-                    });
-                    return;
-                }
-
-                case AcceptedSlow:
-                case AcceptedMedium:
-                {
-                    // TODO (desired): if we have a quorum of Accept with matching ballot or proposal we can go straight to Commit
-                    // TODO (desired): if we didn't find Accepted in *every* shard, consider invalidating for consistency of behaviour
-                    //     however, note that we may have taken the fast path and recovered, so we can only do this if acceptedOrCommitted=Ballot.ZERO
-                    //     (otherwise recovery was attempted and did not invalidate, so it must have determined it needed to complete)
-                    Deps proposeDeps = LatestDeps.mergeProposal(recoverOkList, ok -> ok == null ? null : ok.deps);
-                    propose(SLOW, acceptOrCommitNotTruncated.executeAt, proposeDeps);
                     return;
                 }
 
@@ -321,6 +286,53 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 case PreAccepted:
                     throw illegalState("Should only be possible to have Accepted or later commands");
             }
+
+            LatestDeps.Merge merge = mergeDeps(recoverOkList);
+            Participants<?> await = merge.notAccepted(route);
+            awaitPartialEarlier(recoverOkList, await, () -> {
+                switch (status)
+                {
+                    default: throw new UnhandledEnum(status);
+                    case Applied:
+                    case PreApplied:
+                    {
+                        withStableDeps(merge, executeAt, (i, t) -> node.agent().acceptAndWrap(i, t), stableDeps -> {
+                            adapter.persist(node, tracker.topologies(), route, txnId, txn, executeAt, stableDeps, acceptOrCommitNotTruncated.writes, acceptOrCommitNotTruncated.result, (i, t) -> node.agent().acceptAndWrap(i, t));
+                        });
+                        accept(acceptOrCommitNotTruncated.result, null);
+                        return;
+                    }
+
+                    case Stable:
+                    {
+                        withStableDeps(merge, executeAt, this, stableDeps -> {
+                            adapter.execute(node, tracker.topologies(), route, RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, stableDeps, this);
+                        });
+                        return;
+                    }
+
+                    case PreCommitted:
+                    case Committed:
+                    {
+                        withCommittedDeps(merge, executeAt, this, committedDeps -> {
+                            adapter.stabilise(node, tracker.topologies(), route, ballot, txnId, txn, executeAt, committedDeps, this);
+                        });
+                        return;
+                    }
+
+                    case AcceptedSlow:
+                    case AcceptedMedium:
+                    {
+                        // TODO (desired): if we have a quorum of Accept with matching ballot or proposal we can go straight to Commit
+                        // TODO (desired): if we didn't find Accepted in *every* shard, consider invalidating for consistency of behaviour
+                        //     however, note that we may have taken the fast path and recovered, so we can only do this if acceptedOrCommitted=Ballot.ZERO
+                        //     (otherwise recovery was attempted and did not invalidate, so it must have determined it needed to complete)
+                        Deps proposeDeps = merge.mergeProposal();
+                        propose(SLOW, acceptOrCommitNotTruncated.executeAt, proposeDeps);
+                    }
+                }
+            });
+            return;
         }
 
         if (acceptOrCommit != null && acceptOrCommit != acceptOrCommitNotTruncated)
@@ -417,6 +429,23 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         }
     }
 
+    private static LatestDeps.Merge mergeDeps(List<RecoverOk> nullableRecoverOkList)
+    {
+        return LatestDeps.merge(nullableRecoverOkList, ok -> ok == null ? null : ok.deps);
+    }
+
+    private void awaitPartialEarlier(List<RecoverOk> nullableRecoverOkList, Participants<?> participants, Runnable whenReady)
+    {
+        Deps earlierWait = Deps.merge(nullableRecoverOkList, nullableRecoverOkList.size(), List::get, ok -> ok.earlierWait);
+        Deps earlierNoWait = Deps.merge(nullableRecoverOkList, nullableRecoverOkList.size(), List::get, ok -> ok.earlierNoWait);
+        earlierWait = earlierWait.without(earlierNoWait);
+        earlierWait = earlierWait.intersecting(participants);
+        awaitEarlier(node, earlierWait, HasDecidedExecuteAt).begin((success, fail) -> {
+            if (fail != null) accept(null, fail);
+            else whenReady.run();
+        });
+    }
+
     private static boolean supersedingRejects(List<RecoverOk> oks)
     {
         for (RecoverOk ok : oks)
@@ -464,15 +493,13 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         return ok.laterCoordRejects.with(id -> from.equals(id.node));
     }
 
-    private void withCommittedDeps(List<RecoverOk> nullableRecoverOkList, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
+    private void withCommittedDeps(LatestDeps.Merge merge, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        LatestDeps.Merge merge = LatestDeps.merge(nullableRecoverOkList, ok -> ok == null ? null : ok.deps);
         LatestDeps.withCommitted(adapter, node, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
     }
 
-    private void withStableDeps(List<RecoverOk> nullableRecoverOkList, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
+    private void withStableDeps(LatestDeps.Merge merge, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        LatestDeps.Merge merge = LatestDeps.merge(nullableRecoverOkList, ok -> ok == null ? null : ok.deps);
         LatestDeps.withStable(adapter, node, merge, Deps.NONE, route, null, null, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
     }
 
@@ -506,7 +533,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void propose(Accept.Kind kind, Timestamp executeAt, List<RecoverOk> recoverOkList)
     {
-        Deps proposeDeps = LatestDeps.mergeProposal(recoverOkList, ok -> ok == null ? null : ok.deps);
+        Deps proposeDeps = mergeDeps(recoverOkList).mergeProposal();
         propose(kind, executeAt, proposeDeps);
     }
 

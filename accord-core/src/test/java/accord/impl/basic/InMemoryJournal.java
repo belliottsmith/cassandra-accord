@@ -20,6 +20,8 @@ package accord.impl.basic;
 
 import java.util.AbstractList;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.Iterator;
 import java.util.List;
@@ -33,7 +35,6 @@ import com.google.common.collect.ImmutableSortedMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Result;
 import accord.impl.CommandChange;
@@ -110,35 +111,34 @@ import static accord.utils.Invariants.illegalState;
 public class InMemoryJournal implements Journal
 {
     private static final Logger log = LoggerFactory.getLogger(InMemoryJournal.class);
-    private final Int2ObjectHashMap<NavigableMap<TxnId, List<Diff>>> diffsPerCommandStore = new Int2ObjectHashMap<>();
+    private final Int2ObjectHashMap<NavigableMap<TxnId, Diffs>> diffsPerCommandStore = new Int2ObjectHashMap<>();
     private final List<TopologyUpdate> topologyUpdates = new ArrayList<>();
     private final Int2ObjectHashMap<FieldUpdates> fieldStates = new Int2ObjectHashMap<>();
 
     private Node node;
-    private Agent agent;
     private final RandomSource random;
+    private final float partialCompactionChance;
 
     public InMemoryJournal(Node.Id id, RandomSource random)
     {
         this.random = random;
+        this.partialCompactionChance = 1f - (random.nextFloat()/2);
     }
 
-    public Journal start(Node node)
+    public void start(Node node)
     {
         this.node = node;
-        this.agent = node.agent();
-        return this;
     }
 
     @Override
     public Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        NavigableMap<TxnId, List<Diff>> commandStore = this.diffsPerCommandStore.get(commandStoreId);
+        NavigableMap<TxnId, Diffs> commandStore = this.diffsPerCommandStore.get(commandStoreId);
 
         if (commandStore == null)
             return null;
 
-        List<Diff> saved = this.diffsPerCommandStore.get(commandStoreId).get(txnId);
+        Diffs saved = this.diffsPerCommandStore.get(commandStoreId).get(txnId);
         if (saved == null)
             return null;
 
@@ -174,7 +174,7 @@ public class InMemoryJournal implements Journal
 
     private Builder reconstruct(int commandStoreId, TxnId txnId, Load load)
     {
-        NavigableMap<TxnId, List<Diff>> commandStore = this.diffsPerCommandStore.get(commandStoreId);
+        NavigableMap<TxnId, Diffs> commandStore = this.diffsPerCommandStore.get(commandStoreId);
 
         if (commandStore == null)
             return null;
@@ -182,12 +182,13 @@ public class InMemoryJournal implements Journal
         return reconstruct(this.diffsPerCommandStore.get(commandStoreId).get(txnId), load);
     }
 
-    private Builder reconstruct(List<Diff> saved, Load load)
+    private Builder reconstruct(Diffs files, Load load)
     {
-        if (saved == null)
+        if (files == null)
             return null;
 
         Builder builder = null;
+        List<Diff> saved = files.sorted(false);
         for (int i = saved.size() - 1; i >= 0; i--)
         {
             Diff diff = saved.get(i);
@@ -212,8 +213,8 @@ public class InMemoryJournal implements Journal
         }
 
         diffsPerCommandStore.computeIfAbsent(commandStoreId, (k) -> new TreeMap<>())
-                            .computeIfAbsent(update.txnId, (k_) -> new ArrayList<>())
-                            .add(diff);
+                            .computeIfAbsent(update.txnId, (k_) -> new Diffs())
+                            .addFlushed(diff);
 
         if (onFlush!= null)
             onFlush.run();
@@ -323,50 +324,189 @@ public class InMemoryJournal implements Journal
             onFlush.run();
     }
 
+    static class DiffFile extends ArrayList<Diff>
+    {
+        DiffFile(){}
+        DiffFile(List<Diff> diffs)
+        {
+            for (Diff diff : diffs)
+            {
+                if (diff != null)
+                    add(diff);
+            }
+        }
+    }
+
+    static class Diffs
+    {
+        final boolean subset;
+        final List<DiffFile> files;
+        final List<Diff> flushed;
+        int nextId;
+
+        int size;
+        List<Diff> sorted;
+
+        Diffs()
+        {
+            this.subset = false;
+            this.files = new ArrayList<>();
+            this.flushed = new ArrayList<>();
+        }
+
+        Diffs(PurgedList purged)
+        {
+            this.subset = false;
+            this.files = Collections.emptyList();
+            this.flushed = purged;
+        }
+
+        Diffs(TruncatedList truncated)
+        {
+            this.subset = false;
+            this.files = new ArrayList<>();
+            this.flushed = truncated;
+            this.size = 1;
+        }
+
+        Diffs(ErasedList erased)
+        {
+            this.subset = false;
+            this.files = Collections.emptyList();
+            this.flushed = erased;
+            this.size = 1;
+        }
+
+        Diffs(boolean subset, List<DiffFile> files, List<Diff> flushed)
+        {
+            this.subset = subset;
+            this.files = files;
+            this.flushed = flushed;
+            this.size = flushed.size();
+            for (DiffFile file : files)
+                size += file.size();
+        }
+
+        void addFlushed(Diff diff)
+        {
+            diff.rowId = ++nextId;
+            flushed.add(diff);
+            if (sorted != null && sorted != flushed)
+                sorted.add(diff);
+            ++size;
+        }
+
+        List<Diff> sorted(boolean copy)
+        {
+            if (sorted != null)
+            {
+                Invariants.require(sorted.size() == size);
+                return copy ? new ArrayList<>(sorted) : sorted;
+            }
+
+            if (!subset)
+            {
+                if (files.isEmpty())
+                    return copy ? new ArrayList<>(flushed) : flushed;
+
+                if (flushed.isEmpty() && files.size() == 1)
+                    return copy ? new ArrayList<>(files.get(0)) : files.get(0);
+            }
+
+            List<Diff> sorted = new ArrayList<>(size);
+            for (Diff diff : flushed)
+            {
+                if (diff != null)
+                    sorted.add(diff);
+            }
+            for (DiffFile file : this.files)
+            {
+                if (file != null)
+                    sorted.addAll(file);
+            }
+            Invariants.require(sorted.size() == size);
+            sorted.sort(Comparator.comparingInt(d -> d.rowId));
+            if (!copy)
+                this.sorted = sorted;
+            return sorted;
+        }
+
+        void removeAll(Diffs diffs)
+        {
+            files.removeAll(diffs.files);
+            flushed.removeAll(diffs.flushed);
+            size -= diffs.size;
+            sorted = null;
+        }
+
+        boolean isEmpty()
+        {
+            return size == 0;
+        }
+    }
+
     static int counter = 0;
     @Override
     public void purge(CommandStores commandStores, EpochSupplier minEpoch)
     {
         truncateTopologiesForTesting(minEpoch.epoch());
-        boolean isPartialCompaction = random.nextBoolean();
-        for (Map.Entry<Integer, NavigableMap<TxnId, List<Diff>>> e : diffsPerCommandStore.entrySet())
+        boolean isPartialCompaction = random.decide(0.9f);
+        for (Map.Entry<Integer, NavigableMap<TxnId, Diffs>> e : diffsPerCommandStore.entrySet())
         {
             int commandStoreId = e.getKey();
-            Map<TxnId, List<Diff>> localJournal = e.getValue();
+            Map<TxnId, Diffs> localJournal = e.getValue();
             CommandStore store = commandStores.forId(commandStoreId);
             if (store == null)
                 continue;
 
-            for (Map.Entry<TxnId, List<Diff>> e2 : localJournal.entrySet())
+            for (Map.Entry<TxnId, Diffs> e2 : localJournal.entrySet())
             {
-                List<Diff> diffs = e2.getValue();
-
+                Diffs diffs = e2.getValue();
                 if (diffs.isEmpty()) continue;
-                List<Diff> subset = diffs;
-                if (diffs.size() > 1 && isPartialCompaction)
-                {
-                    int removeCount = 1 + random.nextInt(diffs.size() - 1);
-                    int count = diffs.size();
-                    subset = new ArrayList<>(diffs);
-                    while (removeCount-- > 0)
-                    {
-                        int removeIndex = random.nextInt(diffs.size());
-                        if (subset.get(removeIndex) == null)
-                            continue;
-                        subset.set(removeIndex, null);
-                        --count;
-                    }
 
-                    if (count == 0)
-                        continue;
+                Diffs subset = diffs;
+                {
+                    int filesAndFlushed = subset.flushed.size() + subset.files.size();
+                    if (filesAndFlushed > 1 && isPartialCompaction)
+                    {
+                        int removeCount = 1 + random.nextInt(filesAndFlushed - 1);
+                        int count = filesAndFlushed;
+                        subset = new Diffs(true, new ArrayList<>(diffs.files), new ArrayList<>(diffs.flushed));
+                        List<DiffFile> files = subset.files;
+                        List<Diff> flushed = subset.flushed;
+                        while (removeCount-- > 0)
+                        {
+                            int removeIndex = random.nextInt(filesAndFlushed);
+                            if (removeIndex < flushed.size())
+                            {
+                                if (flushed.get(removeIndex) == null)
+                                    continue;
+                                --subset.size;
+                                flushed.set(removeIndex, null);
+                            }
+                            else
+                            {
+                                removeIndex -= flushed.size();
+                                if (files.get(removeIndex) == null)
+                                    continue;
+                                subset.size -= files.get(removeIndex).size();
+                                files.set(removeIndex, null);
+                            }
+                            --count;
+                        }
+
+                        if (count == 0)
+                            continue;
+                    }
                 }
 
-                Builder[] builders = new Builder[diffs.size()];
-                for (int i = 0 ; i < subset.size() ; ++i)
+                Builder[] builders = new Builder[subset.size];
+                List<Diff> sorted = subset.sorted(true);
+                for (int i = 0 ; i < sorted.size() ; ++i)
                 {
-                    if (subset.get(i) == null) continue;
+                    if (sorted.get(i) == null) continue;
                     Builder builder = new Builder(e2.getKey(), ALL);
-                    builder.apply(subset.get(i));
+                    builder.apply(sorted.get(i));
                     builders[i] = builder;
                 }
 
@@ -388,7 +528,8 @@ public class InMemoryJournal implements Journal
                 {
                     if (cleanup == EXPUNGE)
                     {
-                        if (input == FULL || subset == diffs) e2.setValue(new PurgedList());
+                        if (input == FULL) e2.setValue(new Diffs(new PurgedList()));
+                        else if (subset == diffs) e2.setValue(new Diffs());
                         else diffs.removeAll(subset);
                         continue;
                     }
@@ -411,20 +552,39 @@ public class InMemoryJournal implements Journal
                         else
                         {
                             Diff diff = builder.toDiff();
-                            e2.setValue(cleanup == ERASE ? new ErasedList(diff) : new TruncatedList(diff));
+                            e2.setValue(cleanup == ERASE ? new Diffs(new ErasedList(diff)) : new Diffs(new TruncatedList(diff)));
                             continue;
                         }
                     }
                 }
 
+                if (diffs.flushed instanceof FinalList)
+                    continue;
+
+                int removeCount = 0;
                 for (int i = 0 ; i < builders.length ; ++i)
                 {
                     if (builders[i] != null)
                     {
                         Diff diff = builders[i].toDiff();
-                        diffs.set(i, diff.flags == 0 ? null : diff);
+                        if (diff.flags == 0)
+                        {
+                            ++removeCount;
+                            sorted.set(i, null);
+                        }
+                        else
+                        {
+                            diff.rowId = sorted.get(i).rowId;
+                            sorted.set(i, diff);
+                        }
                     }
                 }
+
+                diffs.size -= removeCount;
+                diffs.flushed.removeAll(subset.flushed);
+                diffs.files.removeAll(subset.files);
+                diffs.files.add(new DiffFile(sorted));
+                diffs.sorted = null;
             }
         }
     }
@@ -432,18 +592,18 @@ public class InMemoryJournal implements Journal
     @Override
     public void replay(CommandStores commandStores)
     {
-        for (Map.Entry<Integer, NavigableMap<TxnId, List<Diff>>> diffEntry : diffsPerCommandStore.entrySet())
+        for (Map.Entry<Integer, NavigableMap<TxnId, Diffs>> diffEntry : diffsPerCommandStore.entrySet())
         {
             int commandStoreId = diffEntry.getKey();
 
             // copy to avoid concurrent modification when appending to journal
-            Map<TxnId, List<Diff>> diffs = new TreeMap<>(diffEntry.getValue());
+            Map<TxnId, List<Diff>> diffs = new TreeMap<>();
 
             InMemoryCommandStore commandStore = (InMemoryCommandStore) commandStores.forId(commandStoreId);
             Loader loader = commandStore.loader();
 
-            for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
-                e.setValue(new ArrayList<>(e.getValue()));
+            for (Map.Entry<TxnId, Diffs> e : diffEntry.getValue().entrySet())
+                diffs.put(e.getKey(), e.getValue().sorted(true));
 
             for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
             {
@@ -455,7 +615,20 @@ public class InMemoryJournal implements Journal
         }
     }
 
-    private static class ErasedList extends AbstractList<Diff>
+    static class TruncatedList extends ArrayList<Diff>
+    {
+        TruncatedList(Diff truncated)
+        {
+            add(truncated);
+        }
+    }
+
+    private static abstract class FinalList extends AbstractList<Diff>
+    {
+
+    }
+
+    private static class ErasedList extends FinalList
     {
         private Diff erased;
 
@@ -500,15 +673,7 @@ public class InMemoryJournal implements Journal
         }
     }
 
-    static class TruncatedList extends ArrayList<Diff>
-    {
-        TruncatedList(Diff truncated)
-        {
-            add(truncated);
-        }
-    }
-
-    private static class PurgedList extends AbstractList<Diff>
+    private static class PurgedList extends FinalList
     {
         @Override
         public Diff get(int index)
@@ -558,6 +723,7 @@ public class InMemoryJournal implements Journal
         public final TxnId txnId;
         public final Map<Field, Object> changes;
         public final int flags;
+        private int rowId;
 
         private Diff(TxnId txnId, int flags, Map<Field, Object> changes)
         {

@@ -479,7 +479,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                    ", deps:" + deps +
                    ", earlierWait:" + earlierWait +
                    ", earlierNoWait:" + earlierNoWait +
-                   ", laterNoVote:" + laterCoordRejects +
+                   ", laterCoordRejects:" + laterCoordRejects +
                    ", selfAcceptsFastPath:" + selfAcceptsFastPath +
                    (txnId.hasPrivilegedCoordinator() ? ", coordinatorFastPath:" + selfAcceptsFastPath : "") +
                    ", supersedingRejects:" + supersedingRejects +

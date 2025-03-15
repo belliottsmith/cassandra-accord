@@ -339,7 +339,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         {
             wakeAt = deadline;
         }
-        else if (prevDeadline == wakeAt && bucketsStart != bucketsEnd)
+        else if (prevDeadline == wakeAt && prevDeadline != Long.MAX_VALUE && bucketsStart != bucketsEnd)
         {
             Bucket<T> head = buckets[bucketsStart];
             if (!head.isHeapified())

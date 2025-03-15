@@ -46,9 +46,11 @@ import accord.utils.UnhandledEnum;
 import static accord.messages.Accept.Kind.SLOW;
 import static accord.primitives.Known.KnownDeps.DepsCommitted;
 import static accord.primitives.Known.KnownDeps.DepsErased;
+import static accord.primitives.Known.KnownDeps.DepsFromCoordinator;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
+import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
@@ -419,7 +421,17 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             return result;
         }
 
-        Deps mergeProposal()
+        public Participants<?> notAccepted(Participants<?> participants)
+        {
+            for (int i = 0 ; i < values.length ; ++i)
+            {
+                if (values[i] != null && values[i].known != DepsUnknown && values[i].known != DepsFromCoordinator)
+                    participants = participants.without(Ranges.of(starts[i].rangeFactory().newRange(starts[i], starts[i + 1])));
+            }
+            return participants;
+        }
+
+        public Deps mergeProposal()
         {
             return mergeProposal(null);
         }

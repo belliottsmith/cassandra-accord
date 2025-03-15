@@ -49,7 +49,7 @@ class ConcurrencyControl implements BiConsumer<Object, Throwable>
 
         void start(ConcurrencyControl concurrencyControl)
         {
-            supplier.get().addCallback(result).begin(concurrencyControl);
+            supplier.get().invoke(result).begin(concurrencyControl);
         }
     }
 
@@ -80,7 +80,7 @@ class ConcurrencyControl implements BiConsumer<Object, Throwable>
             }
             ++inflight;
         }
-        return supplier.get().addCallback(this);
+        return supplier.get().invoke(this);
     }
 
     synchronized void setMaxConcurrency(int newMaxConcurrency)

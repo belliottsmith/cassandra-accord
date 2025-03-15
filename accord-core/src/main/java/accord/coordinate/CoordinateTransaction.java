@@ -104,38 +104,57 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     {
         if (tracker.hasFastPathAccepted())
         {
-            Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
-            ExecuteFlags executeFlags = Functions.foldl(oks.valuesAsNullableList(), (ok, v) -> ok == null ? v : v.and(ok.flags), ExecuteFlags.all());
-            // note: we merge all Deps regardless of witnessedAt. While we only need fast path votes,
-            // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
-            // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
-            executeAdapter().execute(node, topologies, route, FAST, executeFlags, txnId, txn, txnId, deps, deps, settingCallback());
-            node.agent().eventListener().onFastPathTaken(txnId, deps);
+            Deps deps = mergeFastOrMediumDeps(oks);
+            if (deps != null)
+            {
+                ExecuteFlags executeFlags = Functions.foldl(oks.valuesAsNullableList(), (ok, v) -> ok == null ? v : v.and(ok.flags), ExecuteFlags.all());
+                // note: we merge all Deps regardless of witnessedAt. While we only need fast path votes,
+                // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
+                // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
+                executeAdapter().execute(node, topologies, route, FAST, executeFlags, txnId, txn, txnId, deps, deps, settingCallback());
+                node.agent().eventListener().onFastPathTaken(txnId, deps);
+                return;
+            }
         }
         else if (tracker.hasMediumPathAccepted() && txnId.hasMediumPath())
         {
-            Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
-            proposeAdapter().propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, this);
-            node.agent().eventListener().onMediumPathTaken(txnId, deps);
+            Deps deps = mergeFastOrMediumDeps(oks);
+            if (deps != null)
+            {
+                proposeAdapter().propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, this);
+                node.agent().eventListener().onMediumPathTaken(txnId, deps);
+                return;
+            }
         }
-        else
+        else if (executeAt.is(REJECTED))
         {
-            // TODO (low priority, efficiency): perhaps don't submit Accept immediately if we almost have enough for fast-path,
-            //                                  but by sending accept we rule out hybrid fast-path
-            // TODO (low priority, efficiency): if we receive an expired response, perhaps defer to permit at least one other
-            //                                  node to respond before invalidating
-            if (executeAt.is(REJECTED))
-            {
-                proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt,this);
-                node.agent().eventListener().onRejected(txnId);
-            }
-            else
-            {
-                Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
-                proposeAdapter().propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, this);
-                node.agent().eventListener().onSlowPathTaken(txnId, deps);
-            }
+            proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt,this);
+            node.agent().eventListener().onRejected(txnId);
+            return;
         }
+
+        Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
+        proposeAdapter().propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, this);
+        node.agent().eventListener().onSlowPathTaken(txnId, deps);
+    }
+
+    private Deps mergeFastOrMediumDeps(SortedListMap<?, PreAcceptOk> oks)
+    {
+        // we must merge all Deps replies from prior topologies, but from the latest topology we can safely merge only those replies that voted for the fast path
+        // TODO (desired): actually merge these topologies separately, rather than just switching behaviour when multiple topologies
+        if (tracker.topologies().size() == 1)
+            return Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.witnessedAt.equals(ok.txnId) ? ok.deps : null);
+
+        Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
+        // it is possible that one of the earlier epochs that did not need to vote for the fast path
+        // was also unable to compute valid dependencies, and returned a future TxnId as a proxy.
+        // In this case while it is still in principle safe to propose the fast path, it is simpler not to,
+        // as it permits us to maintain safety validation logic that detects unsafe behaviour and execution will
+        // need to wait for the future transaction to be agreed anyway (so we can use its dependency calculation).
+        if (deps.maxTxnId(txnId).compareTo(txnId) > 0)
+            return null;
+
+        return deps;
     }
 
     protected CoordinationAdapter<Result> proposeAdapter()

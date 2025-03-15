@@ -117,7 +117,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
                 return NoChange;
 
             // TODO (low priority, efficiency): support slice method accepting a single Range
-            if (unavailable == null) unavailable = partialSuccess.unavailable.slice(Ranges.of(shard.range));
+            if (unavailable == null) unavailable = partialSuccess.unavailable.slice(Ranges.of(shard.range), Minimal);
             else unavailable = unavailable.slice(partialSuccess.unavailable, Minimal);
             if (!unavailable.isEmpty())
                 return ensureProgressOrFail();

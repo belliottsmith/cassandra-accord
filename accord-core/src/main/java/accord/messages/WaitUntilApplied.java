@@ -26,6 +26,7 @@ import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
 
 import static accord.messages.MessageType.StandardMessage.WAIT_UNTIL_APPLIED_REQ;
 import static accord.primitives.SaveStatus.Applied;
@@ -52,6 +53,7 @@ public class WaitUntilApplied extends ReadData
     {
         super(to, topologies, txnId, scope, executeAtEpoch);
         this.minEpoch = topologies.oldestEpoch();
+        Invariants.require(minEpoch <= executeAtEpoch);
     }
 
     protected WaitUntilApplied(TxnId txnId, Participants<?> scope, long minEpoch, long executeAtEpoch)

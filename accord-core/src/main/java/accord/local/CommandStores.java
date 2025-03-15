@@ -781,7 +781,7 @@ public abstract class CommandStores
         for (ShardHolder shard : shards)
             results.add(shard.store.build(context, mapper));
 
-        return AsyncChains.all(results);
+        return AsyncChains.allOf(results);
     }
 
     protected <O> AsyncChain<O> mapReduce(PreLoadContext context, IntStream commandStoreIds, MapReduce<? super SafeCommandStore, O> mapReduce)

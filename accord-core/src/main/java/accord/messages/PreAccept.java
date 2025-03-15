@@ -123,7 +123,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 if (command.status().compareTo(Status.PreAccepted) > 0)
                     return PreAcceptNack.INSTANCE;
 
-                if (command.executeAt().is(REJECTED))
+                if (command.executeAt().is(REJECTED) && !participants.owns().isEmpty()) // if our vote is required we don't need to compute deps
                     return new PreAcceptOk(txnId, command.executeAt(), Deps.NONE, ExecuteFlags.none());
 
             case Retired:

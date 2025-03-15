@@ -300,7 +300,7 @@ public class ListRequest implements Request
         txn = gen.apply(node);
         id = txnIdGen.apply(node, txn);
         listener.onClientAction(MessageListener.ClientAction.SUBMIT, node.id(), id, txn);
-        node.coordinate(id, txn).addCallback(new ResultCallback(node, client, replyContext, listener, id, txn));
+        node.coordinate(id, txn).invoke(new ResultCallback(node, client, replyContext, listener, id, txn));
     }
 
     @Override

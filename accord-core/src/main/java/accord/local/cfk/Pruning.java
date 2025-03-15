@@ -527,7 +527,7 @@ public class Pruning
         return epochPrunedBefores;
     }
 
-    static TxnInfo[] removeRedundantById(TxnInfo[] byId, QuickBounds prevBounds, QuickBounds newBounds)
+    static TxnInfo[] removeRedundantById(TxnInfo[] byId, boolean hasRedundantLoadingPruned, QuickBounds prevBounds, QuickBounds newBounds)
     {
         TxnId newRedundantBefore = redundantBefore(newBounds);
         TxnId newBootstrappedAt = bootstrappedAt(newBounds);
@@ -538,7 +538,7 @@ public class Pruning
 
         TxnInfo[] newById = byId;
         int pos = insertPos(byId, newRedundantBefore);
-        if (pos != 0)
+        if (pos != 0 || hasRedundantLoadingPruned)
         {
             if (Invariants.isParanoid() && testParanoia(LINEAR, NONE, LOW))
             {
