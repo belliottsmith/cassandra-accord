@@ -312,8 +312,9 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
         else
         {
             copy = new RoutingKey[keys.length];
-            for (int i = 0; i < keys.length; i++)
-                copy[i] = keys[i].toUnseekable();
+            int resultCount = copyToRoutingKeys(keys, 0, copy, 0, keys.length);
+            if (resultCount < copy.length)
+                copy = Arrays.copyOf(copy, resultCount);
         }
 
         int insertPos = Arrays.binarySearch(copy, withKey);
