@@ -71,15 +71,6 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     }
 
     @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Keys keys1 = (Keys) o;
-        return Arrays.equals(keys, keys1.keys);
-    }
-
-    @Override
     public Keys with(Keys that)
     {
         return wrap(SortedArrays.linearUnion(keys, that.keys, cachedKeys()), that);

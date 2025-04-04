@@ -20,7 +20,9 @@ package accord.primitives;
 
 import accord.api.Query;
 import accord.api.Read;
+import accord.api.Sliceable;
 import accord.api.Update;
+import accord.utils.Invariants;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -66,6 +68,11 @@ public interface PartialTxn extends Txn
             super(kind, keys, read, query, update);
         }
 
+        public InMemory(Kind kind, Seekables<?, ?> keys, Read read, Query query, Update update, Sliceable implementationDefined)
+        {
+            super(kind, keys, read, query, update, implementationDefined);
+        }
+
         @Override
         public PartialTxn with(PartialTxn add)
         {
@@ -76,17 +83,24 @@ public interface PartialTxn extends Txn
             Read read = this.read().merge(add.read());
             Query query = this.query() == null ? add.query() : this.query();
             Update update = this.update() == null ? null : this.update().merge(add.update());
+            Sliceable implementationDefined = null;
+            if (this.implementationDefined != null)
+            {
+                Invariants.require(add instanceof Txn.InMemory);
+                implementationDefined = this.implementationDefined.merge(((Txn.InMemory)add).implementationDefined);
+            }
+
             if (keys == this.keys())
             {
-                if (read == this.read() && query == this.query() && update == this.update())
+                if (read == this.read() && query == this.query() && update == this.update() && implementationDefined == this.implementationDefined)
                     return this;
             }
             else if (keys == add.keys())
             {
-                if (read == add.read() && query == add.query() && update == add.update())
+                if (read == add.read() && query == add.query() && update == add.update() && (implementationDefined == null || implementationDefined == ((Txn.InMemory)add).implementationDefined))
                     return add;
             }
-            return new PartialTxn.InMemory(kind(), keys, read, query, update);
+            return new PartialTxn.InMemory(kind(), keys, read, query, update, implementationDefined);
         }
 
         @Override
@@ -95,7 +109,7 @@ public interface PartialTxn extends Txn
             if (!kind().isSystemTxn() && !covers(route) || query() == null)
                 throw illegalState("Incomplete PartialTxn: " + this + ", route: " + route);
 
-            return new Txn.InMemory(kind(), keys(), read(), query(), update());
+            return new Txn.InMemory(kind(), keys(), read(), query(), update(), implementationDefined);
         }
 
         @Override
@@ -107,7 +121,7 @@ public interface PartialTxn extends Txn
             if (this.keys().containsAll(covering))
                 return this;
 
-            return new PartialTxn.InMemory(kind(), keys(), read(), query(), update());
+            return new PartialTxn.InMemory(kind(), keys(), read(), query(), update(), implementationDefined);
         }
 
         @Nonnull
@@ -122,7 +136,8 @@ public interface PartialTxn extends Txn
             return new PartialTxn.InMemory(
                 kind(), intersecting,
                 read().intersecting(participants), includeQuery ? query() : null,
-                update() == null ? null : update().intersecting(participants)
+                update() == null ? null : update().intersecting(participants),
+                implementationDefined == null ? null : implementationDefined.intersecting(participants)
             );
         }
 

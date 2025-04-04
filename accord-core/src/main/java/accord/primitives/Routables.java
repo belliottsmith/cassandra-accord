@@ -265,6 +265,16 @@ public interface Routables<K extends Routable> extends Iterable<K>
     }
 
     /**
+     * Fold-left over the {@code inputs} that intersect with {@code matching} in ascending order.
+     * Terminate once we hit {@code terminalValue}.
+     */
+    @Inline
+    static long foldlExact(AbstractRanges inputs, AbstractRanges matching, IndexedFoldToLong<? super Range> fold, long param, long initialValue, long terminalValue)
+    {
+        return Helper.foldl(AbstractRanges::findNextExactIntersection, Helper::findLimit, inputs, matching, fold, param, initialValue, terminalValue);
+    }
+
+    /**
      * Fold-left over the {@code inputs} that intersect with {@code matching} in ascending order, passing the contiguous ranges that intersect to the IndexedRangeFold function.
      * Terminate once we hit {@code terminalValue}.
      */

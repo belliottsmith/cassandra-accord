@@ -60,13 +60,15 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
         return Arrays.equals(keys, that.keys);
     }
 
-    public int indexOf(K key)
+    public final int indexOf(K key)
     {
-        return Arrays.binarySearch(keys, key);
-    }
-
-    public int indexOf(RoutingKey key)
-    {
+        if (keys.length == 1)
+        {
+            int c = key.compareTo(keys[0]);
+            if (c == 0) return 0;
+            else if (c < 0) return -1;
+            else return -2;
+        }
         return Arrays.binarySearch(keys, key);
     }
 

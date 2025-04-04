@@ -205,6 +205,12 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     }
 
     // returns ki in bottom 32 bits, ri in top, or -1 if no match found
+    public final long findNextExactIntersection(int thisi, AbstractRanges that, int thati)
+    {
+        return SortedArrays.findNextIntersection(ranges, thisi, that.ranges, thati, Range::compare);
+    }
+
+    // returns ki in bottom 32 bits, ri in top, or -1 if no match found
     public final long findNextSameKindIntersection(int thisi, Routables<Range> that, int thati)
     {
         return findNextIntersection(thisi, (AbstractRanges) that, thati);
@@ -838,6 +844,12 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     public final long foldl(AbstractRanges intersect, IndexedFoldToLong<Range> fold, long param, long accumulator, long terminalValue)
     {
         return Routables.foldl(this, intersect, fold, param, accumulator, terminalValue);
+    }
+
+    @Inline
+    public final long foldlExact(AbstractRanges intersect, IndexedFoldToLong<Range> fold, long param, long accumulator, long terminalValue)
+    {
+        return Routables.foldlExact(this, intersect, fold, param, accumulator, terminalValue);
     }
 
     @Inline

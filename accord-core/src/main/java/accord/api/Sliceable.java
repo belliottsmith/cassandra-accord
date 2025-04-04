@@ -20,23 +20,10 @@ package accord.api;
 
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
-import accord.primitives.Seekables;
-import accord.primitives.Timestamp;
 
-import javax.annotation.Nullable;
-
-/**
- * A client-defined update operation (the write equivalent of a query).
- * Takes as input the data returned by {@code Read}, and returns a {@code Write}
- * representing new information to distributed to each shard's stores.
- */
-public interface Update extends Sliceable<Update>
+public interface Sliceable<T extends Sliceable<T>>
 {
-    Seekables<?, ?> keys();
-    // null is provided only if nothing was read
-    Write apply(Timestamp executeAt, @Nullable Data data);
-    Update slice(Ranges ranges);
-    Update intersecting(Participants<?> participants);
-    Update merge(Update other);
-
+    T slice(Ranges ranges);
+    T intersecting(Participants<?> participants);
+    T merge(T merge);
 }
