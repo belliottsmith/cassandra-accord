@@ -43,12 +43,6 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     }
 
     @Override
-    public final int indexOf(RoutingKey key)
-    {
-        return Arrays.binarySearch(keys, key);
-    }
-
-    @Override
     public final boolean contains(RoutingKey key)
     {
         return Arrays.binarySearch(keys, key) >= 0;

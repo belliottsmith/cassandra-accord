@@ -30,6 +30,7 @@ import accord.api.Data;
 import accord.api.Query;
 import accord.api.Read;
 import accord.api.Result;
+import accord.api.Sliceable;
 import accord.api.Update;
 import accord.local.SafeCommandStore;
 import accord.utils.Invariants;
@@ -302,24 +303,42 @@ public interface Txn
         private final Read read;
         private final Query query;
         private final Update update;
+        // TODO (desired): maybe introduce a C* Txn object instead of stashing this here
+        public final Sliceable implementationDefined;
 
         public InMemory(@Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nonnull Query query)
         {
-            this(Kind.Read, keys, read, query, null);
+            this(Kind.Read, keys, read, query, null, null);
+        }
+
+        public InMemory(@Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nonnull Query query, Sliceable implementationDefined)
+        {
+            this(Kind.Read, keys, read, query, null, implementationDefined);
         }
 
         public InMemory(@Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nonnull Query query, @Nullable Update update)
         {
-            this(Kind.Write, keys, read, query, update);
+            this(Kind.Write, keys, read, query, update, null);
+        }
+
+        public InMemory(@Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nonnull Query query, @Nullable Update update, Sliceable implementationDefined)
+        {
+            this(Kind.Write, keys, read, query, update, implementationDefined);
         }
 
         public InMemory(@Nonnull Kind kind, @Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nullable Query query, @Nullable Update update)
+        {
+            this(kind, keys, read, query, update, null);
+        }
+
+        public InMemory(@Nonnull Kind kind, @Nonnull Seekables<?, ?> keys, @Nonnull Read read, @Nullable Query query, @Nullable Update update, Sliceable implementationDefined)
         {
             this.kind = kind;
             this.keys = keys;
             this.read = read;
             this.update = update;
             this.query = query;
+            this.implementationDefined = implementationDefined;
             Invariants.require(kind != Kind.ExclusiveSyncPoint || keys.domain() == Routable.Domain.Range);
         }
 
@@ -329,7 +348,8 @@ public interface Txn
             return new PartialTxn.InMemory(
                 kind(), keys().slice(ranges, Minimal),
                 read().slice(ranges), includeQuery ? query() : null,
-                update() == null ? null : update().slice(ranges)
+                update() == null ? null : update().slice(ranges),
+                implementationDefined == null ? null : implementationDefined.slice(ranges)
             );
         }
 
@@ -339,8 +359,10 @@ public interface Txn
         {
             return new PartialTxn.InMemory(
                 kind(), keys().intersecting(participants, Minimal),
-                read().intersecting(participants), includeQuery ? query() : null,
-                update() == null ? null : update().intersecting(participants)
+                read.intersecting(participants),
+                includeQuery ? query() : null,
+                update == null ? null : update.intersecting(participants),
+                implementationDefined == null ? null : implementationDefined.intersecting(participants)
             );
         }
 
