@@ -297,7 +297,7 @@ public class InMemoryJournal implements Journal
     @Override
     public PersistentField.Persister<DurableBefore, DurableBefore> durableBeforePersister()
     {
-        throw new UnsupportedOperationException("Not implemented");
+        return DurableBefore.NOOP_PERSISTER;
     }
 
     @Override

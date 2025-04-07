@@ -172,6 +172,7 @@ public abstract class CommandStores
     {
         final long[] epochs;
         final Ranges[] ranges;
+        public static final RangesForEpoch EMPTY = new RangesForEpoch(new long[0], new Ranges[0]);
 
         public RangesForEpoch(long epoch, Ranges ranges)
         {

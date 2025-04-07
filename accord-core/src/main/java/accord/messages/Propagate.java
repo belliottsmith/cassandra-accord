@@ -70,6 +70,7 @@ import static accord.primitives.Known.Nothing;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
+import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.WithQuorum.HasQuorum;
 import static accord.utils.Invariants.illegalState;
 
@@ -183,6 +184,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     public Void apply(SafeCommandStore safeStore)
     {
         long executeAtEpoch = committedExecuteAt == null ? txnId.epoch() : committedExecuteAt.epoch();
+        long lowEpoch = Math.min(this.lowEpoch, StoreParticipants.computePropagateLowEpoch(safeStore, txnId, route));
         StoreParticipants participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, highEpoch, committedExecuteAt != null);
         // TODO (expected): can we come up with a better more universal pattern for avoiding updating a command we don't intersect with?
         //   ideally integrated with safeStore.get()
@@ -251,11 +253,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 }
             }
 
-            Participants<?> txnNeeds = participants.stillOwnsOrWaitsOn(txnId);
+            Participants<?> needs = participants.stillOwns();
             if (found.isDefinitionKnown() && partialTxn == null && this.partialTxn != null)
             {
                 PartialTxn existing = command.partialTxn();
-                Participants<?> neededExtra = txnNeeds;
+                Participants<?> neededExtra = needs;
                 if (existing != null) neededExtra = neededExtra.without(existing.keys().toParticipants());
                 partialTxn = this.partialTxn.intersecting(neededExtra, true).reconstitutePartial(neededExtra);
             }
@@ -287,7 +289,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             case PreApplied:
                 Invariants.require(committedExecuteAt != null);
                 // we must use the remote executeAt, as it might have a uniqueHlc we aren't aware of at commit
-                confirm(Commands.apply(safeStore, safeCommand, participants, txnId, route, committedExecuteAt, stableDeps, partialTxn, writes, result));
+                confirm(Commands.apply(safeStore, safeCommand, participants, Ballot.ZERO, txnId, route, committedExecuteAt, stableDeps, partialTxn, writes, result));
                 break;
 
             case Stable:
@@ -375,19 +377,19 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         Known required = PreApplied.minKnown;
         Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
 
-        Participants<?> stillOwnsOrMayExecute = participants.stillOwnsOrWaitsOn(txnId);
+        Participants<?> stillOwnsOrMayExecute = txnId.is(ExclusiveSyncPoint) ? participants.stillTouches() : participants.stillOwns();
         Participants<?> notStaleTouches = known.knownFor(Nothing.with(requireExtra.deps()), stillTouches); // the ranges for which we can already successfully achieve this
-        Participants<?> notStaleOwnsOrMayExecutes = known.knownFor(requireExtra.with(DepsUnknown), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
+        Participants<?> notStaleOwnsOrMayExecute = known.knownFor(requireExtra.with(DepsUnknown), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
 
         // any ranges we execute but cannot achieve the pre-applied status for have been left behind and are stale
         Participants<?> staleTouches = stillTouches.without(notStaleTouches);
-        Participants<?> staleOwnsOrMayExecute = stillOwnsOrMayExecute.without(notStaleOwnsOrMayExecutes);
+        Participants<?> staleOwnsOrMayExecute = stillOwnsOrMayExecute.without(notStaleOwnsOrMayExecute);
         if (staleOwnsOrMayExecute.isEmpty())
         {
             if (staleTouches.isEmpty() && found.is(Outcome.Apply))
             {
                 Invariants.require(notStaleTouches.containsAll(stillTouches));
-                Invariants.require(notStaleOwnsOrMayExecutes.containsAll(stillOwnsOrMayExecute));
+                Invariants.require(notStaleOwnsOrMayExecute.containsAll(stillOwnsOrMayExecute));
                 return required;
             }
 
@@ -477,6 +479,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             default: throw illegalState("Unknown outcome: " + outcome);
             case Redundant:
             case Success:
+            case RaceWithRecovery:
                 return;
             case Insufficient: throw illegalState("Should have enough information");
         }

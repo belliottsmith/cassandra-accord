@@ -90,6 +90,7 @@ import accord.utils.SortedList;
 import accord.utils.SortedListMap;
 import accord.utils.WrappableException;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncExecutor;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
@@ -398,10 +399,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         if (epoch < topology.minEpoch())
         {
             callback.accept(null, new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch()));
-            return;
         }
-
-        if (topology.hasAtLeastEpoch(epoch))
+        else if (topology.hasAtLeastEpoch(epoch))
         {
             callback.accept(null, null);
         }
@@ -415,8 +414,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public void withEpoch(long epoch, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
     {
         if (epoch < topology.minEpoch())
-            throw new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch());
-        if (topology.hasAtLeastEpoch(epoch))
+        {
+            ifFailure.accept(null, new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch()));
+        }
+        else if (topology.hasAtLeastEpoch(epoch))
         {
             ifSuccess.run();
         }
@@ -433,8 +434,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public void withEpoch(long epoch, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
     {
         if (epoch < topology.minEpoch())
-            throw new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch());
-        if (topology.hasEpoch(epoch))
+        {
+            ifFailure.accept(null, onFailure.apply(new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch())));
+        }
+        else if (topology.hasEpoch(epoch))
         {
             ifSuccess.run();
         }
@@ -452,8 +455,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public <T> AsyncChain<T> withEpoch(long epoch, Supplier<? extends AsyncChain<T>> supplier)
     {
         if (epoch < topology.minEpoch())
-            throw new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch());
-        if (topology.hasEpoch(epoch))
+        {
+            return AsyncChains.failure(new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch()));
+        }
+        else if (topology.hasEpoch(epoch))
         {
             return supplier.get();
         }

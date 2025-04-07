@@ -90,7 +90,7 @@ public class ListRequest implements Request
         int count = 0;
         protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback)
         {
-            super(node, txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All, NotKnownToBeInvalid);
+            super(node, txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All, null, NotKnownToBeInvalid);
             this.callback = callback;
         }
 

@@ -111,7 +111,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                 // note: we merge all Deps regardless of witnessedAt. While we only need fast path votes,
                 // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
                 // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
-                executeAdapter().execute(node, topologies, route, FAST, executeFlags, txnId, txn, txnId, deps, deps, settingCallback());
+                executeAdapter().execute(node, topologies, route, Ballot.ZERO, FAST, executeFlags, txnId, txn, txnId, deps, deps, settingCallback());
                 node.agent().eventListener().onFastPathTaken(txnId, deps);
                 return;
             }

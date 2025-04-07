@@ -80,6 +80,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
     final ExecutePath path;
     final Txn txn;
     final FullRoute<?> route;
+    final Ballot ballot;
     final Timestamp executeAt;
     final Deps stableDeps;
     final Deps sendDeps;
@@ -91,12 +92,13 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
     private Data data;
     private long uniqueHlc;
 
-    ExecuteTxn(Node node, Topologies topologies, FullRoute<?> route, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
+    ExecuteTxn(Node node, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
         super(node, topologies.forEpoch(executeAt.epoch()), txnId);
         this.path = path;
         this.txn = txn;
         this.route = route;
+        this.ballot = ballot;
         this.allTopologies = topologies;
         this.executeAt = executeAt;
         this.stableDeps = stableDeps;
@@ -238,7 +240,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
 
             Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, data) : null;
             Result result = txn.result(txnId, executeAt, data);
-            adapter().persist(node, allTopologies, route, txnId, txn, executeAt, stableDeps, writes, result, callback);
+            adapter().persist(node, allTopologies, route, ballot, txnId, txn, executeAt, stableDeps, writes, result, callback);
         }
         else
         {

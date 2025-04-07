@@ -196,7 +196,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
         //  Or we must pick it up as an Unstable dependency here.
         Deps newDeps = mergeNewDeps();
         Deps stableDeps = mergeDeps(newDeps);
-        if (kind == Kind.MEDIUM) adapter().execute(node, acceptTracker.topologies(), route, MEDIUM, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, newDeps, callback);
+        if (kind == Kind.MEDIUM) adapter().execute(node, acceptTracker.topologies(), route, ballot, MEDIUM, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, newDeps, callback);
         else adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, stableDeps, callback);
         if (!Invariants.debug()) acceptOks.clear();
     }

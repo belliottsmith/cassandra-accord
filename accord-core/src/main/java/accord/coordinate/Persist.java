@@ -27,6 +27,7 @@ import accord.messages.Apply;
 import accord.messages.Apply.ApplyReply;
 import accord.messages.Callback;
 import accord.messages.InformDurable;
+import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Route;
@@ -45,6 +46,7 @@ public abstract class Persist implements Callback<ApplyReply>
 {
     protected final Node node;
     protected final TxnId txnId;
+    protected final Ballot ballot;
     protected final Route<?> sendTo;
     protected final Txn txn;
     protected final Timestamp executeAt;
@@ -58,10 +60,11 @@ public abstract class Persist implements Callback<ApplyReply>
     protected final Apply.Factory factory;
     boolean isDone;
 
-    protected Persist(Node node, Topologies all, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, Apply.Factory factory)
+    protected Persist(Node node, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, Apply.Factory factory)
     {
         this.node = node;
         this.txnId = txnId;
+        this.ballot = ballot;
         this.sendTo = sendTo;
         this.txn = txn;
         this.executeAt = executeAt;
@@ -91,9 +94,14 @@ public abstract class Persist implements Callback<ApplyReply>
                         InformDurable.informDefault(node, topologies, txnId, route, executeAt, Majority);
                     }
                 }
+            case RaceWithRecovery:
+                // don't count this towards durability; otherwise it is possible (though very unlikely)
+                // for InformDurable to reach a replica, the CommandsForKey to prune this transaction as durably applied
+                // and some superseding transaction to be coordinated and not witness it before the in-progress recovery
+                // reached another response in its quorum; in this case it may incorrectly determine the transaction should be invalidated
                 break;
             case Insufficient:
-                node.send(from, factory.create(Apply.Kind.Maximal, from, topologies, txnId, sendTo, txn, executeAt, stableDeps, writes, result, route));
+                node.send(from, factory.create(Apply.Kind.Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route));
         }
     }
 
@@ -123,7 +131,7 @@ public abstract class Persist implements Callback<ApplyReply>
         else
         {
             CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
-            node.send(contact, to -> factory.create(kind, to, all, txnId, sendTo, txn, executeAt, stableDeps, writes, result, route), commandStore, this);
+            node.send(contact, to -> factory.create(kind, to, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route), commandStore, this);
         }
     }
 }

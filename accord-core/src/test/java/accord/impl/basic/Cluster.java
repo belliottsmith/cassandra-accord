@@ -79,7 +79,6 @@ import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
-import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.RedundantBefore;
@@ -685,7 +684,7 @@ public class Cluster
                                      nodeExecutor.agent(),
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
                                      DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
-                                     DurableBefore.NOOP_PERSISTER, journal);
+                                     journal.durableBeforePersister(), journal);
                 journal.start(node);
                 DurabilityService durability = node.durability();
                 // TODO (desired): randomise

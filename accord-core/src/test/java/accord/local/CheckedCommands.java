@@ -34,6 +34,8 @@ import accord.primitives.Writes;
 
 import java.util.function.BiConsumer;
 
+import static accord.local.Commands.ApplyOutcome.RaceWithRecovery;
+import static accord.local.Commands.ApplyOutcome.Success;
 import static accord.utils.Invariants.illegalState;
 
 public class CheckedCommands
@@ -96,9 +98,9 @@ public class CheckedCommands
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command before = safeCommand.current();
-        Commands.ApplyOutcome outcome = Commands.apply(safeStore, safeCommand, participants, txnId, route, executeAt, partialDeps, partialTxn, writes, result);
+        Commands.ApplyOutcome outcome = Commands.apply(safeStore, safeCommand, participants, Ballot.ZERO, txnId, route, executeAt, partialDeps, partialTxn, writes, result);
         Command after = safeCommand.current();
-        if (outcome != Commands.ApplyOutcome.Success) throw illegalState("Command mutation rejected: " + outcome);
+        if (outcome != Success && outcome != RaceWithRecovery) throw illegalState("Command mutation rejected: " + outcome);
         consumer.accept(before, after);
     }
 }

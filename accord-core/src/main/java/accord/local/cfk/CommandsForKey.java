@@ -1465,27 +1465,26 @@ public class CommandsForKey extends CommandsForKeyUpdate
             visitor.visit(p1, p2, txn.summaryStatus(), key, txn.plainTxnId());
         }
 
-        if (startedBefore.compareTo(prunedBefore) <= 0)
+        if (end <= prunedBeforeById)
         {
             // In the event we have pruned transactions that may execute before us, we take the earliest future dependency we can in their place.
             // This may occur for any transaction that isn't witnessed by a Write (so, sync points and exclusive sync points).
             // In the former case, this can only happen on recovery, as the original coordinator would propose a later executeAt than any dependency it may witness.
-            int i = SortedArrays.binarySearch(committedByExecuteAt, 0, maxAppliedWriteByExecuteAt, startedBefore, (f, v) -> f.compareTo(v.executeAt), FAST);
-            if (i < 0) i = -1 - i;
-            while (i < committedByExecuteAt.length)
-            {
-                TxnInfo txn = committedByExecuteAt[i];
-                if (txn.epoch() > startedBefore.epoch())
-                    break;
 
-                if (txn.is(Write))
-                {
-                    visitor.visit(p1, p2, txn.summaryStatus(), key, committedByExecuteAt[i].plainTxnId());
-                    if (txn.compareTo(startedBefore) > 0)
-                        break;
-                }
-                ++i;
+            // Note: we do not use committedByExecuteAt because it might exclude transactions that are locally pre-bootstrap, which might lead to an invalid future transaction being included
+            TxnInfo best = byId[prunedBeforeById];
+            for (int i = end; i < prunedBeforeById ; ++i)
+            {
+                TxnInfo txn = byId[i];
+                if (!txn.is(Write) || !txn.isCommittedToExecute()) continue;
+                if (txn.executeAt.compareTo(best.executeAt) < 0)
+                    best = txn;
+
+                if (txn.executeAt == txn || txn.epoch() > startedBefore.epoch())
+                    break;
             }
+            if (best.executeAt.epoch() <= startedBefore.epoch() && !best.equals(startedBefore))
+                visitor.visit(p1, p2, best.summaryStatus(), key, best.plainTxnId());
         }
     }
 

@@ -216,7 +216,7 @@ public class Invalidate implements Callback<InvalidateReply>
                         if (!invalidateWith.containsAll(fullRoute))
                             witnessedByInvalidation = null;
                     }
-                    RecoverWithRoute.recover(node, ballot, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
+                    RecoverWithRoute.recover(node, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
                     return;
 
                 case Invalidated:

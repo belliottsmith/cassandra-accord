@@ -73,29 +73,40 @@ public class StoreParticipants
             }
         }
 
-        @Nullable public final Participants<?> executes()
+        @Override
+        public final @Nullable Participants<?> executes()
         {
             return executes;
         }
 
-        @Nullable public final Participants<?> waitsOn()
+        @Override
+        public final @Nullable Participants<?> waitsOn()
         {
             return waitsOn;
         }
 
+        @Override
         public final Participants<?> touches()
         {
             return touches;
         }
 
+        @Override
         public final Participants<?> hasTouched()
         {
             return hasTouched;
         }
 
+        @Override
         public final boolean touchesOnlyOwned()
         {
             return touches.equals(owns());
+        }
+
+        @Override
+        public final boolean hasTouchedOnlyOwned()
+        {
+            return hasTouched.equals(owns());
         }
     }
 
@@ -136,22 +147,24 @@ public class StoreParticipants
         }
 
         @Override
-        public Participants<?> stillExecutes()
+        public @Nullable Participants<?> stillExecutes()
         {
             return stillExecutes;
         }
 
         @Override
-        public Participants<?> stillWaitsOn()
+        public @Nullable Participants<?> stillWaitsOn()
         {
             return stillWaitsOn;
         }
 
+        @Override
         StoreParticipants update(Route<?> route, Participants<?> hasTouched)
         {
             return new FilteredStoreParticipants(route, owns(), executes(), waitsOn(), touches(), hasTouched, stillOwns, stillExecutes, stillWaitsOn, stillTouches);
         }
 
+        @Override
         StoreParticipants update(Route<?> route, Participants<?> owns, Participants<?> executes, Participants<?> waitsOn, Participants<?> touches, Participants<?> hasTouched)
         {
             return new FilteredStoreParticipants(route, owns, executes, waitsOn, touches, hasTouched, stillOwns, stillExecutes, stillWaitsOn, stillTouches);
@@ -244,6 +257,11 @@ public class StoreParticipants
         return true;
     }
 
+    public boolean hasTouchedOnlyOwned()
+    {
+        return true;
+    }
+
     /**
      * touches, but excluding any stale, pre-bootstrap or retired ranges that are also shard redundant,
      * as we do not need to do anything with these keys locally.
@@ -263,7 +281,6 @@ public class StoreParticipants
 
     /**
      * If set, the keys we are known to execute
-     * @return
      */
     public @Nullable Participants<?> executes()
     {
@@ -278,7 +295,6 @@ public class StoreParticipants
 
     /**
      * If set, the keys we are known to still execute (i.e. excluding any that are pre-bootstrap or stale)
-     * @return
      */
     public @Nullable Participants<?> stillExecutes()
     {
@@ -286,8 +302,12 @@ public class StoreParticipants
     }
 
     /**
-     * If set, the keys we are known to locally waitOn for execution
-     * @return
+     * If set, the keys we are known to locally waitOn for execution.
+     * The distinction is only pertinent for ExclusiveSyncPoints, where we want to distinguish the ranges
+     * we own and execute for bootstrap purposes from those we execute after the completion of.
+     * That is, an ExclusiveSyncPoint waits for all prior epochs for execution, so that we can impose a
+     * global cluster happens-before relationship across all nodes and epochs; however, we can only safely
+     * provide the data for the normal execution ranges if using the sync point to fetch ranges.
      */
     public @Nullable Participants<?> waitsOn()
     {
@@ -296,16 +316,10 @@ public class StoreParticipants
 
     /**
      * If set, the keys we are known to still locally waitOn (i.e. excluding any that are pre-bootstrap or stale)
-     * @return
      */
     public @Nullable Participants<?> stillWaitsOn()
     {
         return waitsOn();
-    }
-
-    public Participants<?> stillOwnsOrWaitsOn(TxnId txnId)
-    {
-        return txnId.is(ExclusiveSyncPoint) ? stillTouches() : stillOwns();
     }
 
     /**
@@ -340,7 +354,7 @@ public class StoreParticipants
             if (txnId.is(ExclusiveSyncPoint))
             {
                 curStillWaitsOn = stillWaitsOn();
-                stillWaitsOn = redundantBefore.expectToWaitOn(txnId, executeAtIfKnown, curStillWaitsOn);
+                stillWaitsOn = redundantBefore.expectExclusiveSyncPointToWaitOn(txnId, executeAtIfKnown, curStillWaitsOn);
             }
             else
             {
@@ -497,7 +511,7 @@ public class StoreParticipants
     }
 
     // TODO (required): synchronise with latest standard logic
-    public static Route<?> touches(SafeCommandStore safeStore, long fromEpoch, TxnId txnId,long toEpoch, Route<?> route)
+    public static Route<?> touches(SafeCommandStore safeStore, long fromEpoch, TxnId txnId, long toEpoch, Route<?> route)
     {
         // TODO (required): remove pre-bootstrap?
         if (txnId.is(ExclusiveSyncPoint))
@@ -639,4 +653,42 @@ public class StoreParticipants
         return new StoreParticipants(route, route, false);
     }
 
+    public static long computeFetchLowEpoch(SafeCommandStore safeStore, TxnId txnId, Command command)
+    {
+        StoreParticipants participants = command.participants();
+        // note: we use hasTouched rather than route here, to account for cases route is null and we have already "touched" some key in an earlier epoch
+        return computeFetchLowEpoch(safeStore, txnId, participants.hasTouched(), participants.owns());
+    }
+
+    private static long computeFetchLowEpoch(SafeCommandStore safeStore, TxnId txnId, Participants<?> touches, Participants<?> owns)
+    {
+        long txnIdEpoch = txnId.epoch();
+        if (txnId.is(ExclusiveSyncPoint))
+            return computeCoveringEpoch(safeStore, txnIdEpoch, touches);
+
+        if (touches.equals(owns))
+            return txnIdEpoch;
+
+        return computeUnsyncedEpoch(safeStore, txnIdEpoch, touches);
+    }
+
+    public static long computePropagateLowEpoch(SafeCommandStore safeStore, TxnId txnId, Route<?> newRoute)
+    {
+        return computeUnsyncedEpoch(safeStore, txnId.epoch(), newRoute);
+    }
+
+    private static long computeUnsyncedEpoch(SafeCommandStore safeStore, long txnIdEpoch, Participants<?> participants)
+    {
+        Participants<?> unsynced = safeStore.node().topology().unsyncedOnly(participants, txnIdEpoch);
+        if (unsynced == null || unsynced.isEmpty())
+            return txnIdEpoch;
+
+        return computeCoveringEpoch(safeStore, txnIdEpoch, unsynced);
+    }
+
+    private static long computeCoveringEpoch(SafeCommandStore safeStore, long txnIdEpoch, Participants<?> participants)
+    {
+        long lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnIdEpoch, participants);
+        return Math.min(lowEpoch, txnIdEpoch);
+    }
 }

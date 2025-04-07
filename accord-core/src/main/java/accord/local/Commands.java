@@ -63,7 +63,6 @@ import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
 import static accord.api.ProtocolModifiers.Toggles.markStaleIfCannotExecute;
-import static accord.local.Cleanup.EXPUNGE;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.shouldCleanup;
@@ -465,9 +464,23 @@ public class Commands
         safeStore.notifyListeners(safeCommand, command);
     }
 
-    public enum ApplyOutcome { Success, Redundant, Insufficient }
+    public enum ApplyOutcome
+    {
+        Success,
 
-    public static ApplyOutcome apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, Result result)
+        Redundant,
+        Insufficient,
+
+        /**
+         * The apply was successful, but a recovery coordinator with a newer ballot had begun beforehand, so we cannot
+         * safely count this towards durability for pruning transitive CommandsForKey, else this in-flight recovery
+         * may reach an incorrect recovery decision by witnessing a superseding transaction without this transaction
+         * as a dependency
+         */
+        RaceWithRecovery,
+    }
+
+    public static ApplyOutcome apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, Result result)
     {
         Command command = safeCommand.current();
         if (command.hasBeen(PreApplied))
@@ -509,7 +522,10 @@ public class Commands
         WaitingOn waitingOn = !command.hasBeen(Stable) ? initialiseWaitingOn(safeStore, txnId,  executeAt, participants, partialDeps)
                                                        : command.asCommitted().waitingOn();
 
-        safeCommand.preapplied(safeStore, participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
+        Ballot promised = command.promised();
+        if (promised.compareTo(ballot) <= 0)
+            promised = ballot;
+        safeCommand.preapplied(safeStore, participants, promised, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
         if (logger.isTraceEnabled())
             logger.trace("{}: apply, status set to Executed with executeAt: {}, deps: {}", txnId, executeAt, partialDeps);
 
@@ -517,7 +533,7 @@ public class Commands
         maybeExecute(safeStore, safeCommand, true, true);
         safeStore.agent().eventListener().onExecuted(command);
 
-        return ApplyOutcome.Success;
+        return promised == ballot ? ApplyOutcome.Success : ApplyOutcome.RaceWithRecovery;
     }
 
     public static void listenerUpdate(SafeCommandStore safeStore, SafeCommand safeListener, SafeCommand safeUpdated)

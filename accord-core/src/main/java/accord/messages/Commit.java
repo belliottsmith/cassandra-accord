@@ -333,7 +333,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         {
             // TODO (expected, safety): this kind of check needs to be inserted in all equivalent methods
             Invariants.require(untilEpoch >= txnId.epoch());
-            Invariants.require(node.topology().hasEpoch(untilEpoch));
+            Invariants.require(node.topology().hasAtLeastEpoch(untilEpoch));
             Topologies commitTo = node.topology().preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch, SHARE);
             commitInvalidate(node, commitTo, txnId, inform);
         }

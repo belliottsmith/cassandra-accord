@@ -809,7 +809,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     {
                         SafeCommandsForKey safeCfk = commandsForKey.get(key);
                         CommandsForKey cfk = safeCfk.current();
-                        int i = cfk.indexOf(cfk.bootstrappedAt());
+                        int i = cfk.indexOf(cfk.bounds().bootstrappedAt);
                         if (i < 0) i = -1 - i;
                         while (--i >= 0)
                         {

@@ -265,6 +265,7 @@ public enum Cleanup
         if (redundantStatus.any(LOCALLY_APPLIED))
             return invalidate(txnId);
 
+        // TODO (desired): safe to use MAJORITY_APPLIED, LOCALLY_REDUNDANT?
         if (redundantStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
             return vestigial(txnId);
 
