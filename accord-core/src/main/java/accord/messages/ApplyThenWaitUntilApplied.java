@@ -26,6 +26,7 @@ import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
 import accord.messages.Apply.ApplyReply;
+import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
@@ -101,7 +102,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     public CommitOrReadNack apply(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, executeAtEpoch);
-        ApplyReply applyReply = Apply.apply(safeStore, participants, txn, txnId, executeAt, deps, route, writes, result);
+        ApplyReply applyReply = Apply.apply(safeStore, participants, Ballot.ZERO, txn, txnId, executeAt, deps, route, writes, result);
         switch (applyReply)
         {
             default:
@@ -112,6 +113,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
             case Redundant:
                 // TODO (required): redundant is not necessarily safe for awaitsOnlyDeps commands as might need a future epoch
             case Applied:
+            case RaceWithRecovery:
                 // In both cases it's fine to continue to process and return a response saying
                 // things were applied
                 break;

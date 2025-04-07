@@ -45,7 +45,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
     MaybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
         // we only want to enquire with the home shard, but we prefer maximal route information for running Invalidation against, if necessary
-        super(node, txnId, someRoute.withHomeKey(), IncludeInfo.Route, invalidIf);
+        super(node, txnId, someRoute.withHomeKey(), IncludeInfo.Route, null, invalidIf);
         this.prevProgress = prevProgress;
         this.callback = callback;
         this.reportLowEpoch = reportLowEpoch;
@@ -113,7 +113,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
                 case Apply:
                     // we have included the home key, and one that witnessed the definition has responded, so it should also know the full route
-                    if (hasMadeProgress(full))
+                    if (hasMadeProgress(full) || !Route.isFullRoute(someRoute))
                     {
                         if (full.durability.isDurable())
                             InformDurable.informDefault(node, topologies, txnId, route, full.executeAtIfKnown(), full.durability);
@@ -121,7 +121,6 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     }
                     else
                     {
-                        Invariants.require(Route.isFullRoute(someRoute), "Require a full route but given %s", full.route);
                         node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportLowEpoch, reportHighEpoch).invoke(callback);
                     }
                     break;

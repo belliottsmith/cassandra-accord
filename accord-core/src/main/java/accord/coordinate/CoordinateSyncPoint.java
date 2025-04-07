@@ -156,7 +156,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
                 withFlags = txnId.addFlag(HLC_BOUND);
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             if (tracker.hasFastPathAccepted())
-                adapter.execute(node, topologies, route, FAST, ExecuteFlags.none(), txnId, txn, withFlags, deps, deps, this);
+                adapter.execute(node, topologies, route, Ballot.ZERO, FAST, ExecuteFlags.none(), txnId, txn, withFlags, deps, deps, this);
             else if (tracker.hasMediumPathAccepted())
                 adapter.propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, this);
             else
@@ -173,10 +173,10 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
 
     public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates)
     {
-        sendApply(node, to, syncPoint, participates, null);
+        sendApply(node, to, syncPoint, participates, Ballot.ZERO, null);
     }
 
-    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates, @Nullable Callback<Apply.ApplyReply> callback)
+    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates, Ballot ballot, @Nullable Callback<Apply.ApplyReply> callback)
     {
         TxnId txnId = syncPoint.syncId;
         Timestamp executeAt = syncPoint.executeAt;
@@ -184,7 +184,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         Deps deps = syncPoint.waitFor;
         FullRoute<?> route = syncPoint.route;
         Result result = txn.result(txnId, executeAt, null);
-        Apply apply = Apply.FACTORY.create(Maximal, to, participates, txnId, route, txn, executeAt, deps, null, result, route);
+        Apply apply = Apply.FACTORY.create(Maximal, to, participates, txnId, ballot, route, txn, executeAt, deps, null, result, route);
         if (callback == null) node.send(to, apply);
         else node.send(to, apply, callback);
     }

@@ -297,7 +297,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     case PreApplied:
                     {
                         withStableDeps(merge, executeAt, (i, t) -> node.agent().acceptAndWrap(i, t), stableDeps -> {
-                            adapter.persist(node, tracker.topologies(), route, txnId, txn, executeAt, stableDeps, acceptOrCommitNotTruncated.writes, acceptOrCommitNotTruncated.result, (i, t) -> node.agent().acceptAndWrap(i, t));
+                            adapter.persist(node, tracker.topologies(), route, ballot, txnId, txn, executeAt, stableDeps, acceptOrCommitNotTruncated.writes, acceptOrCommitNotTruncated.result, (i, t) -> node.agent().acceptAndWrap(i, t));
                         });
                         accept(acceptOrCommitNotTruncated.result, null);
                         return;
@@ -306,7 +306,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     case Stable:
                     {
                         withStableDeps(merge, executeAt, this, stableDeps -> {
-                            adapter.execute(node, tracker.topologies(), route, RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, stableDeps, this);
+                            adapter.execute(node, tracker.topologies(), route, ballot, RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, stableDeps, this);
                         });
                         return;
                     }

@@ -113,19 +113,23 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     public final Participants<?> query;
     public final long sourceEpoch;
     public final IncludeInfo includeInfo;
+    // if set, simply ensure the ballot on the command is equal or greater to this ballot
+    public final @Nullable Ballot bumpBallot;
 
-    public CheckStatus(TxnId txnId, Participants<?> query, long sourceEpoch, IncludeInfo includeInfo)
+    public CheckStatus(TxnId txnId, Participants<?> query, long sourceEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot)
     {
         super(txnId);
+        this.bumpBallot = bumpBallot;
         Invariants.require(txnId.is(query.domain()));
         this.query = query;
         this.sourceEpoch = sourceEpoch;
         this.includeInfo = includeInfo;
     }
 
-    public CheckStatus(Id to, Topologies topologies, TxnId txnId, Participants<?> query, long sourceEpoch, IncludeInfo includeInfo)
+    public CheckStatus(Id to, Topologies topologies, TxnId txnId, Participants<?> query, long sourceEpoch, IncludeInfo includeInfo, Ballot bumpBallot)
     {
         super(txnId);
+        this.bumpBallot = bumpBallot;
         if (isRoute(query)) this.query = computeScope(to, topologies, castToRoute(query), 0, Route::slice, Route::with);
         else this.query = computeScope(to, topologies, (Participants) query, 0, Participants::slice, Participants::with);
         this.sourceEpoch = sourceEpoch;
@@ -147,6 +151,8 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         Command command = safeCommand.current();
 
         Commands.supplementParticipants(safeStore, safeCommand, participants);
+        if (bumpBallot != null && bumpBallot.compareTo(command.promised()) > 0)
+            safeCommand.updatePromised(bumpBallot);
 
         boolean isCoordinating = isCoordinating(node, command);
         Durability durability = command.durability();

@@ -275,8 +275,8 @@ public enum SaveStatus
                     case AcceptedMedium:
                     case AcceptedSlow:
                     case AcceptedInvalidate:
-                        known = known.with(DepsUnknown);
-                        // if the decision is known, we're really PreCommitted
+                        known = known.with(status.minKnown.deps());
+                        // if the decision is known, we're really PreCommitted, but we will update our dependency information
                 }
             }
             else

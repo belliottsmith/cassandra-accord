@@ -1074,10 +1074,9 @@ public class TopologyManager
 
         if (i == snapshot.epochs.length)
         {
-            // Epochs earlier than minEpoch might have been GC'd, so we can not collect
-            // matching ranges for them. However, if ranges were still present in the min epoch,
-            // we have reported them.
-            if (!select.isEmpty() && !select.without(snapshot.get(minEpoch).global.ranges).isEmpty())
+            // now we GC epochs, we cannot rely on addedRanges to remove all ranges, so we also remove the ranges found in the earliest epoch we have
+            select = (K)select.without(snapshot.epochs[snapshot.epochs.length - 1].global.ranges);
+            if (!select.isEmpty())
                 throw Invariants.illegalArgument("Ranges %s could not be found", select);
             return collectors.multi(collector);
         }
@@ -1104,11 +1103,10 @@ public class TopologyManager
         // need to remove sufficient / added else remaining may not be empty when the final matches are the last epoch
         remaining = remaining.without(isSufficientFor.apply(prev));
         remaining = remaining.without(prev.addedRanges);
-
-        // Epochs earlier than minEpoch might have been GC'd, so we can not collect
-        // matching ranges for them. However, if ranges were still present in the min epoch,
-        // we have reported them.
-        if (!remaining.isEmpty() && !select.without(snapshot.get(minEpoch).global.ranges).isEmpty())
+        // TODO (desired): propagate addedRanges to the earliest epoch we retain for consistency
+        // now we GC epochs, we cannot rely on addedRanges to remove all ranges, so we also remove the ranges found in the earliest epoch we have
+        remaining = remaining.without(snapshot.epochs[snapshot.epochs.length - 1].global.ranges);
+        if (!remaining.isEmpty())
             Invariants.illegalArgument("Ranges %s could not be found", remaining);
 
         return collectors.multi(collector);

@@ -52,7 +52,6 @@ import static accord.primitives.Known.Outcome.Apply;
 import static accord.primitives.ProgressToken.APPLIED;
 import static accord.primitives.ProgressToken.INVALIDATED;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
-import static accord.primitives.Route.castToFullRoute;
 import static accord.primitives.Status.Durability.Majority;
 import static accord.topology.Topologies.SelectNodeOwnership.SLICE;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -60,22 +59,20 @@ import static accord.utils.Invariants.illegalState;
 
 public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 {
-    final @Nullable Ballot promisedBallot; // if non-null, has already been promised by some shard
     final BiConsumer<Outcome, Throwable> callback;
     final Status witnessedByInvalidation;
     // TODO (required): we don't use this on all paths, and should at least make sure we don't trigger any Invariant failures e.g. "Fetch was successful for all keys, but the WaitingState has not been cleared"
     final long reportLowEpoch, reportHighEpoch;
 
-    private RecoverWithRoute(Node node, Topologies topologies, @Nullable Ballot promisedBallot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    private RecoverWithRoute(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        super(node, txnId, route, IncludeInfo.All, invalidIf);
+        super(node, txnId, route, IncludeInfo.All, node.uniqueTimestamp(Ballot::fromValues), invalidIf);
         this.reportLowEpoch = reportLowEpoch;
         this.reportHighEpoch = reportHighEpoch;
         // if witnessedByInvalidation == AcceptedInvalidate then we cannot assume its definition was known, and our comparison with the status is invalid
         Invariants.require(witnessedByInvalidation != Status.AcceptedInvalidate);
         // if witnessedByInvalidation == Invalidated we should anyway not be recovering
         Invariants.require(witnessedByInvalidation != Status.Invalidated);
-        this.promisedBallot = promisedBallot;
         this.callback = callback;
         this.witnessedByInvalidation = witnessedByInvalidation;
         assert topologies.oldestEpoch() == topologies.currentEpoch() && topologies.currentEpoch() == txnId.epoch();
@@ -88,30 +85,15 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 
     private static RecoverWithRoute recover(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, topologies, null, txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
-    }
-
-    public static RecoverWithRoute recover(Node node, @Nullable Ballot promisedBallot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
-    {
-        return recover(node, node.topology().forEpoch(route, txnId.epoch(), SHARE), promisedBallot, txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
-    }
-
-    private static RecoverWithRoute recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
-    {
-        RecoverWithRoute recover = new RecoverWithRoute(node, topologies, ballot, txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
+        RecoverWithRoute recover = new RecoverWithRoute(node, topologies, txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
         recover.start();
         return recover;
-    }
-
-    private FullRoute<?> route()
-    {
-        return castToFullRoute(this.route);
     }
 
     @Override
     public void contact(Id to)
     {
-        node.send(to, new CheckStatus(to, topologies(), txnId, route, sourceEpoch, IncludeInfo.All), this);
+        node.send(to, new CheckStatus(to, topologies(), txnId, route, sourceEpoch, IncludeInfo.All, bumpBallot), this);
     }
 
     @Override
@@ -215,14 +197,14 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 
                                         LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, route, callback, deps -> {
                                             Deps stableDeps = deps.intersecting(trySendTo);
-                                            node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, null);
+                                            node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, bumpBallot, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, null);
                                         });
                                     }
                                     else
                                     {
                                         Invariants.require(full.stableDeps.covers(trySendTo));
                                         Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, null);
+                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, bumpBallot, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, null);
                                     }
                                 }
                             }
@@ -270,7 +252,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                     }
                     LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, deps, missingDeps, route, SHARE, route, callback, mergedDeps -> {
                         node.withEpoch(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
-                            node.coordinationAdapter(txnId, Recovery).persist(node, topologies, route, txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
+                            node.coordinationAdapter(txnId, Recovery).persist(node, topologies, route, bumpBallot, txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
                                 callback.accept(f == null ? APPLIED : null, f);
                             });
                         });

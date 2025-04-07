@@ -21,6 +21,7 @@ package accord.coordinate;
 import accord.api.Result;
 import accord.local.Node;
 import accord.messages.Apply;
+import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Route;
@@ -32,8 +33,9 @@ import accord.topology.Topologies;
 
 public class PersistTxn extends Persist
 {
-    public PersistTxn(Node node, Topologies topologies, TxnId txnId, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> route, Apply.Factory factory)
+    // TODO (desired): standardise parameter order with CoordinationAdapter (and others)
+    public PersistTxn(Node node, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> route, Apply.Factory factory)
     {
-        super(node, topologies, txnId, sendTo, txn, executeAt, deps, writes, result, route, factory);
+        super(node, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, factory);
     }
 }

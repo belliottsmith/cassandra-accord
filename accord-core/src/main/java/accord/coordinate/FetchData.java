@@ -290,7 +290,7 @@ public class FetchData extends CheckShards<Route<?>>
     private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, Unseekables<?> propagateTo, long sourceEpoch, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
     {
         // TODO (desired, efficiency): restore behaviour of only collecting info if e.g. Committed or Executed
-        super(node, txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, invalidIf);
+        super(node, txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf);
         this.propagateTo = propagateTo;
         this.lowEpoch = lowEpoch;
         this.maxRoute = maxRoute;

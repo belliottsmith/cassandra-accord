@@ -158,7 +158,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
 
     protected void onStabilised()
     {
-        adapter().execute(node, allTopologies, route, ballot == Ballot.ZERO ? SLOW : RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
+        adapter().execute(node, allTopologies, route, ballot, ballot == Ballot.ZERO ? SLOW : RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
     }
 
     protected abstract CoordinationAdapter<R> adapter();

@@ -64,7 +64,6 @@ import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitHome;
 import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitSlice;
 import static accord.impl.progresslog.WaitingState.CallbackKind.Fetch;
 import static accord.impl.progresslog.WaitingState.CallbackKind.FetchRoute;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
@@ -250,24 +249,7 @@ abstract class WaitingState extends BaseTxnState
 
     static long computeLowEpoch(SafeCommandStore safeStore, TxnId txnId, Command command)
     {
-        StoreParticipants participants = command.participants();
-        long txnIdEpoch = txnId.epoch();
-        if (txnId.is(ExclusiveSyncPoint))
-        {
-            long newEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnIdEpoch, participants.hasTouched());
-            return Math.min(newEpoch, txnIdEpoch);
-        }
-
-        if (command.known().deps().hasPreAcceptedOrProposedOrDecidedDeps() && participants.touchesOnlyOwned())
-            return txnIdEpoch;
-
-        // note: we use hasTouched rather than route here, to account for cases route is null and we have already "touched" some key in an earlier epoch
-        Participants<?> unsynced = safeStore.node().topology().unsyncedOnly(participants.hasTouched(), txnIdEpoch);
-        if (unsynced == null || unsynced.isEmpty())
-            return txnIdEpoch;
-
-        long lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnIdEpoch, unsynced);
-        return Math.min(lowEpoch, txnIdEpoch);
+        return StoreParticipants.computeFetchLowEpoch(safeStore, txnId, command);
     }
 
     long readLowEpoch(SafeCommandStore safeStore, TxnId txnId, Route<?> route)

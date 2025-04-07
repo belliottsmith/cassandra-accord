@@ -28,7 +28,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -77,6 +76,7 @@ import static accord.local.RedundantStatus.any;
 import static accord.local.RedundantStatus.mask;
 import static accord.local.RedundantStatus.matchesMask;
 import static accord.local.RedundantStatus.toAll;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.ArrayBuffers.cachedAny;
@@ -504,24 +504,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return TxnId.nonNullOrMax(max, get.apply(bounds));
         }
 
-        static Participants<?> participantsWithoutStaleOrPreBootstrap(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, @Nullable EpochSupplier executeAt)
-        {
-            return withoutStaleOrPreBootstrap(bounds, execute, txnId, executeAt, Participants::without);
-        }
-
-        static Ranges rangesWithoutStaleOrPreBootstrap(Bounds bounds, @Nonnull Ranges execute, TxnId txnId, @Nullable EpochSupplier executeAt)
-        {
-            return withoutStaleOrPreBootstrap(bounds, execute, txnId, executeAt, Ranges::without);
-        }
-
-        static <P extends Participants<?>> P withoutStaleOrPreBootstrap(Bounds bounds, @Nonnull P execute, TxnId txnId, @Nullable EpochSupplier executeAt, BiFunction<P, Ranges, P> without)
+        static Participants<?> withoutStaleOrPreBootstrap(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, @Nullable EpochSupplier executeAt)
         {
             if (bounds == null)
                 return execute;
 
             Invariants.require(txnId.isSyncPoint() || (executeAt == null ? !bounds.outOfBounds(txnId) : !bounds.outOfBounds(txnId, executeAt)));
             if (bounds.is(txnId, PRE_BOOTSTRAP_OR_STALE))
-                return without.apply(execute, Ranges.of(bounds.range));
+                return execute.without(Ranges.of(bounds.range));
 
             return execute;
         }
@@ -590,15 +580,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return notShardApplied;
         }
 
-        static Participants<?> withoutShardAppliedLocallySynced(Bounds bounds, @Nonnull Participants<?> notShardAppliedLocallyDefunct, TxnId txnId)
+        static Participants<?> withoutShardAppliedLocallySynced(Bounds bounds, @Nonnull Participants<?> notShardAppliedLocallySynced, TxnId txnId)
         {
             if (bounds == null)
-                return notShardAppliedLocallyDefunct;
+                return notShardAppliedLocallySynced;
 
-            if (bounds.is(txnId, SHARD_APPLIED, LOCALLY_SYNCED))
-                return notShardAppliedLocallyDefunct.without(Ranges.of(bounds.range));
+            if (bounds.isRetired() || bounds.is(txnId, SHARD_APPLIED, LOCALLY_SYNCED))
+                return notShardAppliedLocallySynced.without(Ranges.of(bounds.range));
 
-            return notShardAppliedLocallyDefunct;
+            return notShardAppliedLocallySynced;
         }
 
         static Ranges withoutBeforeGc(Bounds entry, @Nonnull Ranges notGarbage, TxnId txnId, @Nullable Timestamp executeAt)
@@ -1049,13 +1039,13 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         if (!mayFilterStaleOrPreBootstrap(txnId, participants))
             return participants;
 
-        return foldl(participants, Bounds::participantsWithoutStaleOrPreBootstrap, participants, txnId, executeAt);
+        return foldl(participants, Bounds::withoutStaleOrPreBootstrap, participants, txnId, executeAt);
     }
 
     /**
-     * Subtract anything we won't execute locally, i.e. are pre-bootstrap or stale (or for RX are on ranges that are already retired)
+     * Subtract anything we won't execute locally, i.e. are pre-bootstrap or stale or retired
      */
-    public Participants<?> expectToWaitOn(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
+    public Participants<?> expectExclusiveSyncPointToWaitOn(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
     {
         Invariants.require(txnId.is(ExclusiveSyncPoint));
         if (!mayFilterStaleOrPreBootstrapOrRetiredOrNotOwned(txnId, executeAt, participants))
@@ -1178,9 +1168,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
          */
         class RangeState
         {
+            final Unseekables<?> participants;
             Range range;
             int bootstrapIdx, appliedIdx;
             Map<Integer, Ranges> partiallyBootstrapping;
+
+            RangeState(Unseekables<?> participants)
+            {
+                this.participants = participants;
+            }
 
             /**
              * Are the participating ranges for the txn fully covered by bootstrapping ranges for this command store
@@ -1195,10 +1191,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                     partiallyBootstrapping = new HashMap<>();
                 Ranges prev = partiallyBootstrapping.get(rangeTxnIdx);
                 Ranges remaining = prev;
-                if (remaining == null) remaining = builder.directRangeDeps.ranges(rangeTxnIdx);
+                if (remaining == null) remaining = builder.directRangeDeps.ranges(rangeTxnIdx).intersecting(participants, Minimal);
                 else Invariants.require(!remaining.isEmpty());
                 remaining = remaining.without(Ranges.of(range));
-                if (prev == null) Invariants.require(!remaining.isEmpty());
+                if (prev == null && remaining.isEmpty())
+                    return true;
                 partiallyBootstrapping.put(rangeTxnIdx, remaining);
                 return remaining.isEmpty();
             }
@@ -1245,7 +1242,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                 });
             }
             return s;
-        }, new RangeState(), rangeDeps, builder);
+        }, new RangeState(participants), rangeDeps, builder);
     }
 
     public final boolean hasLocallyRedundantDependencies(TxnId minimumDependencyId, Timestamp executeAt, Participants<?> participantsOfWaitingTxn)
