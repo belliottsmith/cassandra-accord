@@ -40,6 +40,11 @@ public interface Unseekables<K extends Unseekable> extends Iterable<K>, Routable
         {
             return this == FullKeyRoute | this == FullRangeRoute;
         }
+
+        public Routable.Domain domain()
+        {
+            return this.compareTo(FullKeyRoute) <= 0 ? Routable.Domain.Key : Routable.Domain.Range;
+        }
     }
 
     /**

@@ -845,4 +845,9 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     {
         return Routables.foldl(this, intersect, fold, p1, p2, accumulator, i -> false);
     }
+
+    public Range[] unsafeRanges()
+    {
+        return ranges;
+    }
 }

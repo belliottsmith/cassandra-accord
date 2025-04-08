@@ -54,6 +54,7 @@ public interface Route<K extends Unseekable> extends Participants<K>
     Route<K> intersecting(Unseekables<?> intersecting, Slice slice);
 
     Route<K> withHomeKey();
+    default boolean containsHomeKey() { return contains(homeKey()); }
     Route<K> with(Unseekables<K> with);
 
     /**
@@ -61,10 +62,9 @@ public interface Route<K extends Unseekable> extends Participants<K>
      */
     boolean participatesIn(Ranges ranges);
 
-    /**
-     * Return the unseekables excluding any coordination-only home key
-     */
     Participants<K> participants();
+    // convert to not-a-Route
+    Participants<K> participantsOnly();
 
     /**
      * Return the unseekables excluding any coordination-only home key, that intersect the provided ranges

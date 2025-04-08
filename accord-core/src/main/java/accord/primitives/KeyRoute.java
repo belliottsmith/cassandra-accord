@@ -93,6 +93,11 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
         return this;
     }
 
+    public Participants<RoutingKey> participantsOnly()
+    {
+        return new RoutingKeys(keys);
+    }
+
     @Override
     public Participants<RoutingKey> participants(Ranges ranges)
     {

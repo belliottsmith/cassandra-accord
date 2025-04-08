@@ -194,4 +194,9 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     {
         return wrap == keys ? this : new RoutingKeys(wrap);
     }
+
+    public RoutingKey[] unsafeKeys()
+    {
+        return keys;
+    }
 }

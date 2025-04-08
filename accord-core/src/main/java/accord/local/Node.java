@@ -146,7 +146,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         @Override
         public int compareTo(Id that)
         {
-            return Integer.compare(this.id, that.id);
+            return Integer.compareUnsigned(this.id, that.id);
         }
 
         public String toString()

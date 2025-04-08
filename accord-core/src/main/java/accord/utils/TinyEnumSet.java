@@ -44,6 +44,22 @@ public class TinyEnumSet<E extends Enum<E>>
         this.bitset = bitset;
     }
 
+    public static <E extends Enum<E>> TinyEnumSet<E> allOf(Class<E> clazz)
+    {
+        int count = clazz.getEnumConstants().length;
+        return new TinyEnumSet<>(-1 >>> (32 - count));
+    }
+
+    public static <E extends Enum<E>> TinyEnumSet<E> of(Enum<E> value)
+    {
+        return new TinyEnumSet<>(encode(value));
+    }
+
+    public static <E extends Enum<E>> TinyEnumSet<E> of(Enum<E> ... values)
+    {
+        return new TinyEnumSet<>(encode(values));
+    }
+
     public static <E extends Enum<E>> int encode(Enum<E> ... values)
     {
         int bitset = 0;

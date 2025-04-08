@@ -66,6 +66,12 @@ public class FullKeyRoute extends KeyRoute implements FullRoute<RoutingKey>
     }
 
     @Override
+    public boolean containsHomeKey()
+    {
+        return true;
+    }
+
+    @Override
     public String toString()
     {
         return "{homeKey:" + homeKey + ',' + super.toString() + '}';

@@ -84,6 +84,11 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
         return with(homeKey);
     }
 
+    public Participants<Range> participantsOnly()
+    {
+        return Ranges.ofSortedAndDeoverlappedUnchecked(ranges);
+    }
+
     @Override
     public boolean participatesIn(Ranges ranges)
     {
