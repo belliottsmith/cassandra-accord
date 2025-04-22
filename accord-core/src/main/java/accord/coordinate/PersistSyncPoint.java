@@ -34,9 +34,9 @@ import accord.utils.SortedArrays;
 
 public class PersistSyncPoint extends Persist
 {
-    public PersistSyncPoint(Node node, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> route)
+    public PersistSyncPoint(Node node, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, FullRoute<?> route)
     {
-        super(node, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, Apply.FACTORY);
+        super(node, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, informDurableOnDone, Apply.FACTORY);
     }
 
     @Override

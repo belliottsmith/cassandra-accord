@@ -524,7 +524,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     private void commitInvalidate(Timestamp invalidateUntil)
     {
         long highEpoch = Math.max(invalidateUntil.epoch(), reportHighEpoch);
-        node.withEpoch(highEpoch, node.agent(), () -> {
+        node.withEpochAtLeast(highEpoch, node.agent(), () -> {
             Commit.Invalidate.commitInvalidate(node, txnId, route, invalidateUntil);
         });
         isDone = true;
@@ -539,7 +539,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void propose(Accept.Kind kind, Timestamp executeAt, Deps deps)
     {
-        node.withEpoch(executeAt.epoch(), this, () -> {
+        node.withEpochAtLeast(executeAt.epoch(), this, () -> {
             adapter.propose(node, null, route, kind, ballot, txnId, txn, executeAt, deps, this);
         });
     }
@@ -555,7 +555,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     AsyncResult<InferredFastPath> awaitEarlier(Node node, Deps waitOn, BlockedUntil blockedUntil)
     {
         long requireEpoch = waitOn.maxTxnId(txnId).epoch();
-        return node.withEpoch(requireEpoch, () -> {
+        return node.withEpochExact(requireEpoch, () -> {
             TxnId recoverId = this.txnId;
             List<AsyncResult<InferredFastPath>> requests = new ArrayList<>();
             for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
@@ -619,7 +619,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             return AsyncResults.success(InferredFastPath.Accept);
 
         long requireEpoch = waitOn.maxTxnId(txnId).epoch();
-        return node.withEpoch(requireEpoch, () -> {
+        return node.withEpochExact(requireEpoch, () -> {
             TxnId recoverId = this.txnId;
             List<AsyncResult<InferredFastPath>> requests = new ArrayList<>();
             for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)

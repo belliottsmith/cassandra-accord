@@ -69,7 +69,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
     {
         if (!node.topology().hasEpoch(executeAt.epoch()))
         {
-            node.withEpoch(executeAt.epoch(), failureCallback, () -> withCommitted(adapter, node, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
+            node.withEpochAtLeast(executeAt.epoch(), failureCallback, () -> withCommitted(adapter, node, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
             return;
         }
 
@@ -97,7 +97,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         Invariants.require(sendTo == null || selectSendTo != null);
         if (!node.topology().hasEpoch(executeAt.epoch()))
         {
-            node.withEpoch(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
+            node.withEpochAtLeast(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
             return;
         }
 
@@ -146,7 +146,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         Invariants.require(sendTo == null || selectSendTo != null);
         if (!node.topology().hasEpoch(executeAt.epoch()))
         {
-            node.withEpoch(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, txnId, executeAt, txn, alreadyStableDeps, require, sendTo, selectSendTo, route, failureCallback, withDeps));
+            node.withEpochAtLeast(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, txnId, executeAt, txn, alreadyStableDeps, require, sendTo, selectSendTo, route, failureCallback, withDeps));
         }
         else if (require.isEmpty())
         {

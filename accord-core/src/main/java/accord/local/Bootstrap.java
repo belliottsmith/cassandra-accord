@@ -19,6 +19,7 @@
 package accord.local;
 
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 import javax.annotation.Nonnull;
@@ -124,7 +125,7 @@ class Bootstrap
             if (!node.topology().hasEpoch(globalSyncId.epoch()))
             {
                 // Ignore timeouts fetching the epoch, always keep trying to bootstrap
-                node.withEpoch(globalSyncId.epoch(), (ignored, failure) -> store.execute(empty(), Attempt.this::start, (ignored1, failure2) -> {
+                node.withEpochAtLeast(globalSyncId.epoch(), (ignored, failure) -> store.execute(empty(), Attempt.this::start, (ignored1, failure2) -> {
                     if (failure2 != null)
                         node.agent().acceptAndWrap(null, failure2);
                 }));
@@ -142,7 +143,7 @@ class Bootstrap
                          return CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges);
                      })
                      .flatMap(i -> i)
-                     .flatMap(syncPoint -> node.withEpoch(epoch, () -> store.build(empty(), safeStore1 -> {
+                     .flatMap(syncPoint -> node.withEpochAtLeast(epoch, () -> store.build(empty(), safeStore1 -> {
                          if (valid.isEmpty()) // we've lost ownership of the range
                              return AsyncResults.success(Ranges.EMPTY);
                          return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
@@ -272,7 +273,9 @@ class Bootstrap
                 accept(null, failure);
 
             store.agent().onFailedBootstrap(attempt, "PartialFetch", newFailures, () -> {
-                store.execute(empty(), safeStore -> restart(safeStore, newFailures.slice(allValid), attempt + 1), store.agent());
+                node.scheduler().selfRecurring(() -> {
+                    store.execute(empty(), safeStore -> restart(safeStore, newFailures.slice(allValid), attempt + 1), store.agent());
+                }, 0L, TimeUnit.NANOSECONDS);
             }, failure);
             Invariants.require(!newFailures.intersects(fetchedAndSafeToRead));
         }
@@ -346,7 +349,9 @@ class Bootstrap
             if (!retry.isEmpty())
             {
                 store.agent().onFailedBootstrap(attempt, "Fetch", retry, () -> {
-                    store.execute(empty(), safeStore -> restart(safeStore, retry, attempt + 1), node.agent());
+                    node.scheduler().selfRecurring(() -> {
+                        store.execute(empty(), safeStore -> restart(safeStore, retry, attempt + 1), node.agent());
+                    }, 0L, TimeUnit.NANOSECONDS);
                 }, fetchOutcome);
             }
         }

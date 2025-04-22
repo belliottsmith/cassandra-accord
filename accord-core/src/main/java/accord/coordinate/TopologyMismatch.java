@@ -82,17 +82,16 @@ public class TopologyMismatch extends CoordinationFailed
     private static TopologyMismatch checkForPendingRemoval(Topology t, @Nullable TxnId txnId, @Nullable RoutingKey homeKey, Routables<?> keysOrRanges)
     {
         EnumSet<TopologyMismatch.Reason> reasons = null;
-        if (homeKey != null && !t.reduce(true, s -> s.contains(homeKey), (result, s) -> result & !s.is(PENDING_REMOVAL)))
+        if (homeKey != null)
         {
-            if (reasons == null)
-                reasons = EnumSet.noneOf(TopologyMismatch.Reason.class);
-            reasons.add(TopologyMismatch.Reason.HOME_KEY);
+            int i = t.indexForKey(homeKey);
+            if (i >= 0 && t.get(i).is(PENDING_REMOVAL))
+                reasons = EnumSet.of(Reason.HOME_KEY);
         }
-        if (!t.reduce(true, s -> keysOrRanges.intersects(s.range), (result, s) -> result & !s.is(PENDING_REMOVAL)))
+        if (t.foldl(keysOrRanges, (shard, v, i) -> v || shard.is(PENDING_REMOVAL), false))
         {
-            if (reasons == null)
-                reasons = EnumSet.noneOf(TopologyMismatch.Reason.class);
-            reasons.add(TopologyMismatch.Reason.KEYS_OR_RANGES);
+            if (reasons == null) reasons = EnumSet.of(TopologyMismatch.Reason.KEYS_OR_RANGES);
+            else reasons.add(TopologyMismatch.Reason.KEYS_OR_RANGES);
         }
         return reasons == null ? null : new TopologyMismatch(reasons, t, txnId, homeKey, keysOrRanges);
     }
@@ -118,15 +117,12 @@ public class TopologyMismatch extends CoordinationFailed
         EnumSet<TopologyMismatch.Reason> reasons = null;
         if (!t.ranges().contains(homeKey))
         {
-            if (reasons == null)
-                reasons = EnumSet.noneOf(TopologyMismatch.Reason.class);
-            reasons.add(TopologyMismatch.Reason.HOME_KEY);
+            reasons = EnumSet.of(Reason.HOME_KEY);
         }
         if (!t.ranges().containsAll(keysOrRanges))
         {
-            if (reasons == null)
-                reasons = EnumSet.noneOf(TopologyMismatch.Reason.class);
-            reasons.add(TopologyMismatch.Reason.KEYS_OR_RANGES);
+            if (reasons == null) reasons = EnumSet.of(TopologyMismatch.Reason.KEYS_OR_RANGES);
+            else reasons.add(TopologyMismatch.Reason.KEYS_OR_RANGES);
         }
         return reasons == null ? null : new TopologyMismatch(reasons, t, txnId, homeKey, keysOrRanges);
     }

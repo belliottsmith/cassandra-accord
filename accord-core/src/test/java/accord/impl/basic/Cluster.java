@@ -276,8 +276,13 @@ public class Cluster
     public void processAll()
     {
         List<Pending> pending = new ArrayList<>();
-        while (this.pending.size() > 0)
-            pending.add(this.pending.poll());
+        {
+            // TODO (expected): this doesn't actually process all pending, as any queued tasks on executors aren't processed.
+            //   should we perhaps queue them and then process them?
+            Pending next;
+            while (null != (next = this.pending.poll()))
+                pending.add(next);
+        }
 
         for (Pending next : pending)
         {

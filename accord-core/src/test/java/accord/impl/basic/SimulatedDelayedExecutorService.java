@@ -176,6 +176,21 @@ public class SimulatedDelayedExecutorService extends TaskExecutorService impleme
         pending.add(task);
     }
 
+    public void preregister(Task<?> task)
+    {
+        pending.preregister(task);
+    }
+
+    public void cancel(Task<?> task)
+    {
+        pending.remove(task);
+    }
+
+    public void executePreregistered(Task<?> task)
+    {
+        pending.add(task);
+    }
+
     private void schedule(Task<?> task, long delay, TimeUnit unit)
     {
         pending.add(task, delay, unit);

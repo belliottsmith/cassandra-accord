@@ -322,7 +322,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public AsyncResult<?> markDurable(DurableBefore addDurableBefore)
     {
-        return withEpoch(addDurableBefore.maxEpoch(), () -> persistDurableBefore.mergeAndUpdate(DurableBefore.merge(durableBefore, addDurableBefore)))
+        return withEpochExact(addDurableBefore.maxEpoch(), () -> persistDurableBefore.mergeAndUpdate(DurableBefore.merge(durableBefore, addDurableBefore)))
                .beginAsResult();
     }
 
@@ -384,23 +384,20 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         topology.onEpochRetired(ranges, epoch);
     }
 
+    // TODO (required): audit use of withEpochAtLeast vs withEpochExact
     // TODO (required): audit error handling, as the refactor to provide epoch timeouts appears to have broken a number of coordination
     // TODO (expected): provide a deadline
-    public void withEpoch(EpochSupplier epochSupplier, BiConsumer<Void, Throwable> callback)
+    public void withEpochAtLeast(EpochSupplier epochSupplier, BiConsumer<Void, Throwable> callback)
     {
         if (epochSupplier == null)
             callback.accept(null, null);
         else
-            withEpoch(epochSupplier.epoch(), callback);
+            withEpochAtLeast(epochSupplier.epoch(), callback);
     }
 
-    public void withEpoch(long epoch, BiConsumer<Void, Throwable> callback)
+    public void withEpochAtLeast(long epoch, BiConsumer<Void, Throwable> callback)
     {
-        if (epoch < topology.minEpoch())
-        {
-            callback.accept(null, new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch()));
-        }
-        else if (topology.hasAtLeastEpoch(epoch))
+        if (topology.hasAtLeastEpoch(epoch))
         {
             callback.accept(null, null);
         }
@@ -411,13 +408,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public void withEpoch(long epoch, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
+    public void withEpochAtLeast(long epoch, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
     {
-        if (epoch < topology.minEpoch())
-        {
-            ifFailure.accept(null, new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch()));
-        }
-        else if (topology.hasAtLeastEpoch(epoch))
+        if (topology.hasAtLeastEpoch(epoch))
         {
             ifSuccess.run();
         }
@@ -431,7 +424,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public void withEpoch(long epoch, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
+    public void withEpochExact(long epoch, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
     {
         if (epoch < topology.minEpoch())
         {
@@ -452,13 +445,28 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     @Inline
-    public <T> AsyncChain<T> withEpoch(long epoch, Supplier<? extends AsyncChain<T>> supplier)
+    public <T> AsyncChain<T> withEpochExact(long epoch, Supplier<? extends AsyncChain<T>> supplier)
     {
         if (epoch < topology.minEpoch())
         {
             return AsyncChains.failure(new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch()));
         }
         else if (topology.hasEpoch(epoch))
+        {
+            return supplier.get();
+        }
+        else
+        {
+            AsyncChain<T> res = topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get());
+            configService.fetchTopologyForEpoch(epoch);
+            return res;
+        }
+    }
+
+    @Inline
+    public <T> AsyncChain<T> withEpochAtLeast(long epoch, Supplier<? extends AsyncChain<T>> supplier)
+    {
+        if (epoch < topology.minEpoch() || topology.hasEpoch(epoch))
         {
             return supplier.get();
         }
@@ -795,7 +803,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     // TODO (required): plumb deadlineNanos in (perhaps on integration side, but maybe introduce some context we can pass through for the MessageSink)
     public AsyncResult<Result> coordinate(TxnId txnId, Txn txn, long minEpoch, long deadlineNanos)
     {
-        AsyncResult<Result> result = withEpoch(Math.max(txnId.epoch(), minEpoch), () -> initiateCoordination(txnId, txn)).beginAsResult();
+        AsyncResult<Result> result = withEpochExact(Math.max(txnId.epoch(), minEpoch), () -> initiateCoordination(txnId, txn)).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
         result.invoke((success, fail) -> coordinating.remove(txnId, result));
         return result;
@@ -856,7 +864,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
                 return result;
         }
 
-        AsyncResult<Outcome> result = withEpoch(txnId.epoch(), () -> {
+        AsyncResult<Outcome> result = withEpochExact(txnId.epoch(), () -> {
             RecoverFuture<Outcome> future = new RecoverFuture<>();
             RecoverWithRoute.recover(this, txnId, invalidIf, route, null, reportLowEpoch, reportHighEpoch, future);
             return future;

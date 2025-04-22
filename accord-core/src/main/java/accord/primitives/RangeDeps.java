@@ -839,6 +839,42 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         return ranges.length;
     }
 
+    static class Min extends SimpleCollector<Object, Object>
+    {
+        int minIndex = Integer.MAX_VALUE;
+        @Override
+        public void accept(Range[] ranges, int[] rangesToTxnIds, Object p1, Object p2, int fromIndex, int toIndex)
+        {
+            for (int i = startOffset(ranges, rangesToTxnIds, fromIndex), maxi = endOffset(rangesToTxnIds, toIndex); i < maxi ; ++i)
+                minIndex = Math.min(minIndex, rangesToTxnIds[i]);
+        }
+    }
+
+    public TxnId minTxnId(Range range, TxnId orElse)
+    {
+        Min min = new Min();
+        forEach(range, min, min, ranges, rangesToTxnIds, null, null, 0);
+        return min.minIndex == Integer.MAX_VALUE ? orElse : txnIds[min.minIndex];
+    }
+
+    static class Max extends SimpleCollector<Object, Object>
+    {
+        int maxIndex = -1;
+        @Override
+        public void accept(Range[] ranges, int[] rangesToTxnIds, Object p1, Object p2, int fromIndex, int toIndex)
+        {
+            for (int i = startOffset(ranges, rangesToTxnIds, fromIndex), maxi = endOffset(rangesToTxnIds, toIndex); i < maxi ; ++i)
+                maxIndex = Math.max(maxIndex, rangesToTxnIds[i]);
+        }
+    }
+
+    public TxnId maxTxnId(Range range, TxnId orElse)
+    {
+        Max max = new Max();
+        forEach(range, max, max, ranges, rangesToTxnIds, null, null, 0);
+        return max.maxIndex < 0 ? orElse : txnIds[max.maxIndex];
+    }
+
     public TxnId maxTxnId(TxnId orElse)
     {
         return txnIdCount() == 0 ? orElse : txnId(txnIdCount() - 1);
@@ -896,6 +932,17 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     public boolean isSearchable()
     {
         return searchable != null;
+    }
+
+    static abstract class SimpleCollector<P1, P2> implements
+            IndexedRangeQuadConsumer<Range[], int[], P1, P2>,
+            IndexedQuadConsumer<Range[], int[], P1, P2>
+    {
+        @Override
+        public void accept(Range[] ranges, int[] rangesToTxnIds, P1 p1, P2 p2, int rangeIndex)
+        {
+            accept(ranges, rangesToTxnIds, p1, p2, rangeIndex, rangeIndex + 1);
+        }
     }
 
     static class RangeCollector implements

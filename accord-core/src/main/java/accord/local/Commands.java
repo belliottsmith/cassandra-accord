@@ -1258,8 +1258,8 @@ public class Commands
         RedundantBefore redundantBefore = safeStore.redundantBefore();
         Update update = new Update(current.waitingOn);
         TxnId minWaitingOnTxnId = update.minWaitingOnTxnId();
-        if (minWaitingOnTxnId != null && redundantBefore.hasLocallyRedundantDependencies(update.minWaitingOnTxnId(), current.executeAt(), current.participants().owns()))
-            redundantBefore.removeRedundantDependencies(current.participants().owns(), update);
+        if (minWaitingOnTxnId != null && redundantBefore.hasLocallyRedundantDependencies(update.minWaitingOnTxnId(), current.executeAt(), current.participants().waitsOn()))
+            redundantBefore.removeRedundantDependencies(current.participants().waitsOn(), update);
 
         // if we are a range transaction, being redundant for this transaction does not imply we are redundant for all transactions
         if (redundant != null)

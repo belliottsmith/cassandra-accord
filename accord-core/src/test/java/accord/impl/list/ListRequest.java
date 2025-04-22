@@ -210,7 +210,7 @@ public class ListRequest implements Request
             if (node.epoch() < txnId.epoch())
             {
                 RoutingKey hk = homeKey;
-                node.withEpoch(txnId.epoch(), (success, fail) -> checkOnResult(hk, txnId, attempt + 1, t));
+                node.withEpochAtLeast(txnId.epoch(), (success, fail) -> checkOnResult(hk, txnId, attempt + 1, t));
                 return;
             }
 

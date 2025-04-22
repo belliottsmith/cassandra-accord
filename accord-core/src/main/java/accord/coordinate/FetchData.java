@@ -34,6 +34,8 @@ import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
+import accord.topology.TopologyManager;
+import accord.topology.TopologyManager.TopologyRetiredException;
 import accord.utils.Invariants;
 
 import javax.annotation.Nonnull;
@@ -97,7 +99,14 @@ public class FetchData extends CheckShards<Route<?>>
 
         Ranges localRanges(Node node)
         {
-            return node.topology().localRangesForEpochs(lowEpoch, highEpoch);
+            try
+            {
+                return node.topology().localRangesForEpochs(lowEpoch, highEpoch);
+            }
+            catch (TopologyRetiredException t)
+            {
+                throw new TopologyRetiredException("Failed to read local ranges for " + txnId + " between " + lowEpoch + " and " + highEpoch, t);
+            }
         }
     }
 
@@ -128,7 +137,7 @@ public class FetchData extends CheckShards<Route<?>>
         long srcEpoch = request.srcEpoch;
         if (!node.topology().hasEpoch(srcEpoch))
         {
-            node.withEpoch(srcEpoch, request.callback, () -> fetch(node, route, request));
+            node.withEpochAtLeast(srcEpoch, request.callback, () -> fetch(node, route, request));
             return;
         }
 
@@ -166,7 +175,7 @@ public class FetchData extends CheckShards<Route<?>>
         long srcEpoch = request.srcEpoch;
         if (!node.topology().hasEpoch(srcEpoch))
         {
-            node.withEpoch(srcEpoch, request.callback, () -> fetchSpecific(node, query, maxRoute, request));
+            node.withEpochAtLeast(srcEpoch, request.callback, () -> fetchSpecific(node, query, maxRoute, request));
             return;
         }
 
@@ -255,7 +264,7 @@ public class FetchData extends CheckShards<Route<?>>
 
     public static void fetch(Node node, FullRoute<?> route, FetchRequest request)
     {
-        node.withEpoch(request.srcEpoch, request.callback, () -> {
+        node.withEpochAtLeast(request.srcEpoch, request.callback, () -> {
             Ranges ranges = request.localRanges(node);
             fetchInternal(node, ranges, route, request);
         });

@@ -60,6 +60,7 @@ import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
+import static accord.utils.Invariants.nonNull;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (required): (v1.1) if one shard times out waiting to reply, but another shard produces a reply, return a partial response (or response with suitably populated unavailable)
@@ -364,13 +365,24 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     static Ranges unavailable(SafeCommandStore safeStore, Command command)
     {
-        Timestamp executeAt = command.executesAtLeast();
-        if (executeAt == null) executeAt = command.executeAtOrTxnId();
-        // TODO (required): for awaitsOnlyDeps commands, if we cannot infer an actual executeAtLeast we should confirm no situation where txnId is not an adequately conservative value for unavailable/unsafeToRead
-        Ranges ranges = safeStore.unsafeToReadAt(executeAt);
-        if (ranges.size() > command.route().size())
-            ranges = ranges.intersecting(command.route(), Minimal);
-        return ranges;
+        // note: syncpoints and ephemeral reads simply consume the latest information (whatever it is),
+        //  which is represented by the latest possible safeToRead entry (which is only updated on successful bootstrap)
+        //  We DO NOT use executesAtLeast here, which is used only to compute retryInFutureEpoch, indicating we may not
+        //  own data new enough to answer the query.
+        TxnId txnId = command.txnId();
+        Timestamp executeAt = command.executeAtIfKnown();
+        if (executeAt == null)
+        {
+            Invariants.require(txnId.awaitsOnlyDeps());
+            executeAt = txnId;
+        }
+        Timestamp readAt = txnId.awaitsOnlyDeps() ? Timestamp.MAX : executeAt;
+        Ranges safeToRead = safeStore.safeToReadAt(readAt);
+        Ranges reads = safeStore.ranges().allAt(executeAt);
+        Ranges unsafeToRead = reads.without(safeToRead);
+        if (unsafeToRead.size() > command.route().size())
+            unsafeToRead = unsafeToRead.intersecting(command.route(), Minimal);
+        return unsafeToRead;
     }
 
     protected void read(SafeCommandStore safeStore, Command command)
@@ -391,13 +403,26 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
 
         CommandStore unsafeStore = safeStore.commandStore();
-        Participants<?> executes = command.participants().stillExecutes().without(unavailable);
+        // note: we DO NOT use stillExecutes() here, as we do not know what the remote replica requires
+        StoreParticipants participants = command.participants();
+        Participants<?> executes = nonNull(participants.executes());
+        if (executes != participants.stillExecutes() && !txnId.isSystemTxn())
+        {
+            // if stillExecutes has been filtered, we may have also filtered
+            PartialTxn txn = command.partialTxn();
+            Participants<?> covers = txn == null ? executes.slice(0, 0) : txn.keys().toParticipants();
+            Participants<?> missing = executes.without(covers).without(unavailable);
+            if (!missing.isEmpty())
+                unavailable = unavailable.with(missing.toRanges());
+        }
+        executes = executes.without(unavailable);
         if (executes.isEmpty())
         {
             readComplete(unsafeStore, null, unavailable);
         }
         else
         {
+            Ranges finalUnavailable = unavailable;
             beginRead(safeStore, command.executeAt(), command.partialTxn(), executes).begin((next, throwable) -> {
                 if (throwable != null)
                 {
@@ -407,7 +432,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                 }
                 else
                 {
-                    readComplete(unsafeStore, next, unavailable);
+                    readComplete(unsafeStore, next, finalUnavailable);
                 }
             });
         }

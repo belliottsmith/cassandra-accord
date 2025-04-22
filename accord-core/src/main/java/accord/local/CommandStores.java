@@ -724,10 +724,40 @@ public abstract class CommandStores
     private static class StoreSelector extends SimpleBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
     {
         final int[] indexMap;
-        public StoreSelector(int size, int[] indexMap)
+
+        private StoreSelector(int size, int[] indexMap)
         {
             super(size);
             this.indexMap = indexMap;
+        }
+
+        public StoreSelector(Snapshot snapshot)
+        {
+            this(snapshot.shards.length, snapshot.indexForRange);
+        }
+
+        static StoreSelector select(Snapshot snapshot, Unseekables<?> unseekables)
+        {
+            StoreSelector selector = new StoreSelector(snapshot);
+            switch (unseekables.domain())
+            {
+                default: throw new UnhandledEnum(unseekables.domain());
+                case Range:
+                {
+                    int minIndex = 0;
+                    for (Range range : (AbstractRanges)unseekables)
+                        minIndex = snapshot.lookupByRange.forEachRange(range, selector, selector, null, null, null, null, minIndex);
+                    break;
+                }
+                case Key:
+                {
+                    int minIndex = 0;
+                    for (RoutingKey key : (AbstractUnseekableKeys)unseekables)
+                        minIndex = snapshot.lookupByRange.forEachKey(key, selector, selector, null, null, null, null, minIndex);
+                    break;
+                }
+            }
+            return selector;
         }
 
         @Override
@@ -749,26 +779,7 @@ public abstract class CommandStores
         AsyncChain<O> chain = null;
         BiFunction<O, O, O> reducer = mapReduce::reduce;
         Snapshot snapshot = current;
-        StoreSelector selector = new StoreSelector(snapshot.shards.length, snapshot.indexForRange);
-        switch (unseekables.domain())
-        {
-            default: throw new UnhandledEnum(unseekables.domain());
-            case Range:
-            {
-                int minIndex = 0;
-                for (Range range : (AbstractRanges)unseekables)
-                    minIndex = snapshot.lookupByRange.forEachRange(range, selector, selector, null, null, null, null, minIndex);
-                break;
-            }
-            case Key:
-            {
-                int minIndex = 0;
-                for (RoutingKey key : (AbstractUnseekableKeys)unseekables)
-                    minIndex = snapshot.lookupByRange.forEachKey(key, selector, selector, null, null, null, null, minIndex);
-                break;
-            }
-        }
-
+        StoreSelector selector = StoreSelector.select(snapshot, unseekables);
         for (int i = selector.nextSetBit(0, -1); i >= 0 ; i = selector.nextSetBit(i + 1, -1))
         {
             ShardHolder shard = snapshot.shards[i];
@@ -883,28 +894,16 @@ public abstract class CommandStores
 
     public CommandStore select(RoutingKey key)
     {
-        return select(ranges -> ranges.contains(key));
-    }
-
-    public CommandStore select(Route<?> route)
-    {
-        return select(ranges -> ranges.intersects(route));
+        return select(RoutingKeys.of(key));
     }
 
     public CommandStore select(Participants<?> participants)
     {
-        return select(ranges -> ranges.intersects(participants));
-    }
-
-    private CommandStore select(Predicate<Ranges> fn)
-    {
-        ShardHolder[] shards = current.shards;
-        for (ShardHolder holder : shards)
-        {
-            if (fn.test(holder.ranges().currentRanges()))
-                return holder.store;
-        }
-        return any();
+        Snapshot snapshot = current;
+        StoreSelector selector = StoreSelector.select(snapshot, participants);
+        int i = selector.firstSetBit();
+        if (i < 0) return any();
+        return snapshot.shards[i].store;
     }
 
     @VisibleForTesting
