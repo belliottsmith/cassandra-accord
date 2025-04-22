@@ -34,8 +34,8 @@ import accord.topology.Topologies;
 public class PersistTxn extends Persist
 {
     // TODO (desired): standardise parameter order with CoordinationAdapter (and others)
-    public PersistTxn(Node node, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> route, Apply.Factory factory)
+    public PersistTxn(Node node, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> route, boolean informDurableOnDone, Apply.Factory factory)
     {
-        super(node, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, factory);
+        super(node, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, informDurableOnDone, factory);
     }
 }

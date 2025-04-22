@@ -61,7 +61,7 @@ public class FindSomeRoute extends CheckShards<Participants<?>>
     {
         if (!node.topology().hasEpoch(txnId.epoch()))
         {
-            node.withEpoch(txnId.epoch(), callback, () -> findSomeRoute(node, txnId, invalidIf, unseekables, callback));
+            node.withEpochAtLeast(txnId.epoch(), callback, () -> findSomeRoute(node, txnId, invalidIf, unseekables, callback));
             return;
         }
 

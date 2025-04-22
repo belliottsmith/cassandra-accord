@@ -27,6 +27,15 @@ public interface PendingQueue extends Iterable<Pending>
     void add(Pending item);
     void addNoDelay(Pending item);
     void add(Pending item, long delay, TimeUnit units);
+
+    /**
+     * Register an item we intend to add later.
+     * This is primarily for tracking the number of recurring tasks there are pending to run,
+     * including those that are being tracked pre-submission as e.g. tasks in a logical executor that cannot be
+     * scheduled until the preceding tasks have completed.
+     */
+    void preregister(Pending item);
+
     boolean remove(Pending item);
     Pending poll();
     List<Pending> drain(Predicate<Pending> toDrain);

@@ -1490,5 +1490,10 @@ public class TopologyManager
         {
             super(String.format("Topology %s retired. Min topology %d", epoch, minEpoch));
         }
+
+        public TopologyRetiredException(String message, TopologyRetiredException t)
+        {
+            super(message, t);
+        }
     }
 }

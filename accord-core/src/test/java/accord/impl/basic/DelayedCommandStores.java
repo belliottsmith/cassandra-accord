@@ -336,6 +336,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                     protected Cancellable start(BiConsumer<? super T, Throwable> callback)
                     {
                         boolean wasEmpty = pending.isEmpty();
+                        executor.preregister(task);
                         pending.add(task);
                         if (wasEmpty)
                             runNextTask();
@@ -344,6 +345,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                             if (pending.peek() != task)
                             {
                                 pending.remove(task);
+                                executor.cancel(task);
                                 task.cancel(false);
                             }
                         };
@@ -362,7 +364,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
             next.invoke(agent()); // used to track unexpected exceptions and notify simulations
             next.invoke(this::afterExecution);
-            executor.execute(next);
+            executor.executePreregistered(next);
         }
 
         private void afterExecution()

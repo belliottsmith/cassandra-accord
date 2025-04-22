@@ -285,17 +285,20 @@ public abstract class Command implements ICommand
      */
     public @Nullable Timestamp executesAtLeast()
     {
+        return executesAtLeast(null);
+    }
+
+    public @Nullable Timestamp executesAtLeast(@Nullable Timestamp orElse)
+    {
         WaitingOn waitingOn = waitingOn();
         if (waitingOn == null)
-            return null;
+            return orElse;
         return waitingOn.executeAtLeast();
     }
 
     public final Timestamp executeAtIfKnownElseTxnId()
     {
-        if (known().isExecuteAtKnown())
-            return executeAt();
-        return txnId();
+        return executeAtIfKnown(txnId);
     }
 
     public final Timestamp executeAtIfKnown()
@@ -313,12 +316,6 @@ public abstract class Command implements ICommand
     public final Timestamp executeAtOrTxnId()
     {
         Timestamp executeAt = executeAt();
-        return executeAt == null || executeAt.equals(Timestamp.NONE) ? txnId() : executeAt;
-    }
-
-    public final Timestamp executeAtIfKnownOrTxnId()
-    {
-        Timestamp executeAt = executeAtIfKnown();
         return executeAt == null || executeAt.equals(Timestamp.NONE) ? txnId() : executeAt;
     }
 

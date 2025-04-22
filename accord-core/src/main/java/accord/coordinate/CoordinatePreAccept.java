@@ -19,6 +19,7 @@
 package accord.coordinate;
 
 import java.util.Collection;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
 import accord.coordinate.tracking.FastPathTracker;
@@ -59,19 +60,19 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     final Txn txn;
     boolean fastPathEnabled = true;
 
-    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route)
+    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<T, Throwable> callback)
     {
-        this(node, txnId, txn, route, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include));
+        this(node, txnId, txn, route, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
     }
 
-    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies)
+    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiConsumer<T, Throwable> callback)
     {
-        this(node, txnId, txn, route, topologies, FastPathTracker::new);
+        this(node, txnId, txn, route, topologies, FastPathTracker::new, callback);
     }
 
-    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiFunction<Topologies, TxnId, PreAcceptTracker<?>> trackerFactory)
+    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiFunction<Topologies, TxnId, PreAcceptTracker<?>> trackerFactory, BiConsumer<T, Throwable> callback)
     {
-        super(node, route, txnId, topologies);
+        super(node, route, txnId, topologies, callback);
         this.tracker = trackerFactory.apply(topologies, txnId);
         this.oks = new SortedListMap<>(topologies.nodes(), PreAcceptOk[]::new);
         this.txn = txn;
@@ -141,7 +142,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
         proposeInvalidate(node, node.uniqueTimestamp(Ballot::fromValues), txnId, route.homeKey(), (outcome, failure) -> {
             if (failure != null)
                 mismatch.addSuppressed(failure);
-            accept(null, mismatch);
+            setFailure(mismatch);
         });
     }
 
@@ -149,7 +150,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     void onPreAccepted(Topologies topologies)
     {
         Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
-        node.withEpoch(executeAt.epoch(), this, t -> WrappableException.wrap(t), () -> {
+        node.withEpochExact(executeAt.epoch(), callback, t -> WrappableException.wrap(t), () -> {
             onPreAccepted(topologies, executeAt, oks);
             if (!Invariants.debug()) oks.clear();
         });

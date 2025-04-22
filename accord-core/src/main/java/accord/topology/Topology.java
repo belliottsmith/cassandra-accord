@@ -22,6 +22,7 @@ import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -600,6 +601,24 @@ public class Topology
             {
                 return supersetIndexes.length;
             }
+
+            @Override
+            public Iterator<Shard> iterator()
+            {
+                return new Iterator<>()
+                {
+                    int i = 0;
+                    @Override public boolean hasNext() { return i < supersetIndexes.length; }
+                    @Override public Shard next() { return shards[supersetIndexes[i++]]; }
+                };
+            }
+
+            @Override
+            public void forEach(Consumer<? super Shard> consumer)
+            {
+                for (int i = 0; i < supersetIndexes.length ; ++i)
+                    consumer.accept(shards[supersetIndexes[i]]);
+            }
         };
     }
 
@@ -607,13 +626,6 @@ public class Topology
     {
         for (int i : supersetIndexes)
             forEach.accept(shards[i]);
-    }
-
-    public <A> A reduce(A zero,
-                        Predicate<Shard> filter,
-                        BiFunction<A, ? super Shard, A> reducer)
-    {
-        return Utils.reduce(zero, shards(), filter, reducer);
     }
 
     public SortedArrayList<Id> nodes()

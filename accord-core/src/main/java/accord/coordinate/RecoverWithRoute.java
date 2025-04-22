@@ -46,6 +46,7 @@ import accord.utils.Invariants;
 import accord.utils.WrappableException;
 
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
+import static accord.coordinate.ReadCoordinator.Success.Quorum;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.Outcome.Apply;
@@ -185,6 +186,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             }
                             else
                             {
+                                boolean informDurableOnDone = success == Quorum; // if we have a quorum of truncated responses for the part of the remote we have removed, it is safe to consider this part durable
                                 known = full.knownFor(txnId, trySendTo, trySendTo);
                                 if (known.isDefinitionKnown() && known.is(ApplyAtKnown) && known.outcome() == Apply)
                                 {
@@ -197,14 +199,14 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 
                                         LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, route, callback, deps -> {
                                             Deps stableDeps = deps.intersecting(trySendTo);
-                                            node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, bumpBallot, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, null);
+                                            node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, bumpBallot, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, informDurableOnDone, null);
                                         });
                                     }
                                     else
                                     {
                                         Invariants.require(full.stableDeps.covers(trySendTo));
                                         Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, bumpBallot, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, null);
+                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, bumpBallot, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, informDurableOnDone, null);
                                     }
                                 }
                             }
@@ -251,7 +253,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         }
                     }
                     LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, deps, missingDeps, route, SHARE, route, callback, mergedDeps -> {
-                        node.withEpoch(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
+                        node.withEpochExact(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
                             node.coordinationAdapter(txnId, Recovery).persist(node, topologies, route, bumpBallot, txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
                                 callback.accept(f == null ? APPLIED : null, f);
                             });

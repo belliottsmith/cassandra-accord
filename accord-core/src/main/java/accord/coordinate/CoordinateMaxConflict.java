@@ -19,6 +19,7 @@
 package accord.coordinate;
 
 import java.util.Collection;
+import java.util.function.BiConsumer;
 
 import accord.api.VisibleForImplementation;
 import accord.coordinate.tracking.QuorumTracker;
@@ -32,6 +33,7 @@ import accord.primitives.Timestamp;
 import accord.topology.Topologies;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.AsyncResults.SettableByCallback;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
@@ -46,14 +48,14 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     Timestamp maxConflict;
     long executionEpoch;
 
-    private CoordinateMaxConflict(Node node, FullRoute<?> route, long executionEpoch)
+    private CoordinateMaxConflict(Node node, FullRoute<?> route, long executionEpoch, BiConsumer<Timestamp, Throwable> callback)
     {
-        this(node, route, executionEpoch, node.topology().withUnsyncedEpochs(route, executionEpoch, executionEpoch));
+        this(node, route, executionEpoch, node.topology().withUnsyncedEpochs(route, executionEpoch, executionEpoch), callback);
     }
 
-    private CoordinateMaxConflict(Node node, FullRoute<?> route, long executionEpoch, Topologies topologies)
+    private CoordinateMaxConflict(Node node, FullRoute<?> route, long executionEpoch, Topologies topologies, BiConsumer<Timestamp, Throwable> callback)
     {
-        super(node, route, null, topologies);
+        super(node, route, null, topologies, callback);
         this.maxConflict = Timestamp.NONE;
         this.executionEpoch = executionEpoch;
         this.tracker = new QuorumTracker(topologies);
@@ -66,9 +68,11 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
         TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(epoch), null, route.homeKey(), keysOrRanges);
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
-        CoordinateMaxConflict coordinate = new CoordinateMaxConflict(node, route, epoch);
+
+        SettableByCallback<Timestamp> result = new SettableByCallback<>();
+        CoordinateMaxConflict coordinate = new CoordinateMaxConflict(node, route, epoch, result);
         coordinate.start();
-        return coordinate;
+        return result;
     }
 
     @Override
@@ -91,13 +95,13 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     void onFailureInternal(Node.Id from, Throwable failure)
     {
         if (tracker.recordFailure(from) == Failed)
-            tryFailure(failure);
+            setFailure(failure);
     }
 
     @Override
     void onNewEpochTopologyMismatch(TopologyMismatch mismatch)
     {
-        tryFailure(mismatch);
+        setFailure(mismatch);
     }
 
     @Override
@@ -109,6 +113,6 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onPreAccepted(Topologies topologies)
     {
-        setSuccess(maxConflict);
+        callback.accept(maxConflict, null);
     }
 }

@@ -171,7 +171,7 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
 
         if (retryInFutureEpoch > tracker.topologies().currentEpoch())
         {
-            node.withEpoch(retryInFutureEpoch, (ignore, failure) -> tryFailure(WrappableException.wrap(failure)), () -> {
+            node.withEpochAtLeast(retryInFutureEpoch, (ignore, failure) -> tryFailure(WrappableException.wrap(failure)), () -> {
                 ExecuteSyncPoint continuation = new ExecuteSyncPoint(node, syncPoint, node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE), excludeSuccess, executor, attempt, current());
                 continuation.invoke((success, failure) -> {
                     if (failure == null) trySuccess(success);

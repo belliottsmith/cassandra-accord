@@ -154,7 +154,7 @@ abstract class PostProcess
         for (TxnInfo txn : prev.committedByExecuteAt)
         {
             if (txn.compareTo(newBounds.bootstrappedAt) >= 0)
-                break;
+                continue;
 
             if (txn.is(STABLE))
             {

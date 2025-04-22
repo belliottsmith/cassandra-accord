@@ -30,7 +30,6 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.WrappableException;
-import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -39,26 +38,28 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
  * Abstract parent class for implementing preaccept-like operations where we may need to fetch additional replies
  * from future epochs.
  */
-abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> implements Callback<R>, BiConsumer<T, Throwable>
+abstract class AbstractCoordinatePreAccept<T, R> implements Callback<R>
 {
     final Node node;
     final TxnId txnId;
     final FullRoute<?> route;
 
     final Topologies topologies;
+    final BiConsumer<T, Throwable> callback;
     private boolean isDone;
 
-    AbstractCoordinatePreAccept(Node node, FullRoute<?> route, @Nonnull TxnId txnId)
+    AbstractCoordinatePreAccept(Node node, FullRoute<?> route, @Nonnull TxnId txnId, BiConsumer<T, Throwable> callback)
     {
-        this(node, route, txnId, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include));
+        this(node, route, txnId, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
     }
 
-    AbstractCoordinatePreAccept(Node node, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies)
+    AbstractCoordinatePreAccept(Node node, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies, BiConsumer<T, Throwable> callback)
     {
         this.node = node;
         this.txnId = txnId;
         this.route = route;
         this.topologies = topologies;
+        this.callback = callback;
     }
 
     void start()
@@ -86,7 +87,8 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
     {
         if (isDone) return false;
         isDone = true;
-        return tryFailure(failure);
+        callback.accept(null, failure);
+        return true;
     }
 
     @Override
@@ -103,19 +105,12 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
             onSlowResponseInternal(from);
     }
 
-    @Override
-    public final boolean tryFailure(Throwable failure)
+    void setFailure(Throwable failure)
     {
-        if (!super.tryFailure(failure))
-            return false;
-        onFailure(failure);
-        return true;
-    }
-
-    private void onFailure(Throwable failure)
-    {
+        Invariants.require(!isDone);
         // we may already be complete, as we may receive a failure from a later phase; but it's fine to redundantly mark done
         isDone = true;
+        callback.accept(null, failure);
         if (failure instanceof CoordinationFailed)
         {
             ((CoordinationFailed) failure).set(txnId, route.homeKey());
@@ -133,7 +128,7 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         Invariants.require(!isDone);
         isDone = true;
         long latestEpoch = executeAtEpoch();
-        if (latestEpoch > topologies.currentEpoch()) node.withEpoch(latestEpoch, this, () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
+        if (latestEpoch > topologies.currentEpoch()) node.withEpochExact(latestEpoch, callback, t -> WrappableException.wrap(t), () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
         else onPreAccepted(topologies);
     }
 
@@ -142,12 +137,5 @@ abstract class AbstractCoordinatePreAccept<T, R> extends SettableResult<T> imple
         TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(latestEpoch), txnId, route.homeKey(), route);
         if (mismatch == null) onPreAccepted(topologies);
         else onNewEpochTopologyMismatch(mismatch);
-    }
-
-    @Override
-    public final void accept(T success, Throwable failure)
-    {
-        if (success != null) trySuccess(success);
-        else tryFailure(WrappableException.wrap(failure));
     }
 }

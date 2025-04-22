@@ -19,6 +19,7 @@
 package accord.coordinate;
 
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
@@ -49,6 +50,7 @@ import accord.utils.Invariants;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.AsyncResults.SettableByCallback;
 
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
@@ -73,9 +75,9 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
 
     final CoordinationAdapter<R> adapter;
 
-    private CoordinateSyncPoint(Node node, TxnId txnId, Topologies topologies, Txn txn, FullRoute<?> route, SyncPointAdapter<R> adapter)
+    private CoordinateSyncPoint(Node node, TxnId txnId, Topologies topologies, Txn txn, FullRoute<?> route, SyncPointAdapter<R> adapter, BiConsumer<R, Throwable> callback)
     {
-        super(node, txnId, txn, route, topologies, adapter.preacceptTrackerFactory);
+        super(node, txnId, txn, route, topologies, adapter.preacceptTrackerFactory, callback);
         this.adapter = adapter;
     }
 
@@ -108,14 +110,14 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain(), cardinality(keysOrRanges));
-        return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, keysOrRanges, adapter)).beginAsResult();
+        return node.withEpochExact(txnId.epoch(), () -> coordinate(node, txnId, keysOrRanges, adapter)).beginAsResult();
     }
 
     public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnId(kind, route.domain(), cardinality(route));
-        return node.withEpoch(txnId.epoch(), () -> coordinate(node, txnId, route, adapter)).beginAsResult();
+        return node.withEpochExact(txnId.epoch(), () -> coordinate(node, txnId, route, adapter)).beginAsResult();
     }
 
     private static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, TxnId txnId, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
@@ -131,9 +133,11 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
-        CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter);
+
+        SettableByCallback<SyncPoint<U>> result = new SettableByCallback<>();
+        CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter, result);
         coordinate.start();
-        return coordinate;
+        return result;
     }
 
     @Override
@@ -147,7 +151,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     {
         if (executeAt.is(REJECTED))
         {
-            proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, this);
+            proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
         }
         else
         {
@@ -156,11 +160,11 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
                 withFlags = txnId.addFlag(HLC_BOUND);
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             if (tracker.hasFastPathAccepted())
-                adapter.execute(node, topologies, route, Ballot.ZERO, FAST, ExecuteFlags.none(), txnId, txn, withFlags, deps, deps, this);
+                adapter.execute(node, topologies, route, Ballot.ZERO, FAST, ExecuteFlags.none(), txnId, txn, withFlags, deps, deps, callback);
             else if (tracker.hasMediumPathAccepted())
-                adapter.propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, this);
+                adapter.propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, callback);
             else
-                adapter.propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, this);
+                adapter.propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
         }
     }
 

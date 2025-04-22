@@ -171,7 +171,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         long untilEpoch = full.executeAt == null ? highEpoch : Math.max(highEpoch, full.executeAt.epoch());
 
         Route<?> finalRoute = queried;
-        node.withEpoch(highEpoch, propagate, () -> node.mapReduceConsumeLocal(propagate, finalRoute, lowEpoch, untilEpoch, propagate));
+        node.withEpochAtLeast(highEpoch, propagate, () -> node.mapReduceConsumeLocal(propagate, finalRoute, lowEpoch, untilEpoch, propagate));
     }
 
     @Override

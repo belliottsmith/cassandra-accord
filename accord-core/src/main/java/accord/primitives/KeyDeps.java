@@ -495,6 +495,64 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         }
     }
 
+    /**
+     * Find the minimum intersecting transaction id for the range
+     */
+    public TxnId minTxnId(Range range, TxnId orElse)
+    {
+        int startKeyIndex = keys.indexOf(range.start());
+        if (startKeyIndex < 0) startKeyIndex = -1 - startKeyIndex;
+        else if (!range.startInclusive()) ++startKeyIndex;
+
+        int endKeyIndex = keys.indexOf(range.end());
+        if (endKeyIndex < 0) endKeyIndex = -1 - startKeyIndex;
+        else if (range.endInclusive()) ++endKeyIndex;
+
+        if (endKeyIndex <= startKeyIndex)
+            return orElse;
+
+        int minIndex = Integer.MAX_VALUE;
+        for (int keyIndex = startKeyIndex ; keyIndex < endKeyIndex ; ++keyIndex)
+        {
+            int index = startOffset(keyIndex);
+            minIndex = Math.min(minIndex, keysToTxnIds[index]);
+        }
+
+        if (minIndex == Integer.MAX_VALUE)
+            return orElse;
+
+        return txnIds[minIndex];
+    }
+
+    /**
+     * Find the maximum intersecting transaction id for the range
+     */
+    public TxnId maxTxnId(Range range, TxnId orElse)
+    {
+        int startKeyIndex = keys.indexOf(range.start());
+        if (startKeyIndex < 0) startKeyIndex = -1 - startKeyIndex;
+        else if (!range.startInclusive()) ++startKeyIndex;
+
+        int endKeyIndex = keys.indexOf(range.end());
+        if (endKeyIndex < 0) endKeyIndex = -1 - startKeyIndex;
+        else if (range.endInclusive()) ++endKeyIndex;
+
+        if (endKeyIndex <= startKeyIndex)
+            return orElse;
+
+        int maxIndex = -1;
+        for (int keyIndex = startKeyIndex ; keyIndex < endKeyIndex ; ++keyIndex)
+        {
+            int index = endOffset(keyIndex) - 1;
+            maxIndex = Math.max(maxIndex, keysToTxnIds[index]);
+        }
+
+        if (maxIndex == -1)
+            return orElse;
+
+        return txnIds[maxIndex];
+    }
+
     public void forEach(RoutingKey key, IndexedConsumer<TxnId> forEach)
     {
         int keyIndex = keys.indexOf(key);

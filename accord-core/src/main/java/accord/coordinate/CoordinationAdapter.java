@@ -74,10 +74,10 @@ public interface CoordinationAdapter<R>
     void stabilise(Node node, @Nullable Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback);
     void stabiliseOnly(Node node, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback);
     void execute(Node node, @Nullable Topologies any, FullRoute<?> route, Ballot ballot, ExecutePath path, ExecuteFlags executeFlags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super R, Throwable> callback);
-    void persist(Node node, @Nullable Topologies any, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback);
+    void persist(Node node, @Nullable Topologies any, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, BiConsumer<? super R, Throwable> callback);
     default void persist(Node node, @Nullable Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback)
     {
-        persist(node, any, route, route, SHARE, route, ballot, txnId, txn, executeAt, deps, writes, result, callback);
+        persist(node, any, route, route, SHARE, route, ballot, txnId, txn, executeAt, deps, writes, result, true, callback);
     }
 
     class DefaultFactory implements Factory
@@ -156,7 +156,7 @@ public interface CoordinationAdapter<R>
             {
                 if (!node.topology().hasEpoch(executeAt.epoch()))
                 {
-                    node.withEpoch(executeAt.epoch(), (success, fail) -> {
+                    node.withEpochAtLeast(executeAt.epoch(), (success, fail) -> {
                         if (fail != null) callback.accept(null, fail);
                         else stabilise(node, accept, route, ballot, txnId, txn, executeAt, deps, callback);
                     });
@@ -176,7 +176,7 @@ public interface CoordinationAdapter<R>
             {
                 if (!node.topology().hasEpoch(executeAt.epoch()))
                 {
-                    node.withEpoch(executeAt.epoch(), (success, fail) -> {
+                    node.withEpochAtLeast(executeAt.epoch(), (success, fail) -> {
                         if (fail != null) callback.accept(null, fail);
                         else stabiliseOnly(node, require, sendTo, selectNodeOwnership, route, ballot, txnId, txn, executeAt, deps, callback);
                     });
@@ -208,12 +208,12 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void persist(Node node, Topologies any, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super Result, Throwable> callback)
+            public void persist(Node node, Topologies any, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, BiConsumer<? super Result, Throwable> callback)
             {
                 Topologies all = execution(node, any, sendTo, selectNodeOwnership, route, txnId, executeAt);
 
                 if (callback != null) callback.accept(result, null);
-                new PersistTxn(node, all, txnId, ballot, require, txn, executeAt, deps, writes, result, route, Apply.FACTORY)
+                new PersistTxn(node, all, txnId, ballot, require, txn, executeAt, deps, writes, result, route, informDurableOnDone, Apply.FACTORY)
                 .start(applyKind, all, writes, result);
             }
 
@@ -275,12 +275,12 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            public void persist(Node node, Topologies ignore, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, BiConsumer<? super R, Throwable> callback)
+            public void persist(Node node, Topologies ignore, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, BiConsumer<? super R, Throwable> callback)
             {
                 Topologies all = forExecution(node, sendTo, selectNodeOwnership, txnId, executeAt, deps);
 
                 invokeSuccess(node, route, txnId, executeAt, txn, deps, callback);
-                new PersistSyncPoint(node, all, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route)
+                new PersistSyncPoint(node, all, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, informDurableOnDone, route)
                 .start(Maximal, all, writes, result);
             }
         }

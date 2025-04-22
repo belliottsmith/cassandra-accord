@@ -19,6 +19,7 @@
 package accord.messages;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.DepsCalculator;
@@ -70,7 +71,13 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     @Override
     public GetEphemeralReadDepsOk apply(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, Long.MAX_VALUE);
+        long latestEpoch = Math.max(safeStore.node().epoch(), node.epoch());
+
+        // TODO (desired): only return failure if we've participated in a sync point that could migrate coordination to the newer epoch
+        if (latestEpoch > executionEpoch && safeStore.ranges().removed(executionEpoch, latestEpoch).intersects(scope))
+            return new GetEphemeralReadDepsOk(latestEpoch);
+
+        StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, latestEpoch);
         Deps deps;
         ExecuteFlags flags;
         try (DepsCalculator calculator = new DepsCalculator())
@@ -78,7 +85,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
              deps = calculateDeps(safeStore, txnId, participants, minEpoch, Timestamp.MAX, false);
              flags = calculator.executeFlags(txnId);
         }
-        return new GetEphemeralReadDepsOk(deps, Math.max(safeStore.node().epoch(), node.epoch()), flags);
+        return new GetEphemeralReadDepsOk(deps, latestEpoch, flags);
     }
 
     @Override
@@ -112,7 +119,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     {
         public enum Flag { READY_TO_EXECUTE }
 
-        public final Deps deps;
+        public final @Nullable Deps deps; // if null, unsuccessful
         public final long latestEpoch;
         public final ExecuteFlags flags;
 
@@ -121,6 +128,13 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
             this.deps = Invariants.nonNull(deps);
             this.latestEpoch = latestEpoch;
             this.flags = flags;
+        }
+
+        public GetEphemeralReadDepsOk(long latestEpoch)
+        {
+            this.deps = null;
+            this.latestEpoch = latestEpoch;
+            this.flags = ExecuteFlags.none();
         }
 
         @Override

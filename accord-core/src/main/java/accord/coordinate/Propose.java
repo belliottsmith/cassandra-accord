@@ -280,7 +280,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
                 }
                 else
                 {
-                    node.withEpoch(invalidateUntil.epoch(), callback, t -> WrappableException.wrap(t), () -> {
+                    node.withEpochExact(invalidateUntil.epoch(), callback, t -> WrappableException.wrap(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
                         callback.accept(null, new Invalidated(txnId, invalidateWithParticipant));
                     });

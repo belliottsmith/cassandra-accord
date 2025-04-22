@@ -318,8 +318,8 @@ public class ShardDurability
 
             scheduled = node.agent().awaitStaleId(node, staleId, activeIndex >= 0)
                             .flatMap(
-                                syncId -> node.withEpoch(syncId.epoch(),
-                                    () -> syncPointControl.submit(
+                                syncId -> node.withEpochExact(syncId.epoch(),
+                                                              () -> syncPointControl.submit(
                                         () -> CoordinateSyncPoint.exclusive(node, syncId, (FullRoute<Range>) node.computeRoute(syncId, ranges))
                                                                  .invoke(logSyncPoint(syncId, ranges))
                             )))

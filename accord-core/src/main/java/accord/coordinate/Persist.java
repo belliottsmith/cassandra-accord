@@ -58,9 +58,10 @@ public abstract class Persist implements Callback<ApplyReply>
     // TODO (expected): track separate ALL and Quorum, so we can report Universal durability to permit faster GC
     protected final QuorumTracker tracker;
     protected final Apply.Factory factory;
+    protected final boolean informDurableOnDone;
     boolean isDone;
 
-    protected Persist(Node node, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, Apply.Factory factory)
+    protected Persist(Node node, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, boolean informDurableOnDone, Apply.Factory factory)
     {
         this.node = node;
         this.txnId = txnId;
@@ -75,6 +76,7 @@ public abstract class Persist implements Callback<ApplyReply>
         this.topologies = all;
         this.tracker = new QuorumTracker(all);
         this.factory = factory;
+        this.informDurableOnDone = informDurableOnDone;
         Invariants.require((writes != null) == txnId.is(Txn.Kind.Write), "%s: writes %s", txnId, writes);
     }
 
@@ -86,13 +88,12 @@ public abstract class Persist implements Callback<ApplyReply>
             default: throw new IllegalStateException();
             case Redundant:
             case Applied:
-                if (sendTo == route && tracker.recordSuccess(from) == Success)
+                if (tracker.recordSuccess(from) == Success && informDurableOnDone && !isDone)
                 {
-                    if (!isDone)
-                    {
-                        isDone = true;
-                        InformDurable.informDefault(node, topologies, txnId, route, executeAt, Majority);
-                    }
+                    // note: we enter this branch whether or not sendTo == route,
+                    // since we should only invoke Persist with sendTo != route when the remainder of the route is already persisted and truncated
+                    isDone = true;
+                    InformDurable.informDefault(node, topologies, txnId, route, executeAt, Majority);
                 }
             case RaceWithRecovery:
                 // don't count this towards durability; otherwise it is possible (though very unlikely)

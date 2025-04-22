@@ -76,6 +76,12 @@ public class MonitoredPendingQueue implements PendingQueue
     }
 
     @Override
+    public void preregister(Pending item)
+    {
+        wrapped.preregister(item);
+    }
+
+    @Override
     public boolean remove(Pending item)
     {
         return wrapped.remove(item);
