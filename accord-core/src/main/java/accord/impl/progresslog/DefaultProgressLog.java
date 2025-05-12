@@ -187,7 +187,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     }
 
     @Override
-    public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after)
+    public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force)
     {
         if (!txnId.isVisible())
             return;
@@ -195,7 +195,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         TxnState state = null;
         Route<?> beforeRoute = before.route();
         Route<?> afterRoute = after.route();
-        if (beforeRoute == null && afterRoute != null)
+        if (afterRoute != null && (beforeRoute == null || force))
         {
             RoutingKey homeKey = afterRoute.homeKey();
             Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
@@ -222,7 +222,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
                 state.setHomeDone(this);
             }
         }
-        else if (after.durability().isDurableOrInvalidated() && !before.durability().isDurableOrInvalidated())
+        else if (after.durability().isDurableOrInvalidated() && (force || !before.durability().isDurableOrInvalidated()))
         {
             state = get(txnId);
             if (state != null)
@@ -233,7 +233,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
         SaveStatus beforeSaveStatus = before.saveStatus();
         SaveStatus afterSaveStatus = after.saveStatus();
-        if (beforeSaveStatus == afterSaveStatus)
+        if (beforeSaveStatus == afterSaveStatus && !force)
             return;
 
         if (state == null)

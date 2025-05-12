@@ -652,9 +652,9 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected void update(Command prev, Command updated)
+        protected void update(Command prev, Command updated, boolean force)
         {
-            super.update(prev, updated);
+            super.update(prev, updated, force);
 
             TxnId txnId = updated.txnId();
             if (txnId.domain() != Domain.Range)
@@ -782,10 +782,10 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public void updateExclusiveSyncPoint(Command prev, Command updated)
+        public void updateExclusiveSyncPoint(Command prev, Command updated, boolean force)
         {
-            super.updateExclusiveSyncPoint(prev, updated);
-            if (updated.txnId().kind() != Txn.Kind.ExclusiveSyncPoint || updated.txnId().domain() != Range || !updated.hasBeen(Applied) || prev.hasBeen(Applied) || updated.hasBeen(Truncated)) return;
+            super.updateExclusiveSyncPoint(prev, updated, force);
+            if (updated.txnId().kind() != Txn.Kind.ExclusiveSyncPoint || updated.txnId().domain() != Range || !updated.hasBeen(Applied) || (prev.hasBeen(Applied) && !force) || updated.hasBeen(Truncated)) return;
 
             Participants<?> covering = updated.participants().touches();
             for (Map.Entry<TxnId, GlobalCommand> entry : commandStore().commands.headMap(updated.txnId(), false).entrySet())

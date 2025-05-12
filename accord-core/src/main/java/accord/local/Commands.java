@@ -565,7 +565,7 @@ public class Commands
         if (command.hasBeen(Applied) && !forceApply)
             return;
 
-        safeCommand.applied(safeStore);
+        safeCommand.applied(safeStore, forceApply);
         safeStore.notifyListeners(safeCommand, command);
         if (t0 >= 0) safeStore.agent().eventListener().onApplied(command, t0);
     }
