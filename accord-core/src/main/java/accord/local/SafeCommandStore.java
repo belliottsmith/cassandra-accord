@@ -238,14 +238,14 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
      */
     public abstract PreLoadContext context();
 
-    protected void update(Command prev, Command updated)
+    protected void update(Command prev, Command updated, boolean force)
     {
-        updateMaxConflicts(prev, updated);
-        updateCommandsForKey(prev, updated);
-        updateExclusiveSyncPoint(prev, updated);
+        updateMaxConflicts(prev, updated, force);
+        updateCommandsForKey(prev, updated, force);
+        updateExclusiveSyncPoint(prev, updated, force);
     }
 
-    public void updateExclusiveSyncPoint(Command prev, Command updated)
+    public void updateExclusiveSyncPoint(Command prev, Command updated, boolean force)
     {
         if (updated.txnId().kind() != Kind.ExclusiveSyncPoint || updated.txnId().domain() != Range) return;
         if (updated.route() == null) return;
@@ -253,13 +253,13 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
 
-        if (newSaveStatus.known.isDefinitionKnown() && !oldSaveStatus.known.isDefinitionKnown())
+        if (newSaveStatus.known.isDefinitionKnown() && (force || !oldSaveStatus.known.isDefinitionKnown()))
         {
             Ranges ranges = updated.participants().touches().toRanges();
             commandStore().markExclusiveSyncPoint(this, updated.txnId(), ranges);
         }
 
-        if (newSaveStatus == Applied && oldSaveStatus != Applied)
+        if (newSaveStatus == Applied && (force || oldSaveStatus != Applied))
         {
             Ranges ranges = updated.participants().touches().toRanges();
             TxnId txnIdWithFlags = (TxnId)updated.executeAt();
@@ -289,11 +289,11 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
     }
 
-    public void updateMaxConflicts(Command prev, Command updated)
+    public void updateMaxConflicts(Command prev, Command updated, boolean force)
     {
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
-        if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition().isKnown())
+        if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition().isKnown() && !force)
             return;
 
         TxnId txnId = updated.txnId();
@@ -334,9 +334,9 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         commandStore().unsafeSetRangesForEpoch(rangesForEpoch);
     }
 
-    public void updateCommandsForKey(Command prev, Command next)
+    public void updateCommandsForKey(Command prev, Command next, boolean force)
     {
-        if (!CommandsForKey.needsUpdate(this, prev, next))
+        if (!CommandsForKey.needsUpdate(this, prev, next) && !force)
             return;
 
         TxnId txnId = next.txnId();

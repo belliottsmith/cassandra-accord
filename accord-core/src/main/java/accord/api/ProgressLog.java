@@ -179,7 +179,7 @@ public interface ProgressLog
     /**
      * Record an updated local status for the transaction, to clear any waiting state it satisfies.
      */
-    void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after);
+    void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force);
 
     /**
      * Process a remote asynchronous callback.
@@ -234,7 +234,7 @@ public interface ProgressLog
 
     class NoOpProgressLog implements ProgressLog
     {
-        @Override public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after) {}
+        @Override public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force) {}
         @Override public void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from) {}
         @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants participants) {}
         @Override public void invalidIfUncommitted(TxnId txnId) {}

@@ -813,7 +813,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        protected void update(Command prev, Command updated)
+        protected void update(Command prev, Command updated, boolean force)
         {
         }
 

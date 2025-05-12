@@ -59,13 +59,18 @@ public abstract class SafeCommand
 
     public <C extends Command> C update(SafeCommandStore safeStore, C update)
     {
+        return update(safeStore, update, false);
+    }
+
+    private <C extends Command> C update(SafeCommandStore safeStore, C update, boolean force)
+    {
         Command prev = current();
         if (prev == update)
             return update;
 
         set(update);
-        safeStore.progressLog().update(safeStore, txnId, prev, update);
-        safeStore.update(prev, update);
+        safeStore.progressLog().update(safeStore, txnId, prev, update, force);
+        safeStore.update(prev, update, force);
         return update;
     }
 
@@ -90,7 +95,7 @@ public abstract class SafeCommand
             return prev;
 
         Command update = incidentalUpdate(prev.updateParticipants(participants));
-        safeStore.progressLog().update(safeStore, txnId, prev, update);
+        safeStore.progressLog().update(safeStore, txnId, prev, update, false);
         return update;
     }
 
@@ -161,6 +166,11 @@ public abstract class SafeCommand
     public Command.Executed applied(SafeCommandStore safeStore)
     {
         return update(safeStore, Command.applied(current().asExecuted()));
+    }
+
+    public Command.Executed applied(SafeCommandStore safeStore, boolean forceUpdate)
+    {
+        return update(safeStore, Command.applied(current().asExecuted()), forceUpdate);
     }
 
     public Command.NotDefined uninitialised()
