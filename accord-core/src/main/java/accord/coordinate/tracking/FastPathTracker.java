@@ -84,7 +84,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
                     return complete(NewFastPathSuccess);
             }
 
-            return quorumIfHasRejectedFastPath();
+            return quorumIfFastPathRejectedOrDelayed();
         }
 
         public final ShardOutcome<? super FastPathTracker> onFailure(@Nonnull Node.Id from)
@@ -115,16 +115,16 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
             {
                 ++fastPathDelayed;
 
-                if (isFastPathDelayed() && hasReachedQuorum())
+                if (fastPathIsDelayed() && hasReachedQuorum())
                     return mediumOrSlowSuccess();
             }
 
             return NoChange;
         }
 
-        final ShardOutcome<? super FastPathTracker> quorumIfHasRejectedFastPath()
+        final ShardOutcome<? super FastPathTracker> quorumIfFastPathRejectedOrDelayed()
         {
-            return hasReachedQuorum() && hasRejectedFastPath()
+            return hasReachedQuorum() && (hasRejectedFastPath() || fastPathIsDelayed())
                    ? mediumOrSlowSuccess()
                    : NoChange;
         }
@@ -134,7 +134,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
             return hasMetMediumPathCriteria() ? complete(NewMediumPathSuccess) : complete(Success);
         }
 
-        final boolean isFastPathDelayed()
+        final boolean fastPathIsDelayed()
         {
             return shard.rejectsFastPath(fastQuorumSize, fastPathDelayed);
         }
@@ -187,7 +187,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
             if (shard.isInFastPath(node))
                 ++fastPathFailures; // Quorum success can not count towards fast path success
 
-            return quorumIfHasRejectedFastPath();
+            return quorumIfFastPathRejectedOrDelayed();
         }
     }
 
