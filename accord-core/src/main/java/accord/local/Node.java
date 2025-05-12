@@ -273,7 +273,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             DurableBefore newDurableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
             // TODO (required): it is possible for this invariant to be breached if topologies are received out of order.
             //  We should not update min past the max known epoch.
-            Invariants.require(newDurableBefore.min.majorityBefore.compareTo(durableBefore.min.majorityBefore) >= 0);
+            Invariants.require(newDurableBefore.min.majorityBefore.compareTo(durableBefore.min.majorityBefore) >= 0 || durableBefore.fullyContainedIn(newDurableBefore),
+                    "Previous durable before: %s, new: %s", durableBefore, newDurableBefore);
+
             minDurableBefore = DurableBefore.merge(minDurableBefore, addDurableBefore);
             durableBefore = newDurableBefore;
         }
