@@ -827,14 +827,17 @@ public abstract class CommandStores
         Invariants.require(current.global.epoch() == 0);
         ShardHolder[] shards = new ShardHolder[update.commandStores.size()];
         int i = 0;
+        int maxId = -1;
         for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
         {
             Invariants.require(e.getValue() != null);
             EpochUpdateHolder holder = new EpochUpdateHolder();
             holder.add(1, e.getValue(), e.getValue().all());
             shards[i++] = new ShardHolder(supplier.create(e.getKey(), holder), e.getValue());
+            maxId = Math.max(maxId, e.getKey());
         }
 
+        nextId = maxId + 1;
         loadSnapshot(new Snapshot(shards, update.local, update.global));
     }
 
