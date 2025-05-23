@@ -23,8 +23,10 @@ import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.IntBinaryOperator;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
@@ -114,6 +116,25 @@ public class SortedArrays
         public boolean containsAll(SortedArrayList<T> test)
         {
             return isSubset(Comparable::compareTo, test.array, 0, test.array.length, array, 0, array.length);
+        }
+
+        @Override
+        public final void forEach(Consumer<? super T> action)
+        {
+            for (T t : array)
+                action.accept(t);
+        }
+
+        @Override
+        @Nonnull
+        public final Iterator<T> iterator()
+        {
+            return new Iterator<T>()
+            {
+                int i = 0;
+                @Override public boolean hasNext() { return i < array.length; }
+                @Override public T next() { return array[i++]; }
+            };
         }
 
         @Override
