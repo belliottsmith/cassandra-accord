@@ -609,13 +609,6 @@ public class Topology
             forEach.accept(shards[i]);
     }
 
-    public <A> A reduce(A zero,
-                        Predicate<Shard> filter,
-                        BiFunction<A, ? super Shard, A> reducer)
-    {
-        return Utils.reduce(zero, shards(), filter, reducer);
-    }
-
     public SortedArrayList<Id> nodes()
     {
         return nodeIds;
