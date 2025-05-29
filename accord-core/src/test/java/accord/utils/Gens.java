@@ -532,6 +532,8 @@ public class Gens
         if (input.isEmpty()) return constant(input);
         return rs -> {
             int size = sizeGen.nextInt(rs);
+            if (size == 0)
+                return List.of();
             Invariants.requireIndexInBounds(input.size(), 0, size);
             List<T> remaining = new ArrayList<>(input);
             List<T> list = new ArrayList<>(size);
