@@ -26,15 +26,17 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -46,7 +48,9 @@ import com.google.common.collect.Iterables;
 
 import accord.utils.random.Picker;
 
-public class Gens {
+@SuppressWarnings("unused")
+public class Gens
+{
     private Gens() {
     }
 
@@ -65,6 +69,19 @@ public class Gens {
         return ignore -> constant.get();
     }
 
+    /**
+     * Creates a generator that randomly selects one of the provided generators on each execution, then calls {@link Gen#next(RandomSource)} on that chosen generator.
+     * <p>
+     * This method distributes the selection with equal probability. For weighted selection,
+     * see {@link #oneOf(Map)}.
+     *
+     * @param <T> the type of values to generate
+     * @param gens the generators to select from
+     * @return a generator that uses one of the provided generators for each value
+     * @throws IllegalArgumentException if gens is empty
+     */
+    @SuppressWarnings("unchecked")
+    @SafeVarargs
     public static <T> Gen<T> oneOf(Gen<? extends T>... gens)
     {
         switch (gens.length)
@@ -75,6 +92,18 @@ public class Gens {
         return oneOf(Arrays.asList(gens));
     }
 
+    /**
+     * Creates a generator that randomly selects one of the provided generators from a list on each execution, then calls {@link Gen#next(RandomSource)} on that chosen generator.
+     * <p>
+     * This method distributes the selection with equal probability. For weighted selection,
+     * see {@link #oneOf(Map)}.
+     *
+     * @param <T> the type of values to generate
+     * @param gens the list of generators to select from
+     * @return a generator that uses one of the provided generators for each value
+     * @throws IllegalArgumentException if gens is empty
+     */
+    @SuppressWarnings("unchecked")
     public static <T> Gen<T> oneOf(List<Gen<? extends T>> gens)
     {
         switch (gens.size())
@@ -85,17 +114,50 @@ public class Gens {
         return rs -> rs.pick(gens).next(rs);
     }
 
+    /**
+     * Creates a generator that randomly selects one of the provided generators based on weight, then calls {@link Gen#next(RandomSource)} on that chosen generator.
+     * <p>
+     * Each generator is selected with a probability proportional to its associated weight.
+     * Higher weights increase the likelihood of selection.
+     *
+     * @param <T> the type of values to generate
+     * @param values a map of generators to their respective weights
+     * @return a generator that uses one of the provided generators according to their weights
+     * @throws IllegalArgumentException if values is empty
+     */
     public static <T> Gen<T> oneOf(Map<Gen<T>, Integer> values)
     {
         Gen<Gen<T>> gen = pick(values);
         return rs -> gen.next(rs).next(rs);
     }
 
+    /**
+     * A builder for creating generators that randomly select from multiple generators with customizable weights.
+     *
+     * @see OneOfBuilder
+     * @return a oneOf builder to aid in creating a {@code Gen} of type {@code T}
+     * @param <T> the generator will return
+     */
     public static <T> OneOfBuilder<T> oneOf()
     {
         return new OneOfBuilder<>();
     }
 
+    /**
+     * A builder for creating generators that randomly select from multiple generators with customizable weights.
+     * <p>
+     * This builder allows constructing complex random selection logic with:
+     * <ul>
+     * <li>Weighted probabilities for different generators</li>
+     * <li>Dynamically determined weights at generation time (if {@link #build} is called, the weight will be {@code 1})</li>
+     * </ul>
+     * <p>
+     * The {@link #buildWithDynamicWeights()} method is particularly powerful as it creates
+     * a meta-generator that recalculates the weights for unweighted generators on each invocation,
+     * producing more varied randomization patterns than static weights.
+     *
+     * @param <T> the type of values the generators will produce
+     */
     public static class OneOfBuilder<T>
     {
         private final Map<Gen<T>, Integer> weighted = new LinkedHashMap<>();
@@ -128,8 +190,7 @@ public class Gens {
                 return i -> gen;
             }
             return rs -> {
-                Map<Gen<T>, Integer> commands = new LinkedHashMap<>();
-                commands.putAll(weighted);
+                Map<Gen<T>, Integer> commands = new LinkedHashMap<>(weighted);
                 for (var gen : unweighted)
                     commands.put(gen, unknownWeightGen.nextInt(rs));
                 var top = pick(commands);
@@ -139,8 +200,7 @@ public class Gens {
 
         public Gen<T> build()
         {
-            Map<Gen<T>, Integer> commands = new LinkedHashMap<>();
-            commands.putAll(weighted);
+            Map<Gen<T>, Integer> commands = new LinkedHashMap<>(weighted);
             for (var gen : unweighted)
                 commands.put(gen, 1);
             var top = pick(commands);
@@ -148,40 +208,96 @@ public class Gens {
         }
     }
 
+    /**
+     * Creates a generator that randomly selects one value from an array.
+     * <p>
+     * Each value has an equal probability of being selected.
+     *
+     * @param ts the array of values to select from
+     * @return a generator that produces random values from the given array
+     * @throws IllegalArgumentException if the array is empty
+     */
     public static Gen.IntGen pickInt(int... ts)
     {
+        Invariants.requireArgument(ts.length > 0, "Unable to pick from an empty array");
         return rs -> ts[rs.nextInt(0, ts.length)];
     }
 
+    /**
+     * Creates a generator that randomly selects one value from an array.
+     * <p>
+     * Each value has an equal probability of being selected.
+     *
+     * @param <T> the type of values to generate
+     * @param ts the array of values to select from
+     * @return a generator that produces random values from the given array
+     * @throws IllegalArgumentException if the array is empty
+     */
+    @SafeVarargs
     public static <T> Gen<T> pick(T... ts)
     {
+        Invariants.requireArgument(ts.length > 0, "Unable to pick from an empty array");
         return pick(Arrays.asList(ts));
     }
 
+    /**
+     * Creates a generator that randomly selects one value from a list.
+     * <p>
+     * Each value has an equal probability of being selected.
+     *
+     * @param <T> the type of values to generate
+     * @param ts the list of values to select from
+     * @return a generator that produces random values from the given list
+     * @throws IllegalArgumentException if the list is empty
+     */
     public static <T> Gen<T> pick(List<T> ts)
     {
+        Invariants.requireArgument(!ts.isEmpty(), "Unable to pick from an empty collection");
         Gen.IntGen offset = ints().between(0, ts.size() - 1);
         return rs -> ts.get(offset.nextInt(rs));
     }
 
+    /**
+     * Creates a generator that randomly selects one value from a set. When the set does not have deterministic
+     * iteration ordering, then the values will be sorted based off their natural ordering first.
+     * <p>
+     * Each value has an equal probability of being selected.
+     *
+     * @param <T> the type of values to generate
+     * @param set the set of values to select from
+     * @return a generator that produces random values from the given set
+     * @throws IllegalArgumentException if the set is empty
+     */
     public static <T extends Comparable<T>> Gen<T> pick(Set<T> set)
     {
+        Invariants.requireArgument(!set.isEmpty(), "Unable to pick from an empty collection");
         List<T> list = new ArrayList<>(set);
         // Non-ordered sets may have different iteration order on different environments, which would make a seed produce different histories!
         // To avoid such a problem, make sure to apply a deterministic function (sort).
-        if (!(set instanceof NavigableSet))
+        if (!isIterationSafe(set))
             list.sort(Comparator.naturalOrder());
         return pick(list);
     }
 
+    /**
+     * Creates a generator that randomly selects one value from a weighted map.
+     * <p>
+     * Each value is selected with a probability proportional to its associated weight.
+     * Higher weights increase the likelihood of selection.
+     * <p>
+     * For deterministic behavior, this method requires maps with deterministic iteration order
+     * like {@link java.util.EnumMap} or {@link java.util.LinkedHashMap}.
+     *
+     * @param <T> the type of values to generate
+     * @param values a map of values to their respective weights
+     * @return a generator that produces values according to their weights
+     * @throws IllegalArgumentException if values is empty or doesn't have deterministic iteration order
+     */
     public static <T> Gen<T> pick(Map<T, Integer> values)
     {
         if (values == null || values.isEmpty())
             throw new IllegalArgumentException("values is empty");
-        // if 2 values have the same weight we need some way to tie-break, but that isn't always possible...
-        // this method relies on the map having some order and will reject any map that doesn't define a deterministic order
-        if (!(values instanceof EnumMap || values instanceof LinkedHashMap))
-            throw new IllegalArgumentException("pick(Map) requires a map with deterministic iteration; given " + values.getClass());
+        checkIterationSafe("pick(Map)", values);
         if (values.size() == 1)
             return constant(Objects.requireNonNull(Iterables.getFirst(values.keySet(), null)));
         double totalWeight = values.values().stream().mapToDouble(Integer::intValue).sum();
@@ -205,6 +321,41 @@ public class Gens {
         };
     }
 
+    private static boolean isIterationSafe(Map<?, ?> values)
+    {
+        return values instanceof EnumMap
+                || values instanceof LinkedHashMap
+                || values instanceof SortedMap;
+    }
+
+    private static boolean isIterationSafe(Set<?> values)
+    {
+        return values instanceof EnumSet
+               || values instanceof LinkedHashSet
+               || values instanceof SortedSet;
+    }
+
+    private static void checkIterationSafe(String name, Map<?, ?> values)
+    {
+        if (!isIterationSafe(values))
+            throw new IllegalArgumentException(name + " requires a map with deterministic iteration; given " + values.getClass());
+    }
+
+    /**
+     * Creates a generator that selects values from an array using a Zipfian distribution.
+     * <p>
+     * In a Zipfian distribution, the probability of selecting an element decreases as its index increases.
+     * The first element has the highest probability of being selected, the second element has the second-highest
+     * probability, and so on. This is useful for generating skewed data where some values are much more common than
+     * others.
+     * <p>
+     * The weights follow a power law where {@code weight = base / (i+1)}, creating a harmonic series.
+     *
+     * @see <a href="https://en.wikipedia.org/wiki/Zipf%27s_law">Wikipedia</a>
+     * @param array the array to select from
+     * @return a generator that produces values from the array following a Zipfian distribution
+     * @throws IllegalArgumentException if the array is null or empty
+     */
     public static Gen.IntGen pickZipf(int[] array)
     {
         if (array == null || array.length == 0)
@@ -230,6 +381,21 @@ public class Gens {
         };
     }
 
+    /**
+     * Creates a generator that selects values from an array using a Zipfian distribution.
+     * <p>
+     * In a Zipfian distribution, the probability of selecting an element decreases as its index increases.
+     * The first element has the highest probability of being selected, the second element has the second-highest
+     * probability, and so on. This is useful for generating skewed data where some values are much more common than
+     * others.
+     * <p>
+     * The weights follow a power law where {@code weight = base / (i+1)}, creating a harmonic series.
+     *
+     * @see <a href="https://en.wikipedia.org/wiki/Zipf%27s_law">Wikipedia</a>
+     * @param array the array to select from
+     * @return a generator that produces values from the array following a Zipfian distribution
+     * @throws IllegalArgumentException if the array is null or empty
+     */
     public static Gen.LongGen pickZipf(long[] array)
     {
         if (array == null || array.length == 0)
@@ -255,11 +421,42 @@ public class Gens {
         };
     }
 
+    /**
+     * Creates a generator that selects values from an array using a Zipfian distribution.
+     * <p>
+     * In a Zipfian distribution, the probability of selecting an element decreases as its index increases.
+     * The first element has the highest probability of being selected, the second element has the second-highest
+     * probability, and so on. This is useful for generating skewed data where some values are much more common than
+     * others.
+     * <p>
+     * The weights follow a power law where {@code weight = base / (i+1)}, creating a harmonic series.
+     *
+     * @see <a href="https://en.wikipedia.org/wiki/Zipf%27s_law">Wikipedia</a>
+     * @param array the array to select from
+     * @return a generator that produces values from the array following a Zipfian distribution
+     * @throws IllegalArgumentException if the array is null or empty
+     */
+    @SafeVarargs
     public static <T> Gen<T> pickZipf(T... array)
     {
         return pickZipf(Arrays.asList(array));
     }
 
+    /**
+     * Creates a generator that selects values from a list using a Zipfian distribution.
+     * <p>
+     * In a Zipfian distribution, the probability of selecting an element decreases as its index increases.
+     * The first element has the highest probability of being selected, the second element has the second-highest
+     * probability, and so on. This is useful for generating skewed data where some values are much more common than
+     * others.
+     * <p>
+     * The weights follow a power law where {@code weight = base / (i+1)}, creating a harmonic series.
+     *
+     * @see <a href="https://en.wikipedia.org/wiki/Zipf%27s_law">Wikipedia</a>
+     * @param array the list to select from
+     * @return a generator that produces values from the list following a Zipfian distribution
+     * @throws IllegalArgumentException if the list is null or empty
+     */
     public static <T> Gen<T> pickZipf(List<T> array)
     {
         if (array == null || array.isEmpty())
@@ -285,10 +482,57 @@ public class Gens {
         };
     }
 
+    /**
+     * Creates a generator that produces a subset of the input list.
+     * <p>
+     * Elements are selected randomly from the input list without modifying it; the subset returned may not reflect
+     * the original order.
+     *
+     * @param <T> the type of elements in the list
+     * @param input the source list to select elements from
+     * @return a generator that produces variable-sized random subsets of the input list
+     * @throws IndexOutOfBoundsException if sizeGen produces a value outside the list's range
+     */
     public static <T> Gen<List<T>> select(List<T> input)
     {
+        return select(input, rs -> rs.nextInt(0, input.size() + 1));
+    }
+
+    /**
+     * Creates a generator that produces a subset of the input list.
+     * <p>
+     * Elements are selected randomly from the input list without modifying it; the subset returned may not reflect
+     * the original order.
+     *
+     * @param <T> the type of elements in the list
+     * @param input the source list to select elements from
+     * @param size fixed length of how many elements to return
+     * @return a generator that produces fixed-sized random subsets of the input list
+     * @throws IndexOutOfBoundsException if sizeGen produces a value outside the list's range
+     */
+    public static <T> Gen<List<T>> select(List<T> input, int size)
+    {
+        return select(input, ignore -> size);
+    }
+
+    /**
+     * Creates a generator that produces a subset of the input list.
+     * <p>
+     * Elements are selected randomly from the input list without modifying it; the subset returned may not reflect
+     * the original order.
+     *
+     * @param <T> the type of elements in the list
+     * @param input the source list to select elements from
+     * @param sizeGen a generator that determines how many elements to select
+     * @return a generator that produces variable-sized random subsets of the input list
+     * @throws IndexOutOfBoundsException if sizeGen produces a value outside the list's range
+     */
+    public static <T> Gen<List<T>> select(List<T> input, Gen.IntGen sizeGen)
+    {
+        if (input.isEmpty()) return constant(input);
         return rs -> {
-            int size = rs.nextInt(0, input.size() + 1);
+            int size = sizeGen.nextInt(rs);
+            Invariants.requireIndexInBounds(input.size(), 0, size);
             List<T> remaining = new ArrayList<>(input);
             List<T> list = new ArrayList<>(size);
             for (int i = 0; i < size; i++)
@@ -336,6 +580,27 @@ public class Gens {
         return i;
     }
 
+    /**
+     * Creates a generator that uses different distribution strategies for selecting items from a range.  The range is
+     * broken up into {@code numBuckets} sub ranges, and the bucket will be selected using the distribution strategies.
+     * <p>
+     * When the top level generator is called it selects what distribution to use, and returns a generator of {@code int}
+     * that selects from the input using that distribution.
+     * <p>
+     * This method does not document what distributions it can select from, that way it is free to change (add/remove)
+     * over time; it only maintains the property that the distribution may change between calls to the top level generator.
+     * <p>
+     * Some sample distribution strategies:
+     * <ul>
+     *     <li>Uniform distribution - Each item has equal chance of selection</li>
+     *     <li>Zipfian distribution - Early items are heavily favored, with probability decreasing by index</li>
+     * </ul>
+     *
+     * @param minInclusive value inclusive
+     * @param maxExclusive value exclusive
+     * @param numBuckets how many sub-ranges to create for the top level range
+     * @return a generator of different distribution strategies
+     */
     public static Gen<Gen.IntGen> mixedDistribution(int minInclusive, int maxExclusive, int numBuckets)
     {
         int domainSize = (maxExclusive - minInclusive);
@@ -365,7 +630,7 @@ public class Gens {
                 }
                 case 1: // median biased
                 {
-                    int medians[] = new int[bucket.length];
+                    int[] medians = new int[bucket.length];
                     for (int i = 0; i < medians.length; i++)
                     {
                         int start = bucket[i];
@@ -386,6 +651,25 @@ public class Gens {
         };
     }
 
+    /**
+     * Creates a generator that uses different distribution strategies for selecting items from a range.
+     * <p>
+     * When the top level generator is called it selects what distribution to use, and returns a generator of {@code int}
+     * that selects from the input using that distribution.
+     * <p>
+     * This method does not document what distributions it can select from, that way it is free to change (add/remove)
+     * over time; it only maintains the property that the distribution may change between calls to the top level generator.
+     * <p>
+     * Some sample distribution strategies:
+     * <ul>
+     *     <li>Uniform distribution - Each item has equal chance of selection</li>
+     *     <li>Zipfian distribution - Early items are heavily favored, with probability decreasing by index</li>
+     * </ul>
+     *
+     * @param minInclusive value inclusive
+     * @param maxExclusive value exclusive
+     * @return a generator of different distribution strategies
+     */
     public static Gen<Gen.IntGen> mixedDistribution(int minInclusive, int maxExclusive)
     {
         int domainSize = (maxExclusive - minInclusive + 1);
@@ -448,6 +732,25 @@ public class Gens {
         return array;
     }
 
+    /**
+     * Creates a generator that uses different distribution strategies for selecting items from a range.
+     * <p>
+     * When the top level generator is called it selects what distribution to use, and returns a generator of {@code int}
+     * that selects from the input using that distribution.
+     * <p>
+     * This method does not document what distributions it can select from, that way it is free to change (add/remove)
+     * over time; it only maintains the property that the distribution may change between calls to the top level generator.
+     * <p>
+     * Some sample distribution strategies:
+     * <ul>
+     *     <li>Uniform distribution - Each item has equal chance of selection</li>
+     *     <li>Zipfian distribution - Early items are heavily favored, with probability decreasing by index</li>
+     * </ul>
+     *
+     * @param minInclusive value inclusive
+     * @param maxExclusive value exclusive
+     * @return a generator of different distribution strategies
+     */
     public static Gen<Gen.LongGen> mixedDistribution(long minInclusive, long maxExclusive)
     {
         long domainSize = (maxExclusive - minInclusive + 1);
@@ -511,11 +814,50 @@ public class Gens {
         return array;
     }
 
+    /**
+     * Creates a generator that uses different distribution strategies for selecting items from an array.
+     * <p>
+     * When the top level generator is called it selects what distribution to use, and returns a generator of {@code T}
+     * that selects from the input using that distribution.
+     * <p>
+     * This method does not document what distributions it can select from, that way it is free to change (add/remove)
+     * over time; it only maintains the property that the distribution may change between calls to the top level generator.
+     * <p>
+     * Some sample distribution strategies:
+     * <ul>
+     *     <li>Uniform distribution - Each item has equal chance of selection</li>
+     *     <li>Zipfian distribution - Early items are heavily favored, with probability decreasing by index</li>
+     * </ul>
+     *
+     * @param <T> the type of elements in the array
+     * @param list the array of values to select from
+     * @return a generator of different distribution strategies
+     */
+    @SafeVarargs
     public static <T> Gen<Gen<T>> mixedDistribution(T... list)
     {
         return mixedDistribution(Arrays.asList(list));
     }
 
+    /**
+     * Creates a generator that uses different distribution strategies for selecting items from a list.
+     * <p>
+     * When the top level generator is called it selects what distribution to use, and returns a generator of {@code T}
+     * that selects from the input using that distribution.
+     * <p>
+     * This method does not document what distributions it can select from, that way it is free to change (add/remove)
+     * over time; it only maintains the property that the distribution may change between calls to the top level generator.
+     * <p>
+     * Some sample distribution strategies:
+     * <ul>
+     *     <li>Uniform distribution - Each item has equal chance of selection</li>
+     *     <li>Zipfian distribution - Early items are heavily favored, with probability decreasing by index</li>
+     * </ul>
+     *
+     * @param <T> the type of elements in the list
+     * @param list the list of values to select from
+     * @return a generator of different distribution strategies
+     */
     public static <T> Gen<Gen<T>> mixedDistribution(List<T> list)
     {
         return rs -> {
@@ -542,7 +884,25 @@ public class Gens {
         };
     }
 
-    public static <T> Gen<Gen.IntGen> mixedDistribution(int[] list)
+    /**
+     * Creates a generator that uses different distribution strategies for selecting items from an array.
+     * <p>
+     * When the top level generator is called it selects what distribution to use, and returns a generator of {@code int}
+     * that selects from the input using that distribution.
+     * <p>
+     * This method does not document what distributions it can select from, that way it is free to change (add/remove)
+     * over time; it only maintains the property that the distribution may change between calls to the top level generator.
+     * <p>
+     * Some sample distribution strategies:
+     * <ul>
+     *     <li>Uniform distribution - Each item has equal chance of selection</li>
+     *     <li>Zipfian distribution - Early items are heavily favored, with probability decreasing by index</li>
+     * </ul>
+     *
+     * @param list the array of values to select from
+     * @return a generator of different distribution strategies
+     */
+    public static Gen<Gen.IntGen> mixedDistribution(int[] list)
     {
         return rs -> {
             switch (rs.nextInt(0, 4))
@@ -654,15 +1014,31 @@ public class Gens {
             return RandomSource::nextBoolean;
         }
 
+        /**
+         * Creates a generator that produces boolean values with a target ratio of true values,
+         * and with true values appearing in contiguous runs of random length.
+         * <p>
+         * This is a stateful generator (not thread safe) that maintains an approximate ratio of true values by
+         * tracking the counts of true and false values it has generated. It will produce runs of consecutive true
+         * values up to the specified maximum length to create a more realistic pattern than
+         * independent random choices.
+         *
+         * @param ratio the target ratio of true values (between 0 and 1)
+         * @param maxRuns the maximum length of consecutive true values in a run
+         * @return a generator that produces boolean values matching the specified distribution pattern
+         * @throws IllegalArgumentException if ratio is not between 0 and 1
+         */
         public Gen<Boolean> biasedRepeatingRuns(double ratio, int maxRuns)
         {
             Invariants.requireArgument(ratio > 0 && ratio <= 1, "Expected %d to be larger than 0 and <= 1", ratio);
             double lower = ratio * .8;
             double upper = ratio * 1.2;
-            return new Gen<Boolean>() {
+            return new Gen<>()
+            {
                 // run represents how many consecutaive true values should be returned; -1 implies no active "run" exists
                 private int run = -1;
                 private long falseCount = 0, trueCount = 0;
+
                 @Override
                 public Boolean next(RandomSource rs)
                 {
@@ -705,7 +1081,7 @@ public class Gens {
                 switch (selection)
                 {
                     case 0: // uniform 50/50
-                        return r -> r.nextBoolean();
+                        return RandomSource::nextBoolean;
                     case 1: // variable frequency
                         var freq = rs.nextFloat();
                         return r -> r.decide(freq);
@@ -745,11 +1121,18 @@ public class Gens {
             return r -> r.nextInt(min, max + 1);
         }
 
+
+        /**
+         * @see Gens#mixedDistribution(int, int)
+         */
         public Gen<Gen.IntGen> mixedDistribution(int minInclusive, int maxExclusive)
         {
             return Gens.mixedDistribution(minInclusive, maxExclusive);
         }
 
+        /**
+         * @see Gens#mixedDistribution(int, int, int)
+         */
         public Gen<Gen.IntGen> mixedDistribution(int minInclusive, int maxExclusive, int numBuckets)
         {
             return Gens.mixedDistribution(minInclusive, maxExclusive, numBuckets);
@@ -785,11 +1168,21 @@ public class Gens {
             return pick(klass.getEnumConstants());
         }
 
+        /**
+         * A mixedDistribution using the enum classes values as input to {@link Gens#mixedDistribution(Object[])}
+         *
+         * @see Gens#mixedDistribution(Object[])
+         */
         public <T extends Enum<T>> Gen<Gen<T>> allMixedDistribution(Class<T> klass)
         {
             return mixedDistribution(klass.getEnumConstants());
         }
 
+        /**
+         * Creates a generator that randomly selects one value from the enum values based off a set of weights
+         *
+         * @see #pick(Map)
+         */
         public <T extends Enum<T>> Gen<T> allWithWeights(Class<T> klass, int... weights)
         {
             T[] constants = klass.getEnumConstants();
@@ -925,11 +1318,13 @@ public class Gens {
         }
     }
 
-    public static class ArrayDSL<T> implements BaseSequenceDSL<ArrayDSL<T>, T[]> {
+    public static class ArrayDSL<T> implements BaseSequenceDSL<ArrayDSL<T>, T[]>
+    {
         private final Class<T> type;
         private final Gen<T> fn;
 
-        public ArrayDSL(Class<T> type, Gen<T> fn) {
+        public ArrayDSL(Class<T> type, Gen<T> fn)
+        {
             this.type = Objects.requireNonNull(type);
             this.fn = Objects.requireNonNull(fn);
         }
@@ -952,6 +1347,7 @@ public class Gens {
             {
                 Reset.tryReset(fn);
                 int size = sizeGen.nextInt(r);
+                //noinspection unchecked
                 T[] list = (T[]) Array.newInstance(type, size);
                 for (int i = 0; i < size; i++)
                     list[i] = fn.next(r);
@@ -1075,6 +1471,7 @@ public class Gens {
             {
                 T value = null;
                 int i;
+                //noinspection StatementWithEmptyBody
                 for (i = 0; i < 42 && !seen.add((value = fn.next(random))); i++) {}
                 if (i == 42) throw IgnoreGenResult.INSTANCE;
                 return value;
