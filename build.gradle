@@ -30,6 +30,7 @@ repositories {
 rat {
     // List of Gradle exclude directives, defaults to ['**/.gradle/**']
     excludes.add("**/build/**")
+    excludes.add("**/*.md")
     excludes.add(".idea/**")
     if (layout.projectDirectory.file(".rat-excludes.txt").asFile.exists())
     {
