@@ -95,7 +95,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
     public static void withStable(CoordinationAdapter<?> adapter, Node node, Merge merge, Deps alreadyStableDeps, Route<?> require, @Nullable Route<?> sendTo, @Nullable SelectNodeOwnership selectSendTo, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
     {
         Invariants.require(sendTo == null || selectSendTo != null);
-        if (!node.topology().hasEpoch(executeAt.epoch()))
+        if (!node.topology().hasAtLeastEpoch(executeAt.epoch()))
         {
             node.withEpochAtLeast(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
             return;

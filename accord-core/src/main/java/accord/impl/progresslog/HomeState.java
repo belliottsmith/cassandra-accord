@@ -24,6 +24,8 @@ import javax.annotation.Nullable;
 import accord.coordinate.MaybeRecover;
 import accord.coordinate.Outcome;
 import accord.local.Command;
+import accord.local.CommandStores;
+import accord.local.CommandStores.IncludingSpecificStoreSelector;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Status;
@@ -153,9 +155,8 @@ abstract class HomeState extends WaitingState
 
         CallbackInvoker<ProgressToken, Outcome> invoker = invokeHomeCallback(instance, txnId, maxProgressToken, HomeState::recoverCallback);
 
-        long lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(safeStore, txnId.epoch(), command.participants().hasTouched());
-        long highEpoch = safeStore.ranges().earliestLaterEpochThatFullyCovers(command.executeAtIfKnownElseTxnId().epoch(), command.participants().hasTouched());
-        instance.debugActive(MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, lowEpoch, highEpoch, invoker), invoker);
+        CommandStores.StoreSelector reportTo = new IncludingSpecificStoreSelector(safeStore.commandStore().id());
+        instance.debugActive(MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, reportTo, invoker), invoker);
         set(safeStore, instance, ReadyToExecute, Querying);
     }
 
@@ -178,6 +179,9 @@ abstract class HomeState extends WaitingState
             if (fail != null)
             {
                 safeStore.agent().onCaughtException(fail, "Failed recovering " + state);
+                // re-save prior progress token
+                if (prevProgressToken != null && prevProgressToken.compareTo(command) > 0)
+                    instance.saveProgressToken(command.txnId(), prevProgressToken);
                 state.incrementHomeRetryCounter();
                 state.set(safeStore, instance, status, Queued);
             }

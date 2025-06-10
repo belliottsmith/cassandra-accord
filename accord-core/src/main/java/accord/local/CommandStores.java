@@ -20,6 +20,8 @@ package accord.local;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -27,7 +29,6 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -52,7 +53,6 @@ import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
-import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -73,6 +73,7 @@ import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.Hashing;
+import org.agrona.collections.Int2IntHashMap;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.ConfigurationService.EpochReady.done;
@@ -88,6 +89,158 @@ public abstract class CommandStores
 {
     @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(CommandStores.class);
+
+    public interface LatentStoreSelector
+    {
+        StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants);
+
+        class StandardLatentStoreSelector implements LatentStoreSelector
+        {
+            private static final StandardLatentStoreSelector INSTANCE = new StandardLatentStoreSelector();
+
+            @Override
+            public StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
+            {
+                return snapshot -> StoreFinder.find(snapshot, participants)
+                                              .filter(snapshot, participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch())
+                                              .iterator(snapshot);
+            }
+        }
+
+        static LatentStoreSelector standard()
+        {
+            return StandardLatentStoreSelector.INSTANCE;
+        }
+    }
+
+    public interface StoreSelector extends LatentStoreSelector
+    {
+        default StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants) { return this; }
+        Iterator<CommandStore> select(Snapshot snapshot);
+    }
+
+    public static class IncludingSpecificStoreSelector implements StoreSelector
+    {
+        final int storeId;
+
+        public IncludingSpecificStoreSelector(int storeId)
+        {
+            this.storeId = storeId;
+        }
+
+        @Override
+        public StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
+        {
+            return snapshot -> {
+                StoreFinder finder = StoreFinder.find(snapshot, participants)
+                                                .filter(snapshot, participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch());
+                finder.set(snapshot.byId.get(storeId));
+                return finder.iterator(snapshot);
+            };
+        }
+
+        @Override
+        public Iterator<CommandStore> select(Snapshot snapshot)
+        {
+            return Collections.singletonList(snapshot.byId(storeId)).iterator();
+        }
+    }
+
+
+    public static class StoreFinder extends SimpleBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
+    {
+        final int[] indexMap;
+
+        private StoreFinder(int size, int[] indexMap)
+        {
+            super(size);
+            this.indexMap = indexMap;
+        }
+
+        public StoreFinder(Snapshot snapshot)
+        {
+            this(snapshot.shards.length, snapshot.indexForRange);
+        }
+
+        public static StoreSelector selector(Unseekables<?> unseekables, long minEpoch, long maxEpoch)
+        {
+            return snapshot -> {
+                StoreFinder finder = StoreFinder.find(snapshot, unseekables);
+                finder.filter(snapshot, unseekables, minEpoch, maxEpoch);
+                return finder.iterator(snapshot);
+            };
+        }
+
+        public static StoreFinder find(Snapshot snapshot, Unseekables<?> unseekables)
+        {
+            StoreFinder finder = new StoreFinder(snapshot);
+            switch (unseekables.domain())
+            {
+                default: throw new UnhandledEnum(unseekables.domain());
+                case Range:
+                {
+                    int minIndex = 0;
+                    for (Range range : (AbstractRanges)unseekables)
+                        minIndex = snapshot.lookupByRange.forEachRange(range, finder, finder, null, null, null, null, minIndex);
+                    break;
+                }
+                case Key:
+                {
+                    int minIndex = 0;
+                    for (RoutingKey key : (AbstractUnseekableKeys)unseekables)
+                        minIndex = snapshot.lookupByRange.forEachKey(key, finder, finder, null, null, null, null, minIndex);
+                    break;
+                }
+            }
+            return finder;
+        }
+
+        public StoreFinder filter(Snapshot snapshot, Unseekables<?> unseekables, long minEpoch, long maxEpoch)
+        {
+            for (int i = firstSetBit(); i >= 0 ; i = nextSetBit(i + 1, -1))
+            {
+                ShardHolder shard = snapshot.shards[i];
+                Ranges shardRanges = shard.ranges().allBetween(minEpoch, maxEpoch);
+                if (shardRanges != shard.ranges.all() && !shardRanges.intersects(unseekables))
+                    unset(i);
+            }
+            return this;
+        }
+
+        public Iterator<CommandStore> iterator(Snapshot snapshot)
+        {
+            return new Iterator<>()
+            {
+                int i = firstSetBit();
+                @Override
+                public boolean hasNext()
+                {
+                    return i >= 0;
+                }
+
+                @Override
+                public CommandStore next()
+                {
+                    CommandStore next = snapshot.shards[i].store;
+                    i = nextSetBit(i + 1, -1);
+                    return next;
+                }
+            };
+        }
+
+        @Override
+        public void accept(Object p1, Object p2, Object p3, Object p4, int index)
+        {
+            set(indexMap[index]);
+        }
+
+        @Override
+        public void accept(Object p1, Object p2, Object p3, Object p4, int fromIndex, int toIndex)
+        {
+            for (int i = fromIndex ; i < toIndex ; ++i)
+                set(indexMap[i]);
+        }
+    }
 
     public interface Factory
     {
@@ -130,7 +283,7 @@ public abstract class CommandStores
         }
     }
 
-    protected static class ShardHolder
+    public static class ShardHolder
     {
         public final CommandStore store;
         RangesForEpoch ranges;
@@ -360,22 +513,27 @@ public abstract class CommandStores
             return Math.max(sinceEpoch, epochs[0]);
         }
 
-        public long latestEarlierEpochThatFullyCovers(SafeCommandStore safeStore, long beforeEpoch, Unseekables<?> keysOrRanges)
+        public long latestEarlierEpochThatFullyCovers(long beforeEpoch, Unseekables<?> keysOrRanges)
         {
             int i = ceilIndex(beforeEpoch);
-            if (i == 0 || i <= epochs.length)
+            if (i == 0)
                 return beforeEpoch;
+
             long latest = beforeEpoch;
-            Ranges existing = i >= ranges.length ? Ranges.EMPTY : ranges[i];
-            long minEpoch = safeStore.node().topology().minEpoch();
-            while (--i >= 0 && minEpoch < epochs[i])
+            Ranges existing = Ranges.EMPTY;
+            long next = beforeEpoch;
+            if (i < epochs.length)
+            {
+                existing = ranges[i];
+                next = Math.min(next, epochs[i]);
+            }
+            while (--i >= 0)
             {
                 if (ranges[i].without(existing).intersects(keysOrRanges))
-                    latest = epochs[i + 1] - 1;
+                    latest = next - 1;
                 existing = existing.with(ranges[i]);
+                next = epochs[i];
             }
-            if (latest < beforeEpoch)
-                latest = Math.max(latest, safeStore.node().topology().minEpoch());
             return latest;
         }
 
@@ -398,22 +556,23 @@ public abstract class CommandStores
         current = toLoad;
     }
 
-    protected static class Snapshot extends Journal.TopologyUpdate
+    public static class Snapshot extends Journal.TopologyUpdate implements Iterable<ShardHolder>
     {
-        public final ShardHolder[] shards;
-        public final Int2ObjectHashMap<CommandStore> byId;
+        final ShardHolder[] shards;
+        final Int2IntHashMap byId;
         private final int[] indexForRange;
-        public final SearchableRangeList lookupByRange;
+        final SearchableRangeList lookupByRange;
 
         public Snapshot(ShardHolder[] shards, Topology local, Topology global)
         {
             super(asMap(shards), local, global);
             this.shards = shards;
-            this.byId = new Int2ObjectHashMap<>(shards.length, Hashing.DEFAULT_LOAD_FACTOR, true);
+            this.byId = new Int2IntHashMap(shards.length, Hashing.DEFAULT_LOAD_FACTOR, -1);
             int count = 0;
-            for (ShardHolder shard : shards)
+            for (int i = 0 ; i < shards.length ; ++i)
             {
-                byId.put(shard.store.id(), shard.store);
+                ShardHolder shard = shards[i];
+                byId.put(shard.store.id(), i);
                 count += shard.ranges.all().size();
             }
             class RangeAndIndex
@@ -460,6 +619,17 @@ public abstract class CommandStores
             for (ShardHolder shard : shards)
                 commandStores.put(shard.store.id, shard.ranges);
             return commandStores;
+        }
+
+        public CommandStore byId(int id)
+        {
+            return shards[byId.get(id)].store;
+        }
+
+        @Override
+        public Iterator<ShardHolder> iterator()
+        {
+            return Arrays.asList(shards).iterator();
         }
     }
 
@@ -666,7 +836,7 @@ public abstract class CommandStores
 
     private AsyncChain<Void> forEach(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach, boolean matchesMultiple)
     {
-        return this.mapReduce(context, keys, minEpoch, maxEpoch, new MapReduce<SafeCommandStore, Void>()
+        return this.mapReduce(context, keys, minEpoch, maxEpoch, new MapReduce<>()
         {
             @Override
             public Void apply(SafeCommandStore in)
@@ -689,6 +859,22 @@ public abstract class CommandStores
             {
                 return forEach.getClass().getName();
             }
+        });
+    }
+
+    public AsyncChain<Void> forEach(PreLoadContext context, StoreSelector selector, Consumer<SafeCommandStore> forEach)
+    {
+        return this.mapReduce(context, selector, new MapReduce<>()
+        {
+            @Override
+            public Void apply(SafeCommandStore in)
+            {
+                forEach.accept(in);
+                return null;
+            }
+            @Override
+            public Void reduce(Void o1, Void o2) { return null; }
+            @Override public String toString() { return forEach.getClass().getName(); }
         });
     }
 
@@ -715,79 +901,33 @@ public abstract class CommandStores
         return reduced.begin(mapReduceConsume);
     }
 
+    protected <O> Cancellable mapReduceConsume(PreLoadContext context, StoreSelector selector, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    {
+        AsyncChain<O> reduced = mapReduce(context, selector, mapReduceConsume);
+        return reduced.begin(mapReduceConsume);
+    }
+
     public  <O> Cancellable mapReduceConsume(PreLoadContext context, IntStream commandStoreIds, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
     {
         AsyncChain<O> reduced = mapReduce(context, commandStoreIds, mapReduceConsume);
         return reduced.begin(mapReduceConsume);
     }
 
-    private static class StoreSelector extends SimpleBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
+    // TODO (required): as we get more tables this will become expensive to allocate; we need to index first by prefix
+    public <O> AsyncChain<O> mapReduce(PreLoadContext context, Unseekables<?> unseekables, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
-        final int[] indexMap;
-
-        private StoreSelector(int size, int[] indexMap)
-        {
-            super(size);
-            this.indexMap = indexMap;
-        }
-
-        public StoreSelector(Snapshot snapshot)
-        {
-            this(snapshot.shards.length, snapshot.indexForRange);
-        }
-
-        static StoreSelector select(Snapshot snapshot, Unseekables<?> unseekables)
-        {
-            StoreSelector selector = new StoreSelector(snapshot);
-            switch (unseekables.domain())
-            {
-                default: throw new UnhandledEnum(unseekables.domain());
-                case Range:
-                {
-                    int minIndex = 0;
-                    for (Range range : (AbstractRanges)unseekables)
-                        minIndex = snapshot.lookupByRange.forEachRange(range, selector, selector, null, null, null, null, minIndex);
-                    break;
-                }
-                case Key:
-                {
-                    int minIndex = 0;
-                    for (RoutingKey key : (AbstractUnseekableKeys)unseekables)
-                        minIndex = snapshot.lookupByRange.forEachKey(key, selector, selector, null, null, null, null, minIndex);
-                    break;
-                }
-            }
-            return selector;
-        }
-
-        @Override
-        public void accept(Object p1, Object p2, Object p3, Object p4, int index)
-        {
-            set(indexMap[index]);
-        }
-
-        @Override
-        public void accept(Object p1, Object p2, Object p3, Object p4, int fromIndex, int toIndex)
-        {
-            for (int i = fromIndex ; i < toIndex ; ++i)
-                set(indexMap[i]);
-        }
+        return mapReduce(context, StoreFinder.selector(unseekables, minEpoch, maxEpoch), mapReduce);
     }
 
-    public <O> AsyncChain<O> mapReduce(PreLoadContext context, Unseekables<?> unseekables, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
+    public <O> AsyncChain<O> mapReduce(PreLoadContext context, StoreSelector selector, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
         AsyncChain<O> chain = null;
         BiFunction<O, O, O> reducer = mapReduce::reduce;
         Snapshot snapshot = current;
-        StoreSelector selector = StoreSelector.select(snapshot, unseekables);
-        for (int i = selector.nextSetBit(0, -1); i >= 0 ; i = selector.nextSetBit(i + 1, -1))
+        Iterator<CommandStore> stores = selector.select(snapshot);
+        while (stores.hasNext())
         {
-            ShardHolder shard = snapshot.shards[i];
-            Ranges shardRanges = shard.ranges().allBetween(minEpoch, maxEpoch);
-            if (shardRanges != shard.ranges.all() && !shardRanges.intersects(unseekables))
-                continue;
-
-            AsyncChain<O> next = shard.store.build(context, mapReduce);
+            AsyncChain<O> next = stores.next().build(context, mapReduce);
             chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
@@ -811,17 +951,7 @@ public abstract class CommandStores
 
     protected <O> AsyncChain<O> mapReduce(PreLoadContext context, IntStream commandStoreIds, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
-        // TODO (low priority, efficiency): avoid using an array, or use a scratch buffer
-        int[] ids = commandStoreIds.toArray();
-        AsyncChain<O> chain = null;
-        BiFunction<O, O, O> reducer = mapReduce::reduce;
-        for (int id : ids)
-        {
-            CommandStore commandStore = forId(id);
-            AsyncChain<O> next = commandStore.build(context, mapReduce);
-            chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
-        }
-        return chain == null ? AsyncChains.success(null) : chain;
+        return mapReduce(context, snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
     }
 
     public <O> Cancellable mapReduceConsume(PreLoadContext context, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
@@ -900,8 +1030,8 @@ public abstract class CommandStores
     public CommandStore select(Participants<?> participants)
     {
         Snapshot snapshot = current;
-        StoreSelector selector = StoreSelector.select(snapshot, participants);
-        int i = selector.firstSetBit();
+        StoreFinder stores = StoreFinder.find(snapshot, participants);
+        int i = stores.firstSetBit();
         if (i < 0) return any();
         return snapshot.shards[i].store;
     }
@@ -938,7 +1068,7 @@ public abstract class CommandStores
     public CommandStore forId(int id)
     {
         Snapshot snapshot = current;
-        return snapshot.byId.get(id);
+        return snapshot.shards[snapshot.byId.get(id)].store;
     }
 
     public int[] ids()

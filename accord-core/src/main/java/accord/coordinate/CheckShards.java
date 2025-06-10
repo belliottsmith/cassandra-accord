@@ -39,7 +39,7 @@ import static accord.utils.Invariants.illegalState;
  */
 public abstract class CheckShards<U extends Participants<?>> extends ReadCoordinator<CheckStatusReply>
 {
-    final U route;
+    final U query;
 
     /**
      * The epoch we want to fetch data from remotely
@@ -54,17 +54,17 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     protected boolean truncated;
 
     // srcEpoch is either txnId.epoch() or executeAt.epoch()
-    protected CheckShards(Node node, TxnId txnId, U route, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
+    protected CheckShards(Node node, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
-        this(node, txnId, route, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf);
+        this(node, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf);
         Invariants.require(txnId.isVisible());
     }
 
-    protected CheckShards(Node node, TxnId txnId, U route, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
+    protected CheckShards(Node node, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
-        super(node, topologyFor(node, txnId, route, srcEpoch), txnId);
+        super(node, topologyFor(node, txnId, query, srcEpoch), txnId);
         this.sourceEpoch = srcEpoch;
-        this.route = route;
+        this.query = query;
         this.includeInfo = includeInfo;
         this.bumpBallot = bumpBallot;
         this.previouslyKnownToBeInvalidIf = previouslyKnownToBeInvalidIf;
@@ -79,7 +79,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     @Override
     protected void contact(Id id)
     {
-        Participants<?> unseekables = route.slice(topologies().computeRangesForNode(id));
+        Participants<?> unseekables = query.slice(topologies().computeRangesForNode(id));
         node.send(id, new CheckStatus(txnId, unseekables, sourceEpoch, includeInfo, bumpBallot), this);
     }
 
@@ -119,7 +119,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     @Override
     protected void finishOnExhaustion()
     {
-        if (merged != null && merged.map.hasFullyTruncated(route)) finishOnFailure(new Truncated(txnId, null), false);
+        if (merged != null && merged.map.hasFullyTruncated(query)) finishOnFailure(new Truncated(txnId, null), false);
         else super.finishOnExhaustion();
     }
 }

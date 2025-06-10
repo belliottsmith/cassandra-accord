@@ -24,6 +24,8 @@ import accord.coordinate.FetchData.FetchResult;
 import accord.coordinate.Infer.InvalidIf;
 import accord.local.Cleanup;
 import accord.local.Command;
+import accord.local.CommandStores.LatentStoreSelector;
+import accord.local.CommandStores.StoreSelector;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.PreLoadContext;
@@ -80,7 +82,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     final Node node;
     final TxnId txnId;
     final Route<?> route;
-    final Unseekables<?> propagateTo;
+    final Unseekables<?> requestedFor;
     final Known target;
     final InvalidIf invalidIf;
 
@@ -96,7 +98,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     final WithQuorum withQuorum;
     @Nullable final PartialTxn partialTxn;
     @Nullable final PartialDeps stableDeps;
-    final long lowEpoch, highEpoch;
     @Nullable final Timestamp committedExecuteAt;
     @Nullable final Writes writes;
     @Nullable final Result result;
@@ -108,7 +109,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     Propagate(
     Node node, TxnId txnId,
     Route<?> route,
-    Unseekables<?> propagateTo, Known target, InvalidIf invalidIf,
+    Unseekables<?> requestedFor, Known target, InvalidIf invalidIf,
     SaveStatus maxKnowledgeSaveStatus,
     SaveStatus maxSaveStatus, Ballot promised,
     Ballot acceptedOrCommitted,
@@ -117,8 +118,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     KnownMap known, WithQuorum withQuorum,
     @Nullable PartialTxn partialTxn,
     @Nullable PartialDeps stableDeps,
-    long lowEpoch,
-    long highEpoch,
     @Nullable Timestamp committedExecuteAt,
     @Nullable Writes writes,
     @Nullable Result result,
@@ -127,7 +126,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.node = node;
         this.txnId = txnId;
         this.route = route;
-        this.propagateTo = propagateTo;
+        this.requestedFor = requestedFor;
         this.target = target;
         this.invalidIf = invalidIf;
         this.maxKnowledgeSaveStatus = maxKnowledgeSaveStatus;
@@ -140,19 +139,17 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.withQuorum = withQuorum;
         this.partialTxn = partialTxn;
         this.stableDeps = stableDeps;
-        this.lowEpoch = lowEpoch;
-        this.highEpoch = highEpoch;
         this.committedExecuteAt = committedExecuteAt;
         this.writes = writes;
         this.result = result;
         this.callback = callback;
     }
 
-    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, long lowEpoch, long highEpoch, WithQuorum withQuorum, Route<?> queried, Unseekables<?> propagateTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, WithQuorum withQuorum, Route<?> queried, Participants<?> requestedFor, LatentStoreSelector reportTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
     {
         if (full.maxKnowledgeSaveStatus.status == NotDefined && full.invalidIf == NotKnownToBeInvalid)
         {
-            callback.accept(new FetchResult(Nothing, propagateTo.slice(0, 0), propagateTo), null);
+            callback.accept(new FetchResult(Nothing, requestedFor.slice(0, 0), requestedFor), null);
             return;
         }
 
@@ -160,18 +157,19 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         // TODO (required): consider and document whether it is safe to infer that we are stale if we have not received responses from all shards we know of
         //  (in principle, we should at least require responses from our own shard, and the home shard if we know it); if we only hear from a remote shard it may have fully Erased
-        full = full.finish(queried, propagateTo, queried.with((Unseekables) propagateTo), withQuorum, previouslyKnownToBeInvalidIf);
+        full = full.finish(queried, requestedFor, queried.with((Unseekables) requestedFor), withQuorum, previouslyKnownToBeInvalidIf);
         Route<?> route = Invariants.nonNull(full.route);
 
+        Timestamp committedExecuteAt = full.executeAtIfKnown();
         Propagate propagate =
-            new Propagate(node, txnId, route, propagateTo, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, lowEpoch, highEpoch, full.executeAtIfKnown(), full.writes, full.result, callback);
+            new Propagate(node, txnId, route, requestedFor, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, committedExecuteAt, full.writes, full.result, callback);
 
-        if (full.executeAt != null && full.executeAt.epoch() > highEpoch)
-            highEpoch = full.executeAt.epoch();
-        long untilEpoch = full.executeAt == null ? highEpoch : Math.max(highEpoch, full.executeAt.epoch());
+        long untilEpoch = txnId.epoch();
+        if (committedExecuteAt != null)
+            untilEpoch = Math.max(untilEpoch, committedExecuteAt.epoch());
 
-        Route<?> finalRoute = queried;
-        node.withEpochAtLeast(highEpoch, propagate, () -> node.mapReduceConsumeLocal(propagate, finalRoute, lowEpoch, untilEpoch, propagate));
+        StoreSelector selector = reportTo.refine(txnId, committedExecuteAt, route);
+        node.withEpochAtLeast(untilEpoch, propagate, () -> node.mapReduceConsumeLocal(propagate, selector, propagate));
     }
 
     @Override
@@ -184,8 +182,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     public Void apply(SafeCommandStore safeStore)
     {
         long executeAtEpoch = committedExecuteAt == null ? txnId.epoch() : committedExecuteAt.epoch();
-        long lowEpoch = Math.min(this.lowEpoch, StoreParticipants.computePropagateLowEpoch(safeStore, txnId, route));
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, highEpoch, committedExecuteAt != null);
+        long lowEpoch = StoreParticipants.computePropagateLowEpoch(safeStore, txnId, route);
+        StoreParticipants participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, executeAtEpoch, committedExecuteAt != null);
         // TODO (expected): can we come up with a better more universal pattern for avoiding updating a command we don't intersect with?
         //   ideally integrated with safeStore.get()
         if (participants.owns().isEmpty() && safeStore.ifInitialised(txnId) == null)
@@ -198,7 +196,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         if (participants.executes() == null && executeAtIfKnown != null)
         {
             executeAtEpoch = executeAtIfKnown.epoch();
-            participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, highEpoch, true);
+            participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, executeAtEpoch, true);
         }
 
         switch (command.saveStatus().phase)
@@ -347,9 +345,9 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     {
         FetchResult current = fetchResult;
         if (current == null)
-            return new FetchResult(Nothing, propagateTo.slice(0, 0), propagateTo);
+            return new FetchResult(Nothing, requestedFor.slice(0, 0), requestedFor);
 
-        Unseekables<?> missed = propagateTo.without(current.achievedTarget);
+        Unseekables<?> missed = requestedFor.without(current.achievedTarget);
         if (missed.isEmpty())
             return current;
 

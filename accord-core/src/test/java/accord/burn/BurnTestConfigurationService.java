@@ -51,7 +51,7 @@ public class BurnTestConfigurationService extends AbstractConfigurationService.M
 
     public BurnTestConfigurationService(Node.Id node, AgentExecutor executor, Supplier<RandomSource> randomSupplier, Topology topology, Function<Node.Id, Node> lookup, TopologyUpdates topologyUpdates)
     {
-        super(node);
+        super(node, executor.agent());
         this.executor = executor;
         this.randomSupplier = randomSupplier;
         this.lookup = lookup;
@@ -176,13 +176,9 @@ public class BurnTestConfigurationService extends AbstractConfigurationService.M
     {
         synchronized (this)
         {
-            if (epoch <= maxRequestedEpoch)
-                return;
-
-            maxRequestedEpoch = epoch;
+            while (maxRequestedEpoch < epoch)
+                pendingEpochs.computeIfAbsent(++maxRequestedEpoch, FetchTopology::new);
         }
-
-        pendingEpochs.computeIfAbsent(epoch, FetchTopology::new);
     }
 
     @Override

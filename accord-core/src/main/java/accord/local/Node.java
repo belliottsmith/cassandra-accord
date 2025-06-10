@@ -59,6 +59,7 @@ import accord.coordinate.CoordinationAdapter.Factory.Kind;
 import accord.coordinate.Infer.InvalidIf;
 import accord.coordinate.Outcome;
 import accord.coordinate.RecoverWithRoute;
+import accord.local.CommandStores.StoreSelector;
 import accord.local.durability.DurabilityService;
 import accord.messages.Callback;
 import accord.messages.Reply;
@@ -522,6 +523,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return commandStores.forEach(context, unseekables, minEpoch, maxEpoch, forEach);
     }
 
+    public AsyncChain<Void> forEachLocal(PreLoadContext context, StoreSelector selector, Consumer<SafeCommandStore> forEach)
+    {
+        return commandStores.forEach(context, selector, forEach);
+    }
+
     public AsyncChain<Void> forEachLocalSince(PreLoadContext context, Unseekables<?> unseekables, Timestamp since, Consumer<SafeCommandStore> forEach)
     {
         return commandStores.forEach(context, unseekables, since.epoch(), Long.MAX_VALUE, forEach);
@@ -550,6 +556,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
         return commandStores.mapReduceConsume(context, keys, minEpoch, maxEpoch, mapReduceConsume);
+    }
+
+    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, StoreSelector selector, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
+    {
+        return commandStores.mapReduceConsume(context, selector, mapReduceConsume);
     }
 
     public <T> Cancellable mapReduceConsumeAllLocal(PreLoadContext context, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
@@ -856,7 +867,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, long reportLowEpoch, long reportHighEpoch)
+    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, StoreSelector reportTo)
     {
         {
             AsyncResult<? extends Outcome> result = coordinating.get(txnId);
@@ -866,7 +877,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
         AsyncResult<Outcome> result = withEpochExact(txnId.epoch(), () -> {
             RecoverFuture<Outcome> future = new RecoverFuture<>();
-            RecoverWithRoute.recover(this, txnId, invalidIf, route, null, reportLowEpoch, reportHighEpoch, future);
+            RecoverWithRoute.recover(this, txnId, invalidIf, route, null, reportTo, future);
             return future;
         }).beginAsResult();
         coordinating.putIfAbsent(txnId, result);

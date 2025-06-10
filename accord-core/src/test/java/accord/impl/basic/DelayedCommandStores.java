@@ -103,7 +103,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             Snapshot current = current();
             RangesForEpoch ranges = e.getValue();
             CommandStore commandStore = null;
-            for (ShardHolder shard : current.shards)
+            for (ShardHolder shard : current)
             {
                 if (shard.ranges().equals(ranges))
                     commandStore = shard.store;
@@ -122,10 +122,10 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
     {
         Snapshot current = current();
         // These checks are only applicable to delayed command stores.
-        for (Integer id : current.byId.keySet())
+        for (ShardHolder shard : current)
         {
-            CommandStore prev = current.byId.get(id);
-            CommandStore next = nextSnapshot.byId.get(id);
+            CommandStore prev = current.byId(shard.store.id());
+            CommandStore next = nextSnapshot.byId(shard.store.id());
             {
                 RedundantBefore orig = prev.unsafeGetRedundantBefore();
                 RedundantBefore loaded = next.unsafeGetRedundantBefore();
@@ -468,7 +468,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
     public List<DelayedCommandStore> unsafeStores()
     {
         List<DelayedCommandStore> stores = new ArrayList<>();
-        for (ShardHolder holder : current().shards)
+        for (ShardHolder holder : current())
             stores.add((DelayedCommandStore) holder.store);
         return stores;
     }

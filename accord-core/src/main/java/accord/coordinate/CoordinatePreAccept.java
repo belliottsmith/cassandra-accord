@@ -142,7 +142,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
         proposeInvalidate(node, node.uniqueTimestamp(Ballot::fromValues), txnId, route.homeKey(), (outcome, failure) -> {
             if (failure != null)
                 mismatch.addSuppressed(failure);
-            setFailure(mismatch);
+            callback.accept(null, mismatch);
         });
     }
 

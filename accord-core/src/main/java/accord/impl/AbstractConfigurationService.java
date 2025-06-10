@@ -29,6 +29,7 @@ import com.google.common.primitives.Ints;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Agent;
 import accord.api.ConfigurationService;
 import accord.local.Node;
 import accord.primitives.Ranges;
@@ -45,6 +46,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
     private static final Logger logger = LoggerFactory.getLogger(AbstractConfigurationService.class);
 
     protected final Node.Id localId;
+    protected final Agent agent;
 
     protected final EpochHistory epochs = createEpochHistory();
 
@@ -294,9 +296,10 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         }
     }
 
-    public AbstractConfigurationService(Node.Id localId)
+    public AbstractConfigurationService(Node.Id localId, Agent agent)
     {
         this.localId = localId;
+        this.agent = agent;
     }
 
     protected abstract EpochHistory createEpochHistory();
@@ -363,8 +366,9 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         if (lastReceived > 0 && topology.epoch() > lastReceived + 1)
         {
             logger.debug("Epoch {} received; waiting to receive {} before reporting", topology.epoch(), lastReceived + 1);
-            epochs.receiveFuture(lastReceived + 1).invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync), executor());
-
+            epochs.receiveFuture(lastReceived + 1)
+                  .invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync), executor())
+                  .begin(agent);
             fetchTopologyForEpoch(lastReceived + 1);
             return;
         }
@@ -373,14 +377,18 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         if (lastAcked == 0 && lastReceived > 0)
         {
             logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), epochs.minEpoch(), executor());
-            epochs.acknowledgeFuture(epochs.minEpoch()).invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync));
+            epochs.acknowledgeFuture(epochs.minEpoch())
+                  .invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync))
+                  .begin(agent);
             return;
         }
 
         if (lastAcked > 0 && topology.epoch() > lastAcked + 1)
         {
             logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), lastAcked + 1);
-            epochs.acknowledgeFuture(lastAcked + 1).invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync), executor());
+            epochs.acknowledgeFuture(lastAcked + 1)
+                  .invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync), executor())
+                  .begin(agent);
             return;
         }
 
@@ -453,9 +461,9 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             }
         }
 
-        public Minimal(Node.Id node)
+        public Minimal(Node.Id node, Agent agent)
         {
-            super(node);
+            super(node, agent);
         }
 
         @Override

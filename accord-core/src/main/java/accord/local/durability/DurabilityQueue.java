@@ -317,7 +317,7 @@ public class DurabilityQueue
         long retryDelay = node.agent().retryDurabilityDelay(node, attempt, MICROSECONDS);
         Invariants.require(retryDelay > 0);
         if (request != null) logger.info("{}: Retrying durability for {} requested by {} in {}s.", syncPoint.syncId, syncPoint.route.toRanges(), request.requestedBy, String.format("%.3f", retryDelay/1000_000.0));
-        else logger.debug("{}: Retrying durability for {} in {}.", syncPoint.syncId, syncPoint.route.toRanges(), String.format("%.3f", retryDelay/1000_000.0));
+        else logger.debug("{}: Retrying durability for {} in {}s.", syncPoint.syncId, syncPoint.route.toRanges(), String.format("%.3f", retryDelay/1000_000.0));
         node.scheduler().selfRecurring(() -> submit(syncPoint, request, attempt), retryDelay, MICROSECONDS);
     }
 

@@ -25,7 +25,9 @@ import javax.annotation.Nullable;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.coordinate.AsynchronousAwait;
 import accord.coordinate.FetchData;
+import accord.coordinate.FetchSomeRoute;
 import accord.local.Command;
+import accord.local.CommandStores.IncludingSpecificStoreSelector;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.Node;
 import accord.local.SafeCommand;
@@ -141,7 +143,7 @@ abstract class WaitingState extends BaseTxnState
         return waitingProgress(encodedState);
     }
 
-    final @Nonnull long waitingKeyTrackerBits()
+    final long waitingKeyTrackerBits()
     {
         return (encodedState >>> AWAIT_SHIFT) & (-1L >>> (64 - AWAIT_BITS));
     }
@@ -240,7 +242,7 @@ abstract class WaitingState extends BaseTxnState
         if (offset >= 3)
         {
             offset = 3;
-            lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(safeStore, lowEpoch, command.maxContactable());
+            lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(lowEpoch, command.maxContactable());
         }
         encodedState = encodedState & ~(0x3L << AWAIT_EPOCH_SHIFT);
         encodedState |= ((long)offset) << AWAIT_EPOCH_SHIFT;
@@ -263,7 +265,7 @@ abstract class WaitingState extends BaseTxnState
         long epoch = ranges.epochAtIndex(Math.max(0, i)) - 1;
         if (offset < 3)
             return epoch;
-        return safeStore.ranges().latestEarlierEpochThatFullyCovers(safeStore, epoch, route);
+        return safeStore.ranges().latestEarlierEpochThatFullyCovers(epoch, route);
     }
 
     boolean hasNewLowEpoch(SafeCommandStore safeStore, TxnId txnId, long prevLowEpoch, long newLowEpoch)
@@ -298,10 +300,10 @@ abstract class WaitingState extends BaseTxnState
 
     long readHighEpoch(SafeCommandStore safeStore, TxnId txnId, Route<?> route)
     {
+        RangesForEpoch ranges = safeStore.ranges();
         int offset = (int) ((encodedState >>> (AWAIT_EPOCH_SHIFT + 2)) & 0x3);
         if (offset == 0)
-            return txnId.epoch();
-        RangesForEpoch ranges = safeStore.ranges();
+            return Math.max(txnId.epoch(), ranges.epochAtIndex(0));
         long epoch = ranges.epochAtIndex(Math.max(0, ranges.floorIndex(txnId.epoch())) + offset);
         if (offset < 3)
             return epoch;
@@ -389,17 +391,15 @@ abstract class WaitingState extends BaseTxnState
         TxnId txnId = safeCommand.txnId();
         // first make sure we have enough information to obtain the command locally
         Timestamp executeAt = command.executeAtIfKnown();
-        Participants<?> fetchKeys = Invariants.nonNull(command.maxContactable());
+        Participants<?> maxContactable = Invariants.nonNull(command.maxContactable());
 
-        if (!Route.isRoute(fetchKeys))
+        if (!Route.isRoute(maxContactable))
         {
-            long lowEpoch = updateLowEpoch(safeStore, txnId, command);
-            long highEpoch = updateHighEpoch(safeStore, txnId, blockedUntil, command, executeAt);
-            fetchRoute(owner, blockedUntil, txnId, executeAt, lowEpoch, highEpoch, fetchKeys);
+            fetchRoute(owner, blockedUntil, txnId, maxContactable);
             return;
         }
 
-        Route<?> route = Route.castToRoute(fetchKeys);
+        Route<?> route = Route.castToRoute(maxContactable);
         if (homeSatisfies().compareTo(blockedUntil) < 0)
         {
             // first wait until the homeKey has progressed to a point where it can answer our query; we don't expect our shards to know until then anyway
@@ -418,7 +418,7 @@ abstract class WaitingState extends BaseTxnState
         {
             // we know it has been decided one way or the other by the home shard at least, so we attempt a fetch
             // including the home shard to get us to at least PreCommitted where we can safely wait on individual shards
-            fetch(owner, blockedUntil, txnId, executeAt, lowEpoch, highEpoch, slicedRoute, slicedRoute.withHomeKey(), route);
+            fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, slicedRoute.withHomeKey(), route);
             return;
         }
 
@@ -430,7 +430,7 @@ abstract class WaitingState extends BaseTxnState
         if (awaitRoute.isHomeKeyOnlyRoute())
         {
             // at this point we can switch to polling as we know someone has the relevant state
-            fetch(owner, blockedUntil, txnId, executeAt, lowEpoch, highEpoch, slicedRoute, fetchRoute, route);
+            fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, fetchRoute, route);
             return;
         }
 
@@ -457,7 +457,7 @@ abstract class WaitingState extends BaseTxnState
         {
             // all of the shards we are awaiting have been processed and found at least one replica that has the state needed to answer our query
             // at this point we can switch to polling as we know someone has the relevant state
-            fetch(owner, blockedUntil, txnId, executeAt, lowEpoch, highEpoch, slicedRoute, fetchRoute, route);
+            fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, fetchRoute, route);
             return;
         }
 
@@ -485,6 +485,7 @@ abstract class WaitingState extends BaseTxnState
             if (route == null)
             {
                 Invariants.require(kind == FetchRoute);
+                Invariants.require(ready == null);
                 state.retry(safeStore, safeCommand, owner, blockedUntil);
                 return;
             }
@@ -599,9 +600,12 @@ abstract class WaitingState extends BaseTxnState
         }
     }
 
-    static void fetchRouteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, FetchData.FetchResult fetchResult, Throwable fail)
+    static void fetchRouteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, Route<?> found, Throwable fail)
     {
-        fetchCallback(FetchRoute, safeStore, safeCommand, owner, txnId, blockedUntil, fetchResult, fail);
+        if (found == null)
+            found = safeCommand.current().route();
+        Participants<?> ready = found != null ? found.slice(0, 0) : null;
+        awaitOrFetchCallback(FetchRoute, safeStore, safeCommand, owner, txnId, blockedUntil, ready, null, null, fail);
     }
 
     static void fetchCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, FetchData.FetchResult fetchResult, Throwable fail)
@@ -703,20 +707,20 @@ abstract class WaitingState extends BaseTxnState
         }
     }
 
-    static void fetchRoute(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, long lowEpoch, long highEpoch, Participants<?> fetchKeys)
+    static void fetchRoute(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Participants<?> contactable)
     {
         // TODO (desired): fetch only the route
         // we MUSt allocate before calling withEpoch to register cancellation, as async
-        BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchRouteCallback);
-        FetchData.fetch(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchKeys, lowEpoch, highEpoch, invoker);
+        BiConsumer<Route<?>, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchRouteCallback);
+        FetchSomeRoute.fetchSomeRoute(owner.node(), txnId, contactable, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker);
     }
 
-    static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, long lowEpoch, long highEpoch, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
+    static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
     {
         Invariants.require(!slicedRoute.isEmpty());
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
-        FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchRoute, maxRoute, slicedRoute, lowEpoch, highEpoch, invoker);
+        FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchRoute, maxRoute, slicedRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker);
     }
 
     void awaitHomeKey(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route)

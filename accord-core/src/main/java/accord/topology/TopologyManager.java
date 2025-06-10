@@ -1157,8 +1157,8 @@ public class TopologyManager
         Epochs snapshot = epochs;
 
         minEpoch = Math.max(snapshot.minEpoch(), minEpoch);
-        maxEpoch = validateMax(maxEpoch, snapshot);
-        if (maxEpoch == minEpoch)
+        maxEpoch = Math.min(maxEpoch, snapshot.currentEpoch);
+        if (maxEpoch <= minEpoch)
             return collectors.none();
 
         EpochState cur = nonNull(snapshot.get(maxEpoch));
