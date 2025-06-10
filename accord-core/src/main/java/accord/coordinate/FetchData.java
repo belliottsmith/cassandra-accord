@@ -21,30 +21,24 @@ import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
 import accord.coordinate.Infer.InvalidIf;
+import accord.local.CommandStores.LatentStoreSelector;
+import accord.local.CommandStores.StoreSelector;
 import accord.local.Node;
-import accord.primitives.Status;
 import accord.primitives.Known;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOkFull;
 import accord.messages.Propagate;
-import accord.primitives.FullRoute;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
-import accord.topology.TopologyManager;
-import accord.topology.TopologyManager.TopologyRetiredException;
 import accord.utils.Invariants;
 
 import javax.annotation.Nonnull;
 
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
-import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
-import static accord.primitives.Route.castToRoute;
-import static accord.primitives.Route.isFullRoute;
-import static accord.primitives.Route.isRoute;
 
 /**
  * Find data and persist locally
@@ -75,16 +69,13 @@ public class FetchData extends CheckShards<Route<?>>
         final InvalidIf invalidIf;
         final @Nullable Timestamp executeAt;
         final long srcEpoch;
-        final Participants<?> fetchKeys;
-        final long lowEpoch, highEpoch;
+        // known participants, a subset of which we may fetch from
+        final Participants<?> contactable;
+        final Participants<?> requestedFor;
+        final StoreSelector reportTo;
         final BiConsumer<? super FetchResult, Throwable> callback;
 
-        public FetchRequest(Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, BiConsumer<? super FetchResult, Throwable> callback)
-        {
-            this(fetch, txnId, invalidIf, executeAt, fetchKeys, Long.MIN_VALUE, Long.MIN_VALUE, callback);
-        }
-
-        public FetchRequest(Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+        public FetchRequest(Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> contactable, Participants<?> requestedFor, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
         {
             this.fetch = fetch;
             this.invalidIf = invalidIf;
@@ -92,88 +83,32 @@ public class FetchData extends CheckShards<Route<?>>
             this.executeAt = executeAt;
             this.callback = callback;
             this.srcEpoch = fetch.fetchEpoch(txnId, executeAt);
-            this.fetchKeys = fetchKeys;
-            this.lowEpoch = lowEpoch == Long.MIN_VALUE ? txnId.epoch() : lowEpoch;
-            this.highEpoch = highEpoch == Long.MIN_VALUE ? srcEpoch : highEpoch;
-        }
-
-        Ranges localRanges(Node node)
-        {
-            try
-            {
-                return node.topology().localRangesForEpochs(lowEpoch, highEpoch);
-            }
-            catch (TopologyRetiredException t)
-            {
-                throw new TopologyRetiredException("Failed to read local ranges for " + txnId + " between " + lowEpoch + " and " + highEpoch, t);
-            }
-        }
-    }
-
-    public static void fetch(Known fetch, Node node, TxnId txnId, @Nullable Timestamp executeAt, Participants<?> someKeys, long localLowEpoch, long localHighEpoch, BiConsumer<? super FetchResult, Throwable> callback)
-    {
-        fetch(fetch, node, txnId, NotKnownToBeInvalid, executeAt, someKeys, localLowEpoch, localHighEpoch, callback);
-    }
-
-    public static void fetch(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, long localLowEpoch, long localHighEpoch, BiConsumer<? super FetchResult, Throwable> callback)
-    {
-        fetch(node, new FetchRequest(fetch, txnId, invalidIf, executeAt, fetchKeys, localLowEpoch, localHighEpoch, callback));
-    }
-
-    public static void fetch(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> fetchKeys, BiConsumer<? super FetchResult, Throwable> callback)
-    {
-        fetch(node, new FetchRequest(fetch, txnId, invalidIf, executeAt, fetchKeys, callback));
-    }
-
-    public static void fetch(Node node, FetchRequest request)
-    {
-        Participants<?> fetchKeys = request.fetchKeys;
-        if (fetchKeys.kind().isRoute()) fetch(node, castToRoute(fetchKeys), request);
-        else fetchViaSomeRoute(node, fetchKeys, request);
-    }
-
-    public static void fetch(Node node, Route<?> route, FetchRequest request)
-    {
-        long srcEpoch = request.srcEpoch;
-        if (!node.topology().hasEpoch(srcEpoch))
-        {
-            node.withEpochAtLeast(srcEpoch, request.callback, () -> fetch(node, route, request));
-            return;
-        }
-
-        Invariants.requireArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
-        Ranges ranges = request.localRanges(node);
-        if (!Route.isFullRoute(route))
-        {
-            fetchWithIncompleteRoute(node, route, request);
-        }
-        else
-        {
-            Route<?> slicedRoute = route.slice(ranges);
-            fetchInternal(node, ranges, slicedRoute, request);
+            this.contactable = contactable;
+            this.requestedFor = requestedFor;
+            this.reportTo = reportTo;
         }
     }
 
     /**
      * Do not make an attempt to discern what keys need to be contacted; fetch from only the specific remote keys that were requested.
      */
-    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, Participants<?> localKeys, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, Participants<?> requestedFor, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        fetchSpecific(fetch, node, txnId, NotKnownToBeInvalid, executeAt, query, maxRoute, localKeys, lowEpoch, highEpoch, callback);
+        fetchSpecific(fetch, node, txnId, NotKnownToBeInvalid, executeAt, query, maxRoute, requestedFor, reportTo, callback);
     }
 
     /**
      * Do not make an attempt to discern what keys need to be contacted; fetch from only the specific remote keys that were requested.
      */
-    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, Participants<?> localKeys, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, Participants<?> requestedFor, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        fetchSpecific(node, query, maxRoute, new FetchRequest(fetch, txnId, invalidIf, executeAt, localKeys, lowEpoch, highEpoch, callback));
+        fetchSpecific(node, query, maxRoute, new FetchRequest(fetch, txnId, invalidIf, executeAt, maxRoute, requestedFor, reportTo, callback));
     }
 
     public static void fetchSpecific(Node node, Route<?> query, Route<?> maxRoute, FetchRequest request)
     {
         long srcEpoch = request.srcEpoch;
-        if (!node.topology().hasEpoch(srcEpoch))
+        if (!node.topology().hasAtLeastEpoch(srcEpoch))
         {
             node.withEpochAtLeast(srcEpoch, request.callback, () -> fetchSpecific(node, query, maxRoute, request));
             return;
@@ -182,166 +117,67 @@ public class FetchData extends CheckShards<Route<?>>
         fetchData(node, query, maxRoute, request);
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void fetchViaSomeRoute(Node node, Participants<?> someUnseekables, FetchRequest request)
-    {
-        FindSomeRoute.findSomeRoute(node, request.txnId, request.invalidIf, someUnseekables, (foundRoute, fail) -> {
-            if (fail != null) request.callback.accept(null, fail);
-            else if (foundRoute.route == null)
-            {
-                reportRouteNotFound(node, foundRoute.known, request);
-            }
-            else if (isFullRoute(foundRoute.route))
-            {
-                fetch(node, Route.castToFullRoute(foundRoute.route), request);
-            }
-            else if (isRoute(someUnseekables) && someUnseekables.containsAll(foundRoute.route))
-            {
-                // this is essentially a reentrancy check; we can only reach this point if we have already tried once to fetchSomeRoute
-                // (as a user-provided Route is used to fetchRoute, not fetchSomeRoute)
-                reportRouteNotFound(node, foundRoute.known, request);
-            }
-            else
-            {
-                Route<?> route = foundRoute.route;
-                if (isRoute(someUnseekables))
-                    route = Route.merge(route, (Route)someUnseekables);
-                fetch(node, route, request);
-            }
-        });
-    }
-
-    private static void reportRouteNotFound(Node node, Known found, FetchRequest req)
-    {
-        Invariants.require(req.executeAt == null);
-        TxnId txnId = req.txnId;
-        switch (found.outcome())
-        {
-            default: throw new AssertionError("Unknown outcome: " + found.outcome());
-            case Abort:
-                locallyInvalidateAndCallback(node, txnId, req.lowEpoch, req.highEpoch, req.fetchKeys, new FetchResult(found, req.fetchKeys, null), req.callback);
-                break;
-
-            case Unknown:
-                if (found.canProposeInvalidation())
-                {
-                    Invalidate.invalidate(node, txnId, req.fetchKeys, false, req.lowEpoch, req.highEpoch, (outcome, throwable) -> {
-                        FetchResult result = null;
-                        if (throwable == null)
-                        {
-                            Known achieved = Known.Invalidated;
-                            Unseekables<?> achievedTarget = req.fetchKeys, didNotAchieveTarget = null;
-                            if (outcome.asProgressToken().status != Status.Invalidated)
-                            {
-                                achievedTarget = req.fetchKeys.slice(0, 0);
-                                didNotAchieveTarget = req.fetchKeys;
-                                achieved = Known.Nothing;
-                            }
-                            result = new FetchResult(achieved, achievedTarget, didNotAchieveTarget);
-                        }
-                        req.callback.accept(result, throwable);
-                    });
-                    break;
-                }
-            case Erased:
-            case WasApply:
-            case Apply:
-                // TODO (required): we may be stale
-                req.callback.accept(new FetchResult(found, req.fetchKeys.slice(0, 0), req.fetchKeys), null);
-        }
-    }
-
-    private static void fetchWithIncompleteRoute(Node node, Route<?> someRoute, FetchRequest request)
-    {
-        long srcEpoch = request.srcEpoch;
-        Invariants.requireArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
-        FindRoute.findRoute(node, request.txnId, request.invalidIf, someRoute.withHomeKey(), (foundRoute, fail) -> {
-            if (fail != null) request.callback.accept(null, fail);
-            else if (foundRoute == null) fetchViaSomeRoute(node, someRoute, request);
-            else fetch(node, foundRoute.route, request);
-        });
-    }
-
-    public static void fetch(Node node, FullRoute<?> route, FetchRequest request)
-    {
-        node.withEpochAtLeast(request.srcEpoch, request.callback, () -> {
-            Ranges ranges = request.localRanges(node);
-            fetchInternal(node, ranges, route, request);
-        });
-    }
-
-    private static Object fetchInternal(Node node, Ranges ranges, Route<?> route, FetchRequest request)
-    {
-        long srcEpoch = request.srcEpoch;
-        Invariants.requireArgument(node.topology().hasEpoch(srcEpoch), "Unknown epoch %d, latest known is %d", srcEpoch, node.epoch());
-        Route<?> slicedRoute = route.slice(ranges);
-        return fetchData(node, slicedRoute, route, request);
-    }
-
     final BiConsumer<? super FetchResult, Throwable> callback;
     /**
      * The epoch until which we want to persist any response for locally
      */
     final Known target;
     final Route<?> maxRoute;
+    final Participants<?> requestedFor;
 
     // to support cases where a later epoch that ultimately does not participate in execution has a vestigial entry
     // (i.e. if preaccept/accept contact a later epoch than execution is decided for)
-    final long lowEpoch, highEpoch;
+    final LatentStoreSelector reportTo;
 
-    final Unseekables<?> propagateTo;
-
-    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, Unseekables<?> propagateTo, long sourceEpoch, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, Participants<?> requestedFor, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        this(node, target, txnId, invalidIf, route, route.withHomeKey(), maxRoute, propagateTo, sourceEpoch, lowEpoch, highEpoch, callback);
+        this(node, target, txnId, invalidIf, route, route.withHomeKey(), maxRoute, requestedFor, sourceEpoch, reportTo, callback);
     }
 
-    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, Unseekables<?> propagateTo, long sourceEpoch, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, Participants<?> requestedFor, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
         // TODO (desired, efficiency): restore behaviour of only collecting info if e.g. Committed or Executed
         super(node, txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf);
-        this.propagateTo = propagateTo;
-        this.lowEpoch = lowEpoch;
+        this.reportTo = reportTo;
         this.maxRoute = maxRoute;
+        this.requestedFor = requestedFor;
         Invariants.requireArgument(routeWithHomeKey.contains(route.homeKey()), "route %s does not contain %s", routeWithHomeKey, route.homeKey());
         this.target = target;
-        this.highEpoch = highEpoch;
         this.callback = callback;
     }
 
     private static FetchData fetchData(Node node, Route<?> route, Route<?> maxRoute, FetchRequest req)
     {
-        Invariants.require(!req.fetchKeys.isEmpty());
-        FetchData fetch = new FetchData(node, req.fetch, req.txnId, req.invalidIf, route, maxRoute, req.fetchKeys, req.srcEpoch, req.lowEpoch, req.highEpoch, req.callback);
+        Invariants.require(!req.contactable.isEmpty());
+        FetchData fetch = new FetchData(node, req.fetch, req.txnId, req.invalidIf, route, maxRoute, req.requestedFor, req.srcEpoch, req.reportTo, req.callback);
         fetch.start();
         return fetch;
     }
 
-    private static FetchData fetchData(Node node, Known fetch, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, Unseekables<?> localKeys, long sourceEpoch, long lowEpoch, long highEpoch, BiConsumer<? super FetchResult, Throwable> callback)
+    private static FetchData fetchData(Node node, Known fetch, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, Participants<?> requestedFor, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        Invariants.require(!localKeys.isEmpty());
-        FetchData fetchData = new FetchData(node, fetch, txnId, invalidIf, route, maxRoute, localKeys, sourceEpoch, lowEpoch, highEpoch, callback);
+        FetchData fetchData = new FetchData(node, fetch, txnId, invalidIf, route, maxRoute, requestedFor, sourceEpoch, reportTo, callback);
         fetchData.start();
         return fetchData;
     }
 
     protected Route<?> query()
     {
-        return route;
+        return query;
     }
 
     @Override
     protected boolean isSufficient(Node.Id from, CheckStatus.CheckStatusOk ok)
     {
         Ranges rangesForNode = topologies().computeRangesForNode(from);
-        Route<?> scope = this.route.slice(rangesForNode);
+        Route<?> scope = this.query.slice(rangesForNode);
         return isSufficient(scope, ok);
     }
 
     @Override
     protected boolean isSufficient(CheckStatus.CheckStatusOk ok)
     {
-        return isSufficient(route, ok);
+        return isSufficient(query, ok);
     }
 
     protected boolean isSufficient(Route<?> scope, CheckStatus.CheckStatusOk ok)
@@ -363,7 +199,7 @@ public class FetchData extends CheckShards<Route<?>>
                 Invariants.require(isSufficient(merged), "Status %s is not sufficient", merged);
 
             // TODO (expected): should we automatically trigger a new fetch if we find executeAt but did not request enough information? would be more robust
-            Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, lowEpoch, highEpoch, success.withQuorum, query(), propagateTo, target, (CheckStatusOkFull) merged, callback);
+            Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query(), requestedFor, reportTo, target, (CheckStatusOkFull) merged, callback);
         }
     }
 }

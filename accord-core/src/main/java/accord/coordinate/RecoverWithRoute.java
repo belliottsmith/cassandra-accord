@@ -21,6 +21,7 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
+import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.CheckStatus;
@@ -62,14 +63,12 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 {
     final BiConsumer<Outcome, Throwable> callback;
     final Status witnessedByInvalidation;
-    // TODO (required): we don't use this on all paths, and should at least make sure we don't trigger any Invariant failures e.g. "Fetch was successful for all keys, but the WaitingState has not been cleared"
-    final long reportLowEpoch, reportHighEpoch;
+    final LatentStoreSelector reportTo;
 
-    private RecoverWithRoute(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    private RecoverWithRoute(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         super(node, txnId, route, IncludeInfo.All, node.uniqueTimestamp(Ballot::fromValues), invalidIf);
-        this.reportLowEpoch = reportLowEpoch;
-        this.reportHighEpoch = reportHighEpoch;
+        this.reportTo = reportTo;
         // if witnessedByInvalidation == AcceptedInvalidate then we cannot assume its definition was known, and our comparison with the status is invalid
         Invariants.require(witnessedByInvalidation != Status.AcceptedInvalidate);
         // if witnessedByInvalidation == Invalidated we should anyway not be recovering
@@ -79,14 +78,14 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         assert topologies.oldestEpoch() == topologies.currentEpoch() && topologies.currentEpoch() == txnId.epoch();
     }
 
-    public static RecoverWithRoute recover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    public static RecoverWithRoute recover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, node.topology().forEpoch(route, txnId.epoch(), SHARE), txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
+        return recover(node, node.topology().forEpoch(route, txnId.epoch(), SHARE), txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
     }
 
-    private static RecoverWithRoute recover(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    private static RecoverWithRoute recover(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        RecoverWithRoute recover = new RecoverWithRoute(node, topologies, txnId, invalidIf, route, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
+        RecoverWithRoute recover = new RecoverWithRoute(node, topologies, txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
         recover.start();
         return recover;
     }
@@ -94,21 +93,21 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
     @Override
     public void contact(Id to)
     {
-        node.send(to, new CheckStatus(to, topologies(), txnId, route, sourceEpoch, IncludeInfo.All, bumpBallot), this);
+        node.send(to, new CheckStatus(to, topologies(), txnId, query, sourceEpoch, IncludeInfo.All, bumpBallot), this);
     }
 
     @Override
     protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
         Ranges rangesForNode = topologies().getEpoch(txnId.epoch()).rangesForNode(from);
-        Route<?> route = this.route.slice(rangesForNode);
+        Route<?> route = this.query.slice(rangesForNode);
         return isSufficient(route, ok);
     }
 
     @Override
     protected boolean isSufficient(CheckStatusOk ok)
     {
-        return isSufficient(route, merged);
+        return isSufficient(query, merged);
     }
 
     protected boolean isSufficient(Route<?> route, CheckStatusOk ok)
@@ -134,8 +133,8 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
             return;
         }
 
-        CheckStatusOkFull full = ((CheckStatusOkFull) this.merged).finish(route, route, route, success.withQuorum, previouslyKnownToBeInvalidIf);
-        Known known = full.knownFor(txnId, route, route);
+        CheckStatusOkFull full = ((CheckStatusOkFull) this.merged).finish(query, query, query, success.withQuorum, previouslyKnownToBeInvalidIf);
+        Known known = full.knownFor(txnId, query, query);
 
         // TODO (required): audit this logic, and centralise with e.g. FetchData inferences
         // TODO (expected): skip straight to ExecuteTxn if we have a Stable reply from each shard
@@ -145,14 +144,14 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
             case Unknown:
                 if (known.definition().isKnown())
                 {
-                    Txn txn = full.partialTxn.reconstitute(route);
-                    Recover.recover(node, txnId, txn, route, reportLowEpoch, reportHighEpoch, callback);
+                    Txn txn = full.partialTxn.reconstitute(query);
+                    Recover.recover(node, txnId, txn, query, reportTo, callback);
                 }
                 else if (!known.definition().isOrWasKnown())
                 {
                     if (witnessedByInvalidation != null && witnessedByInvalidation.compareTo(Status.PreAccepted) > 0)
                         throw illegalState("We previously invalidated, finding a status that should be recoverable");
-                    Invalidate.invalidate(node, txnId, route, witnessedByInvalidation != null, reportLowEpoch, reportHighEpoch, callback);
+                    Invalidate.invalidate(node, txnId, query, witnessedByInvalidation != null, reportTo, callback);
                 }
                 else
                 {
@@ -173,11 +172,11 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
 
                     // TODO (expected): if we determine new durability, propagate it
                     CheckStatusOkFull propagate;
-                    if (!full.map.hasFullyTruncated(route))
+                    if (!full.map.hasFullyTruncated(query))
                     {
                         // we might have only part of the full transaction, and a shard may have truncated;
                         // in this case we want to skip straight to apply, but only for the shards that haven't truncated
-                        Route<?> trySendTo = route.without(full.map.matchingRanges(minMax -> minMax.min.isTruncated()));
+                        Route<?> trySendTo = query.without(full.map.matchingRanges(minMax -> minMax.min.isTruncated()));
                         if (!trySendTo.isEmpty())
                         {
                             if (known.isInvalidated())
@@ -193,20 +192,20 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                                     if (!known.is(DepsKnown))
                                     {
                                         Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                        Participants<?> haveStable = full.map.knownFor(Known.DepsOnly, route);
-                                        Route<?> haveUnstable = route.without(haveStable);
+                                        Participants<?> haveStable = full.map.knownFor(Known.DepsOnly, query);
+                                        Route<?> haveUnstable = query.without(haveStable);
                                         Deps stable = full.stableDeps.reconstitutePartial(haveStable).asFullUnsafe();
 
-                                        LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, route, callback, deps -> {
+                                        LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, query, callback, deps -> {
                                             Deps stableDeps = deps.intersecting(trySendTo);
-                                            node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, bumpBallot, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, informDurableOnDone, null);
+                                            node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, query, bumpBallot, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, informDurableOnDone, null);
                                         });
                                     }
                                     else
                                     {
                                         Invariants.require(full.stableDeps.covers(trySendTo));
                                         Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, route, bumpBallot, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, informDurableOnDone, null);
+                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, query, bumpBallot, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, informDurableOnDone, null);
                                     }
                                 }
                             }
@@ -222,24 +221,24 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         propagate = full;
                     }
 
-                    Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, reportLowEpoch, reportHighEpoch, success.withQuorum, route, route, null, propagate, (s, f) -> callback.accept(f == null ? propagate.toProgressToken() : null, f));
+                    Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, propagate, (s, f) -> callback.accept(f == null ? propagate.toProgressToken() : null, f));
                     break;
                 }
 
-                Txn txn = full.partialTxn.reconstitute(route);
+                Txn txn = full.partialTxn.reconstitute(query);
                 if (known.is(ApplyAtKnown) && known.outcome() == Apply)
                 {
                     Deps deps;
                     Route<?> missingDeps;
                     if (known.is(DepsKnown))
                     {
-                        deps = full.stableDeps.reconstitute(route);
-                        missingDeps = route.slice(0, 0);
+                        deps = full.stableDeps.reconstitute(query);
+                        missingDeps = query.slice(0, 0);
                     }
                     else
                     {
-                        Participants<?> hasDeps = full.map.knownFor(Known.DepsOnly, route);
-                        missingDeps = route.without(hasDeps);
+                        Participants<?> hasDeps = full.map.knownFor(Known.DepsOnly, query);
+                        missingDeps = query.without(hasDeps);
                         if (full.stableDeps == null)
                         {
                             Invariants.require(hasDeps.isEmpty());
@@ -252,9 +251,9 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             deps = new Deps(full.stableDeps.reconstitutePartial(hasDeps));
                         }
                     }
-                    LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, deps, missingDeps, route, SHARE, route, callback, mergedDeps -> {
+                    LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, deps, missingDeps, query, SHARE, query, callback, mergedDeps -> {
                         node.withEpochExact(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
-                            node.coordinationAdapter(txnId, Recovery).persist(node, topologies, route, bumpBallot, txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
+                            node.coordinationAdapter(txnId, Recovery).persist(node, topologies, query, bumpBallot, txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
                                 callback.accept(f == null ? APPLIED : null, f);
                             });
                         });
@@ -262,7 +261,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 }
                 else
                 {
-                    Recover.recover(node, txnId, txn, route, callback);
+                    Recover.recover(node, txnId, txn, query, callback);
                 }
                 break;
 
@@ -270,12 +269,12 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 if (witnessedByInvalidation != null && witnessedByInvalidation.hasBeen(Status.PreCommitted))
                     throw illegalState("We previously invalidated, finding a status that should be recoverable");
 
-                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, reportLowEpoch, reportHighEpoch, success.withQuorum, route, route, null, full, (s, f) -> callback.accept(f == null ? INVALIDATED : null, f));
+                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, full, (s, f) -> callback.accept(f == null ? INVALIDATED : null, f));
                 break;
 
             case Erased:
                 // we should only be able to hit the Erased case if every participating shard has advanced past this TxnId, so we don't need to recover it
-                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, reportLowEpoch, reportHighEpoch, success.withQuorum, route, route, null, full, (s, f) -> callback.accept(f == null ? TRUNCATED_DURABLE_OR_INVALIDATED : null, f));
+                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, full, (s, f) -> callback.accept(f == null ? TRUNCATED_DURABLE_OR_INVALIDATED : null, f));
                 break;
         }
     }

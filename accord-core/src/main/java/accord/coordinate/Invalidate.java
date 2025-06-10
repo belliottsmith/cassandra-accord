@@ -23,6 +23,8 @@ import java.util.function.BiConsumer;
 import accord.coordinate.tracking.InvalidationTracker;
 import accord.coordinate.tracking.InvalidationTracker.InvalidationShardTracker;
 import accord.coordinate.tracking.RequestStatus;
+import accord.local.CommandStores.LatentStoreSelector;
+import accord.local.CommandStores.StoreSelector;
 import accord.local.Node.Id;
 import accord.messages.Commit;
 import accord.local.*;
@@ -63,9 +65,9 @@ public class Invalidate implements Callback<InvalidateReply>
     private final SortedListMap<Id, InvalidateReply> replies;
     private final InvalidationTracker tracker;
     private Throwable failure;
-    private final long reportLowEpoch, reportHighEpoch;
+    private final LatentStoreSelector reportTo;
 
-    private Invalidate(Node node, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    private Invalidate(Node node, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         this.callback = callback;
         this.node = node;
@@ -73,8 +75,7 @@ public class Invalidate implements Callback<InvalidateReply>
         this.txnId = txnId;
         this.invalidateWith = invalidateWith;
         this.transitivelyInvokedByPriorInvalidation = transitivelyInvokedByPriorInvalidation;
-        this.reportLowEpoch = reportLowEpoch;
-        this.reportHighEpoch = reportHighEpoch;
+        this.reportTo = reportTo;
         Topologies topologies = node.topology().forEpoch(invalidateWith, txnId.epoch(), SHARE);
         Invariants.require(topologies.size() == 1);
         this.tracker = new InvalidationTracker(topologies, txnId);
@@ -88,13 +89,13 @@ public class Invalidate implements Callback<InvalidateReply>
 
     public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, BiConsumer<Outcome, Throwable> callback)
     {
-        return invalidate(node, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, txnId.epoch(), txnId.epoch(), callback);
+        return invalidate(node, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, LatentStoreSelector.standard(), callback);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
-        Invalidate invalidate = new Invalidate(node, ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportLowEpoch, reportHighEpoch, callback);
+        Invalidate invalidate = new Invalidate(node, ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
         invalidate.start();
         return invalidate;
     }
@@ -216,7 +217,7 @@ public class Invalidate implements Callback<InvalidateReply>
                         if (!invalidateWith.containsAll(fullRoute))
                             witnessedByInvalidation = null;
                     }
-                    RecoverWithRoute.recover(node, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportLowEpoch, reportHighEpoch, callback);
+                    RecoverWithRoute.recover(node, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportTo, callback);
                     return;
 
                 case Invalidated:
@@ -289,14 +290,14 @@ public class Invalidate implements Callback<InvalidateReply>
         //  so we do not need to explicitly do so here before notifying the waiter
         Participants<?> commitTo = Participants.merge(route, (Participants) invalidateWith);
         Commit.Invalidate.commitInvalidate(node, txnId, commitTo, txnId);
-        commitInvalidateLocal(commitTo, reportLowEpoch, reportHighEpoch);
+        commitInvalidateLocal(commitTo, reportTo.refine(txnId, null, commitTo));
     }
 
-    private void commitInvalidateLocal(Participants<?> commitTo, long lowEpoch, long highEpoch)
+    private void commitInvalidateLocal(Participants<?> commitTo, StoreSelector reportTo)
     {
         // TODO (desired): merge with FetchData.InvalidateOnDone
         // TODO (desired): when sending to network, register a callback for when local application of commitInvalidate message ahs been performed, so no need to special-case
-        node.forEachLocal(txnId, commitTo, lowEpoch, highEpoch, safeStore -> {
+        node.forEachLocal(txnId, reportTo.refine(txnId, null, commitTo), safeStore -> {
             // TODO (expected): consid
             StoreParticipants participants = StoreParticipants.notAccept(safeStore, commitTo, txnId);
             Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), commitTo);

@@ -32,6 +32,7 @@ import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.coordinate.tracking.RecoveryTracker;
+import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Accept;
@@ -109,7 +110,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     private final Txn txn;
     private final FullRoute<?> route;
     private final @Nullable Timestamp committedExecuteAt;
-    private final long reportLowEpoch, reportHighEpoch;
+    private final LatentStoreSelector reportTo;
     private final BiConsumer<Outcome, Throwable> callback;
     private boolean isDone;
 
@@ -118,12 +119,9 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     private boolean isBallotPromised;
 
     private Recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route,
-                    @Nullable Timestamp committedExecuteAt, long reportLowEpoch, long reportHighEpoch,
+                    @Nullable Timestamp committedExecuteAt, LatentStoreSelector reportTo,
                     BiConsumer<Outcome, Throwable> callback)
     {
-        this.committedExecuteAt = committedExecuteAt;
-        this.reportLowEpoch = reportLowEpoch;
-        this.reportHighEpoch = reportHighEpoch;
         Invariants.require(txnId.isVisible());
         this.adapter = node.coordinationAdapter(txnId, Recovery);
         this.node = node;
@@ -131,6 +129,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         this.txnId = txnId;
         this.txn = txn;
         this.route = route;
+        this.committedExecuteAt = committedExecuteAt;
+        this.reportTo = reportTo;
         this.callback = callback;
         this.tracker = new RecoveryTracker(topologies);
         this.recoverOks = new SortedListMap<>(topologies.nodes(), RecoverOk[]::new);
@@ -166,39 +166,39 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     public static Recover recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, txnId, txn, route, txnId.epoch(), txnId.epoch(), callback);
+        return recover(node, txnId, txn, route, LatentStoreSelector.standard(), callback);
     }
 
-    public static Recover recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    public static Recover recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
-        return recover(node, ballot, txnId, txn, route, reportLowEpoch, reportHighEpoch, callback);
+        return recover(node, ballot, txnId, txn, route, reportTo, callback);
     }
 
     private static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, ballot, txnId, txn, route, null, txnId.epoch(), txnId.epoch(), callback);
+        return recover(node, ballot, txnId, txn, route, null, null, callback);
     }
 
-    private static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    private static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, ballot, txnId, txn, route, null, reportLowEpoch, reportHighEpoch, callback);
+        return recover(node, ballot, txnId, txn, route, null, reportTo, callback);
     }
 
     public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Timestamp executeAt, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, ballot, txnId, txn, route, executeAt, txnId.epoch(), (executeAt == null ? txnId : executeAt).epoch(), callback);
+        return recover(node, ballot, txnId, txn, route, executeAt, null, callback);
     }
 
-    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Timestamp executeAt, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Timestamp executeAt, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         Topologies topologies = node.topology().select(route, txnId, executeAt == null ? txnId : executeAt, SHARE, QuorumEpochIntersections.recover);
-        return recover(node, topologies, ballot, txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
+        return recover(node, topologies, ballot, txnId, txn, route, executeAt, reportTo, callback);
     }
 
-    private static Recover recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    private static Recover recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        Recover recover = new Recover(node, topologies, ballot, txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
+        Recover recover = new Recover(node, topologies, ballot, txnId, txn, route, executeAt, reportTo, callback);
         recover.start(topologies.nodes());
         return recover;
     }
@@ -523,12 +523,11 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void commitInvalidate(Timestamp invalidateUntil)
     {
-        long highEpoch = Math.max(invalidateUntil.epoch(), reportHighEpoch);
-        node.withEpochAtLeast(highEpoch, node.agent(), () -> {
+        node.withEpochAtLeast(invalidateUntil.epoch(), node.agent(), () -> {
             Commit.Invalidate.commitInvalidate(node, txnId, route, invalidateUntil);
         });
         isDone = true;
-        locallyInvalidateAndCallback(node, txnId, reportLowEpoch, highEpoch, route, ProgressToken.INVALIDATED, callback);
+        locallyInvalidateAndCallback(node, txnId, reportTo.refine(txnId, null, route), route, ProgressToken.INVALIDATED, callback);
     }
 
     private void propose(Accept.Kind kind, Timestamp executeAt, List<RecoverOk> recoverOkList)
@@ -549,7 +548,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         Topologies topologies = tracker.topologies();
         if (executeAt != null && executeAt.epoch() != (this.committedExecuteAt == null ? txnId : this.committedExecuteAt).epoch())
             topologies = node.topology().select(route, txnId, executeAt, SHARE, QuorumEpochIntersections.recover);
-        Recover.recover(node, topologies, node.uniqueTimestamp(Ballot::fromValues), txnId, txn, route, executeAt, reportLowEpoch, reportHighEpoch, callback);
+        Recover.recover(node, topologies, node.uniqueTimestamp(Ballot::fromValues), txnId, txn, route, executeAt, reportTo, callback);
     }
 
     AsyncResult<InferredFastPath> awaitEarlier(Node node, Deps waitOn, BlockedUntil blockedUntil)

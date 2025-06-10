@@ -423,7 +423,7 @@ public class StoreParticipants
 
     public final StoreParticipants supplement(Route<?> route)
     {
-        route = Route.merge(this.route(), (Route)route);
+        route = this.route != null ? this.route.with((Route)route) : route.with((Participants) owns);
         if (route == this.route()) return this;
         return create(route, owns(), executes(), waitsOn(), touches(), hasTouched());
     }
@@ -688,7 +688,7 @@ public class StoreParticipants
 
     private static long computeCoveringEpoch(SafeCommandStore safeStore, long txnIdEpoch, Participants<?> participants)
     {
-        long lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(safeStore, txnIdEpoch, participants);
+        long lowEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnIdEpoch, participants);
         return Math.min(lowEpoch, txnIdEpoch);
     }
 }

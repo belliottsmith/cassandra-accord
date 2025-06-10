@@ -21,6 +21,8 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.local.Command;
+import accord.local.CommandStores.StoreFinder;
+import accord.local.CommandStores.StoreSelector;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.SafeCommand;
@@ -30,13 +32,10 @@ import accord.primitives.Known;
 import accord.local.StoreParticipants;
 import accord.primitives.Participants;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 
 import static accord.primitives.Status.PreCommitted;
-import static accord.primitives.Route.castToRoute;
-import static accord.primitives.Route.isRoute;
 
 // TODO (testing): dedicated randomised testing of all inferences
 public class Infer
@@ -108,17 +107,16 @@ public class Infer
         final TxnId txnId;
         // TODO (expected): more consistent handling of transactions that only MAY intersect a commandStore
         //  (e.g. dependencies from an earlier epoch that have not yet committed, or commands that are proposed to execute in a later epoch than eventually agreed)
-        final long lowEpoch, highEpoch;
+        final StoreSelector reportTo;
         final Participants<?> participants;
         final T param;
         final BiConsumer<T, Throwable> callback;
 
-        private CleanupAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
+        private CleanupAndCallback(Node node, TxnId txnId, StoreSelector reportTo, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
         {
             this.node = node;
             this.txnId = txnId;
-            this.lowEpoch = lowEpoch;
-            this.highEpoch = highEpoch;
+            this.reportTo = reportTo;
             this.participants = participants;
             this.param = param;
             this.callback = callback;
@@ -126,8 +124,7 @@ public class Infer
 
         void start()
         {
-            Unseekables<?> propagateTo = isRoute(participants) ? castToRoute(participants).withHomeKey() : participants;
-            node.mapReduceConsumeLocal(txnId, propagateTo, lowEpoch, highEpoch, this);
+            node.mapReduceConsumeLocal(txnId, reportTo.refine(txnId, null, participants), this);
         }
 
         @Override
@@ -153,17 +150,21 @@ public class Infer
         }
     }
 
-    // TODO (required, consider): low and high bounds are correct?
     static class InvalidateAndCallback<T> extends CleanupAndCallback<T>
     {
-        private InvalidateAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
+        private InvalidateAndCallback(Node node, TxnId txnId, StoreSelector selector, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
         {
-            super(node, txnId, lowEpoch, highEpoch, someUnseekables, param, callback);
+            super(node, txnId, selector, participants, param, callback);
         }
 
-        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> someUnseekables, T param, BiConsumer<T, Throwable> callback)
+        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
         {
-            new InvalidateAndCallback<>(node, txnId, lowEpoch, highEpoch, someUnseekables, param, callback).start();
+            new InvalidateAndCallback<>(node, txnId, StoreFinder.selector(participants, lowEpoch, highEpoch), participants, param, callback).start();
+        }
+
+        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, StoreSelector selector, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
+        {
+            new InvalidateAndCallback<>(node, txnId, selector, participants, param, callback).start();
         }
 
         @Override

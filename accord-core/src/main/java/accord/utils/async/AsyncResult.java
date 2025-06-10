@@ -27,6 +27,8 @@ import static accord.utils.Invariants.illegalState;
 /**
  * Handle for async computations that supports multiple listeners and registering
  * listeners after the computation has started
+ *
+ * TODO (expected): by default AsyncResult methods should be started immediately; should introduce newChain() for building a chain.
  */
 public interface AsyncResult<V> extends AsyncChain<V>
 {

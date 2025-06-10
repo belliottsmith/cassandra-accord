@@ -321,7 +321,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             return null;
         }
 
-        public CheckStatusOk finish(Unseekables<?> queried, Unseekables<?> propagatingTo, Unseekables<?> routeOrParticipants, WithQuorum withQuorum, InvalidIf previouslyKnownToBeInvalidIf)
+        public CheckStatusOk finish(Unseekables<?> queried, Unseekables<?> requestedFor, Unseekables<?> routeOrParticipants, WithQuorum withQuorum, InvalidIf previouslyKnownToBeInvalidIf)
         {
             CheckStatusOk finished = this;
             if (withQuorum == HasQuorum)
@@ -343,7 +343,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             }
 
             Known validForAll = map.computeValidForAll(routeOrParticipants);
-            if (withQuorum == HasQuorum && (invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted) && queried.containsAll(propagatingTo))
+            if (withQuorum == HasQuorum && (invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted) && queried.containsAll(requestedFor))
             {
                 Known minKnown = finished.minMaxKnown(queried), maxKnown = finished.maxKnown(queried);
                 InvalidIf invalidIf = this.invalidIf.inferWithQuorum(minKnown, maxKnown);
@@ -534,9 +534,9 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             this.result = result;
         }
 
-        public CheckStatusOkFull finish(Unseekables<?> queried, Unseekables<?> propagatingTo, Unseekables<?> routeOrParticipants, WithQuorum withQuorum, InvalidIf previouslyKnownToBeInvalidIf)
+        public CheckStatusOkFull finish(Unseekables<?> queried, Unseekables<?> requestedFor, Unseekables<?> routeOrParticipants, WithQuorum withQuorum, InvalidIf previouslyKnownToBeInvalidIf)
         {
-            return (CheckStatusOkFull) super.finish(queried, propagatingTo, routeOrParticipants, withQuorum, previouslyKnownToBeInvalidIf);
+            return (CheckStatusOkFull) super.finish(queried, requestedFor, routeOrParticipants, withQuorum, previouslyKnownToBeInvalidIf);
         }
 
         public CheckStatusOkFull merge(@Nonnull Route<?> route)

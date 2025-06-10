@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import accord.local.CommandStores.StoreSelector;
 import accord.messages.InformDurable;
 import accord.primitives.*;
 import accord.utils.Invariants;
@@ -31,6 +32,7 @@ import accord.utils.UnhandledEnum;
 
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
+import static accord.primitives.WithQuorum.HasQuorum;
 
 /**
  * A result of null indicates the transaction is globally persistent
@@ -40,21 +42,20 @@ public class MaybeRecover extends CheckShards<Route<?>>
 {
     final ProgressToken prevProgress;
     final BiConsumer<Outcome, Throwable> callback;
-    final long reportLowEpoch, reportHighEpoch;
+    final StoreSelector reportTo;
 
-    MaybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    MaybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, StoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         // we only want to enquire with the home shard, but we prefer maximal route information for running Invalidation against, if necessary
         super(node, txnId, someRoute.withHomeKey(), IncludeInfo.Route, null, invalidIf);
         this.prevProgress = prevProgress;
         this.callback = callback;
-        this.reportLowEpoch = reportLowEpoch;
-        this.reportHighEpoch = reportHighEpoch;
+        this.reportTo = reportTo;
     }
 
-    public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, long reportLowEpoch, long reportHighEpoch, BiConsumer<Outcome, Throwable> callback)
+    public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, StoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, invalidIf, someRoute, prevProgress, reportLowEpoch, reportHighEpoch, callback);
+        MaybeRecover maybeRecover = new MaybeRecover(node, txnId, invalidIf, someRoute, prevProgress, reportTo, callback);
         maybeRecover.start();
         return maybeRecover;
     }
@@ -85,7 +86,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
         else
         {
             Invariants.require(merged != null);
-            CheckStatusOk full = merged.finish(this.route, this.route, this.route, success.withQuorum, previouslyKnownToBeInvalidIf);
+            CheckStatusOk full = merged.finish(this.query, this.query, this.query, success.withQuorum, previouslyKnownToBeInvalidIf);
             Known known = full.maxKnown();
             Route<?> someRoute = full.route;
 
@@ -102,7 +103,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     // may be disseminated globally. However, if all shards are erased then the outcome must be
                     // decided locally by the application of GC points.
                     // TODO (expected): replicas may be stale in this case, and should detect this and stop attempting to coordinate/invalidate.
-                    if (known.canProposeInvalidation() && !Route.isFullRoute(full.route))
+                    if (success.withQuorum == HasQuorum && known.canProposeInvalidation() && !Route.isFullRoute(full.route))
                     {
                         // for correctness reasons, we have not necessarily preempted the initial pre-accept round and
                         // may have raced with it, so we must attempt to recover anything we see pre-accepted.
@@ -116,12 +117,12 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     if (hasMadeProgress(full) || !Route.isFullRoute(someRoute))
                     {
                         if (full.durability.isDurable())
-                            InformDurable.informDefault(node, topologies, txnId, route, full.executeAtIfKnown(), full.durability);
+                            InformDurable.informDefault(node, topologies, txnId, query, full.executeAtIfKnown(), full.durability);
                         callback.accept(full.toProgressToken(), null);
                     }
                     else
                     {
-                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportLowEpoch, reportHighEpoch).invoke(callback);
+                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportTo).invoke(callback);
                     }
                     break;
 
@@ -132,7 +133,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     break;
 
                 case Abort:
-                    commitInvalidate(node, txnId, Route.merge(full.route, (Route)route), txnId.epoch());
+                    commitInvalidate(node, txnId, Route.merge(full.route, (Route) query), txnId.epoch());
                     locallyInvalidateAndCallback(node, txnId, txnId.epoch(), txnId.epoch(), someRoute, full.toProgressToken(), callback);
                     break;
             }

@@ -26,6 +26,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import accord.api.Agent;
 import accord.api.ConfigurationService.EpochReady;
 import accord.primitives.Ranges;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -130,9 +131,9 @@ public class AbstractConfigurationServiceTest
         final Set<Long> syncStarted = new HashSet<>();
         final Set<Long> epochsFetched = new HashSet<>();
 
-        public TestableConfigurationService(Id node)
+        public TestableConfigurationService(Id node, Agent agent)
         {
-            super(node);
+            super(node, agent);
         }
 
         @Override
@@ -206,7 +207,7 @@ public class AbstractConfigurationServiceTest
     @Test
     public void getTopologyTest()
     {
-        TestableConfigurationService service = new TestableConfigurationService(ID1);
+        TestableConfigurationService service = new TestableConfigurationService(ID1, new TestAgent());
         TestListener listener = new TestListener(service, false);
         service.registerListener(listener);
         service.reportTopology(TOPOLOGY1);
@@ -229,7 +230,7 @@ public class AbstractConfigurationServiceTest
     @Test
     public void loadAfterTruncate()
     {
-        TestableConfigurationService service = new TestableConfigurationService(ID1);
+        TestableConfigurationService service = new TestableConfigurationService(ID1, new TestAgent());
         TestListener listener = new TestListener(service, false);
         service.registerListener(listener);
         service.reportTopology(TOPOLOGY3);
@@ -248,7 +249,7 @@ public class AbstractConfigurationServiceTest
     @Test
     public void awaitOutOfOrderTopologies()
     {
-        TestableConfigurationService service = new TestableConfigurationService(ID1);
+        TestableConfigurationService service = new TestableConfigurationService(ID1, new TestAgent());
 
         TestListener listener = new TestListener(service, false);
         service.registerListener(listener);
