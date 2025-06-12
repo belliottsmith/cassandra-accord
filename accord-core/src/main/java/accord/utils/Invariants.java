@@ -242,6 +242,12 @@ public class Invariants
             throw illegalState(format(fmt, p1, p2));
     }
 
+    public static void require(boolean condition, String fmt, int p1, int p2, Object p3)
+    {
+        if (!condition)
+            throw illegalState(format(fmt, p1, p2, p3));
+    }
+
     public static void require(boolean condition, String fmt, long p1)
     {
         if (!condition)
@@ -252,6 +258,24 @@ public class Invariants
     {
         if (!condition)
             throw illegalState(format(fmt, p1, p2));
+    }
+
+    public static void require(boolean condition, String fmt, long p1, long p2, long p3)
+    {
+        if (!condition)
+            throw illegalState(format(fmt, p1, p2, p3));
+    }
+
+    public static void require(boolean condition, String fmt, long p1, long p2, Object p3)
+    {
+        if (!condition)
+            throw illegalState(format(fmt, p1, p2, p3));
+    }
+
+    public static void require(boolean condition, String fmt, long p1, long p2, long p3, Object p4)
+    {
+        if (!condition)
+            throw illegalState(format(fmt, p1, p2, p3, p4));
     }
 
     public static void require(boolean condition, String fmt, @Nullable Object p1)

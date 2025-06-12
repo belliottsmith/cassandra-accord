@@ -590,7 +590,7 @@ public class CommandChange
                    + (isChanged(EXECUTE_AT, flags)        ? ", executeAt=" + executeAt : "")
                    + (isChanged(PROMISED, flags)          ? ", promised=" + promised : "")
                    + (isChanged(ACCEPTED, flags)          ? ", acceptedOrCommitted=" + acceptedOrCommitted : "")
-                   + (isChanged(PARTIAL_TXN, flags)      ? ", partialTxn=" + partialTxn : "")
+                   + (isChanged(PARTIAL_TXN, flags)       ? ", partialTxn=" + safeToString(partialTxn) : "")
                    + (isChanged(PARTIAL_DEPS, flags)      ? ", partialDeps=" + partialDeps : "")
                    + (isChanged(WAITING_ON, flags)        ? ", waitingOn=" + waitingOn : "")
                    + (isChanged(MIN_UNIQUE_HLC, flags)    ? ", minUniqueHlc=" + minUniqueHlc : "")
@@ -599,6 +599,18 @@ public class CommandChange
                    + (isChanged(RESULT, flags)            ? ", result=" + result : "")
                    + (isChanged(CLEANUP, flags)           ? ", cleanup=" + cleanup : "") +
                    '}';
+        }
+
+        private static String safeToString(Object obj)
+        {
+            try
+            {
+                return obj.toString();
+            }
+            catch (Throwable t)
+            {
+                return "<error evaluating>";
+            }
         }
     }
 

@@ -82,7 +82,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     final Node node;
     final TxnId txnId;
     final Route<?> route;
-    final Unseekables<?> requestedFor;
     final Known target;
     final InvalidIf invalidIf;
 
@@ -109,7 +108,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     Propagate(
     Node node, TxnId txnId,
     Route<?> route,
-    Unseekables<?> requestedFor, Known target, InvalidIf invalidIf,
+    Known target, InvalidIf invalidIf,
     SaveStatus maxKnowledgeSaveStatus,
     SaveStatus maxSaveStatus, Ballot promised,
     Ballot acceptedOrCommitted,
@@ -126,7 +125,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.node = node;
         this.txnId = txnId;
         this.route = route;
-        this.requestedFor = requestedFor;
         this.target = target;
         this.invalidIf = invalidIf;
         this.maxKnowledgeSaveStatus = maxKnowledgeSaveStatus;
@@ -145,11 +143,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.callback = callback;
     }
 
-    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, WithQuorum withQuorum, Route<?> queried, Participants<?> requestedFor, LatentStoreSelector reportTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, WithQuorum withQuorum, Route<?> queried, Participants<?> contactable, LatentStoreSelector reportTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
     {
         if (full.maxKnowledgeSaveStatus.status == NotDefined && full.invalidIf == NotKnownToBeInvalid)
         {
-            callback.accept(new FetchResult(Nothing, requestedFor.slice(0, 0), requestedFor), null);
+            callback.accept(new FetchResult(Nothing, queried.slice(0, 0)), null);
             return;
         }
 
@@ -157,12 +155,12 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         // TODO (required): consider and document whether it is safe to infer that we are stale if we have not received responses from all shards we know of
         //  (in principle, we should at least require responses from our own shard, and the home shard if we know it); if we only hear from a remote shard it may have fully Erased
-        full = full.finish(queried, requestedFor, queried.with((Unseekables) requestedFor), withQuorum, previouslyKnownToBeInvalidIf);
+        full = full.finish(queried, contactable, queried.with((Unseekables) contactable), withQuorum, previouslyKnownToBeInvalidIf);
         Route<?> route = Invariants.nonNull(full.route);
 
         Timestamp committedExecuteAt = full.executeAtIfKnown();
         Propagate propagate =
-            new Propagate(node, txnId, route, requestedFor, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, committedExecuteAt, full.writes, full.result, callback);
+            new Propagate(node, txnId, route, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, committedExecuteAt, full.writes, full.result, callback);
 
         long untilEpoch = txnId.epoch();
         if (committedExecuteAt != null)
@@ -321,20 +319,14 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     {
         achieved = achieved.propagates();
         Unseekables<?> achievedTarget = owns;
-        Unseekables<?> didNotAchieveTarget = null;
         if (target != null && !target.isSatisfiedBy(achieved))
-        {
             achievedTarget = owns.slice(0, 0);
-            didNotAchieveTarget = owns;
-        }
 
         while (true)
         {
             FetchResult current = fetchResult;
-            FetchResult next = current == null ? new FetchResult(achieved, achievedTarget, didNotAchieveTarget)
-                               : new FetchResult(achieved.reduce(current.achieved),
-                                                 achievedTarget.with((Unseekables)current.achievedTarget),
-                                                 Unseekables.merge(current.didNotAchieveTarget, (Unseekables) didNotAchieveTarget));
+            FetchResult next = current == null ? new FetchResult(target, achievedTarget)
+                               : new FetchResult(target, achievedTarget.with((Unseekables)current.achievedTarget));
 
             if (fetchResultUpdater.compareAndSet(this, current, next))
                 return;
@@ -345,13 +337,9 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     {
         FetchResult current = fetchResult;
         if (current == null)
-            return new FetchResult(Nothing, requestedFor.slice(0, 0), requestedFor);
+            return new FetchResult(target, route.slice(0, 0));
 
-        Unseekables<?> missed = requestedFor.without(current.achievedTarget);
-        if (missed.isEmpty())
-            return current;
-
-        return new FetchResult(Nothing, current.achievedTarget, Unseekables.merge(missed, (Unseekables) current.didNotAchieveTarget));
+        return current;
     }
 
     // if can only propagate Truncated, we might be stale; try to upgrade for this command store only, even partially if necessary

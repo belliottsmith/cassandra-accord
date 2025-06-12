@@ -797,15 +797,20 @@ public abstract class Command implements ICommand
             super(copy, status, overrideWaitingOn);
             this.writes = copy.writes();
             this.result = copy.result();
-            Invariants.require(txnId().kind() != Write || writes != null);
+            validateWrites(txnId(), writes);
         }
 
         private Executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, Result result)
         {
             super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
-            Invariants.require(txnId().kind() != Write || writes != null);
+            validateWrites(txnId, writes);
             this.writes = writes;
             this.result = result;
+        }
+
+        static void validateWrites(TxnId txnId, Writes writes)
+        {
+            Invariants.require(txnId.kind() != Write || writes != null, (writes == null ? "Expected writes for %s" : "Unexpected writes for %s"), txnId);
         }
 
         @Override
@@ -1578,16 +1583,25 @@ public abstract class Command implements ICommand
 
     public static <T extends Command> T validate(T validate)
     {
-        Invariants.require(validate.txnId().hasOnlyIdentityFlags());
-        Invariants.require(!validate.participants().hasTouched().isEmpty() || validate.saveStatus() == Uninitialised);
+        TxnId txnId = validate.txnId();
+        Invariants.require(txnId.hasOnlyIdentityFlags(), "%s has non-identity flags", txnId);
+
+        SaveStatus saveStatus = validate.saveStatus();
+        StoreParticipants participants = validate.participants();
+        Invariants.require(!participants.hasTouched().isEmpty() || saveStatus == Uninitialised, "%s(%s): hasTouched is empty. %s", txnId, saveStatus, participants);
         Known known = validate.known();
-        switch (known.route())
+
         {
-            default: throw new UnhandledEnum(known.route());
-            case MaybeRoute: break;
-            case FullRoute: Invariants.require(Route.isFullRoute(validate.route())); break;
-            case CoveringRoute: Invariants.require(Route.isRoute(validate.route())); break;
+            Route<?> route = validate.route();
+            switch (known.route())
+            {
+                default: throw new UnhandledEnum(known.route());
+                case MaybeRoute: break;
+                case FullRoute: Invariants.require(Route.isFullRoute(route), "%s(%s): missing FullRoute; have %s", txnId, saveStatus, route); break;
+                case CoveringRoute: Invariants.require(Route.isRoute(route), "%s(%s): missing Route", txnId, saveStatus); break;
+            }
         }
+
         {
             PartialTxn partialTxn = validate.partialTxn();
             switch (known.definition())

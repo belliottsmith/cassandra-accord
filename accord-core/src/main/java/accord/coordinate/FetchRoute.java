@@ -42,44 +42,38 @@ import static accord.primitives.WithQuorum.HasQuorum;
 /**
  * Find some Route for a txnId using some known participants
  */
-public class FetchSomeRoute extends CheckShards<Participants<?>>
+public class FetchRoute extends CheckShards<Participants<?>>
 {
     final LatentStoreSelector reportTo;
     final BiConsumer<Route<?>, Throwable> callback;
-    FetchSomeRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
+    FetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
     {
         super(node, txnId, contactable, IncludeInfo.Route, null, invalidIf);
         this.reportTo = reportTo;
         this.callback = callback;
     }
 
-    public static void fetchSomeRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> unseekables, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
+    public static void fetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> unseekables, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
     {
         if (!node.topology().hasEpoch(txnId.epoch()))
         {
-            node.withEpochAtLeast(txnId.epoch(), callback, () -> fetchSomeRoute(node, txnId, invalidIf, unseekables, reportTo, callback));
+            node.withEpochAtLeast(txnId.epoch(), callback, () -> fetchRoute(node, txnId, invalidIf, unseekables, reportTo, callback));
             return;
         }
 
-        FetchSomeRoute fetchSomeRoute = new FetchSomeRoute(node, txnId, invalidIf, unseekables, reportTo, callback);
-        fetchSomeRoute.start();
+        FetchRoute fetchRoute = new FetchRoute(node, txnId, invalidIf, unseekables, reportTo, callback);
+        fetchRoute.start();
     }
 
-
-    public static void fetchSomeRoute(Node node, TxnId txnId, Participants<?> contactable, BiConsumer<Route<?>, Throwable> callback)
+    public static void fetchRoute(Node node, TxnId txnId, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
     {
-        fetchSomeRoute(node, txnId, contactable, LatentStoreSelector.standard(), callback);
-    }
-
-    public static void fetchSomeRoute(Node node, TxnId txnId, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
-    {
-        fetchSomeRoute(node, txnId, NotKnownToBeInvalid, contactable, reportTo, callback);
+        fetchRoute(node, txnId, NotKnownToBeInvalid, contactable, reportTo, callback);
     }
 
     @Override
     protected boolean isSufficient(CheckStatusOk ok)
     {
-        return ok.route != null;
+        return Route.isFullRoute(ok.route);
     }
 
     @Override

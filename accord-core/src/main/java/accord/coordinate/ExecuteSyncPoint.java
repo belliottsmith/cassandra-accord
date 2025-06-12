@@ -26,12 +26,14 @@ import java.util.function.Function;
 
 import javax.annotation.Nullable;
 
+import accord.api.Result;
 import accord.coordinate.tracking.DurabilityTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.local.durability.DurabilityResult;
 import accord.local.durability.DurabilityService.SyncRemote;
+import accord.messages.ApplyThenWaitUntilApplied;
 import accord.messages.Callback;
 import accord.messages.ReadData;
 import accord.messages.ReadData.CommitOrReadNack;
@@ -40,6 +42,7 @@ import accord.messages.SetShardDurable;
 import accord.messages.WaitUntilApplied;
 import accord.primitives.Range;
 import accord.primitives.SyncPoint;
+import accord.primitives.Txn;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -248,7 +251,10 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
     protected void start()
     {
         SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
+        // TODO (desired): special Apply message that doesn't resend deps if path=MEDIUM
+        Txn txn = node.agent().emptySystemTxn(Txn.Kind.ExclusiveSyncPoint, syncPoint.syncId.domain());
+        Result result = txn.result(syncPoint.syncId, syncPoint.executeAt, null);
         if (contact == null) tryFailure(new Exhausted(syncPoint.syncId, syncPoint.route.homeKey(), null));
-        else node.send(contact, to -> new WaitUntilApplied(to, tracker.topologies(), syncPoint.syncId, syncPoint.route, tracker.topologies().currentEpoch()), executor, this);
+        else node.send(contact, to -> new ApplyThenWaitUntilApplied(to, tracker.topologies(), syncPoint.executeAt, tracker.topologies().currentEpoch(), syncPoint.route, syncPoint.syncId, txn, syncPoint.waitFor, syncPoint.route, null, result), executor, this);
     }
 }
