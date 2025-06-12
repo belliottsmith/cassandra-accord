@@ -25,7 +25,7 @@ import javax.annotation.Nullable;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.coordinate.AsynchronousAwait;
 import accord.coordinate.FetchData;
-import accord.coordinate.FetchSomeRoute;
+import accord.coordinate.FetchRoute;
 import accord.local.Command;
 import accord.local.CommandStores.IncludingSpecificStoreSelector;
 import accord.local.CommandStores.RangesForEpoch;
@@ -65,7 +65,6 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitHome;
 import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitSlice;
 import static accord.impl.progresslog.WaitingState.CallbackKind.Fetch;
-import static accord.impl.progresslog.WaitingState.CallbackKind.FetchRoute;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
@@ -165,6 +164,8 @@ abstract class WaitingState extends BaseTxnState
 
     private static int awaitRoundSize(Route<?> slicedRoute)
     {
+        // TODO (required): for testing, introduce some deterministic mechanism for picking some value smaller than we can support,
+        //  so we can better exercise this without breaking the infrequent much larger routes for sync points
         return roundSize(slicedRoute.size(), AWAIT_BITS);
     }
 
@@ -469,7 +470,7 @@ abstract class WaitingState extends BaseTxnState
     }
 
     // note that ready and notReady may include keys not requested by this progressLog
-    static void awaitOrFetchCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, Unseekables<?> ready, @Nullable Unseekables<?> notReady, @Nullable BlockedUntil upgrade, Throwable fail)
+    static void awaitOrFetchCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, Unseekables<?> ready, @Nullable BlockedUntil upgrade, Throwable fail)
     {
         WaitingState state = owner.get(txnId);
         Invariants.require(state != null, "State has been cleared but callback was not cancelled");
@@ -484,7 +485,7 @@ abstract class WaitingState extends BaseTxnState
         {
             if (route == null)
             {
-                Invariants.require(kind == FetchRoute);
+                Invariants.require(kind == CallbackKind.FetchRoute);
                 Invariants.require(ready == null);
                 state.retry(safeStore, safeCommand, owner, blockedUntil);
                 return;
@@ -503,7 +504,6 @@ abstract class WaitingState extends BaseTxnState
             long fromLocalEpoch = state.readLowEpoch(safeStore, txnId, route);
             long toLocalEpoch = state.readHighEpoch(safeStore, txnId, route);
             Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, fromLocalEpoch, toLocalEpoch); // the actual local keys we care about
-
             Route<?> awaitRoute = awaitRoute(slicedRoute, blockedUntil); // either slicedRoute or just the home key
 
             int roundSize = awaitRoundSize(awaitRoute);
@@ -515,7 +515,7 @@ abstract class WaitingState extends BaseTxnState
                 default: throw new UnhandledEnum(kind);
 
                 case AwaitHome:
-                    if (notReady == null)
+                    if (ready.contains(route.homeKey()))
                     {
                         // the home shard was found to already have the necessary state, with no distributed await;
                         // we can immediately progress the state machine
@@ -534,9 +534,12 @@ abstract class WaitingState extends BaseTxnState
                     Invariants.require(awaitRoute == slicedRoute);
                     // In a production system it is safe for the roundIndex to get corrupted as we will just start polling a bit early,
                     // but for testing we would like to know it has happened.
-                    if (Invariants.expect(roundStart < roundSize))
+                    if (Invariants.expect(roundStart < slicedRoute.size()))
                     {
-                        if (notReady == null)
+                        Route<?> round = slicedRoute.slice(roundStart, Math.min(slicedRoute.size(), roundStart + roundSize));
+                        Participants<?> notReady = round.without(ready);
+
+                        if (notReady.isEmpty())
                         {
                             Invariants.expect((int) awaitRoute.findNextSameKindIntersection(roundStart, (Unseekables) ready, 0) / roundSize == roundIndex);
                             // TODO (desired): in this case perhaps upgrade to fetch for next round?
@@ -560,13 +563,11 @@ abstract class WaitingState extends BaseTxnState
                         state.runInternal(safeStore, safeCommand, owner);
                         return;
                     }
-                    // we may not have requested everything since we didn't have a Route, so calculate our own notReady and fall-through
-                    notReady = slicedRoute.without(ready);
 
                 case Fetch:
                 {
-                    Invariants.require(notReady != null, "Fetch was successful for all keys, but the WaitingState has not been cleared");
-                    Invariants.require(notReady.intersects(slicedRoute), "Fetch was successful for all keys, but the WaitingState has not been cleared");
+                    Participants<?> notReady = slicedRoute.without(ready);
+                    Invariants.expect(!notReady.isEmpty(), "Fetch was successful for all keys, but the WaitingState has not been cleared");
                     int nextIndex;
                     if (roundStart >= awaitRoute.size()) nextIndex = -1;
                     else if (slicedRoute == awaitRoute) nextIndex = (int) awaitRoute.findNextSameKindIntersection(roundStart, (Unseekables) notReady, 0);
@@ -605,7 +606,7 @@ abstract class WaitingState extends BaseTxnState
         if (found == null)
             found = safeCommand.current().route();
         Participants<?> ready = found != null ? found.slice(0, 0) : null;
-        awaitOrFetchCallback(FetchRoute, safeStore, safeCommand, owner, txnId, blockedUntil, ready, null, null, fail);
+        awaitOrFetchCallback(CallbackKind.FetchRoute, safeStore, safeCommand, owner, txnId, blockedUntil, ready, null, fail);
     }
 
     static void fetchCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, FetchData.FetchResult fetchResult, Throwable fail)
@@ -617,9 +618,8 @@ abstract class WaitingState extends BaseTxnState
     {
         Invariants.require(fetchResult != null || fail != null);
         Unseekables<?> ready = fetchResult == null ? null : fetchResult.achievedTarget;
-        Unseekables<?> notReady = fetchResult == null ? null : fetchResult.didNotAchieveTarget;
-        BlockedUntil upgrade = fetchResult == null ? null : BlockedUntil.forSaveStatus(fetchResult.achieved.propagatesSaveStatus());
-        awaitOrFetchCallback(kind, safeStore, safeCommand, owner, txnId, blockedUntil, ready, notReady, upgrade, fail);
+        BlockedUntil upgrade = fetchResult == null ? null : BlockedUntil.forSaveStatus(safeCommand.current().saveStatus());
+        awaitOrFetchCallback(kind, safeStore, safeCommand, owner, txnId, blockedUntil, ready, upgrade, fail);
     }
 
     static void synchronousAwaitHomeCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, AsynchronousAwait.SynchronousResult awaitResult, Throwable fail)
@@ -635,9 +635,8 @@ abstract class WaitingState extends BaseTxnState
     static void synchronousAwaitCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, AsynchronousAwait.SynchronousResult awaitResult, Throwable fail)
     {
         Unseekables<?> ready = awaitResult == null ? null : awaitResult.ready;
-        Unseekables<?> notReady = awaitResult == null ? null : awaitResult.notReady;
         // TODO (desired): extract "upgrade" info from AsynchronousAwait
-        awaitOrFetchCallback(kind, safeStore, safeCommand, owner, txnId, blockedUntil, ready, notReady, null, fail);
+        awaitOrFetchCallback(kind, safeStore, safeCommand, owner, txnId, blockedUntil, ready, null, fail);
     }
     
     void asynchronousAwaitCallback(DefaultProgressLog owner, SafeCommandStore safeStore, SaveStatus newStatus, Node.Id from, int callbackId)
@@ -712,7 +711,7 @@ abstract class WaitingState extends BaseTxnState
         // TODO (desired): fetch only the route
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         BiConsumer<Route<?>, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchRouteCallback);
-        FetchSomeRoute.fetchSomeRoute(owner.node(), txnId, contactable, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker);
+        FetchRoute.fetchRoute(owner.node(), txnId, contactable, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker);
     }
 
     static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
@@ -720,7 +719,7 @@ abstract class WaitingState extends BaseTxnState
         Invariants.require(!slicedRoute.isEmpty());
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
-        FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchRoute, maxRoute, slicedRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker);
+        FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchRoute, maxRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker);
     }
 
     void awaitHomeKey(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route)

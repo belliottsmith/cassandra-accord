@@ -1191,7 +1191,8 @@ public class TopologyManager
             return snapshot.currentEpoch;
 
         Invariants.require(snapshot.currentEpoch >= maxEpoch, "current epoch %d < provided max %d", snapshot.currentEpoch, maxEpoch);
-        Invariants.require(snapshot.minEpoch() <= maxEpoch, "minimum known epoch %d > provided max %d", snapshot.minEpoch(), maxEpoch);
+        if (maxEpoch < snapshot.minEpoch())
+            throw new TopologyRetiredException(maxEpoch, snapshot.minEpoch());
         return maxEpoch;
     }
 
@@ -1213,6 +1214,10 @@ public class TopologyManager
     public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, SelectNodeOwnership selectNodeOwnership, SelectFunction selectFunction)
     {
         Epochs snapshot = epochs;
+
+        // TODO (expected): we should disambiguate minEpoch we can bump (i.e. historical epochs) and those we cannot (i.e. txnId.epoch())
+        minEpoch = Math.max(snapshot.minEpoch(), minEpoch);
+        maxEpoch = validateMax(maxEpoch, snapshot);
         EpochState maxState = snapshot.get(maxEpoch);
 
         if (maxState == null)

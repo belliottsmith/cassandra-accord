@@ -192,6 +192,8 @@ public class ProtocolModifiers
 
     public static class Toggles
     {
+        public static final boolean artificiallyConstrainResources = Invariants.debug();
+
         private static FastPaths permittedFastPaths = new FastPaths(FastPath.values());
         public static boolean usePrivilegedCoordinator() { return permittedFastPaths.hasPrivilegedCoordinator(); }
         public static void setPermittedFastPaths(FastPaths newPermittedFastPaths) { permittedFastPaths = newPermittedFastPaths; }

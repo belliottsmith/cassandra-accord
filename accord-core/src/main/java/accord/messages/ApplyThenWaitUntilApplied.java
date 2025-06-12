@@ -71,7 +71,12 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
 
     public ApplyThenWaitUntilApplied(Node.Id to, Topologies topologies, Timestamp executeAt, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, Participants<?> readScope, Writes writes, Result result)
     {
-        super(to, topologies, txnId, readScope, executeAt.epoch());
+        this(to, topologies, executeAt, executeAt.epoch(), route, txnId, txn, deps, readScope, writes, result);
+    }
+
+    public ApplyThenWaitUntilApplied(Node.Id to, Topologies topologies, Timestamp executeAt, long executeAtEpoch, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, Participants<?> readScope, Writes writes, Result result)
+    {
+        super(to, topologies, txnId, readScope, executeAtEpoch);
         this.executeAt = executeAt;
         Route<?> scope = computeScope(to, topologies, route);
         this.route = route;
@@ -101,7 +106,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     @Override
     public CommitOrReadNack apply(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, executeAtEpoch);
+        StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch(), txnId, executeAtEpoch);
         ApplyReply applyReply = Apply.apply(safeStore, participants, Ballot.ZERO, txn, txnId, executeAt, deps, route, writes, result);
         switch (applyReply)
         {
