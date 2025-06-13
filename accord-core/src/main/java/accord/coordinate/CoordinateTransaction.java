@@ -27,15 +27,16 @@ import accord.api.Result;
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
 import accord.coordinate.CoordinationAdapter.Adapters;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
-import accord.local.CommandStore;
 import accord.local.Commands;
 import accord.local.DepsCalculator;
 import accord.local.KeyHistory;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.messages.Accept;
 import accord.messages.PreAccept;
@@ -52,7 +53,6 @@ import accord.primitives.FullRoute;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.utils.Functions;
 import accord.utils.MapReduceConsume;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncResult;
@@ -64,6 +64,7 @@ import static accord.coordinate.CoordinateTransaction.LocalExecuteState.PENDING;
 import static accord.coordinate.CoordinateTransaction.LocalExecuteState.SUCCESS;
 import static accord.coordinate.CoordinateTransaction.LocalExecuteState.TIMEOUT;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
+import static accord.coordinate.ExecuteFlag.CoordinationFlags.empty;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.local.Commands.AcceptOutcome.Success;
@@ -79,9 +80,9 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
  */
 public class CoordinateTransaction extends CoordinatePreAccept<Result>
 {
-    private CoordinateTransaction(Node node, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<Result, Throwable> callback)
+    private CoordinateTransaction(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<Result, Throwable> callback)
     {
-        super(node, txnId, txn, route, callback);
+        super(node, executor, txnId, txn, route, callback);
     }
 
     public static AsyncResult<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
@@ -91,7 +92,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             return AsyncResults.failure(mismatch);
 
         SettableByCallback<Result> result = new SettableByCallback<>();
-        CoordinateTransaction coordinate = new CoordinateTransaction(node, txnId, txn, route, result);
+        CoordinateTransaction coordinate = new CoordinateTransaction(node, node.someSequentialExecutor(), txnId, txn, route, result);
         coordinate.start();
         return result;
     }
@@ -111,11 +112,15 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             Deps deps = mergeFastOrMediumDeps(oks);
             if (deps != null)
             {
-                ExecuteFlags executeFlags = Functions.foldl(oks.valuesAsNullableList(), (ok, v) -> ok == null ? v : v.and(ok.flags), ExecuteFlags.all());
+                CoordinationFlags flags = oks.foldlNonNull((d, k, v, out) -> {
+                    ExecuteFlags.collect(out, k, v.flags, d, v.deps);
+                    return out;
+                }, deps, empty(oks.domain()));
+
                 // note: we merge all Deps regardless of witnessedAt. While we only need fast path votes,
                 // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
                 // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
-                executeAdapter().execute(node, topologies, route, Ballot.ZERO, FAST, executeFlags, txnId, txn, txnId, deps, deps, callback);
+                executeAdapter().execute(node, executor, topologies, route, Ballot.ZERO, FAST, flags, txnId, txn, txnId, deps, deps, callback);
                 node.agent().eventListener().onFastPathTaken(txnId, deps);
                 return;
             }
@@ -125,20 +130,20 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             Deps deps = mergeFastOrMediumDeps(oks);
             if (deps != null)
             {
-                proposeAdapter().propose(node, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, callback);
+                proposeAdapter().propose(node, executor, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, callback);
                 node.agent().eventListener().onMediumPathTaken(txnId, deps);
                 return;
             }
         }
         else if (executeAt.is(REJECTED))
         {
-            proposeAndCommitInvalidate(node, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
             node.agent().eventListener().onRejected(txnId);
             return;
         }
 
         Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
-        proposeAdapter().propose(node, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
+        proposeAdapter().propose(node, executor, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
         node.agent().eventListener().onSlowPathTaken(txnId, deps);
     }
 
@@ -213,7 +218,6 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             {
                 if (result.isOk())
                 {
-                    CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
                     PreAcceptOk ok = (PreAcceptOk) result;
                     // TODO (desired): we can probably still process and record fast path votes from peers, just with different quorum requirements
                     boolean hasCoordinatorVote = txnId.equals(ok.witnessedAt);
@@ -223,7 +227,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                     for (Node.Id id : topologies.nodes())
                     {
                         if (id.equals(node.id())) continue;
-                        node.send(id, new PreAccept(id, topologies, txnId, txn, deps, hasCoordinatorVote, route), commandStore, CoordinateTransaction.this);
+                        node.send(id, new PreAccept(id, topologies, txnId, txn, deps, hasCoordinatorVote, route), executor, CoordinateTransaction.this);
                     }
                 }
                 else

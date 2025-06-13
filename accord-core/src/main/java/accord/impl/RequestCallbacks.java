@@ -18,13 +18,13 @@
 
 package accord.impl;
 
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.local.TimeService;
 import accord.messages.Callback;
@@ -46,7 +46,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
     {
         protected class RegisteredCallback<T> extends AbstractRegistered implements CallbackEntry
         {
-            final AgentExecutor executor;
+            final Executor executor;
             final long callbackId;
             final Callback<T> callback;
             final Node.Id to;
@@ -55,7 +55,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             final long reportFailAt;
             boolean cancelInFlight;
 
-            public RegisteredCallback(AgentExecutor executor, long callbackId, Callback<T> callback, Node.Id to, long registeredAt, long reportSlowAt, long reportFailAt)
+            public RegisteredCallback(Executor executor, long callbackId, Callback<T> callback, Node.Id to, long registeredAt, long reportSlowAt, long reportFailAt)
             {
                 this.callbackId = callbackId;
                 this.executor = executor;
@@ -140,19 +140,19 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
                     }
                     catch (Throwable t)
                     {
-                        Throwable log = null;
+                        boolean rethrow = false;
                         try
                         {
                             if (!callback.onCallbackFailure(to, t))
-                                log = t;
+                                rethrow = true;
                         }
                         catch (Throwable t2)
                         {
-                            log = t;
+                            rethrow = true;
                             t.addSuppressed(t2);
                         }
-                        if (log != null)
-                            executor.agent().onUncaughtException(t);
+                        if (rethrow)
+                            throw t;
                     }
                 });
             }
@@ -165,12 +165,12 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             super(time);
         }
 
-        <T> RegisteredCallback<T> register(long callbackId, AgentExecutor executor, Callback<T> callback, Node.Id to, long now, long failDeadline)
+        <T> RegisteredCallback<T> register(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long failDeadline)
         {
             return register(callbackId, executor, callback, to, now, Long.MAX_VALUE, failDeadline);
         }
 
-        <T> RegisteredCallback<T> register(long callbackId, AgentExecutor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt)
+        <T> RegisteredCallback<T> register(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt)
         {
             lock();
             try
@@ -244,12 +244,12 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
         super(time, stripeCount, CallbackStripe[]::new, CallbackStripe::new);
     }
 
-    public <T> void registerWithDelay(long callbackId, AgentExecutor executor, Callback<T> callback, Node.Id to, long failDelay, TimeUnit units)
+    public <T> void registerWithDelay(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long failDelay, TimeUnit units)
     {
         registerWithDelay(callbackId, executor, callback, to, Long.MAX_VALUE, failDelay, units);
     }
 
-    public <T> void registerWithDelay(long callbackId, AgentExecutor executor, Callback<T> callback, Node.Id to, long slowDelay, long failDelay, TimeUnit units)
+    public <T> void registerWithDelay(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long slowDelay, long failDelay, TimeUnit units)
     {
         long now = time.elapsed(MICROSECONDS);
         long reportFailAt = now + units.toMicros(failDelay);
@@ -257,12 +257,12 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
         stripes[(int)callbackId & (stripes.length - 1)].register(callbackId, executor, callback, to, now, reportSlowAt, reportFailAt);
     }
 
-    public <T> void registerAt(long callbackId, AgentExecutor executor, Callback<T> callback, Node.Id to, long now, long reportFailAt, TimeUnit units)
+    public <T> void registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportFailAt, TimeUnit units)
     {
         registerAt(callbackId, executor, callback, to, now, Long.MAX_VALUE, reportFailAt, units);
     }
 
-    public <T> void registerAt(long callbackId, AgentExecutor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt, TimeUnit units)
+    public <T> void registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt, TimeUnit units)
     {
         if (units != MICROSECONDS)
         {

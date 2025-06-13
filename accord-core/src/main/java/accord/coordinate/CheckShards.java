@@ -22,6 +22,7 @@ import javax.annotation.Nullable;
 
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusReply;
@@ -54,15 +55,15 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     protected boolean truncated;
 
     // srcEpoch is either txnId.epoch() or executeAt.epoch()
-    protected CheckShards(Node node, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
-        this(node, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf);
+        this(node, executor, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf);
         Invariants.require(txnId.isVisible());
     }
 
-    protected CheckShards(Node node, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
-        super(node, topologyFor(node, txnId, query, srcEpoch), txnId);
+        super(node, executor, topologyFor(node, txnId, query, srcEpoch), txnId);
         this.sourceEpoch = srcEpoch;
         this.query = query;
         this.includeInfo = includeInfo;
@@ -80,7 +81,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     protected void contact(Id id)
     {
         Participants<?> unseekables = query.slice(topologies().computeRangesForNode(id));
-        node.send(id, new CheckStatus(txnId, unseekables, sourceEpoch, includeInfo, bumpBallot), this);
+        node.send(id, new CheckStatus(txnId, unseekables, sourceEpoch, includeInfo, bumpBallot), executor, this);
     }
 
     protected boolean isSufficient(Id from, CheckStatusOk ok) { return isSufficient(ok); }

@@ -26,7 +26,6 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 import com.google.common.collect.Lists;
@@ -34,6 +33,7 @@ import com.google.common.util.concurrent.MoreExecutors;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import accord.utils.Reduce;
 import org.assertj.core.api.AbstractThrowableAssert;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
@@ -272,8 +272,8 @@ public class AsyncChainsTest
 
     private static void assertCombinerSize(int size, AsyncChain<?> chain)
     {
-        Assertions.assertTrue(chain instanceof AsyncChains.AccumulatingReducerAsyncChain, () -> String.format("%s is not an instance of AsyncChainCombiner", chain));
-        AsyncChains.AccumulatingReducerAsyncChain<?> combiner = (AsyncChains.AccumulatingReducerAsyncChain<?>) chain;
+        Assertions.assertTrue(chain instanceof AsyncChains.ReducingAsyncChain, () -> String.format("%s is not an instance of AsyncChainCombiner", chain));
+        AsyncChains.ReducingAsyncChain<?> combiner = (AsyncChains.ReducingAsyncChain<?>) chain;
         Assertions.assertEquals(size, combiner.size());
     }
 
@@ -283,7 +283,7 @@ public class AsyncChainsTest
         AsyncChain<Integer> chain1 = AsyncChains.success(1);
         AsyncChain<Integer> chain2 = AsyncChains.success(2);
         AsyncChain<Integer> chain3 = AsyncChains.success(3);
-        BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;
+        Reduce<Integer, Integer> add = (a, b) -> a + b;
         AsyncChain<Integer> reduction1 = AsyncChains.reduce(chain1, chain2, add);
         assertCombinerSize(2, reduction1);
         AsyncChain<Integer> reduction2 = AsyncChains.reduce(reduction1, chain3, add);
@@ -301,8 +301,8 @@ public class AsyncChainsTest
         AsyncChain<Integer> chain1 = AsyncChains.success(1);
         AsyncChain<Integer> chain2 = AsyncChains.success(2);
         AsyncChain<Integer> chain3 = AsyncChains.success(3);
-        BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;
-        BiFunction<Integer, Integer, Integer> mult = (a, b) -> a * b;
+        Reduce<Integer, Integer> add = (a, b) -> a + b;
+        Reduce<Integer, Integer> mult = (a, b) -> a * b;
         AsyncChain<Integer> reduction1 = AsyncChains.reduce(chain1, chain2, add);
         assertCombinerSize(2, reduction1);
         AsyncChain<Integer> reduction2 = AsyncChains.reduce(reduction1, chain3, mult);

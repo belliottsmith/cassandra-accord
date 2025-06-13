@@ -32,6 +32,7 @@ import accord.api.Read;
 import accord.api.Result;
 import accord.api.Sliceable;
 import accord.api.Update;
+import accord.local.CommandStore;
 import accord.local.SafeCommandStore;
 import accord.utils.Invariants;
 import accord.utils.TinyEnumSet;
@@ -455,14 +456,40 @@ public interface Txn
     default AsyncChain<Data> read(SafeCommandStore safeStore, Timestamp executeAt, Participants<?> execute)
     {
         Seekables<?, ?> keys = read().keys().intersecting(execute, Minimal);
-        List<AsyncChain<Data>> chains = new ArrayList<>(keys.size());
-        Read read = read();
-        for (int i = 0, mi = keys.size() ; i < mi ; ++i)
-            chains.add(read.read(keys.get(i), safeStore, executeAt, safeStore.dataStore()));
+        int count = keys.size();
+        switch (count)
+        {
+            case 0: return read().read(safeStore, null, executeAt);
+            case 1: return read().read(safeStore, keys.get(0), executeAt);
+            default:
+            {
+                List<AsyncChain<Data>> chains = new ArrayList<>(keys.size());
+                Read read = read();
+                for (int i = 0 ; i < count ; ++i)
+                    chains.add(read.read(safeStore, keys.get(i), executeAt));
 
-        if (chains.isEmpty())
-            return AsyncChains.success(null);
+                return AsyncChains.reduce(chains, Data::merge);
+            }
+        }
+    }
 
-        return AsyncChains.reduce(chains, Data::merge);
+    default AsyncChain<Data> readDirect(CommandStore commandStore, Timestamp executeAt, Participants<?> execute)
+    {
+        Seekables<?, ?> keys = read().keys().intersecting(execute, Minimal);
+        int count = keys.size();
+        switch (count)
+        {
+            case 0: return AsyncChains.success(null);
+            case 1: return read().readDirect(commandStore, keys.get(0), executeAt);
+            default:
+            {
+                List<AsyncChain<Data>> chains = new ArrayList<>(keys.size());
+                Read read = read();
+                for (int i = 0 ; i < count ; ++i)
+                    chains.add(read.readDirect(commandStore, keys.get(i), executeAt));
+
+                return AsyncChains.reduce(chains, Data::merge);
+            }
+        }
     }
 }

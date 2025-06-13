@@ -36,8 +36,6 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
-import static accord.local.DepsCalculator.calculateDeps;
-
 public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralReadDeps.GetEphemeralReadDepsOk>
 {
     public static final class SerializationSupport
@@ -82,7 +80,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
         ExecuteFlags flags;
         try (DepsCalculator calculator = new DepsCalculator())
         {
-             deps = calculateDeps(safeStore, txnId, participants, minEpoch, Timestamp.MAX, false);
+             deps = calculator.calculate(safeStore, txnId, participants, minEpoch, Timestamp.MAX, false);
              flags = calculator.executeFlags(txnId);
         }
         return new GetEphemeralReadDepsOk(deps, latestEpoch, flags);
@@ -91,7 +89,10 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     @Override
     public GetEphemeralReadDepsOk reduce(GetEphemeralReadDepsOk r1, GetEphemeralReadDepsOk r2)
     {
-        return new GetEphemeralReadDepsOk(r1.deps.with(r2.deps), Math.max(r1.latestEpoch, r2.latestEpoch), r1.flags.and(r2.flags));
+        long latestEpoch = Math.max(r1.latestEpoch, r2.latestEpoch);
+        if (r1.deps == null || r2.deps == null)
+            return new GetEphemeralReadDepsOk(latestEpoch);
+        return new GetEphemeralReadDepsOk(r1.deps.with(r2.deps), latestEpoch, r1.flags.and(r2.flags));
     }
 
     @Override

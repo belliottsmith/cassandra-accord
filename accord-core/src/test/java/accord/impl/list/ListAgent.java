@@ -186,7 +186,7 @@ public class ListAgent implements Agent
     public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
     {
         // TODO (required): meta randomise
-        return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
+        return units.convert(rnd.nextInt(100, 1000) * retryCount, MILLISECONDS);
     }
 
     @Override

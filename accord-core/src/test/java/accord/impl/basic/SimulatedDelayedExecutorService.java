@@ -29,7 +29,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.Nullable;
 
 import accord.api.Agent;
-import accord.local.AgentExecutor;
 
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
@@ -197,12 +196,6 @@ public class SimulatedDelayedExecutorService extends TaskExecutorService impleme
     }
 
     @Override
-    public Agent agent()
-    {
-        return agent;
-    }
-
-    @Override
     protected <T> Task<T> newTaskFor(Callable<T> callable)
     {
         return new RegularTask<>(callable, owner);
@@ -239,10 +232,5 @@ public class SimulatedDelayedExecutorService extends TaskExecutorService impleme
         ScheduledTask<?> task = new ScheduledTask<>(owner, sequenceNumber.incrementAndGet(), initialDelay, -delay, unit, Executors.callable(command));
         schedule(task, initialDelay, unit);
         return task;
-    }
-
-    public AgentExecutor withAgent(Agent agent)
-    {
-        return new SimulatedDelayedExecutorService(pending, agent, sequenceNumber, owner);
     }
 }

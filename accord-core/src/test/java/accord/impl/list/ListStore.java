@@ -280,12 +280,12 @@ public class ListStore implements DataStore, ConfigurationService.Listener
         this.node = node;
     }
 
-    public synchronized Timestamped<int[]> get(Ranges unavailable, Timestamp executeAt, Key key)
+    public synchronized Timestamped<int[]> get(Ranges unavailable, Timestamp executeAt, Key key, boolean isDirectRead)
     {
         // we perform the read, and report alongside its result what we were unable to provide to the coordinator
         // since we might have part of the read request, and it might be necessary for availability for us to serve that part
         if (!unavailable.contains(key))
-            checkReadAccess(executeAt, key);
+            checkReadAccess(executeAt, key, isDirectRead);
         Timestamped<int[]> v = data.get(key);
         return v == null ? EMPTY : v;
     }
@@ -322,13 +322,13 @@ public class ListStore implements DataStore, ConfigurationService.Listener
         data.merge(key, value, ListStore::merge);
     }
 
-    private void checkReadAccess(Timestamp executeAt, Key key)
+    private void checkReadAccess(Timestamp executeAt, Key key, boolean isDirectRead)
     {
         if (!allowedReads.contains(key))
         {
             // TODO (testing): improve this validation logic
             // but in the meantime, whitelist valid things, e.g. ephemeral reads can access data that has been retired
-            if (executeAt instanceof TxnId && ((TxnId) executeAt).awaitsOnlyDeps()
+            if (((executeAt instanceof TxnId && ((TxnId) executeAt).awaitsOnlyDeps()) || isDirectRead)
                 && removedAts.stream().anyMatch(r -> r.ranges.contains(key) && r.epoch > executeAt.epoch()))
                 return;
 

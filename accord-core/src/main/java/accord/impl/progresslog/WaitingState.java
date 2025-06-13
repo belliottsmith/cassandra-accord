@@ -18,6 +18,7 @@
 
 package accord.impl.progresslog;
 
+import java.util.concurrent.Executor;
 import java.util.function.BiConsumer;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -740,7 +741,7 @@ abstract class WaitingState extends BaseTxnState
         long epoch = blockedUntil.fetchEpoch(txnId, executeAt);
         // we MUST allocate the invoker before invoking withEpoch as this may be asynchronous and we must first register our callback for cancellation
         BiConsumer<AsynchronousAwait.SynchronousResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, callback);
-        owner.node().withEpochAtLeast(epoch, invoker, () -> {
+        owner.node().withEpochAtLeast(epoch, (Executor)null, invoker, () -> {
             AsynchronousAwait.awaitAny(owner.node(), contact(owner, route, epoch), txnId, route, blockedUntil, callbackId, invoker);
         });
     }

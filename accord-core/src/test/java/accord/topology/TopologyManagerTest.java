@@ -27,6 +27,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
@@ -35,10 +36,10 @@ import com.google.common.collect.Iterators;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import accord.api.AsyncExecutor;
 import accord.burn.TopologyUpdates;
 import accord.impl.PrefixedIntHashKey;
 import accord.impl.TestAgent;
-import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -50,8 +51,8 @@ import accord.utils.Gens;
 import accord.utils.RandomSource;
 
 import accord.utils.SortedArrays.SortedArrayList;
+import accord.utils.async.AsyncChain;
 import org.agrona.collections.Long2ObjectHashMap;
-import org.mockito.Mockito;
 
 import static accord.Utils.id;
 import static accord.Utils.idList;
@@ -391,8 +392,12 @@ public class TopologyManagerTest
     void fuzz()
     {
         Gen<Topology> firstTopology = AccordGens.topologys(Gens.longs().between(1, 1024)); // limit the epochs between 1-1024, so it is easier to tell the difference while in a debugger
-        AgentExecutor executor = Mockito.mock(AgentExecutor.class, Mockito.withSettings().defaultAnswer(ignore -> { throw new IllegalStateException("Attempted to perform async operation"); }));
-        Mockito.doReturn(new TestAgent.RethrowAgent()).when(executor).agent();
+        AsyncExecutor executor = new AsyncExecutor()
+        {
+            @Override public <T> AsyncChain<T> build(Callable<T> task) { throw new IllegalStateException("Attempted to perform async operation"); }
+            @Override public void execute(Runnable command) { execute(command, new TestAgent.RethrowAgent()); }
+        };
+
         qt().withExamples(20).check(rs -> {
             int[] prefixes = IntStream.generate(rs::nextInt).limit(10).toArray();
             TopologyRandomizer randomizer = new TopologyRandomizer(() -> rs, prefixes, firstTopology.next(rs), new TopologyUpdates(ignore -> executor), null, TopologyRandomizer.Listeners.NOOP);

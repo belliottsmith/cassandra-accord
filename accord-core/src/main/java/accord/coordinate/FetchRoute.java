@@ -48,7 +48,7 @@ public class FetchRoute extends CheckShards<Participants<?>>
     final BiConsumer<Route<?>, Throwable> callback;
     FetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
     {
-        super(node, txnId, contactable, IncludeInfo.Route, null, invalidIf);
+        super(node, node.someSequentialExecutor(), txnId, contactable, IncludeInfo.Route, null, invalidIf);
         this.reportTo = reportTo;
         this.callback = callback;
     }
@@ -57,7 +57,7 @@ public class FetchRoute extends CheckShards<Participants<?>>
     {
         if (!node.topology().hasEpoch(txnId.epoch()))
         {
-            node.withEpochAtLeast(txnId.epoch(), callback, () -> fetchRoute(node, txnId, invalidIf, unseekables, reportTo, callback));
+            node.withEpochAtLeast(txnId.epoch(), null, callback, () -> fetchRoute(node, txnId, invalidIf, unseekables, reportTo, callback));
             return;
         }
 

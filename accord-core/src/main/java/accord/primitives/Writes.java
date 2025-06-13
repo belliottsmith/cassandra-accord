@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 import accord.api.Write;
+import accord.local.CommandStore;
 import accord.local.SafeCommandStore;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -65,32 +66,40 @@ public class Writes
         return Objects.hash(txnId, executeAt, keys, write);
     }
 
-    // TODO (expected): accept Participants here, computes from StoreParticipants.executes
     public AsyncChain<Void> apply(SafeCommandStore safeStore, Participants<?> executes, PartialTxn txn)
+    {
+        return apply(Write::apply, safeStore, executes, txn);
+    }
+
+    public AsyncChain<Void> applyDirect(CommandStore unsafeStore, Participants<?> executes, PartialTxn txn)
+    {
+        return apply(Write::applyDirect, unsafeStore, executes, txn);
+    }
+
+    public interface ApplyWrite<W, P>
+    {
+        AsyncChain<Void> apply(W write, P param, Seekable seekable, TxnId txnId, Timestamp executeAt, PartialTxn txn);
+    }
+
+    public <W extends Write, P> AsyncChain<Void> apply(ApplyWrite<W, P> f, P param, Participants<?> executes, PartialTxn txn)
     {
         if (write == null || executes.isEmpty())
             return SUCCESS;
 
         Seekables<?, ?> keys = this.keys.intersecting(executes);
-        if (keys.isEmpty())
-            return SUCCESS;
-
-        List<AsyncChain<Void>> futures = new ArrayList<>(keys.size());
-        for (Seekable key : keys)
-            futures.add(write.apply(key, safeStore, txnId, executeAt, safeStore.dataStore(), txn));
-
-        return AsyncChains.reduce(futures, (l, r) -> null);
-    }
-
-    public void applyUnsafe(SafeCommandStore safeStore, Ranges ranges, PartialTxn txn)
-    {
-        if (write == null || ranges.isEmpty())
-            return;
-
-        Routables.foldl(keys, ranges, (key, obj, index) -> {
-            write.applyUnsafe(key, safeStore, txnId, executeAt, safeStore.dataStore(), txn);
-            return obj;
-        }, null);
+        int count = keys.size();
+        switch (count)
+        {
+            case 0: return SUCCESS;
+            case 1: return f.apply((W)write, param, keys.get(0), txnId, executeAt, txn);
+            default:
+            {
+                List<AsyncChain<Void>> futures = new ArrayList<>(keys.size());
+                for (int i = 0 ; i < count ; ++i)
+                    futures.add(f.apply((W)write, param, keys.get(i), txnId, executeAt, txn));
+                return AsyncChains.reduce(futures, (l, r) -> null);
+            }
+        }
     }
 
     @Override

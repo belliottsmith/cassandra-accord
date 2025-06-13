@@ -18,6 +18,9 @@
 
 package accord.api;
 
+import javax.annotation.Nullable;
+
+import accord.local.CommandStore;
 import accord.local.SafeCommandStore;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
@@ -32,7 +35,21 @@ import accord.utils.async.AsyncChain;
 public interface Read
 {
     Seekables<?, ?> keys();
-    AsyncChain<Data> read(Seekable key, SafeCommandStore commandStore, Timestamp executeAt, DataStore store);
+
+    /**
+     * Issue a potentially-asynchronous read against the underlying data store while owning the SafeCommandStore.
+     * The result is expected to be non-null unless the store determined the data was stale.
+     * @param key MAY BE NULL indicating a no-op result should be returned
+     */
+    AsyncChain<Data> read(SafeCommandStore safeStore, @Nullable Seekable key, Timestamp executeAt);
+
+    /**
+     * Issue a potentially-asynchronous read against the underlying data store, while not owning the SafeCommandStore.
+     * This method is only invoked if {@link ProtocolModifiers.Toggles#fastReadsMayBypassSafeStore()} is true.
+     * The result is expected to be non-null unless the store determined the data was stale.
+     * @param key MAY BE NULL indicating a no-op result should be returned
+     */
+    default AsyncChain<Data> readDirect(CommandStore commandStore, @Nullable Seekable key, Timestamp executeAt) { throw new UnsupportedOperationException(); }
     Read slice(Ranges ranges);
     Read intersecting(Participants<?> participants);
     Read merge(Read other);

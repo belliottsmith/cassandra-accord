@@ -90,7 +90,7 @@ public class ListRequest implements Request
         int count = 0;
         protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback)
         {
-            super(node, txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All, null, NotKnownToBeInvalid);
+            super(node, node.someSequentialExecutor(), txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All, null, NotKnownToBeInvalid);
             this.callback = callback;
         }
 
@@ -210,7 +210,7 @@ public class ListRequest implements Request
             if (node.epoch() < txnId.epoch())
             {
                 RoutingKey hk = homeKey;
-                node.withEpochAtLeast(txnId.epoch(), (success, fail) -> checkOnResult(hk, txnId, attempt + 1, t));
+                node.withEpochAtLeast(txnId.epoch(), null, (success, fail) -> checkOnResult(hk, txnId, attempt + 1, t));
                 return;
             }
 
@@ -224,7 +224,7 @@ public class ListRequest implements Request
             if (homeKey == null)
                 homeKey = node.computeRoute(txnId, txn.keys()).homeKey();
             RoutingKey finalHomeKey = homeKey;
-            node.commandStores().select(homeKey).execute(() -> CheckOnResult.checkOnResult(node, txnId, finalHomeKey, (s, f) -> {
+            node.someExecutor().execute(() -> CheckOnResult.checkOnResult(node, txnId, finalHomeKey, (s, f) -> {
                 if (f != null)
                 {
                     if (f instanceof Truncated)

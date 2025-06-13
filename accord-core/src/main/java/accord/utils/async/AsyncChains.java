@@ -43,8 +43,8 @@ import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.VisibleForImplementation;
 import accord.utils.Invariants;
+import accord.utils.Reduce;
 
 import static accord.utils.Invariants.illegalState;
 
@@ -391,40 +391,99 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     }
 
     @VisibleForTesting
-    static class AccumulatingReducerAsyncChain<V> extends AsyncChains.Head<V>
+    static abstract class AbstractReducingAsyncChain<I, O> extends AsyncChainCombiner<I, O>
     {
-        private final BiFunction<? super V, ? super V, ? extends V> reducer;
-        private final AsyncChainCombiner<V> chain;
+        private AbstractReducingAsyncChain(AsyncChain<I> accum, AsyncChain<I> add)
+        {
+            super(list(accum, add));
+        }
 
-        private AccumulatingReducerAsyncChain(AsyncChain<V> accum, AsyncChain<V> add, BiFunction<? super V, ? super V, ? extends V> reducer)
+        private AbstractReducingAsyncChain(List<? extends AsyncChain<? extends I>> list)
+        {
+            super(list);
+        }
+
+        private static <V> List<AsyncChain<V>> list(AsyncChain<V> accum, AsyncChain<V> add)
         {
             List<AsyncChain<V>> list = new ArrayList<>(2);
             list.add(accum);
             list.add(add);
-            this.chain = new AsyncChainCombiner<>(list);
-            this.reducer = reducer;
+            return list;
         }
 
-        private static <V> boolean match(AsyncChain<V> accum, BiFunction<? super V, ? super V, ? extends V> reducer)
+        void add(AsyncChain<I> a)
         {
-            return accum instanceof AccumulatingReducerAsyncChain && ((AccumulatingReducerAsyncChain<?>) accum).reducer == reducer;
-        }
-
-        private void add(AsyncChain<V> a)
-        {
-            chain.inputs().add(a);
+            inputs().add(a);
         }
 
         @VisibleForTesting
         int size()
         {
-            return chain.inputs().size();
+            return inputs().size();
+        }
+    }
+
+    @VisibleForTesting
+    static class ReducingFunctionAsyncChain<V> extends AbstractReducingAsyncChain<V, V>
+    {
+        private final BiFunction<? super V, ? super V, ? extends V> reducer;
+
+        private ReducingFunctionAsyncChain(AsyncChain<V> accum, AsyncChain<V> add, BiFunction<? super V, ? super V, ? extends V> reducer)
+        {
+            super(accum, add);
+            this.reducer = reducer;
+        }
+
+        private ReducingFunctionAsyncChain(List<? extends AsyncChain<? extends V>> list, BiFunction<? super V, ? super V, ? extends V> reducer)
+        {
+            super(list);
+            this.reducer = reducer;
+        }
+
+        private static <V> boolean match(AsyncChain<V> accum, BiFunction<? super V, ? super V, ? extends V> reducer)
+        {
+            return accum instanceof ReducingFunctionAsyncChain && ((ReducingFunctionAsyncChain<?>) accum).reducer == reducer;
         }
 
         @Override
-        protected Cancellable start(BiConsumer<? super V, Throwable> callback)
+        V process(V[] inputs)
         {
-            return chain.map(r -> reduceArray(r, reducer)).begin(callback);
+            V result = inputs[0];
+            for (int i = 1; i < inputs.length; i++)
+                result = reducer.apply(result, inputs[i]);
+            return result;
+        }
+    }
+
+    @VisibleForTesting
+    static class ReducingAsyncChain<V> extends AbstractReducingAsyncChain<V, V>
+    {
+        private final Reduce<? super V, ? extends V> reducer;
+
+        private ReducingAsyncChain(List<? extends AsyncChain<? extends V>> list, Reduce<? super V, ? extends V> reducer)
+        {
+            super(list);
+            this.reducer = reducer;
+        }
+
+        private ReducingAsyncChain(AsyncChain<V> accum, AsyncChain<V> add, Reduce<? super V, ? extends V> reducer)
+        {
+            super(accum, add);
+            this.reducer = reducer;
+        }
+
+        private static <V> boolean match(AsyncChain<V> accum, Reduce<? super V, ? extends V> reducer)
+        {
+            return accum instanceof ReducingAsyncChain && ((ReducingAsyncChain<?>) accum).reducer == reducer;
+        }
+
+        @Override
+        V process(V[] inputs)
+        {
+            V result = inputs[0];
+            for (int i = 1; i < inputs.length; i++)
+                result = reducer.reduce(result, inputs[i]);
+            return result;
         }
     }
 
@@ -500,7 +559,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
             }
             catch (Throwable t)
             {
-                logger.debug("AsyncChain Callable threw an Exception", t);
+                logger.trace("AsyncChain Callable threw an Exception", t);
                 receiver.accept(null, t);
             }
         };
@@ -534,6 +593,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
     public static <V, T> AsyncChain<T> map(AsyncChain<V> chain, Function<? super V, ? extends T> mapper, Executor executor)
     {
+        // type parameter needed for compilation for some reason on some JDKs
         return chain.flatMap(v -> new Head<T>()
         {
             @Override
@@ -631,110 +691,56 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         };
     }
 
-    @VisibleForImplementation
-    public static AsyncChain<Void> ofRunnables(Executor executor, Iterable<? extends Runnable> runnables)
-    {
-        return ofRunnable(executor, () -> {
-            Throwable failure = null;
-            for (Runnable runnable : runnables)
-            {
-                try
-                {
-                    runnable.run();
-                }
-                catch (Throwable t)
-                {
-                    if (failure == null)
-                        failure = t;
-                    else
-                        failure.addSuppressed(t);
-                }
-            }
-            if (failure != null)
-                throw new RuntimeException(failure);
-        });
-    }
-
     public static <V> AsyncChain<List<V>> allOf(List<? extends AsyncChain<? extends V>> chains)
     {
-        return allOfInternal(chains).map(Arrays::asList);
+        return new AsyncChainCombiner<>(chains) {
+
+            @Override
+            List<V> process(V[] inputs)
+            {
+                return Arrays.asList(inputs);
+            }
+        };
     }
 
-    // cannot expose this as we're actually providing an Object[] to the next in the chain
-    // which is not safe if receiver statically expecting the strongly typed array
-    private static <V> AsyncChain<V[]> allOfInternal(List<? extends AsyncChain<? extends V>> chains)
-    {
-        return new AsyncChainCombiner<>(chains);
-    }
-
-    public static <V> AsyncChain<V> reduce(List<? extends AsyncChain<? extends V>> chains, BiFunction<? super V, ? super V, ? extends V> reducer)
+    public static <V> AsyncChain<V> reduce(List<? extends AsyncChain<? extends V>> chains, Reduce<? super V, ? extends V> reducer)
     {
         if (chains.size() == 1)
             return (AsyncChain<V>) chains.get(0);
-        return allOfInternal(chains).map(r -> reduceArray(r, reducer));
+        return new ReducingAsyncChain<>(chains, reducer);
     }
 
     public static <I, O> AsyncChain<O> reduce(List<? extends AsyncChain<? extends I>> chains, BiFunction<? super I, ? super O, ? extends O> reducer, O identity)
     {
-        if (chains.size() == 1)
-            return chains.get(0).map(i -> reducer.apply(i, identity));
-        return allOfInternal(chains).map(r -> reduceArray(r, reducer, identity));
-    }
-
-    private static <V> V reduceArray(Object[] results, BiFunction<? super V, ? super V, ? extends V> reducer)
-    {
-        V result = (V) results[0];
-        for (int i=1; i< results.length; i++)
-            result = reducer.apply(result, (V)results[i]);
-        return result;
-    }
-
-    private static <I, O> O reduceArray(Object[] results, BiFunction<? super I, ? super O, ? extends O> reducer, O identity)
-    {
-        O result = identity;
-        for (int i=0; i< results.length; i++)
-            result = reducer.apply((I)results[i], identity);
-        return result;
-    }
-
-    /**
-     * Special variant of {@link #reduce(List, BiFunction)} that returns a mutable chain, where new chains can be appended as long as the returned chain has not started.  The target use case are for patterns such as the following
-     * <p/>
-     * <pre>{@code
-     * BiFunction<? super V, ? super V, ? extends V> reducer = ...;
-     * AsyncChain<V> chain = null;
-     * for (...)
-     * {
-     *   AsyncChain<V> next = ...;
-     *   chain = chain == null ? next : reduce(chain, next, reducer);
-     * }
-     * }</pre>
-     */
-    public static <V> AsyncChain<V> reduce(AsyncChain<V> accum, AsyncChain<V> add, BiFunction<? super V, ? super V, ? extends V> reducer)
-    {
-        if (AccumulatingReducerAsyncChain.match(accum, reducer))
-        {
-            ((AccumulatingReducerAsyncChain<V>) accum).add(add);
-            return accum;
-        }
-        return new AccumulatingReducerAsyncChain<>(accum, add, reducer);
-    }
-
-    public static <A, B> AsyncChain<B> reduce(List<? extends AsyncChain<? extends A>> chains, B identity, BiFunction<B, ? super A, B> reducer)
-    {
         switch (chains.size())
         {
             case 0: return AsyncChains.success(identity);
-            case 1: return chains.get(0).map(a -> reducer.apply(identity, a));
+            case 1: return chains.get(0).map(a -> reducer.apply(a, identity));
         }
-        return allOfInternal(chains).map(results -> {
-            B result = identity;
-            for (A r : results)
-                result = reducer.apply(result, r);
-            return result;
-        });
+        return new AbstractReducingAsyncChain<I, O>(chains)
+        {
+            @Override
+            O process(I[] inputs)
+            {
+                O result = identity;
+                for (I input : inputs)
+                    result = reducer.apply(input, identity);
+                return result;
+            }
+        };
     }
 
+    public static <V> AsyncChain<V> reduce(AsyncChain<V> accum, AsyncChain<V> add, Reduce<? super V, ? extends V> reducer)
+    {
+        if (ReducingAsyncChain.match(accum, reducer))
+        {
+            ((ReducingAsyncChain<V>) accum).add(add);
+            return accum;
+        }
+        return new ReducingAsyncChain<>(accum, add, reducer);
+    }
+
+    // TODO (expected): move this methods to test-only; in Cassandra we should not be using these as not simulator safe
     public static <V> V getBlocking(AsyncChain<V> chain) throws InterruptedException, ExecutionException
     {
         try

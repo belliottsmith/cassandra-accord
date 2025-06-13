@@ -82,8 +82,16 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
             truncated = null;
         }
 
-        boolean acceptedFastPath = BeginRecovery.acceptsFastPath(txnId, participants, command.saveStatus(), command.executeAt());
-        return new InvalidateReply(supersededBy, command.acceptedOrCommitted(), command.saveStatus(), acceptedFastPath, command.route(), command.homeKey(), truncated);
+        SaveStatus saveStatus = command.saveStatus();
+        // We don't respond with Vestigial as it breaks the logic (as of this commit) that aborts an invalidate if there exists a truncated reply
+        //  but vestigial truncations don't imply anything about a decision of the command, so we can encounter a fully undecided command
+        //  with some shard that doesn't actually own the command (but participates in the invalidation) and incorrectly determine it's unsafe to invalidate
+        //  because the decision may have been erased.
+        // TODO (required): move to KnownMap so we can simply check if any key we consulted is undecided.
+        if (saveStatus == SaveStatus.Vestigial)
+            saveStatus = SaveStatus.NotDefined;
+        boolean acceptedFastPath = BeginRecovery.acceptsFastPath(txnId, participants, saveStatus, command.executeAt());
+        return new InvalidateReply(supersededBy, command.acceptedOrCommitted(), saveStatus, acceptedFastPath, command.route(), command.homeKey(), truncated);
     }
 
     @Override
@@ -224,28 +232,17 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
 
         public static InvalidateReply max(InvalidateReply[] invalidateReplies, Shard shard, SortedList<Id> nodeIds)
         {
-            return SaveStatus.max(nodeIds.select(invalidateReplies, shard.nodes), r -> r.maxStatus, r -> r.accepted, Objects::nonNull, false);
+            return SaveStatus.max(nodeIds.select(invalidateReplies, shard.nodes), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
         }
 
         public static InvalidateReply max(InvalidateReply[] invalidateReplies)
         {
-            return SaveStatus.max(Arrays.asList(invalidateReplies),r -> r.maxStatus, r -> r.accepted, Objects::nonNull, false);
+            return SaveStatus.max(Arrays.asList(invalidateReplies), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
         }
 
         public static InvalidateReply maxNotTruncated(InvalidateReply[] invalidateReplies)
         {
-            return SaveStatus.max(Arrays.asList(invalidateReplies),r -> r.maxKnowledgeStatus, r -> r.accepted, r -> r != null && !r.maxKnowledgeStatus.is(Status.Truncated), true);
-        }
-
-        public static int countTruncated(InvalidateReply[] invalidateReplies, Shard shard, SortedList<Id> nodeIds)
-        {
-            int count = 0;
-            for (InvalidateReply reply : nodeIds.select(invalidateReplies, shard.nodes))
-            {
-                if (reply != null && reply.maxStatus.is(Status.Truncated))
-                    ++count;
-            }
-            return count;
+            return SaveStatus.max(Arrays.asList(invalidateReplies), r -> r.maxKnowledgeStatus, r -> r.accepted, r -> r != null && !r.maxKnowledgeStatus.is(Status.Truncated));
         }
     }
 }

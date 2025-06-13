@@ -23,12 +23,13 @@ import java.util.function.BiConsumer;
 
 import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
-import accord.coordinate.ExecuteFlag.ExecuteFlags;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Commands.AcceptOutcome;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Accept;
 import accord.messages.Accept.AcceptReply;
 import accord.messages.Accept.Kind;
@@ -62,6 +63,7 @@ import static accord.utils.Invariants.debug;
 abstract class Propose<R> implements Callback<AcceptReply>
 {
     final Node node;
+    final SequentialAsyncExecutor executor;
     final Kind kind;
     final Ballot ballot;
     final TxnId txnId;
@@ -77,11 +79,11 @@ abstract class Propose<R> implements Callback<AcceptReply>
 
     private Throwable failure;
     private boolean isDone;
-    private int executeFlags;
 
-    Propose(Node node, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, Txn txn, Route<?> require, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
+    Propose(Node node, SequentialAsyncExecutor executor, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, Txn txn, Route<?> require, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
         this.node = node;
+        this.executor = executor;
         this.kind = kind;
         this.ballot = ballot;
         this.txnId = txnId;
@@ -102,7 +104,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
     {
         SortedArrays.SortedArrayList<Node.Id> contact = acceptTracker.filterAndRecordFaulty();
         if (contact == null) callback.accept(null, new Timeout(null, null));
-        else node.send(contact, to -> new Accept(to, acceptTracker.topologies(), kind, ballot, txnId, route, executeAt, deps, require != route), this);
+        else node.send(contact, to -> new Accept(to, acceptTracker.topologies(), kind, ballot, txnId, route, executeAt, deps, require != route), executor, this);
     }
 
     @Override
@@ -196,8 +198,8 @@ abstract class Propose<R> implements Callback<AcceptReply>
         //  Or we must pick it up as an Unstable dependency here.
         Deps newDeps = mergeNewDeps();
         Deps stableDeps = mergeDeps(newDeps);
-        if (kind == Kind.MEDIUM) adapter().execute(node, acceptTracker.topologies(), route, ballot, MEDIUM, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, newDeps, callback);
-        else adapter().stabilise(node, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, stableDeps, callback);
+        if (kind == Kind.MEDIUM) adapter().execute(node, executor, acceptTracker.topologies(), route, ballot, MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, stableDeps, newDeps, callback);
+        else adapter().stabilise(node, executor, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, stableDeps, callback);
         if (!Invariants.debug()) acceptOks.clear();
     }
 
@@ -257,30 +259,30 @@ abstract class Propose<R> implements Callback<AcceptReply>
             this.debug = debug() ? new SortedListMap<>(topologies.nodes(), AcceptReply[]::new) : null;
         }
 
-        public static NotAccept proposeInvalidate(Node node, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, BiConsumer<Void, Throwable> callback)
+        public static NotAccept proposeInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, BiConsumer<Void, Throwable> callback)
         {
-            return proposeNotAccept(node, AcceptedInvalidate, ballot, txnId, invalidateWithParticipant, callback);
+            return proposeNotAccept(node, executor, AcceptedInvalidate, ballot, txnId, invalidateWithParticipant, callback);
         }
 
-        public static NotAccept proposeNotAccept(Node node, Status status, Ballot ballot, TxnId txnId, RoutingKey participatingKey, BiConsumer<Void, Throwable> callback)
+        public static NotAccept proposeNotAccept(Node node, SequentialAsyncExecutor executor, Status status, Ballot ballot, TxnId txnId, RoutingKey participatingKey, BiConsumer<Void, Throwable> callback)
         {
             Participants<?> participants = Participants.singleton(txnId.domain(), participatingKey);
             Topologies topologies = node.topology().forEpoch(participants, txnId.epoch(), SHARE);
             NotAccept notAccept = new NotAccept(node, status, topologies, ballot, txnId, participants, callback);
-            node.send(topologies.nodes(), to -> new Accept.NotAccept(status, ballot, txnId, participants), notAccept);
+            node.send(topologies.nodes(), to -> new Accept.NotAccept(status, ballot, txnId, participants), executor, notAccept);
             return notAccept;
         }
 
-        public static NotAccept proposeAndCommitInvalidate(Node node, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, Route<?> commitInvalidationTo, Timestamp invalidateUntil, BiConsumer<?, Throwable> callback)
+        public static NotAccept proposeAndCommitInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, Route<?> commitInvalidationTo, Timestamp invalidateUntil, BiConsumer<?, Throwable> callback)
         {
-            return proposeInvalidate(node, ballot, txnId, invalidateWithParticipant, (success, fail) -> {
+            return proposeInvalidate(node, executor, ballot, txnId, invalidateWithParticipant, (success, fail) -> {
                 if (fail != null)
                 {
                     callback.accept(null, fail);
                 }
                 else
                 {
-                    node.withEpochExact(invalidateUntil.epoch(), callback, t -> WrappableException.wrap(t), () -> {
+                    node.withEpochExact(invalidateUntil.epoch(), executor, callback, t -> WrappableException.wrap(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
                         callback.accept(null, new Invalidated(txnId, invalidateWithParticipant));
                     });

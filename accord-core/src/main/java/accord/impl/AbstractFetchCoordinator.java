@@ -25,6 +25,7 @@ import java.util.Map;
 
 import accord.local.Command;
 import accord.local.SafeCommandStore;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.ReadData;
 import accord.primitives.Participants;
 import accord.utils.UnhandledEnum;
@@ -118,9 +119,9 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     final FetchResult result = new FetchResult(this);
     final List<AsyncResult<Void>> persisting = new ArrayList<>();
 
-    protected AbstractFetchCoordinator(Node node, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore)
+    protected AbstractFetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore)
     {
-        super(node, ranges, syncPoint, fetchRanges);
+        super(node, executor, ranges, syncPoint, fetchRanges);
         this.fetchRanges = fetchRanges;
         this.commandStore = commandStore;
     }
@@ -142,7 +143,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         Ranges ownedRanges = ownedRangesForNode(to);
         Invariants.requireArgument(ownedRanges.containsAll(ranges), "Got a reply from %s for ranges %s, but owned ranges %s does not contain all the ranges", to, ranges, ownedRanges);
         PartialDeps partialDeps = syncPoint.waitFor.intersecting(ranges);
-        node.send(to, newFetchRequest(syncPoint.syncId.epoch(), syncPoint.syncId, ranges, partialDeps, rangeReadTxn(ranges)), new Callback<ReadReply>()
+        node.send(to, newFetchRequest(syncPoint.syncId.epoch(), syncPoint.syncId, ranges, partialDeps, rangeReadTxn(ranges)), executor, new Callback<ReadReply>()
         {
             @Override
             public void onSuccess(Node.Id from, ReadReply reply)
@@ -239,7 +240,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
 
         public FetchRequest(long sourceEpoch, TxnId syncId, Ranges ranges, PartialDeps partialDeps, PartialTxn partialTxn)
         {
-            super(syncId, ranges, sourceEpoch);
+            super(syncId, ranges, null, syncId, sourceEpoch);
             this.read = partialTxn;
             this.partialDeps = partialDeps;
         }
@@ -281,11 +282,11 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         }
 
         @Override
-        protected ReadOk constructReadOk(Ranges unavailable, Data data, long uniqueHlc)
+        protected void reply(Ranges unavailable, Data data, long uniqueHlc)
         {
             Timestamp safeToReadAfter = safeToReadAfter();
             Invariants.require(data == null || safeToReadAfter != null);
-            return new FetchResponse(unavailable, data, safeToReadAfter);
+            reply(new FetchResponse(unavailable, data, safeToReadAfter), null);
         }
 
         @Override

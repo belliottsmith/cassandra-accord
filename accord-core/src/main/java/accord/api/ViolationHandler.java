@@ -16,29 +16,28 @@
  * limitations under the License.
  */
 
-package accord.maelstrom;
+package accord.api;
 
-import accord.api.Key;
-import accord.api.Write;
-import accord.local.SafeCommandStore;
-import accord.primitives.PartialTxn;
-import accord.primitives.Seekable;
+import java.util.function.Supplier;
+import javax.annotation.Nullable;
+
+import accord.primitives.Participants;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.primitives.Writes;
-import accord.utils.Timestamped;
-import accord.utils.async.AsyncChain;
 
-import java.util.TreeMap;
+import static accord.utils.Invariants.illegalState;
 
-public class MaelstromWrite extends TreeMap<Key, Value> implements Write
+public interface ViolationHandler
 {
-    @Override
-    public AsyncChain<Void> apply(SafeCommandStore safeStore, Seekable key, TxnId txnId, Timestamp executeAt, PartialTxn txn)
+    default void onViolation(String message, Participants<?> participants, @Nullable TxnId notWitnessed, @Nullable Timestamp notWitnessedExecuteAt, @Nullable TxnId by, @Nullable Timestamp byEexecuteAt) { throw illegalState(message); }
+    class ViolationHandlerHolder
     {
-        MaelstromStore dataStore = (MaelstromStore) safeStore.dataStore();
-        if (containsKey(key))
-            dataStore.data.merge((Key)key, new Timestamped<>(executeAt, get(key), Value::toString), Timestamped::merge);
-        return Writes.SUCCESS;
+        private static volatile Supplier<ViolationHandler> global = () -> new ViolationHandler() {};
+        public static ViolationHandler get()
+        {
+            Supplier<ViolationHandler> supplier = global;
+            return supplier == null ? null : supplier.get();
+        }
+        public static void set(Supplier<ViolationHandler> agent) { global = agent; }
     }
 }

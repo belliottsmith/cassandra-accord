@@ -28,6 +28,7 @@ import accord.coordinate.tracking.RequestStatus;
 import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Await;
 import accord.messages.Callback;
 import accord.primitives.Participants;
@@ -55,7 +56,7 @@ public class SynchronousAwait implements Callback<Await.AwaitOk>
         this.tracker = tracker;
     }
 
-    public static AsyncChain<Boolean> awaitQuorum(Node node, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants)
+    public static AsyncChain<Boolean> awaitQuorum(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants)
     {
         // TODO (expected): copy this pattern elsewhere; should also make it easier to share exception handling logic etc
         return new AsyncChains.Head<>()
@@ -63,7 +64,7 @@ public class SynchronousAwait implements Callback<Await.AwaitOk>
             protected @Nullable @Override Cancellable start(BiConsumer<? super Boolean, Throwable> callback)
             {
                 SynchronousAwait await = new SynchronousAwait(new QuorumTracker(topologies), callback);
-                node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, participants, blockedUntil, notifyProgressLog), await);
+                node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, participants, blockedUntil, notifyProgressLog), executor, await);
                 return null;
             }
         };

@@ -125,7 +125,7 @@ class Bootstrap
             if (!node.topology().hasEpoch(globalSyncId.epoch()))
             {
                 // Ignore timeouts fetching the epoch, always keep trying to bootstrap
-                node.withEpochAtLeast(globalSyncId.epoch(), (ignored, failure) -> store.execute(empty(), Attempt.this::start, (ignored1, failure2) -> {
+                node.withEpochAtLeast(globalSyncId.epoch(), null, (ignored, failure) -> store.execute(empty(), Attempt.this::start, (ignored1, failure2) -> {
                     if (failure2 != null)
                         node.agent().acceptAndWrap(null, failure2);
                 }));
@@ -143,7 +143,7 @@ class Bootstrap
                          return CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges);
                      })
                      .flatMap(i -> i)
-                     .flatMap(syncPoint -> node.withEpochAtLeast(epoch, () -> store.build(empty(), safeStore1 -> {
+                     .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> store.build(empty(), safeStore1 -> {
                          if (valid.isEmpty()) // we've lost ownership of the range
                              return AsyncResults.success(Ranges.EMPTY);
                          return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);

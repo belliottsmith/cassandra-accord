@@ -131,5 +131,26 @@ public class TinyEnumSet<E extends Enum<E>>
     {
         return bitset;
     }
+
+    protected String toString(Object[] universe)
+    {
+        if (bitset == 0)
+            return "{}";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append('{');
+        int bits = this.bitset;
+        while (bits != 0)
+        {
+            if (sb.length() > 1)
+                sb.append(',');
+            int i = Integer.numberOfTrailingZeros(bits);
+            sb.append(universe[i]);
+            bits ^= 1 << i;
+        }
+        sb.append('}');
+        return sb.toString();
+    }
+
 }
 

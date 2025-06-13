@@ -18,6 +18,7 @@
 
 package accord.api;
 
+import accord.local.CommandStore;
 import accord.local.SafeCommandStore;
 import accord.primitives.PartialTxn;
 import accord.primitives.Seekable;
@@ -32,7 +33,16 @@ import accord.utils.async.AsyncChain;
  */
 public interface Write
 {
-    AsyncChain<Void> apply(Seekable key, SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, DataStore store, PartialTxn txn);
-    // TODO (expected): this is used only for testing today; hide it somewhere outside of the public API
-    default void applyUnsafe(Seekable key, SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, DataStore store, PartialTxn txn) { throw new UnsupportedOperationException(); }
+    AsyncChain<Void> apply(SafeCommandStore safeStore, Seekable key, TxnId txnId, Timestamp executeAt, PartialTxn txn);
+
+    /**
+     * Apply the write directly to the underlying data store.
+     * This method will only be invoked if {@link ProtocolModifiers.Toggles#fastWritesMayBypassSafeStore()}
+     */
+    default AsyncChain<Void> applyDirect(CommandStore unsafeStore, Seekable key, TxnId txnId, Timestamp executeAt, PartialTxn txn) { throw new UnsupportedOperationException(); }
+
+    interface InMemoryWrite extends Write
+    {
+        default AsyncChain<Void> applySync(CommandStore unsafeStore, Seekable key, TxnId txnId, Timestamp executeAt, PartialTxn txn) { throw new UnsupportedOperationException(); }
+    }
 }

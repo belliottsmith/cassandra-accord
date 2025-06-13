@@ -25,6 +25,7 @@ import accord.api.RoutingKey;
 import accord.local.CommandSummaries;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.local.SequentialAsyncExecutor;
 import accord.local.durability.DurabilityService.SyncLocal;
 import accord.local.durability.DurabilityService.SyncRemote;
 import accord.messages.Await;
@@ -162,32 +163,32 @@ public class KeyBarriers
         return result;
     }
 
-    public static AsyncChain<Boolean> await(Node node, Found found, SyncLocal syncLocal, SyncRemote syncRemote)
+    public static AsyncChain<Boolean> await(Node node, SequentialAsyncExecutor executor, Found found, SyncLocal syncLocal, SyncRemote syncRemote)
     {
         if (found == null)
             return AsyncChains.success(false);
 
         if (found.knownLocal.compareTo(syncLocal) < 0)
-            return awaitLocal(node, found.txnId, found.key).flatMap(ignore -> awaitRemote(node, found, syncRemote));
+            return awaitLocal(node, found.txnId, found.key).flatMap(ignore -> awaitRemote(node, executor, found, syncRemote));
 
         if (found.knownRemote.compareTo(syncRemote) < 0)
-            return awaitRemote(node, found.txnId, found.key);
+            return awaitRemote(node, executor, found.txnId, found.key);
 
         return AsyncChains.success(true);
     }
 
-    public static AsyncChain<Boolean> awaitRemote(Node node, Found found, SyncRemote syncRemote)
+    public static AsyncChain<Boolean> awaitRemote(Node node, SequentialAsyncExecutor executor, Found found, SyncRemote syncRemote)
     {
         if (found.knownRemote.compareTo(syncRemote) >= 0)
             return AsyncChains.success(true);
 
-        return awaitRemote(node, found.txnId, found.key);
+        return awaitRemote(node, executor, found.txnId, found.key);
     }
 
-    public static AsyncChain<Boolean> awaitRemote(Node node, TxnId txnId, RoutingKey key)
+    public static AsyncChain<Boolean> awaitRemote(Node node, SequentialAsyncExecutor executor, TxnId txnId, RoutingKey key)
     {
         RoutingKeys keys = RoutingKeys.of(key);
         Topologies topologies = node.topology().forEpoch(keys, txnId.epoch(), SHARE);
-        return SynchronousAwait.awaitQuorum(node, topologies, txnId, IsApplied, true, keys);
+        return SynchronousAwait.awaitQuorum(node, executor, topologies, txnId, IsApplied, true, keys);
     }
 }

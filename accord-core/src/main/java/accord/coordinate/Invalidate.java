@@ -54,6 +54,7 @@ import static accord.utils.Invariants.illegalState;
 public class Invalidate implements Callback<InvalidateReply>
 {
     private final Node node;
+    private final SequentialAsyncExecutor executor;
     private final Ballot ballot;
     private final TxnId txnId;
     private final Participants<?> invalidateWith;
@@ -67,10 +68,11 @@ public class Invalidate implements Callback<InvalidateReply>
     private Throwable failure;
     private final LatentStoreSelector reportTo;
 
-    private Invalidate(Node node, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    private Invalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         this.callback = callback;
         this.node = node;
+        this.executor = executor;
         this.ballot = ballot;
         this.txnId = txnId;
         this.invalidateWith = invalidateWith;
@@ -95,7 +97,7 @@ public class Invalidate implements Callback<InvalidateReply>
     public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
-        Invalidate invalidate = new Invalidate(node, ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
+        Invalidate invalidate = new Invalidate(node, node.someSequentialExecutor(), ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
         invalidate.start();
         return invalidate;
     }
@@ -104,7 +106,7 @@ public class Invalidate implements Callback<InvalidateReply>
     {
         SortedArrays.SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
         if (contact == null) callback.accept(null, new Exhausted(null, null, null));
-        else node.send(contact, to -> new BeginInvalidation(to, tracker.topologies(), txnId, invalidateWith, ballot), this);
+        else node.send(contact, to -> new BeginInvalidation(to, tracker.topologies(), txnId, invalidateWith, ballot), executor, this);
     }
 
     @Override
@@ -217,7 +219,7 @@ public class Invalidate implements Callback<InvalidateReply>
                         if (!invalidateWith.containsAll(fullRoute))
                             witnessedByInvalidation = null;
                     }
-                    RecoverWithRoute.recover(node, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportTo, callback);
+                    RecoverWithRoute.recover(node, executor, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportTo, callback);
                     return;
 
                 case Invalidated:
@@ -238,6 +240,7 @@ public class Invalidate implements Callback<InvalidateReply>
             //   we should reconsider and at least
             //      1) ensure GC points can be propagated between nodes;
             //      2) broaden cases where we can derive that the command has not been decided and send invalidated/erased to everyone
+            //  SEE ALSO BeginInvalidation conversion of Vestigial to NotDefined
             // TODO (required): we have another edge cases to consider here only when we don't have a FullRoute and
             //    we report that the outcome is durable - which may not be the case for all of the shards.
             //    The home shard will stop attempting to recover the transaction in this case.
@@ -254,7 +257,7 @@ public class Invalidate implements Callback<InvalidateReply>
         Ranges ranges = Ranges.of(tracker.promisedShard().range);
         // we look up by TxnId at the target node, so it's fine to pick a RoutingKey even if it's a range transaction
         RoutingKey someKey = invalidateWith.slice(ranges).get(0).someIntersectingRoutingKey(ranges);
-        proposeInvalidate(node, ballot, txnId, someKey, (success, fail) -> {
+        proposeInvalidate(node, executor, ballot, txnId, someKey, (success, fail) -> {
             /*
               We're now inside our *exactly once* callback we registered with proposeInvalidate, and we need to
               make sure we honour our own exactly once semantics with {@code callback}.

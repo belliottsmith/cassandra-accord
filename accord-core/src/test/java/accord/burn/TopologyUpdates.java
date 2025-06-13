@@ -18,8 +18,8 @@
 
 package accord.burn;
 
+import accord.api.AsyncExecutor;
 import accord.api.TestableConfigurationService;
-import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -37,8 +37,8 @@ public class TopologyUpdates
     private final Long2ObjectHashMap<Map<Node.Id, Ranges>> pendingSyncTopologies = new Long2ObjectHashMap<>();
     private final Long2ObjectHashMap<Map<Node.Id, Ranges>> pendingBootstrap = new Long2ObjectHashMap<>();
 
-    Function<Node.Id, AgentExecutor> executors;
-    public TopologyUpdates(Function<Node.Id, AgentExecutor> executors)
+    Function<Node.Id, AsyncExecutor> executors;
+    public TopologyUpdates(Function<Node.Id, AsyncExecutor> executors)
     {
         this.executors = executors;
     }

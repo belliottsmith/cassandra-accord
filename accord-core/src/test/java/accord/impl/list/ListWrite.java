@@ -29,15 +29,15 @@ import accord.primitives.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.DataStore;
 import accord.api.Key;
 import accord.api.Write;
 import accord.local.CommandStore;
 import accord.local.SafeCommandStore;
 import accord.utils.async.AsyncChain;
-import accord.utils.async.AsyncExecutor;
+import accord.utils.async.AsyncChains;
+import accord.api.AsyncExecutor;
 
-public class ListWrite extends TreeMap<Key, int[]> implements Write
+public class ListWrite extends TreeMap<Key, int[]> implements Write.InMemoryWrite
 {
     private static final Logger logger = LoggerFactory.getLogger(ListWrite.class);
 
@@ -49,30 +49,30 @@ public class ListWrite extends TreeMap<Key, int[]> implements Write
     }
 
     @Override
-    public AsyncChain<Void> apply(Seekable key, SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, DataStore store, PartialTxn txn)
+    public AsyncChain<Void> apply(SafeCommandStore safeStore, Seekable key, TxnId txnId, Timestamp executeAt, PartialTxn txn)
     {
-        ListStore s = (ListStore) store;
-        if (!containsKey(key))
-            return Writes.SUCCESS;
+        return applyDirect(safeStore.commandStore(), key, txnId, executeAt, txn);
+    }
 
-        logger.trace("submitting WRITE on {} at {} key:{}", s.node, executeAt, key);
-        return executor.apply(safeStore.commandStore()).build(() -> {
-            int[] data = get(key);
-            s.write((Key)key, executeAt, data);
-            logger.trace("WRITE on {} at {} key:{} -> {}", s.node, executeAt, key, data);
+    @Override
+    public AsyncChain<Void> applyDirect(CommandStore unsafeStore, Seekable key, TxnId txnId, Timestamp executeAt, PartialTxn txn)
+    {
+        ListStore dataStore = (ListStore) unsafeStore.unsafeGetDataStore();
+        logger.trace("submitting WRITE on {} at {} key:{}", dataStore.node, executeAt, key);
+        return executor.apply(unsafeStore).build(() -> {
+            applySync(unsafeStore, key, txnId, executeAt, txn);
             return null;
         });
     }
 
-    public void applyUnsafe(Seekable key, SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, DataStore store, PartialTxn txn)
+    @Override
+    public AsyncChain<Void> applySync(CommandStore unsafeStore, Seekable key, TxnId txnId, Timestamp executeAt, PartialTxn txn)
     {
-        ListStore s = (ListStore) store;
-        if (!containsKey(key))
-            return;
-
-        logger.trace("unsafe applying WRITE on {} at {} key:{}", s.node, executeAt, key);
+        ListStore dataStore = (ListStore) unsafeStore.unsafeGetDataStore();
         int[] data = get(key);
-        s.writeUnsafe((Key)key, executeAt, data);
+        dataStore.write((Key)key, executeAt, data);
+        logger.trace("WRITE on {} at {} key:{} -> {}", dataStore.node, executeAt, key, data);
+        return AsyncChains.success(null);
     }
 
     @Override

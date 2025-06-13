@@ -32,14 +32,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Data;
-import accord.api.DataStore;
 import accord.api.Key;
 import accord.api.Read;
 import accord.local.CommandStore;
 import accord.primitives.Range;
 import accord.primitives.Seekable;
 import accord.primitives.Seekables;
-import accord.utils.async.AsyncExecutor;
+import accord.api.AsyncExecutor;
+import accord.utils.async.AsyncChains;
 
 import static accord.primitives.Routables.Slice.Minimal;
 
@@ -67,9 +67,12 @@ public class ListRead implements Read
     }
 
     @Override
-    public AsyncChain<Data> read(Seekable key, SafeCommandStore safeStore, Timestamp executeAt, DataStore store)
+    public AsyncChain<Data> read(SafeCommandStore safeStore, Seekable key, Timestamp executeAt)
     {
-        ListStore s = (ListStore)store;
+        if (key == null)
+            return AsyncChains.success(new ListData());
+
+        ListStore s = (ListStore)safeStore.dataStore();
         logger.trace("submitting READ on {} at {} key:{}", s.node, executeAt, key);
         return executor.apply(safeStore.commandStore()).build(() -> {
             Ranges unavailable = safeStore.unsafeToReadAt(executeAt);
@@ -80,7 +83,7 @@ public class ListRead implements Read
                 case Key:
                     if (!keys.contains((Key)key))
                         throw new IllegalArgumentException("Attempted to read key " + key + " which is outside of the expected range " + keys);
-                    Timestamped<int[]> data = s.get(unavailable, executeAt, (Key)key);
+                    Timestamped<int[]> data = s.get(unavailable, executeAt, (Key)key, false);
                     logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
                     result.put((Key)key, data);
                     break;
@@ -92,7 +95,35 @@ public class ListRead implements Read
             }
             return result;
         });
+    }
 
+    @Override
+    public AsyncChain<Data> readDirect(CommandStore unsafeStore, Seekable key, Timestamp executeAt)
+    {
+        ListStore s = (ListStore)unsafeStore.unsafeGetDataStore();
+        logger.trace("submitting READ on {} at {} key:{}", unsafeStore.node(), executeAt, key);
+        return executor.apply(unsafeStore).build(() -> {
+            Ranges unavailable = unsafeStore.unsafeGetRangesForEpoch().allAt(executeAt.epoch())
+                                            .without(unsafeStore.unsafeGetSafeToRead().lowerEntry(executeAt).getValue());
+            ListData result = new ListData();
+            switch (key.domain())
+            {
+                default: throw new AssertionError();
+                case Key:
+                    if (!keys.contains((Key)key))
+                        throw new IllegalArgumentException("Attempted to read key " + key + " which is outside of the expected range " + keys);
+                    Timestamped<int[]> data = s.get(unavailable, executeAt, (Key)key, true);
+                    logger.trace("READ on {} at {} key:{} -> {}", s.node, executeAt, key, data);
+                    result.put((Key)key, data);
+                    break;
+                case Range:
+                    if (!keys.containsAll(Ranges.single((Range)key)))
+                        throw new IllegalArgumentException("Attempted to read range " + key + " which is outside of the expected range " + keys);
+                    for (Map.Entry<Key, Timestamped<int[]>> e : s.get(unavailable, executeAt, (Range)key))
+                        result.put(e.getKey(), e.getValue());
+            }
+            return result;
+        });
     }
 
     @Override

@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.NetworkFilter;
 import accord.api.Agent;
+import accord.api.AsyncExecutor;
 import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.coordinate.CoordinationAdapter;
@@ -46,7 +47,6 @@ import accord.impl.progresslog.DefaultProgressLogs;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.SizeOfIntersectionSorter;
 import accord.impl.TestAgent;
-import accord.local.AgentExecutor;
 import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -181,7 +181,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
     }
 
     @Override
-    public void send(Id from, Id to, Request request, AgentExecutor executor, Callback callback)
+    public void send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback)
     {
         Node node = nodes.get(to);
         if (node == null)

@@ -217,7 +217,6 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
     public static final class AcceptReply implements Reply
     {
-        public enum Flag { READY_TO_EXECUTE, HAS_UNIQUE_HLC }
         public static final AcceptReply SUCCESS = new AcceptReply(Success);
 
         public final AcceptOutcome outcome;
@@ -382,7 +381,10 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
                 default: throw new IllegalArgumentException("Unknown status: " + outcome);
                 case Redundant:
                 case Truncated:
-                    return AcceptReply.redundant(outcome, ballot, safeCommand.current());
+                    // TODO (required): consider more fully how to safely handle (and add dedicated testing of)
+                    //    all the various combinations of states we might encounter when some shard or replica of a shard has truncated
+                    if (safeCommand.current().saveStatus() != SaveStatus.Vestigial)
+                        return AcceptReply.redundant(outcome, ballot, safeCommand.current());
                 case Retired:
                 case Success:
                     return AcceptReply.SUCCESS;

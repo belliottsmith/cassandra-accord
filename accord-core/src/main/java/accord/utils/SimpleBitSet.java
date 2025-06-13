@@ -409,6 +409,8 @@ public class SimpleBitSet
     {
         int fromIndex = from >>> 6;
         int toIndex = to >>> 6;
+        if (toIndex > fromIndex && (to & 63) == 0)
+            --toIndex;
 
         if (fromIndex == toIndex)
         {
@@ -420,10 +422,10 @@ public class SimpleBitSet
         }
         else
         {
-            reverseForEach(fromIndex, -1L << (from & 63), p1, p2, p3, p4, forEach);
-            for (int i = fromIndex + 1; i < toIndex; ++i)
-                reverseForEach(fromIndex, -1L, p1, p2, p3, p4, forEach);
-            reverseForEach(fromIndex, -1L >>> (64 - (to & 63)), p1, p2, p3, p4, forEach);
+            reverseForEach(toIndex, -1L >>> (64 - (to & 63)), p1, p2, p3, p4, forEach);
+            while (--toIndex > fromIndex)
+                reverseForEach(toIndex, -1L, p1, p2, p3, p4, forEach);
+            reverseForEach(toIndex, -1L << (from & 63), p1, p2, p3, p4, forEach);
         }
     }
 
@@ -433,7 +435,7 @@ public class SimpleBitSet
         while ((register = (bits[index] & mask)) != 0)
         {
             int bitIndex = 63 - Long.numberOfLeadingZeros(register);
-            mask = (1L << bitIndex) - 1;
+            mask &= (1L << bitIndex) - 1;
             forEach.accept(p1, p2, p3, p4, index * 64 + bitIndex);
         }
     }

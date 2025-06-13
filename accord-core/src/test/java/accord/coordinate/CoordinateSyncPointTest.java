@@ -19,13 +19,12 @@
 package accord.coordinate;
 
 import accord.Utils;
+import accord.api.AsyncExecutor;
 import accord.api.MessageSink;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.impl.IntKey;
 import accord.impl.TestAgent;
 import accord.impl.mock.MockCluster;
-import accord.local.AgentExecutor;
-import accord.local.CommandStore;
 import accord.local.Node;
 import accord.messages.Accept;
 import accord.messages.Apply;
@@ -153,8 +152,7 @@ class CoordinateSyncPointTest
     private static <T> void onSuccess(InvocationOnMock args, T reply)
     {
         Node.Id to = args.getArgument(0);
-        AgentExecutor executor = args.getArgument(2);
-        if (executor == null) executor = CommandStore.current();
+        AsyncExecutor executor = args.getArgument(2);
         Callback<T> cb = args.getArgument(3);
         executor.execute(() -> cb.onSuccess(to, reply));
     }

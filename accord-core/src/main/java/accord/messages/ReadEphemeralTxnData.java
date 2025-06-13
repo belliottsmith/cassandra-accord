@@ -20,6 +20,7 @@ package accord.messages;
 import javax.annotation.Nonnull;
 
 import accord.api.Data;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node.Id;
@@ -51,43 +52,39 @@ public class ReadEphemeralTxnData extends ReadData
 {
     public static class SerializerSupport
     {
-        public static ReadEphemeralTxnData create(TxnId txnId, Participants<?> scope, long executeAtEpoch, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps, @Nonnull FullRoute<?> route)
+        public static ReadEphemeralTxnData create(TxnId txnId, Participants<?> scope, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps, @Nonnull FullRoute<?> route, ExecuteFlags flags)
         {
-            return new ReadEphemeralTxnData(txnId, scope, executeAtEpoch, partialTxn, partialDeps, route);
+            return new ReadEphemeralTxnData(txnId, scope, partialTxn, partialDeps, route, flags);
         }
     }
 
     private static final ExecuteOn EXECUTE_ON = new ExecuteOn(SaveStatus.ReadyToExecute, SaveStatus.Applied);
 
-    private PartialTxn partialTxn;
     private PartialDeps partialDeps;
     private FullRoute<?> route; // TODO (desired): should be unnecessary, only included to not breach Stable command validations
 
-    public ReadEphemeralTxnData(Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route)
+    public ReadEphemeralTxnData(Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route, ExecuteFlags flags)
     {
-        this(to, topologies, txnId, readScope, executeAtEpoch, txn, deps, route, latestRelevantEpochIndex(to, topologies, readScope));
+        this(to, topologies, txnId, readScope, txn, deps, route, flags, latestRelevantEpochIndex(to, topologies, readScope));
     }
 
-    private ReadEphemeralTxnData(Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route, int latestRelevantIndex)
+    private ReadEphemeralTxnData(Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route, ExecuteFlags flags, int latestRelevantIndex)
     {
-        this(txnId, readScope, computeScope(to, topologies, route, latestRelevantIndex), executeAtEpoch, txn, deps, route);
+        this(txnId, readScope, computeScope(to, topologies, route, latestRelevantIndex), txnId.epoch(), txn, deps, route, flags);
     }
 
-    private ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, Route<?> scope, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route)
+    private ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, Route<?> scope, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route, ExecuteFlags flags)
     {
-        super(txnId, readScope.intersecting(scope), executeAtEpoch);
+        super(txnId, readScope.intersecting(scope), txn.intersecting(scope, false), txnId, executeAtEpoch, flags);
         Invariants.require(executeAtEpoch == txnId.epoch(),
                            "Epoch for transaction %s (%d) did not match expected %d", txn, txnId.epoch(), executeAtEpoch);
         this.route = route;
-        this.partialTxn = txn.intersecting(scope, false);
         this.partialDeps = deps.intersecting(scope);
     }
 
-    public ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, long executeAtEpoch, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps, @Nonnull FullRoute<?> route)
+    public ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, @Nonnull PartialTxn partialTxn, @Nonnull PartialDeps partialDeps, @Nonnull FullRoute<?> route, ExecuteFlags flags)
     {
-        super(txnId, readScope, executeAtEpoch);
-        Invariants.require(executeAtEpoch == txnId.epoch());
-        this.partialTxn = partialTxn;
+        super(txnId, readScope, partialTxn, txnId, txnId.epoch(), flags);
         this.partialDeps = partialDeps;
         this.route = route;
     }
@@ -107,11 +104,6 @@ public class ReadEphemeralTxnData extends ReadData
         return super.apply(safeStore, safeCommand, participants);
     }
 
-    public final PartialTxn partialTxn()
-    {
-        return partialTxn;
-    }
-
     public final PartialDeps partialDeps()
     {
         return partialDeps;
@@ -126,7 +118,6 @@ public class ReadEphemeralTxnData extends ReadData
     public void accept(CommitOrReadNack reply, Throwable failure)
     {
         super.accept(reply, failure);
-        partialTxn = null;
         partialDeps = null;
         route = null;
     }
@@ -140,7 +131,7 @@ public class ReadEphemeralTxnData extends ReadData
     @Override
     public ReadType kind()
     {
-        return ReadType.readDataWithoutTimestamp;
+        return ReadType.readEphemeral;
     }
 
     @Override
@@ -151,7 +142,7 @@ public class ReadEphemeralTxnData extends ReadData
         {
             // TODO (expected): wait for all stores' results and report only the ranges that execute later to be retried
             cancel();
-            node.reply(replyTo, replyContext, new ReadOkWithFutureEpoch(null, null, retryInLaterEpoch), null);
+            reply(new ReadOkWithFutureEpoch(null, null, retryInLaterEpoch), null);
         }
         super.read(safeStore, command);
     }
@@ -195,9 +186,9 @@ public class ReadEphemeralTxnData extends ReadData
     }
 
     @Override
-    protected ReadOk constructReadOk(Ranges unavailable, Data data, long uniqueHlc)
+    protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        return new ReadOkWithFutureEpoch(unavailable, data, uniqueHlc);
+        reply(new ReadOkWithFutureEpoch(unavailable, data, uniqueHlc), null);
     }
 
     @Override

@@ -41,7 +41,6 @@ import static accord.local.KeyHistory.SYNC;
  */
 public interface PreLoadContext
 {
-
     @Nullable TxnId primaryTxnId();
 
     /**

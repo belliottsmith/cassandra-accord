@@ -41,6 +41,7 @@ import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
+import accord.api.AsyncExecutor;
 import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
@@ -51,7 +52,6 @@ import accord.impl.DefaultLocalListeners;
 import accord.impl.progresslog.DefaultProgressLogs;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.SizeOfIntersectionSorter;
-import accord.local.AgentExecutor;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
@@ -121,7 +121,7 @@ public class Cluster implements Scheduler
         }
 
         @Override
-        public void send(Id to, Request send, int attempt, AgentExecutor executor, Callback callback)
+        public void send(Id to, Request send, int attempt, AsyncExecutor executor, Callback callback)
         {
             long messageId = nextMessageId++;
             SafeCallback sc = new SafeCallback(executor, callback);
@@ -357,9 +357,8 @@ public class Cluster implements Scheduler
                                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                                           MaelstromAgent.INSTANCE,
                                           randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
-                                          DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
-                                          DurableBefore.NOOP_PERSISTER,
-                                          new NoOpJournal()));
+                                          DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, InMemoryCommandStores.SingleThread::new,
+                                          new CoordinationAdapter.DefaultFactory(), DurableBefore.NOOP_PERSISTER, new NoOpJournal()));
             }
 
             AsyncResult<?> startup = AsyncChains.reduce(lookup.values().stream().map(Node::unsafeStart).collect(toList()), (a, b) -> null).beginAsResult();

@@ -22,8 +22,10 @@ import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
 import accord.local.CommandStores.LatentStoreSelector;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.CheckStatusOkFull;
@@ -65,9 +67,9 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
     final Status witnessedByInvalidation;
     final LatentStoreSelector reportTo;
 
-    private RecoverWithRoute(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    private RecoverWithRoute(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        super(node, txnId, route, IncludeInfo.All, node.uniqueTimestamp(Ballot::fromValues), invalidIf);
+        super(node, executor, txnId, route, IncludeInfo.All, node.uniqueTimestamp(Ballot::fromValues), invalidIf);
         this.reportTo = reportTo;
         // if witnessedByInvalidation == AcceptedInvalidate then we cannot assume its definition was known, and our comparison with the status is invalid
         Invariants.require(witnessedByInvalidation != Status.AcceptedInvalidate);
@@ -78,14 +80,14 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
         assert topologies.oldestEpoch() == topologies.currentEpoch() && topologies.currentEpoch() == txnId.epoch();
     }
 
-    public static RecoverWithRoute recover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    public static RecoverWithRoute recover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        return recover(node, node.topology().forEpoch(route, txnId.epoch(), SHARE), txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
+        return recover(node, executor, node.topology().forEpoch(route, txnId.epoch(), SHARE), txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
     }
 
-    private static RecoverWithRoute recover(Node node, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    private static RecoverWithRoute recover(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        RecoverWithRoute recover = new RecoverWithRoute(node, topologies, txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
+        RecoverWithRoute recover = new RecoverWithRoute(node, executor, topologies, txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
         recover.start();
         return recover;
     }
@@ -93,7 +95,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
     @Override
     public void contact(Id to)
     {
-        node.send(to, new CheckStatus(to, topologies(), txnId, query, sourceEpoch, IncludeInfo.All, bumpBallot), this);
+        node.send(to, new CheckStatus(to, topologies(), txnId, query, sourceEpoch, IncludeInfo.All, bumpBallot), executor, this);
     }
 
     @Override
@@ -192,20 +194,20 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                                     if (!known.is(DepsKnown))
                                     {
                                         Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                        Participants<?> haveStable = full.map.knownFor(Known.DepsOnly, query);
-                                        Route<?> haveUnstable = query.without(haveStable);
-                                        Deps stable = full.stableDeps.reconstitutePartial(haveStable).asFullUnsafe();
+                                        Participants<?> haveStable = full.map.knownFor(Known.DepsOnly, trySendTo);
+                                        Route<?> haveUnstable = trySendTo.without(haveStable);
+                                        Deps stable = haveStable.isEmpty() ? Deps.NONE : full.stableDeps.reconstitutePartial(haveStable).asFullUnsafe();
 
-                                        LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, query, callback, deps -> {
+                                        LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, executor, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, query, callback, deps -> {
                                             Deps stableDeps = deps.intersecting(trySendTo);
-                                            node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, query, bumpBallot, txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, informDurableOnDone, null);
+                                            node.coordinationAdapter(txnId, Recovery).persist(node, executor, null, trySendTo, trySendTo, SLICE, query, bumpBallot, CoordinationFlags.none(), txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, informDurableOnDone, null);
                                         });
                                     }
                                     else
                                     {
                                         Invariants.require(full.stableDeps.covers(trySendTo));
                                         Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                        node.coordinationAdapter(txnId, Recovery).persist(node, null, trySendTo, trySendTo, SLICE, query, bumpBallot, txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, informDurableOnDone, null);
+                                        node.coordinationAdapter(txnId, Recovery).persist(node, executor, null, trySendTo, trySendTo, SLICE, query, bumpBallot, CoordinationFlags.none(), txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, informDurableOnDone, null);
                                     }
                                 }
                             }
@@ -251,9 +253,9 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             deps = new Deps(full.stableDeps.reconstitutePartial(hasDeps));
                         }
                     }
-                    LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, txnId, full.executeAt, full.partialTxn, deps, missingDeps, query, SHARE, query, callback, mergedDeps -> {
-                        node.withEpochExact(full.executeAt.epoch(), node.agent(), t -> WrappableException.wrap(t), () -> {
-                            node.coordinationAdapter(txnId, Recovery).persist(node, topologies, query, bumpBallot, txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
+                    LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, executor, txnId, full.executeAt, full.partialTxn, deps, missingDeps, missingDeps, SHARE, query, callback, mergedDeps -> {
+                        node.withEpochAtLeast(full.executeAt.epoch(), executor, node.agent(), t -> WrappableException.wrap(t), () -> {
+                            node.coordinationAdapter(txnId, Recovery).persist(node, executor, topologies, query, bumpBallot, CoordinationFlags.none(), txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
                                 callback.accept(f == null ? APPLIED : null, f);
                             });
                         });

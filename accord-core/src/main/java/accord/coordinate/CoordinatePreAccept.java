@@ -24,9 +24,9 @@ import java.util.function.BiFunction;
 
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.PreAcceptTracker;
-import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
 import accord.messages.PreAccept;
 import accord.messages.PreAccept.PreAcceptOk;
@@ -60,19 +60,19 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     final Txn txn;
     boolean fastPathEnabled = true;
 
-    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<T, Throwable> callback)
+    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<T, Throwable> callback)
     {
-        this(node, txnId, txn, route, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
+        this(node, executor, txnId, txn, route, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
     }
 
-    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiConsumer<T, Throwable> callback)
+    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiConsumer<T, Throwable> callback)
     {
-        this(node, txnId, txn, route, topologies, FastPathTracker::new, callback);
+        this(node, executor, txnId, txn, route, topologies, FastPathTracker::new, callback);
     }
 
-    CoordinatePreAccept(Node node, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiFunction<Topologies, TxnId, PreAcceptTracker<?>> trackerFactory, BiConsumer<T, Throwable> callback)
+    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiFunction<Topologies, TxnId, PreAcceptTracker<?>> trackerFactory, BiConsumer<T, Throwable> callback)
     {
-        super(node, route, txnId, topologies, callback);
+        super(node, executor, route, txnId, topologies, callback);
         this.tracker = trackerFactory.apply(topologies, txnId);
         this.oks = new SortedListMap<>(topologies.nodes(), PreAcceptOk[]::new);
         this.txn = txn;
@@ -80,8 +80,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
 
     void contact(Collection<Id> nodes, Topologies topologies, Callback<PreAcceptReply> callback)
     {
-        CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
-        node.send(nodes, to -> new PreAccept(to, topologies, txnId, txn, null, false, route), commandStore, callback);
+        node.send(nodes, to -> new PreAccept(to, topologies, txnId, txn, null, false, route), executor, callback);
     }
 
     @Override
@@ -139,7 +138,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
          * We cannot execute the transaction because the execution epoch's topology no longer contains all of the
          * participating keys/ranges, so we propose that the transaction is invalidated in its coordination epoch
          */
-        proposeInvalidate(node, node.uniqueTimestamp(Ballot::fromValues), txnId, route.homeKey(), (outcome, failure) -> {
+        proposeInvalidate(node, executor, node.uniqueTimestamp(Ballot::fromValues), txnId, route.homeKey(), (outcome, failure) -> {
             if (failure != null)
                 mismatch.addSuppressed(failure);
             callback.accept(null, mismatch);
@@ -150,7 +149,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     void onPreAccepted(Topologies topologies)
     {
         Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
-        node.withEpochExact(executeAt.epoch(), callback, t -> WrappableException.wrap(t), () -> {
+        node.withEpochExact(executeAt.epoch(), executor, callback, t -> WrappableException.wrap(t), () -> {
             onPreAccepted(topologies, executeAt, oks);
             if (!Invariants.debug()) oks.clear();
         });

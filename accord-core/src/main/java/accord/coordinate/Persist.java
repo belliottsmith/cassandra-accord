@@ -19,10 +19,11 @@
 package accord.coordinate;
 
 import accord.api.Result;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.QuorumTracker;
-import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Apply;
 import accord.messages.Apply.ApplyReply;
 import accord.messages.Callback;
@@ -45,6 +46,7 @@ import static accord.primitives.Status.Durability.Majority;
 public abstract class Persist implements Callback<ApplyReply>
 {
     protected final Node node;
+    protected final SequentialAsyncExecutor executor;
     protected final TxnId txnId;
     protected final Ballot ballot;
     protected final Route<?> sendTo;
@@ -54,6 +56,7 @@ public abstract class Persist implements Callback<ApplyReply>
     protected final Writes writes;
     protected final Result result;
     protected final FullRoute<?> route;
+    protected final CoordinationFlags flags;
     protected final Topologies topologies;
     // TODO (expected): track separate ALL and Quorum, so we can report Universal durability to permit faster GC
     protected final QuorumTracker tracker;
@@ -61,9 +64,10 @@ public abstract class Persist implements Callback<ApplyReply>
     protected final boolean informDurableOnDone;
     boolean isDone;
 
-    protected Persist(Node node, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, boolean informDurableOnDone, Apply.Factory factory)
+    protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory)
     {
         this.node = node;
+        this.executor = executor;
         this.txnId = txnId;
         this.ballot = ballot;
         this.sendTo = sendTo;
@@ -73,6 +77,7 @@ public abstract class Persist implements Callback<ApplyReply>
         this.writes = writes;
         this.result = result;
         this.route = route;
+        this.flags = flags;
         this.topologies = all;
         this.tracker = new QuorumTracker(all);
         this.factory = factory;
@@ -92,6 +97,7 @@ public abstract class Persist implements Callback<ApplyReply>
                 {
                     // note: we enter this branch whether or not sendTo == route,
                     // since we should only invoke Persist with sendTo != route when the remainder of the route is already persisted and truncated
+                    // but we make this explicit for the caller with informDurableOnDone
                     isDone = true;
                     InformDurable.informDefault(node, topologies, txnId, route, executeAt, Majority);
                 }
@@ -102,7 +108,7 @@ public abstract class Persist implements Callback<ApplyReply>
                 // reached another response in its quorum; in this case it may incorrectly determine the transaction should be invalidated
                 break;
             case Insufficient:
-                node.send(from, factory.create(Apply.Kind.Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route));
+                node.send(from, factory.create(Apply.Kind.Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags.get(from)));
         }
     }
 
@@ -131,8 +137,7 @@ public abstract class Persist implements Callback<ApplyReply>
         }
         else
         {
-            CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
-            node.send(contact, to -> factory.create(kind, to, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route), commandStore, this);
+            node.send(contact, to -> factory.create(kind, to, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags.get(to)), executor, this);
         }
     }
 }

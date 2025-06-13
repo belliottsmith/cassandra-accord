@@ -497,7 +497,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             minEpoch = Math.min(awaitingEpochBuffer[i].run.txnId.epoch(), minEpoch);
         Invariants.requireArgument(minEpoch != Long.MAX_VALUE);
         isAwaitingEpoch = true;
-        node.withEpochAtLeast(minEpoch, (success, fail) -> commandStore.execute(empty(), ss -> {
+        node.withEpochAtLeast(minEpoch, commandStore, (success, fail) -> commandStore.execute(empty(), ss -> {
             isAwaitingEpoch = false;
             accept(ss);
         }, node.agent()));

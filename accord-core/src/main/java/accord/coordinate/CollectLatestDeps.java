@@ -25,9 +25,9 @@ import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
 import accord.coordinate.tracking.QuorumTracker;
-import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
 import accord.messages.GetLatestDeps;
 import accord.messages.GetLatestDeps.GetLatestDepsOk;
@@ -78,11 +78,11 @@ public class CollectLatestDeps implements Callback<GetLatestDepsReply>
         Route<?> route = fullRoute.intersecting(collectFrom, Minimal);
         Topologies topologies = node.topology().withUnsyncedEpochs(route, txnId, executeAt);
         CollectLatestDeps collect = new CollectLatestDeps(node, topologies, txnId, route, ballot, executeAt, callback);
-        CommandStore store = CommandStore.currentOrElseSelect(node, fullRoute);
+        SequentialAsyncExecutor executor = node.someSequentialExecutor();
 
         SortedArrayList<Id> contact = collect.tracker.filterAndRecordFaulty();
         if (contact == null) callback.accept(null, new Exhausted(txnId, route.homeKey(), null));
-        else node.send(contact, to -> new GetLatestDeps(to, topologies, route, txnId, ballot, executeAt), store, collect);
+        else node.send(contact, to -> new GetLatestDeps(to, topologies, route, txnId, ballot, executeAt), executor, collect);
     }
 
     @Override

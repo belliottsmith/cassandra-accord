@@ -28,6 +28,7 @@ import accord.coordinate.tracking.ReadTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
 import accord.primitives.WithQuorum;
 import accord.primitives.Ranges;
@@ -99,15 +100,17 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
     }
 
     protected final Node node;
+    protected final SequentialAsyncExecutor executor;
     protected final TxnId txnId;
     private boolean isDone;
     private Throwable failure;
     final Map<Id, Object> debug;
 
-    protected ReadCoordinator(Node node, Topologies topologies, TxnId txnId)
+    protected ReadCoordinator(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId)
     {
         super(topologies);
         this.node = node;
+        this.executor = executor;
         this.txnId = txnId;
         this.debug = debug() ? new SortedListMap<>(topologies.nodes(), Object[]::new) : null;
     }

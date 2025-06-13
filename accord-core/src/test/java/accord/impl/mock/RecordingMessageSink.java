@@ -18,7 +18,7 @@
 
 package accord.impl.mock;
 
-import accord.local.AgentExecutor;
+import accord.api.AsyncExecutor;
 import accord.local.Node;
 import accord.messages.Callback;
 import accord.messages.Reply;
@@ -63,7 +63,7 @@ public class RecordingMessageSink extends SimpleMessageSink
     }
 
     @Override
-    public void send(Node.Id to, Request request, int attempt, AgentExecutor executor, Callback callback)
+    public void send(Node.Id to, Request request, int attempt, AsyncExecutor executor, Callback callback)
     {
         requests.add(new Envelope<>(to, request, callback));
         super.send(to, request, executor, callback);

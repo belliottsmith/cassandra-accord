@@ -48,11 +48,17 @@ public class MockStore implements DataStore
         {
             return DATA;
         }
+
+        @Override
+        public Data without(Ranges ranges)
+        {
+            return this;
+        }
     };
 
     public static final Result RESULT = new Result() {};
     public static final Query QUERY = (txnId, executeAt, keys, data, read, update) -> RESULT;
-    public static final Write WRITE = (key, commandStore, txnId, executeAt, store, command) -> Writes.SUCCESS;
+    public static final Write WRITE = (commandStore, key, txnId, executeAt, command) -> Writes.SUCCESS;
 
     public static Read read(Seekables<?, ?> keys)
     {
@@ -65,7 +71,7 @@ public class MockStore implements DataStore
             }
 
             @Override
-            public AsyncChain<Data> read(Seekable key, SafeCommandStore commandStore, Timestamp executeAt, DataStore store)
+            public AsyncChain<Data> read(SafeCommandStore safeStore, Seekable key, Timestamp executeAt)
             {
                 return AsyncChains.success(DATA);
             }

@@ -35,6 +35,9 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owne
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
 import static accord.api.ProtocolModifiers.Toggles.InformOfDurability.ALL;
+import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS;
+import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS_OR_NONE_IF_FASTEXEC;
+import static accord.primitives.Txn.Kind.EphemeralRead;
 
 /**
  * Configure various protocol behaviours. Many of these switches are correctness impacting, and should not be touched.
@@ -207,9 +210,11 @@ public class ProtocolModifiers
         public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
         public static void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }
 
-        private static boolean sendMinimalStableMessages = true;
-        public static void setSendMinimalStableMessages(boolean newSendMinimalStableMessages) { sendMinimalStableMessages = newSendMinimalStableMessages; }
-        public static boolean sendMinimalStableMessages() { return sendMinimalStableMessages; }
+        public enum SendStableMessages { TO_ALL, FOR_READS, FOR_READS_OR_NONE_IF_FASTEXEC}
+        private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;
+        public static void setSendStableMessages(SendStableMessages newSendStableMessages) { sendStableMessages = newSendStableMessages; }
+        public static boolean sendOnlyReadStableMessages() { return sendStableMessages.compareTo(FOR_READS) >= 0; }
+        public static boolean sendNoStableMessagesIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
         private static boolean permitLocalExecution = true;
         public static boolean permitLocalExecution() { return permitLocalExecution; }
@@ -252,5 +257,24 @@ public class ProtocolModifiers
         private static InformOfDurability informOfDurability = ALL;
         public static InformOfDurability informOfDurability() { return informOfDurability; }
         public static void setInformOfDurability(InformOfDurability newInformOfDurability) { informOfDurability = newInformOfDurability; }
+
+        public enum FastExec { DISABLED, MAY_BYPASS_COMMANDSFORKEY, MAY_BYPASS_SAFESTORE }
+        private static FastExec fastReadExec = FastExec.MAY_BYPASS_SAFESTORE;
+        public static boolean fastReadsMayBypassSafeStore(TxnId txnId) { return fastReadExec == FastExec.MAY_BYPASS_SAFESTORE && (dataStoreDetectsFutureReads() || txnId.is(EphemeralRead)); }
+        public static boolean fastReadsMayBypassCommandsForKey(TxnId txnId) { return fastReadExec != FastExec.DISABLED && !txnId.is(Txn.Kind.Write); }
+        public static void setFastReadExec(FastExec newFastReads) { fastReadExec = newFastReads; }
+
+        private static boolean fastReadExecMayResendTxn = true;
+        public static boolean fastReadExecMayResendTxn() { return fastReadExecMayResendTxn; }
+        public static void setFastReadExecMayResendTxn(boolean newFastReadExecMayResendTxn) { fastReadExecMayResendTxn = newFastReadExecMayResendTxn; }
+
+        private static FastExec fastWriteExec = FastExec.MAY_BYPASS_SAFESTORE;
+        public static boolean fastWritesMayBypassSafeStore() { return fastWriteExec == FastExec.MAY_BYPASS_SAFESTORE; }
+        public static boolean fastWritesMayBypassCommandsForKey() { return fastWriteExec != FastExec.DISABLED; }
+        public static void setFastWriteExec(FastExec newFastWrites) { fastWriteExec = newFastWrites; }
+
+        private static boolean dataStoreDetectsFutureReads;
+        public static boolean dataStoreDetectsFutureReads() { return dataStoreDetectsFutureReads; }
+        public static void setDataStoreDetectsFutureReads(boolean newDataStoreDetectsFutureReads) { dataStoreDetectsFutureReads = newDataStoreDetectsFutureReads; }
     }
 }

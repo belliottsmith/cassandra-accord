@@ -22,9 +22,10 @@ import java.util.Collection;
 import java.util.function.BiConsumer;
 
 import accord.api.Result;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.QuorumTracker;
-import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
 import accord.messages.GetEphemeralReadDeps;
 import accord.messages.GetEphemeralReadDeps.GetEphemeralReadDepsOk;
@@ -40,6 +41,7 @@ import accord.utils.async.AsyncResults.SettableByCallback;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owned;
+import static accord.coordinate.ExecuteFlag.CoordinationFlags.empty;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -76,7 +78,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
         }
 
         Topologies topologies = node.topology().withUnsyncedEpochs(route, txnId, txnId);
-        CoordinateEphemeralRead coordinate = new CoordinateEphemeralRead(node, topologies, route, txnId, txn, callback);
+        CoordinateEphemeralRead coordinate = new CoordinateEphemeralRead(node, node.someSequentialExecutor(), topologies, route, txnId, txn, callback);
         coordinate.start();
     }
 
@@ -87,9 +89,9 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     private long executeAtEpoch;
     private long retryInEpoch;
 
-    CoordinateEphemeralRead(Node node, Topologies topologies, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<Result, Throwable> callback)
+    CoordinateEphemeralRead(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<Result, Throwable> callback)
     {
-        super(node, route, txnId, callback);
+        super(node, executor, route, txnId, callback);
         this.txn = txn;
         this.tracker = new QuorumTracker(topologies);
         this.executeAtEpoch = txnId.epoch();
@@ -99,8 +101,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     @Override
     void contact(Collection<Node.Id> nodes, Topologies topologies, Callback<GetEphemeralReadDepsOk> callback)
     {
-        CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
-        node.send(nodes, to -> new GetEphemeralReadDeps(to, topologies, route, txnId, executeAtEpoch), commandStore, callback);
+        node.send(nodes, to -> new GetEphemeralReadDeps(to, topologies, route, txnId, executeAtEpoch), executor, callback);
     }
 
     @Override
@@ -155,7 +156,11 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     {
         Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
         topologies = node.topology().reselect(topologies, QuorumEpochIntersections.preaccept.include, route, executeAtEpoch, executeAtEpoch, SHARE, Owned);
-        new ExecuteEphemeralRead(node, topologies, route, txnId.withEpoch(executeAtEpoch), txn, deps, callback).start();
+        CoordinationFlags flags = oks.foldlNonNull((d, k, v, out) -> {
+            ExecuteFlag.ExecuteFlags.collect(out, k, v.flags, d, v.deps);
+            return out;
+        }, deps, empty(oks.domain()));
+        new ExecuteEphemeralRead(node, executor, topologies, route, txnId.withEpoch(executeAtEpoch), txn, deps, flags, callback).start();
         if (!Invariants.debug()) oks.clear();
     }
 }

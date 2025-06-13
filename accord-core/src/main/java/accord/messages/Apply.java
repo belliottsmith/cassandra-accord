@@ -20,7 +20,11 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
+import accord.api.DataStore;
 import accord.api.Result;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
+import accord.local.CommandStore;
+import accord.local.CommandStores;
 import accord.local.Commands;
 import accord.local.KeyHistory;
 import accord.local.Node;
@@ -35,6 +39,8 @@ import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
+import accord.primitives.RoutingKeys;
+import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -42,10 +48,17 @@ import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.async.AsyncChain;
 import accord.utils.async.Cancellable;
 
+import static accord.api.ProtocolModifiers.Toggles.fastWritesMayBypassCommandsForKey;
+import static accord.api.ProtocolModifiers.Toggles.fastWritesMayBypassSafeStore;
+import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.messages.MessageType.StandardMessage.APPLY_REQ;
 import static accord.messages.MessageType.StandardMessage.APPLY_RSP;
+import static accord.primitives.SaveStatus.Applied;
+import static accord.primitives.SaveStatus.Applying;
+import static accord.primitives.SaveStatus.PreApplied;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class Apply extends TxnRequest<ApplyReply>
@@ -53,31 +66,32 @@ public class Apply extends TxnRequest<ApplyReply>
     public static final Factory FACTORY = Apply::new;
     public static class SerializationSupport
     {
-        public static Apply create(TxnId txnId, Ballot ballot, Route<?> scope, long minEpoch, long waitForEpoch, long maxEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
+        public static Apply create(TxnId txnId, Ballot ballot, Route<?> scope, long minEpoch, long waitForEpoch, long maxEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result, ExecuteFlags flags)
         {
-            return new Apply(kind, txnId, ballot, scope, minEpoch, waitForEpoch, maxEpoch, executeAt, deps, txn, fullRoute, writes, result);
+            return new Apply(kind, txnId, ballot, scope, minEpoch, waitForEpoch, maxEpoch, executeAt, deps, txn, fullRoute, writes, result, flags);
         }
     }
 
     public interface Factory
     {
-        Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> scope, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute);
+        Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> scope, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute, ExecuteFlags flags);
     }
 
     public final Kind kind;
     public final Ballot ballot;
     public final Timestamp executeAt;
-    public final PartialDeps deps; // TODO (expected): this should be nullable, and only included if we did not send Commit (or if sending Maximal apply)
+    public final PartialDeps deps; // not much benefit in nullability, as we try only to commit to readers, so most recipients will need to receive deps
     public final @Nullable PartialTxn txn;
     public final @Nullable FullRoute<?> fullRoute;
     public final @Nullable Writes writes;
     public final Result result;
     public final long minEpoch;
     public final long maxEpoch;
+    public final ExecuteFlags flags;
 
     public enum Kind { Minimal, Maximal }
 
-    protected Apply(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute)
+    protected Apply(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute, ExecuteFlags flags)
     {
         super(to, participates, sendTo, txnId);
         Invariants.require(txnId.kind() != Txn.Kind.Write || writes != null);
@@ -89,6 +103,7 @@ public class Apply extends TxnRequest<ApplyReply>
         this.executeAt = executeAt;
         this.writes = writes;
         this.result = result;
+        this.flags = flags;
         this.minEpoch = participates.oldestEpoch();
         this.maxEpoch = participates.currentEpoch();
     }
@@ -103,7 +118,7 @@ public class Apply extends TxnRequest<ApplyReply>
         return node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
     }
 
-    protected Apply(Kind kind, TxnId txnId, Ballot ballot, Route<?> route, long minEpoch, long waitForEpoch, long maxEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result)
+    protected Apply(Kind kind, TxnId txnId, Ballot ballot, Route<?> route, long minEpoch, long waitForEpoch, long maxEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result, ExecuteFlags flags)
     {
         super(txnId, route, waitForEpoch);
         this.kind = kind;
@@ -114,6 +129,7 @@ public class Apply extends TxnRequest<ApplyReply>
         this.fullRoute = fullRoute;
         this.writes = writes;
         this.result = result;
+        this.flags = flags;
         this.minEpoch = minEpoch;
         this.maxEpoch = maxEpoch;
     }
@@ -121,31 +137,73 @@ public class Apply extends TxnRequest<ApplyReply>
     @Override
     public Cancellable submit()
     {
+        if (flags.contains(READY_TO_EXECUTE) && fastWritesMayBypassSafeStore() && kind == Kind.Maximal)
+            return node.mapReduceConsumeLocal(scope, minEpoch, maxEpoch, this::applyDirect, this, this);
+
         return node.mapReduceConsumeLocal(this, minEpoch, maxEpoch, this);
     }
 
     @Override
     public ApplyReply apply(SafeCommandStore safeStore)
     {
-        Route<?> route = fullRoute != null ? fullRoute : scope;
+        Route<?> route = bestRoute();
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, maxEpoch);
         return apply(safeStore, participants);
     }
 
+    // TODO (desired): always applyDirect reads, whether or not the replica is ready, as reads are no-ops (note: affects linearizability warnings)
+    private AsyncChain<ApplyReply> applyDirect(CommandStore commandStore)
+    {
+        DataStore dataStore = commandStore.unsafeGetDataStore();
+        // TODO (required): RangesForEpoch may be stale, must protect against this
+        CommandStores.RangesForEpoch storeRanges = commandStore.unsafeGetRangesForEpoch();
+        Route<?> route = bestRoute();
+        StoreParticipants participants = StoreParticipants.execute(storeRanges, route, minEpoch, txnId, maxEpoch);
+        AsyncChain<Void> written = writes == null ? Writes.SUCCESS
+                                                  : writes.applyDirect(commandStore, participants.executes(), txn);
+
+        return written.flatMap(ignore -> commandStore.build(this, safeStore -> {
+            return apply(Applied, safeStore, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
+        }));
+    }
+
     public ApplyReply apply(SafeCommandStore safeStore, StoreParticipants participants)
     {
-        return apply(safeStore, participants, ballot, txn, txnId, executeAt, deps, participants.route(), writes, result);
+        SaveStatus newSaveStatus = PreApplied;
+        if (flags.contains(READY_TO_EXECUTE) && fastWritesMayBypassCommandsForKey())
+            newSaveStatus = Applying;
+        return apply(newSaveStatus, safeStore, participants);
+    }
+
+    private Route<?> bestRoute()
+    {
+        return fullRoute != null ? fullRoute : scope;
+    }
+
+    private ApplyReply apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, StoreParticipants participants)
+    {
+        return apply(newSaveStatus, safeStore, participants, ballot, txn, txnId, executeAt, deps, bestRoute(), writes, result);
     }
 
     public static ApplyReply apply(SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
     {
+        return apply(PreApplied, safeStore, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
+    }
+
+    public static ApplyReply apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
+    {
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        return apply(safeStore, safeCommand, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
+        return apply(newSaveStatus, safeStore, safeCommand, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
     }
 
     public static ApplyReply apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
     {
-        switch (Commands.apply(safeStore, safeCommand, participants, ballot, txnId, route, executeAt, deps, txn, writes, result))
+        return apply(PreApplied, safeStore, safeCommand, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
+    }
+
+    public static ApplyReply apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
+    {
+        switch (Commands.apply(newSaveStatus, safeStore, safeCommand, participants, ballot, txnId, route, executeAt, deps, txn, writes, result))
         {
             default:
             case Success: return ApplyReply.Applied;
@@ -153,6 +211,14 @@ public class Apply extends TxnRequest<ApplyReply>
             case Insufficient: return ApplyReply.Insufficient;
             case RaceWithRecovery: return ApplyReply.RaceWithRecovery;
         }
+    }
+
+    @Override
+    public Unseekables<?> keys()
+    {
+        if (flags.contains(READY_TO_EXECUTE) && fastWritesMayBypassCommandsForKey())
+            return RoutingKeys.EMPTY;
+        return super.keys();
     }
 
     @Override

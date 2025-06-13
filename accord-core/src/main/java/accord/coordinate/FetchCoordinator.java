@@ -26,6 +26,7 @@ import java.util.Map;
 import accord.api.DataStore.StartingRangeFetch;
 import accord.api.DataStore.FetchRanges;
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.topology.Topology;
@@ -129,6 +130,7 @@ public abstract class FetchCoordinator
     }
 
     protected final Node node;
+    protected final SequentialAsyncExecutor executor;
     protected final Ranges ranges;
     protected final SyncPoint syncPoint;
     // provided to us, and manages the safe-to-read state
@@ -143,9 +145,10 @@ public abstract class FetchCoordinator
     private Ranges needed;
     private int inflight;
 
-    protected FetchCoordinator(Node node, Ranges ranges, SyncPoint syncPoint, FetchRanges fetchRanges)
+    protected FetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, FetchRanges fetchRanges)
     {
         this.node = node;
+        this.executor = executor;
         this.ranges = ranges;
         this.syncPoint = syncPoint;
         this.fetchRanges = fetchRanges;

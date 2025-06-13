@@ -18,12 +18,15 @@
 
 package accord.messages;
 
+import javax.annotation.Nullable;
+
 import accord.api.Data;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
@@ -41,7 +44,7 @@ public class WaitUntilApplied extends ReadData
     {
         public static WaitUntilApplied create(TxnId txnId, Participants<?> scope, long minEpoch, long executeAtEpoch)
         {
-            return new WaitUntilApplied(txnId, scope, minEpoch, executeAtEpoch);
+            return new WaitUntilApplied(txnId, scope, minEpoch, null, executeAtEpoch);
         }
     }
 
@@ -51,14 +54,19 @@ public class WaitUntilApplied extends ReadData
 
     public WaitUntilApplied(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long executeAtEpoch)
     {
-        super(to, topologies, txnId, scope, executeAtEpoch);
+        this(to, topologies, txnId, scope, null, executeAtEpoch);
+    }
+
+    public WaitUntilApplied(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, @Nullable Timestamp executeAt, long executeAtEpoch)
+    {
+        super(to, topologies, txnId, scope, null, executeAt, executeAtEpoch);
         this.minEpoch = topologies.oldestEpoch();
         Invariants.require(minEpoch <= executeAtEpoch);
     }
 
-    protected WaitUntilApplied(TxnId txnId, Participants<?> scope, long minEpoch, long executeAtEpoch)
+    protected WaitUntilApplied(TxnId txnId, Participants<?> scope, long minEpoch, @Nullable Timestamp executeAt, long executeAtEpoch)
     {
-        super(txnId, scope, executeAtEpoch);
+        super(txnId, scope, null, executeAt, executeAtEpoch);
         this.minEpoch = minEpoch;
     }
 
@@ -90,11 +98,12 @@ public class WaitUntilApplied extends ReadData
     }
 
     @Override
-    protected ReadOk constructReadOk(Ranges unavailable, Data data, long uniqueHlc)
+    protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        if (retryInLaterEpoch > 0)
-            return new ReadOkWithFutureEpoch(unavailable, data, retryInLaterEpoch);
-        return new ReadOk(unavailable, data, uniqueHlc);
+        if (data != null) data.validateReply(txnId, executeAt, false);
+        ReadReply reply = retryInLaterEpoch > 0 ? new ReadOkWithFutureEpoch(unavailable, data, retryInLaterEpoch)
+                                                : new ReadOk(unavailable, data, uniqueHlc);
+        reply(reply, null);
     }
 
     @Override

@@ -94,6 +94,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 
     // we use exactly -1 to make serialization easy (can increment by 1 and store a non-negative integer)
     private static final int SYNCHRONOUS_CALLBACKID = -1;
+    protected boolean unavailable;
 
     public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, int callbackId, boolean notifyProgressLog)
     {
@@ -146,7 +147,14 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             return null;
         }
 
-        Commands.supplementParticipants(safeStore, safeCommand, participants);
+        participants = Commands.supplementParticipants(safeStore, safeCommand, participants).participants();
+        if (participants.stillTouches().isEmpty())
+        {
+            // stillTouches removes only shard redundant participants, so we know any consensus decision
+            // we might participate for e.g. a pre-bootstrap range is also something we cannot usefully answer
+            onUnavailable();
+            return null;
+        }
 
         if (callbackId >= 0)
         {
@@ -189,7 +197,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         else if (callbackId >= 0)
         {
             RemoteListeners.Registration asyncRegistration = this.asyncRegistration;
-            AwaitOk reply = asyncRegistration == null || 0 == asyncRegistration.done() ? AwaitOk.Ready : AwaitOk.NotReady;
+            AwaitOk reply = unavailable ? AwaitOk.Unavailable : asyncRegistration == null || 0 == asyncRegistration.done() ? AwaitOk.Ready : AwaitOk.NotReady;
             reply(reply, null);
         }
         else
@@ -255,7 +263,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 
     public enum AwaitOk implements Reply
     {
-        NotReady, Ready;
+        NotReady, Ready, Unavailable;
 
         @Override
         public MessageType type()
@@ -296,13 +304,18 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
                || (blockedUntil.additionallyUnblockedBy != null && blockedUntil.additionallyUnblockedBy.test(saveStatus));
     }
 
+    protected void onUnavailable()
+    {
+        unavailable = true;
+    }
+
     protected void onNotWaiting(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
     }
 
     protected void onSynchronousAwaitComplete()
     {
-        node.reply(replyTo, replyContext, AwaitOk.Ready, null);
+        node.reply(replyTo, replyContext, unavailable ? AwaitOk.Unavailable : AwaitOk.Ready, null);
     }
 
     public static class AsyncAwaitComplete implements Request, PreLoadContext, Consumer<SafeCommandStore>

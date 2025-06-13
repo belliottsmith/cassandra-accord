@@ -34,7 +34,7 @@ import accord.primitives.Ranges;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.utils.Invariants;
-import accord.utils.async.AsyncExecutor;
+import accord.api.AsyncExecutor;
 import accord.utils.Timestamped;
 
 public class ListUpdate extends TreeMap<Key, Integer> implements Update
@@ -60,7 +60,7 @@ public class ListUpdate extends TreeMap<Key, Integer> implements Update
         for (Map.Entry<Key, Integer> e : entrySet())
         {
             Timestamped<int[]> prev = data.get(e.getKey());
-            Invariants.require(prev.timestamp.compareTo(executeAt) < 0);
+            Invariants.require(prev != null && prev.timestamp.compareTo(executeAt) < 0);
             write.put(e.getKey(), append(prev.data, e.getValue()));
         }
         return write;

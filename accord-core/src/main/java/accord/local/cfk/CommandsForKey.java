@@ -32,9 +32,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.RoutingKey;
+import accord.api.ViolationHandler;
+import accord.api.ViolationHandler.ViolationHandlerHolder;
 import accord.api.VisibleForImplementation;
 import accord.local.Command;
-import accord.local.CommandStore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.CommandSummaries.ActiveCommandVisitor;
@@ -43,6 +44,8 @@ import accord.local.CommandSummaries.IsDep;
 import accord.local.CommandSummaries.SummaryStatus;
 import accord.local.CommandSummaries.ComputeIsDep;
 import accord.local.CommandSummaries.TestStartedAt;
+import accord.primitives.Deps;
+import accord.primitives.Deps.DepRelationList;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -884,7 +887,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             FROM_SAVE_STATUS.put(SaveStatus.Stable, STABLE);
             FROM_SAVE_STATUS.put(SaveStatus.ReadyToExecute, STABLE);
             FROM_SAVE_STATUS.put(SaveStatus.PreApplied, STABLE);
-            FROM_SAVE_STATUS.put(SaveStatus.Applying, STABLE);
+            // SaveStatus.Applying is a transient state; let PreApplied and Applied handle updates
             FROM_SAVE_STATUS.put(SaveStatus.Applied, APPLIED_NOT_DURABLE);
             // We don't map TruncatedApplyX or Erased as we want to retain them as APPLIED
             // esp. to support pruning where we expect the prunedBefore entr*ies* to be APPLIED
@@ -895,7 +898,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             FROM_SAVE_STATUS.put(SaveStatus.Vestigial, ERASED);
             FROM_SAVE_STATUS.put(SaveStatus.Invalidated, INVALIDATED);
             for (SaveStatus saveStatus : SaveStatus.values())
-                Invariants.require(FROM_SAVE_STATUS.get(saveStatus) != null || saveStatus.is(Status.Truncated) || saveStatus.is(Status.NotDefined));
+                Invariants.require(FROM_SAVE_STATUS.get(saveStatus) != null || saveStatus.is(Status.Truncated) || saveStatus.is(Status.NotDefined) || saveStatus == SaveStatus.Applying);
 
             SummaryStatus[] summaryStatuses = SummaryStatus.values();
             TO_SUMMARY_STATUS = Arrays.copyOf(summaryStatuses, summaryStatuses.length + 1);
@@ -1487,6 +1490,44 @@ public class CommandsForKey extends CommandsForKeyUpdate
             if (best.executeAt.epoch() <= startedBefore.epoch() && !best.equals(startedBefore))
                 visitor.visit(p1, p2, best.summaryStatus(), key, best.plainTxnId());
         }
+    }
+
+    public boolean hasUniqueHlcAndIsReadyToExecute(TxnId txnId, Timestamp executeAt, Deps deps)
+    {
+        if (txnId.isWrite() && executeAt.hlc() <= maxUniqueHlc)
+            return false;
+
+        if (txnId.awaitsOnlyDeps())
+            executeAt = Timestamp.MAX;
+
+        DepRelationList list = deps.keyDeps.txnIdsWithFlags(key);
+        int i = list.size() - 1, j = byId.length - 1;
+        i: while (i >= 0)
+        {
+            TxnId d = list.get(i);
+            TxnInfo e;
+            while (true)
+            {
+                if (--j < 0)
+                    return d.compareTo(redundantBefore()) < 0;
+                e = byId[j];
+                int c = e.compareTo(d);
+                if (c == 0)
+                {
+                    if (!e.isAtLeast(APPLIED) && (!e.isAtLeast(COMMITTED) || e.executeAt.compareTo(executeAt) < 0))
+                        return false;
+                    --i;
+                    continue i;
+                }
+                else if (c > 0)
+                {
+                    if (!e.isAtLeast(APPLIED) && (!e.isAtLeast(COMMITTED) || e.executeAt.compareTo(executeAt) < 0) && txnId.witnesses(e) && e.isManaged())
+                        return false;
+                }
+                else return d.compareTo(redundantBefore()) < 0;
+            }
+        }
+        return true;
     }
 
     public CommandsForKeyUpdate callback(SafeCommandStore safeStore, Command update)
@@ -2327,9 +2368,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
                          + notWitnessed + " is committed to execute (at " + notWitnessedExecuteAt + ") before "
                          + by + " that should witness it but has already applied (at " + byExecuteAt + ")";
 
-        CommandStore commandStore = CommandStore.maybeCurrent();
-        if (commandStore == null) logger.error(message);
-        else commandStore.agent().onViolation(message, RoutingKeys.of(key), notWitnessed, notWitnessedExecuteAt, by, byExecuteAt);
+        ViolationHandler agent = ViolationHandlerHolder.get();
+        if (agent == null) logger.error(message);
+        else agent.onViolation(message, RoutingKeys.of(key), notWitnessed, notWitnessedExecuteAt, by, byExecuteAt);
     }
 
     public static void enableLinearizabilityViolationsReporting()

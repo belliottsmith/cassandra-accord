@@ -119,7 +119,7 @@ class ReadDataTest
         Mockito.when(read.intersecting(any())).thenAnswer(i -> mockRead(keys.intersecting((Unseekables) i.getArgument(0)), readResult));
         Mockito.when(read.merge(any())).thenReturn(read);
         Mockito.when(read.keys()).thenReturn((Seekables)keys);
-        Mockito.when(read.read(any(), any(), any(), any())).thenAnswer(new Answer<AsyncChain<Data>>()
+        Mockito.when(read.read(any(), any(), any())).thenAnswer(new Answer<AsyncChain<Data>>()
         {
             private final boolean called = false;
             @Override
@@ -300,7 +300,7 @@ class ReadDataTest
         {
             AsyncResults.SettableResult<Void> writeResult = new AsyncResults.SettableResult<>();
             Write write = Mockito.mock(Write.class);
-            Mockito.when(write.apply(any(), any(), any(), any(), any(), any())).thenReturn(writeResult);
+            Mockito.when(write.apply(any(), any(), any(), any(), any())).thenReturn(writeResult);
             Writes writes = new Writes(txnId, executeAt, keys, write);
 
             forEach(store -> check(store.build(PreLoadContext.contextFor(txnId, route), safe -> {
@@ -312,7 +312,7 @@ class ReadDataTest
         ReplyContext process()
         {
             ReplyContext replyContext = Mockito.mock(ReplyContext.class);
-            ReadData readData = new ReadTxnData(node.id(), TOPOLOGIES, txnId, keys.toParticipants(), txnId.epoch());
+            ReadData readData = new ReadTxnData(node.id(), TOPOLOGIES, txnId, keys.toParticipants(), null, null, txnId.epoch());
             readData.process(node, node.id(), replyContext);
             return replyContext;
         }

@@ -27,6 +27,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongConsumer;
@@ -49,7 +50,6 @@ import accord.api.TopologySorter;
 import accord.api.VisibleForImplementation;
 import accord.coordinate.EpochTimeout;
 import accord.coordinate.tracking.QuorumTracker;
-import accord.local.CommandStore;
 import accord.local.Node.Id;
 import accord.local.TimeService;
 import accord.primitives.EpochSupplier;
@@ -743,7 +743,7 @@ public class TopologyManager
         return ready;
     }
 
-    public AsyncChain<Void> awaitEpoch(long epoch)
+    public AsyncChain<Void> awaitEpoch(long epoch, @Nullable Executor executor)
     {
         FutureEpoch futureEpoch;
         synchronized (this)
@@ -751,8 +751,7 @@ public class TopologyManager
             futureEpoch = epochs.awaitEpoch(epoch, this);
         }
         AsyncResult<Void> result = futureEpoch.waiting();
-        CommandStore current = CommandStore.maybeCurrent();
-        return current == null || result.isDone() ? result : result.withExecutor(current);
+        return executor == null || result.isDone() ? result : result.withExecutor(executor);
     }
 
     public synchronized boolean hasReachedQuorum(long epoch)
@@ -1242,6 +1241,18 @@ public class TopologyManager
     public Topologies forEpoch(Unseekables<?> select, long epoch, SelectNodeOwnership selectNodeOwnership)
     {
         EpochState state = epochs.get(epoch);
+        return new Single(sorter, state.global.select(select, selectNodeOwnership));
+    }
+
+    public Topologies forEpochAtLeast(Unseekables<?> select, long epoch, SelectNodeOwnership selectNodeOwnership)
+    {
+        Epochs snapshot = this.epochs;
+        EpochState state = snapshot.get(epoch);
+        if (state == null)
+        {
+            Invariants.require(snapshot.currentEpoch >= epoch, "current epoch %d < provided max %d", snapshot.currentEpoch, epoch);
+            state = snapshot.get(snapshot.minEpoch());
+        }
         return new Single(sorter, state.global.select(select, selectNodeOwnership));
     }
 

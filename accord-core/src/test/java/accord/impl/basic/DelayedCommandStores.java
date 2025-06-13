@@ -187,7 +187,21 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             @Override
             public void run()
             {
-                unsafeRunIn(super::run);
+                Invariants.require(active == null);
+                Invariants.require(activeThread == null);
+                active = this;
+                activeThread = Thread.currentThread();
+                try
+                {
+                    super.run();
+                }
+                finally
+                {
+                    Invariants.require(active == this);
+                    Invariants.require(activeThread == Thread.currentThread());
+                    active = null;
+                    activeThread = null;
+                }
             }
 
             public Callable<T> callable()
@@ -200,6 +214,8 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         private final Queue<Task<?>> pending = new LinkedList<>();
         private final CacheLoading cacheLoading;
         private final Journal journal;
+        private Task<?> active;
+        private Thread activeThread;
 
         public DelayedCommandStore(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, SimulatedDelayedExecutorService executor, CacheLoading cacheLoading, Journal journal)
         {
@@ -288,7 +304,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         public boolean inStore()
         {
-            return CommandStore.maybeCurrent() == this;
+            return Thread.currentThread() == activeThread;
         }
 
         @Override
@@ -362,7 +378,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             if (next == null)
                 return;
 
-            next.invoke(agent()); // used to track unexpected exceptions and notify simulations
+            next.invoke(this.agent()); // used to track unexpected exceptions and notify simulations
             next.invoke(this::afterExecution);
             executor.executePreregistered(next);
         }
@@ -383,12 +399,6 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         protected InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
         {
             return new DelayedSafeStore(this, ranges, context, commands, commandsForKeys, cacheLoading);
-        }
-
-        @Override
-        public void unsafeRunIn(Runnable fn)
-        {
-            super.unsafeRunIn(fn);
         }
     }
 

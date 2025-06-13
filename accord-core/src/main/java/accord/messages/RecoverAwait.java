@@ -101,7 +101,7 @@ public class RecoverAwait extends Await
     protected void onSynchronousAwaitComplete()
     {
         if (!rejects)
-            node.reply(replyTo, replyContext, cannotAccept ? RecoverAwaitOk.Unknown : RecoverAwaitOk.Accept, null);
+            node.reply(replyTo, replyContext, cannotAccept || unavailable ? RecoverAwaitOk.Unknown : RecoverAwaitOk.Accept, null);
     }
 
     @Override

@@ -265,6 +265,9 @@ public class StoreParticipants
     /**
      * touches, but excluding any stale, pre-bootstrap or retired ranges that are also shard redundant,
      * as we do not need to do anything with these keys locally.
+     *
+     * We rely on this removing shard redundant participants at least:
+     *  in Await.apply() to avoid waiting on a command that is shard-redundant and not known locally
      */
     public Participants<?> stillTouches()
     {
@@ -561,9 +564,19 @@ public class StoreParticipants
         return execute(safeStore, participants, txnId, txnId.epoch(), executeAtEpoch);
     }
 
+    public static StoreParticipants execute(RangesForEpoch storeRanges, Participants<?> participants, TxnId txnId, long executeAtEpoch)
+    {
+        return execute(storeRanges, participants, txnId, txnId.epoch(), executeAtEpoch);
+    }
+
     public static StoreParticipants execute(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, long minEpoch, long executeAtEpoch)
     {
         return update(safeStore, participants, minEpoch, txnId, executeAtEpoch, executeAtEpoch, true);
+    }
+
+    public static StoreParticipants execute(RangesForEpoch storeRanges, Participants<?> participants, TxnId txnId, long minEpoch, long executeAtEpoch)
+    {
+        return update(storeRanges, participants, minEpoch, txnId, executeAtEpoch, executeAtEpoch, true);
     }
 
     public static StoreParticipants read(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, long minEpoch, long maxEpoch)
@@ -593,6 +606,11 @@ public class StoreParticipants
         return update(safeStore, participants, minEpoch, txnId, executeAtEpoch, executeAtEpoch, true);
     }
 
+    public static StoreParticipants execute(RangesForEpoch storeRanges, Participants<?> participants, long minEpoch, TxnId txnId, long executeAtEpoch)
+    {
+        return update(storeRanges, participants, minEpoch, txnId, executeAtEpoch, executeAtEpoch, true);
+    }
+
     public static StoreParticipants update(SafeCommandStore safeStore, Participants<?> participants, long minEpoch, TxnId txnId, long executeAtEpoch, long highEpoch)
     {
         return update(safeStore, participants, minEpoch, txnId, executeAtEpoch, highEpoch, false);
@@ -600,7 +618,11 @@ public class StoreParticipants
 
     public static StoreParticipants update(SafeCommandStore safeStore, Participants<?> participants, long minEpoch, TxnId txnId, long executeAtEpoch, long highEpoch, boolean execute)
     {
-        RangesForEpoch storeRanges = safeStore.ranges();
+        return update(safeStore.ranges(), participants, minEpoch, txnId, executeAtEpoch, highEpoch, execute);
+    }
+
+    public static StoreParticipants update(RangesForEpoch storeRanges, Participants<?> participants, long minEpoch, TxnId txnId, long executeAtEpoch, long highEpoch, boolean execute)
+    {
         Ranges ownedRanges = storeRanges.allBetween(txnId.epoch(), executeAtEpoch);
         Participants<?> owns = participants.slice(ownedRanges, Minimal);
         Ranges touchesRanges = storeRanges.extend(ownedRanges, txnId.epoch(), executeAtEpoch, minEpoch, highEpoch);
@@ -674,7 +696,8 @@ public class StoreParticipants
 
     public static long computePropagateLowEpoch(SafeCommandStore safeStore, TxnId txnId, Route<?> newRoute)
     {
-        return computeUnsyncedEpoch(safeStore, txnId.epoch(), newRoute);
+        if (txnId.is(ExclusiveSyncPoint)) return computeCoveringEpoch(safeStore, txnId.epoch(), newRoute);
+        else return computeUnsyncedEpoch(safeStore, txnId.epoch(), newRoute);
     }
 
     private static long computeUnsyncedEpoch(SafeCommandStore safeStore, long txnIdEpoch, Participants<?> participants)
