@@ -21,10 +21,11 @@ package accord.coordinate;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
-import accord.coordinate.ExecuteFlag.ExecuteFlags;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.messages.ReadData.CommitOrReadNack;
@@ -50,6 +51,7 @@ import static accord.utils.Invariants.debug;
 public abstract class Stabilise<R> implements Callback<ReadReply>
 {
     final Node node;
+    final SequentialAsyncExecutor executor;
     final Txn txn;
     final FullRoute<?> route;
     final Route<?> sendTo;
@@ -64,9 +66,10 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
     final BiConsumer<? super R, Throwable> callback;
     private boolean isDone;
 
-    public Stabilise(Node node, Topologies coordinates, Topologies allTopologies, Route<?> sendTo, FullRoute<?> route, TxnId txnId, Ballot ballot, Txn txn, Timestamp executeAt, Deps stabiliseDeps, BiConsumer<? super R, Throwable> callback)
+    public Stabilise(Node node, SequentialAsyncExecutor executor, Topologies coordinates, Topologies allTopologies, Route<?> sendTo, FullRoute<?> route, TxnId txnId, Ballot ballot, Txn txn, Timestamp executeAt, Deps stabiliseDeps, BiConsumer<? super R, Throwable> callback)
     {
         this.node = node;
+        this.executor = executor;
         this.txn = txn;
         this.sendTo = sendTo;
         this.route = route;
@@ -88,7 +91,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
             contact = contact.with(allTopologies.nodes().without(stableTracker.nodes()).without(allTopologies::isFaulty));
 
         if (contact == null) callback.accept(null, new Exhausted(txnId, route.homeKey(), null));
-        else Commit.commitMinimalNoRead(contact, node, stableTracker.topologies(), allTopologies, ballot, txnId, txn, route, executeAt, stabiliseDeps, this);
+        else Commit.commitMinimalNoRead(contact, node, executor, stableTracker.topologies(), allTopologies, ballot, txnId, txn, route, null, executeAt, stabiliseDeps, CoordinationFlags.none(), this);
     }
 
     @Override
@@ -158,7 +161,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
 
     protected void onStabilised()
     {
-        adapter().execute(node, allTopologies, route, ballot, ballot == Ballot.ZERO ? SLOW : RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
+        adapter().execute(node, executor, allTopologies, route, ballot, ballot == Ballot.ZERO ? SLOW : RECOVER, CoordinationFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
     }
 
     protected abstract CoordinationAdapter<R> adapter();

@@ -27,6 +27,7 @@ import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Await;
 import accord.messages.Await.AwaitOk;
 import accord.messages.Callback;
@@ -90,25 +91,25 @@ public class AsynchronousAwait implements Callback<AwaitOk>
 
     public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
     {
-        return awaitAny(node, topologies, txnId, contact, awaiting, true, asynchronousCallbackId, synchronousCallback);
+        return awaitAny(node, node.someSequentialExecutor(), topologies, txnId, contact, awaiting, true, asynchronousCallbackId, synchronousCallback);
     }
 
     /**
      * we require a Route to contact so we can be sure a home shard recipient invokes {@link Commands#supplementParticipants},
      * notifying the progress log of a Route to determine it is the home shard.
      */
-    public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, boolean notifyProgressLog, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
+    public static AsynchronousAwait awaitAny(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, boolean notifyProgressLog, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
     {
         Invariants.requireArgument(topologies.size() == 1);
         AwaitTracker tracker = new AwaitTracker(topologies);
         AsynchronousAwait result = new AsynchronousAwait(txnId, contact, tracker, notifyProgressLog, asynchronousCallbackId, synchronousCallback);
-        result.start(node, topologies, contact, awaiting);
+        result.start(node, executor, topologies, contact, awaiting);
         return result;
     }
 
-    private void start(Node node, Topologies topologies, Route<?> route, BlockedUntil blockedUntil)
+    private void start(Node node, SequentialAsyncExecutor executor, Topologies topologies, Route<?> route, BlockedUntil blockedUntil)
     {
-        node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, route, blockedUntil, asynchronousCallbackId, notifyProgressLog), this);
+        node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, route, blockedUntil, asynchronousCallbackId, notifyProgressLog), executor, this);
     }
 
     @Override

@@ -18,6 +18,8 @@
 
 package accord.messages;
 
+import java.util.NavigableMap;
+import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
@@ -28,18 +30,22 @@ import accord.api.LocalListeners;
 import accord.api.LocalListeners.Registered;
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.CommandStore;
+import accord.local.CommandStores;
 import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies;
@@ -53,11 +59,17 @@ import org.agrona.collections.IntHashSet;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
+import static accord.api.ProtocolModifiers.Toggles.dataStoreDetectsFutureReads;
+import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassCommandsForKey;
+import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
+import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
+import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.messages.MessageType.StandardMessage.READ_RSP;
 import static accord.messages.ReadData.CommitOrReadNack.Insufficient;
 import static accord.messages.ReadData.CommitOrReadNack.Redundant;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
@@ -77,7 +89,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public enum ReadType
     {
         readTxnData(0),
-        readDataWithoutTimestamp(1),
+        readEphemeral(1),
         waitUntilApplied(2),
         applyThenWaitUntilApplied(3),
         stableThenRead(4);
@@ -96,7 +108,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                 case 0:
                     return readTxnData;
                 case 1:
-                    return readDataWithoutTimestamp;
+                    return readEphemeral;
                 case 2:
                     return waitUntilApplied;
                 case 3:
@@ -109,7 +121,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
     }
 
-    protected static class ExecuteOn
+    public static class ExecuteOn
     {
         final SaveStatus min, max;
 
@@ -123,12 +135,16 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public final TxnId txnId;
     public final Participants<?> scope;
     public final long executeAtEpoch;
-    public final int flags;
+    public final ExecuteFlags flags;
+    protected @Nullable PartialTxn partialTxn;
+    protected @Nullable Timestamp executeAt;
+    private boolean fastExec;
+
     private transient State state = State.PENDING; // TODO (low priority, semantics): respond with the Executed result we have stored?
 
-    transient Timestamp executeAt;
     private Data data;
     private long uniqueHlc;
+    private long stamp;
     transient IntHashSet waitingOn, reading;
     transient int waitingOnCount;
     transient Ranges unavailable;
@@ -140,35 +156,49 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     protected transient Node.Id replyTo;
     protected transient ReplyContext replyContext;
 
-    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long executeAtEpoch)
+    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch)
     {
-        this(to, topologies, txnId, scope, executeAtEpoch, 0);
+        this(to, topologies, txnId, scope, txn, executeAt, executeAtEpoch, ExecuteFlags.none());
     }
 
-    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long executeAtEpoch, int flags)
+    public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
     {
         this.txnId = txnId;
         this.flags = flags;
         int startIndex = latestRelevantEpochIndex(to, topologies, scope);
         this.scope = TxnRequest.computeScope(to, topologies, scope, startIndex, Participants::slice, Participants::with);
+        this.partialTxn = txn == null ? null : txn.intersecting(scope, true);
+        this.executeAt = executeAt;
         this.executeAtEpoch = executeAtEpoch;
     }
 
-    protected ReadData(TxnId txnId, Participants<?> scope, long executeAtEpoch)
+    protected ReadData(TxnId txnId, Participants<?> scope, @Nullable PartialTxn partialTxn, @Nullable Timestamp executeAt, long executeAtEpoch)
     {
-        this(txnId, scope, executeAtEpoch, 0);
+        this(txnId, scope, partialTxn, executeAt, executeAtEpoch, ExecuteFlags.none());
     }
 
-    protected ReadData(TxnId txnId, Participants<?> scope, long executeAtEpoch, int flags)
+    protected ReadData(TxnId txnId, Participants<?> scope, @Nullable PartialTxn partialTxn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
     {
         this.txnId = txnId;
         this.scope = scope;
+        this.partialTxn = partialTxn;
+        this.executeAt = executeAt;
         this.executeAtEpoch = executeAtEpoch;
         this.flags = flags;
     }
 
     protected abstract ExecuteOn executeOn();
     abstract public ReadType kind();
+
+    public final @Nullable PartialTxn partialTxn()
+    {
+        return partialTxn;
+    }
+
+    public final @Nullable Timestamp executeAt()
+    {
+        return executeAt;
+    }
 
     @Override
     public long waitForEpoch()
@@ -197,12 +227,12 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     }
 
     // TODO (expected): register slowAt
-    public final void process(Node on, long expiresAt)
+    public void process(Node on, long expiresAt)
     {
         this.node = on;
         waitingOn = new IntHashSet();
         reading = new IntHashSet();
-        Cancellable cancel = node.mapReduceConsumeLocal(this, scope, minEpoch(), executeAtEpoch, this);
+        Cancellable cancel = submit();
         RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerWithDelay(this, expiresAt, MICROSECONDS);
         synchronized (this)
         {
@@ -221,6 +251,19 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
         if (cancel != null) cancel.cancel();
         if (timeout != null) timeout.cancel();
+    }
+
+    protected Cancellable submit()
+    {
+        stamp = node.currentStamp();
+
+        if (flags.contains(READY_TO_EXECUTE) && fastReadsMayBypassSafeStore(txnId) && partialTxn != null && executeAt != null && (txnId.is(EphemeralRead) || flags.contains(HAS_UNIQUE_HLC)))
+        {
+            fastExec = true;
+            return node.commandStores().mapReduceConsume(scope, minEpoch(), executeAtEpoch, this::applyFastRead, this, this);
+        }
+
+        return node.mapReduceConsumeLocal(this, scope, minEpoch(), executeAtEpoch, this);
     }
 
     @Override
@@ -271,7 +314,8 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     return Redundant;
 
                 case EXECUTE:
-                    listeners.put(storeId, safeStore.register(txnId, this));
+                    if (!dataStoreDetectsFutureReads())
+                        listeners.put(storeId, safeStore.register(txnId, this));
                     waitingOn.add(storeId);
                     ++waitingOnCount;
                     reading.add(storeId);
@@ -280,6 +324,38 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
         read(safeStore, safeCommand.current());
         return null;
+    }
+
+    private AsyncChain<CommitOrReadNack> applyFastRead(CommandStore unsafeStore)
+    {
+        Invariants.require(partialTxn != null);
+        Invariants.require(executeAt != null);
+
+        synchronized (this)
+        {
+            if (state != State.PENDING)
+                return null;
+
+            int storeId = unsafeStore.id();
+            CommandStores.RangesForEpoch ranges = unsafeStore.unsafeGetRangesForEpoch();
+            Ranges unavailable = unavailable(unsafeStore);
+
+            Participants<?> read = scope.slice(ranges.allAt(executeAtEpoch), Minimal)
+                                        .without(unavailable);
+            if (read.isEmpty())
+            {
+                updateUnavailable(unavailable);
+                return null;
+            }
+
+            waitingOn.add(storeId);
+            ++waitingOnCount;
+            reading.add(storeId);
+
+            return partialTxn.readDirect(unsafeStore, executeAt, read)
+                             .invoke(readCallback(unsafeStore, unavailable))
+                             .map(i -> null);
+        }
     }
 
     protected final StoreAction actionForStatus(SaveStatus status)
@@ -293,6 +369,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     @Override
     public boolean notify(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
+        int storeId = safeStore.commandStore().id();
         Command command = safeCommand.current();
 
         if (logger.isTraceEnabled())
@@ -302,7 +379,6 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         boolean execute;
         synchronized (this)
         {
-            int storeId = safeStore.commandStore().id();
             if (state != State.PENDING)
                 return false;
 
@@ -322,6 +398,10 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
                     if (waitingOn.add(storeId))
                         ++waitingOnCount;
+
+                    if (dataStoreDetectsFutureReads())
+                        listeners.remove(storeId);
+
                     execute = true;
             }
         }
@@ -330,7 +410,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         {
             logger.trace("{}: executing read", command.txnId());
             read(safeStore, command);
-            return true;
+            return !dataStoreDetectsFutureReads();
         }
         else
         {
@@ -342,6 +422,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     @Override
     public void accept(CommitOrReadNack reply, Throwable failure)
     {
+        partialTxn = null;
         // Unless failed always ack to indicate setup has completed otherwise the counter never gets to -1
         if ((reply == null || !reply.isFinal()) && failure == null)
         {
@@ -357,31 +438,38 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> execute)
     {
-        if (this.executeAt == null) this.executeAt = executeAt;
-        else if (txnId.awaitsOnlyDeps()) this.executeAt = Timestamp.max(this.executeAt, executeAt);
-        else Invariants.require(executeAt.equals(this.executeAt));
         return txn.read(safeStore, executeAt, execute);
     }
 
     static Ranges unavailable(SafeCommandStore safeStore, Command command)
     {
+        return unavailable(command.txnId(), command.executeAtIfKnown(), command.route(), safeStore.ranges(), safeStore.commandStore().unsafeGetSafeToRead());
+    }
+
+    Ranges unavailable(CommandStore unsafeStore)
+    {
+        Invariants.require(executeAt != null);
+        return unavailable(txnId, executeAt, scope, unsafeStore.unsafeGetRangesForEpoch(), unsafeStore.unsafeGetSafeToRead());
+    }
+
+    static Ranges unavailable(TxnId txnId, Timestamp executeAt, Participants<?> scope, CommandStores.RangesForEpoch ranges, NavigableMap<Timestamp, Ranges> safeToReadAt)
+    {
         // note: syncpoints and ephemeral reads simply consume the latest information (whatever it is),
         //  which is represented by the latest possible safeToRead entry (which is only updated on successful bootstrap)
-        //  We DO NOT use executesAtLeast here, which is used only to compute retryInFutureEpoch, indicating we may not
-        //  own data new enough to answer the query.
-        TxnId txnId = command.txnId();
-        Timestamp executeAt = command.executeAtIfKnown();
+        //  We DO NOT use executesAtLeast here, this is used only to compute retryInFutureEpoch which reports ranges
+        //  we aren't able to serve information newer than executesAtLeast for.
+        //  executeAtLeast can yield false answers for safeToRead even for single keys by picking a time
         if (executeAt == null)
         {
             Invariants.require(txnId.awaitsOnlyDeps());
             executeAt = txnId;
         }
         Timestamp readAt = txnId.awaitsOnlyDeps() ? Timestamp.MAX : executeAt;
-        Ranges safeToRead = safeStore.safeToReadAt(readAt);
-        Ranges reads = safeStore.ranges().allAt(executeAt);
+        Ranges safeToRead = safeToReadAt.lowerEntry(readAt).getValue();
+        Ranges reads = ranges.allAt(executeAt);
         Ranges unsafeToRead = reads.without(safeToRead);
-        if (unsafeToRead.size() > command.route().size())
-            unsafeToRead = unsafeToRead.intersecting(command.route(), Minimal);
+        if (unsafeToRead.size() > scope.size())
+            unsafeToRead = unsafeToRead.intersecting(scope, Minimal);
         return unsafeToRead;
     }
 
@@ -416,30 +504,56 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                 unavailable = unavailable.with(missing.toRanges());
         }
         executes = executes.without(unavailable);
-        if (executes.isEmpty())
-        {
-            readComplete(unsafeStore, null, unavailable);
-        }
-        else
-        {
-            Ranges finalUnavailable = unavailable;
-            beginRead(safeStore, command.executeAt(), command.partialTxn(), executes).begin((next, throwable) -> {
-                if (throwable != null)
-                {
-                    if (logger.isTraceEnabled())
-                        logger.trace("{}: read failed for {}", txnId, unsafeStore, throwable);
-                    onFailure(null, throwable);
-                }
-                else
-                {
-                    readComplete(unsafeStore, next, finalUnavailable);
-                }
-            });
-        }
+
+        Timestamp executeAt = command.executeAt();
+        if (this.executeAt == null) this.executeAt = executeAt;
+        else if (txnId.awaitsOnlyDeps()) this.executeAt = Timestamp.max(this.executeAt, executeAt);
+        else Invariants.require(executeAt.equals(this.executeAt));
+
+        if (executes.isEmpty()) readComplete(unsafeStore, null, unavailable);
+        else beginRead(safeStore, executeAt, command.partialTxn(), executes)
+             .begin(readCallback(unsafeStore, unavailable));
+    }
+
+    private BiConsumer<Data, Throwable> readCallback(CommandStore unsafeStore, @Nullable Ranges unavailable)
+    {
+        return (success, fail) -> {
+            if (fail != null)
+            {
+                if (logger.isTraceEnabled())
+                    logger.trace("{}: read failed for {}", txnId, unsafeStore, fail);
+                onFailure(null, fail);
+            }
+            else if (success == null)
+            {
+                onFailure(Redundant, null);
+            }
+            else
+            {
+                readComplete(unsafeStore, success, unavailable);
+            }
+        };
     }
 
     protected void readComplete(CommandStore commandStore, @Nullable Data result, @Nullable Ranges unavailable)
     {
+        if (stamp != node.currentStamp())
+        {
+            Ranges newUnavailable = unavailable(commandStore);
+            if (newUnavailable != null)
+            {
+                Ranges discard;
+                if (unavailable == null) unavailable = discard = newUnavailable;
+                else
+                {
+                    unavailable = unavailable.with(newUnavailable);
+                    discard = newUnavailable.without(unavailable);
+                }
+                if (result != null)
+                    result = result.without(discard);
+            }
+        }
+
         Registered cancelSelf;
         Cancellable clear;
         synchronized(this)
@@ -455,13 +569,24 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
             cancelSelf = listeners.remove(storeId);
             clear = onOneSuccessInternal(storeId, unavailable);
         }
-        cancelSelf.cancel();
+        if (cancelSelf != null)
+            cancelSelf.cancel();
         cleanup(clear);
     }
 
     protected void onOneSuccess(int storeId, @Nullable Ranges newUnavailable)
     {
         cleanup(onOneSuccessInternal(storeId, newUnavailable));
+    }
+
+    private void updateUnavailable(@Nullable Ranges newUnavailable)
+    {
+        if (newUnavailable != null && !newUnavailable.isEmpty())
+        {
+            newUnavailable = newUnavailable.intersecting(scope, Minimal);
+            if (unavailable == null) unavailable = newUnavailable;
+            else unavailable = newUnavailable.with(unavailable);
+        }
     }
 
     protected synchronized Cancellable onOneSuccessInternal(int storeId, @Nullable Ranges newUnavailable)
@@ -472,12 +597,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
             Invariants.require(removed, "%s not waiting on store %d; waitingOn=%s", txnId, storeId, waitingOn);
         }
 
-        if (newUnavailable != null && !newUnavailable.isEmpty())
-        {
-            newUnavailable = newUnavailable.intersecting(scope, Minimal);
-            if (unavailable == null) unavailable = newUnavailable;
-            else unavailable = newUnavailable.with(unavailable);
-        }
+        updateUnavailable(newUnavailable);
 
         // wait for -1 to ensure the setup phase has also completed. Setup calls ack in its callback
         // and prevents races where we respond before dispatching all the required reads (if the reads are
@@ -498,7 +618,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
             case PENDING:
                 state = State.RETURNED;
-                reply(constructReadOk(unavailable, data, uniqueHlc), null);
+                reply(unavailable, data, uniqueHlc);
                 return clearUnsafe();
         }
     }
@@ -577,13 +697,15 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     @Override
     public Unseekables<?> keys()
     {
+        if (flags.contains(READY_TO_EXECUTE) && fastReadsMayBypassCommandsForKey(txnId))
+            return RoutingKeys.EMPTY;
         return scope;
     }
 
-    protected ReadOk constructReadOk(Ranges unavailable, Data data, long uniqueHlc)
+    protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        if (data != null) data.validateReply(txnId, executeAt);
-        return new ReadOk(unavailable, data, uniqueHlc);
+        if (data != null && !data.validateReply(txnId, executeAt, fastExec)) reply(Redundant, null);
+        else reply(new ReadOk(unavailable, data, uniqueHlc), null);
     }
 
     protected void reply(ReadReply reply, Throwable fail)

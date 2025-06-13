@@ -237,6 +237,11 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         return list.size();
     }
 
+    public SortedList<K> domain()
+    {
+        return list;
+    }
+
     public K getKey(int keyIndex)
     {
         return list.get(keyIndex);
@@ -265,5 +270,27 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
     public <O> O foldlNonNullValues(BiFunction<V, O, O> foldl, O zero)
     {
         return Functions.foldlNonNull(values, foldl, zero);
+    }
+
+    public <O> O foldlNonNull(TriFunction<K, V, O, O> foldl, O zero)
+    {
+        O result = zero;
+        for (int i = 0 ; i < values.length ; ++i)
+        {
+            if (values[i] != null)
+                result = foldl.apply(list.get(i), values[i], result);
+        }
+        return result;
+    }
+
+    public <O, P1> O foldlNonNull(QuadFunction<P1, K, V, O, O> foldl, P1 p1, O zero)
+    {
+        O result = zero;
+        for (int i = 0 ; i < values.length ; ++i)
+        {
+            if (values[i] != null)
+                result = foldl.apply(p1, list.get(i), values[i], result);
+        }
+        return result;
     }
 }

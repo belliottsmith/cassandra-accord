@@ -42,6 +42,7 @@ import static accord.local.RedundantStatus.Property.NOT_OWNED;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.Property.TRUNCATE_BEFORE;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
+import static accord.primitives.Known.KnownRoute.CoveringRoute;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.Invalidated;
 import static accord.primitives.SaveStatus.TruncatedApply;
@@ -236,7 +237,7 @@ public enum Cleanup
             return NO;
 
         Invariants.require(!saveStatus.hasBeen(PreCommitted));
-        if (participants.owns().isEmpty())
+        if (participants.route() == null)
         {
             // we don't want to erase something that we only don't own because it hasn't been initialised
             if (saveStatus == Uninitialised)
@@ -248,8 +249,16 @@ public enum Cleanup
             return vestigial(txnId);
         }
 
+        boolean isCovering = saveStatus.known.route() == CoveringRoute;
+        if (isCovering && txnId.isSyncPoint() && participants.owns().isEmpty())
+        {
+            RedundantStatus redundant = redundantBefore.status(txnId, null, participants.touches());
+            if (redundant.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
+                return vestigial(txnId);
+        }
+
         RedundantStatus redundant = redundantBefore.status(txnId, null, participants.owns());
-        return cleanupUndecided(txnId, redundant);
+        return cleanupUndecided(txnId, redundant, isCovering || redundantBefore.minShardAndLocallyAppliedBefore().compareTo(txnId) > 0);
     }
 
     private static Cleanup cleanupIfUndecidedWithFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, RedundantStatus redundantStatus)
@@ -257,16 +266,17 @@ public enum Cleanup
         if (input == PARTIAL || saveStatus.hasBeen(PreCommitted))
             return NO;
 
-        return cleanupUndecided(txnId, redundantStatus);
+        return cleanupUndecided(txnId, redundantStatus, true);
     }
 
-    private static Cleanup cleanupUndecided(TxnId txnId, RedundantStatus redundantStatus)
+    private static Cleanup cleanupUndecided(TxnId txnId, RedundantStatus redundantStatus, boolean isCoveringRoute)
     {
         if (redundantStatus.any(LOCALLY_APPLIED))
             return invalidate(txnId);
 
         // TODO (desired): safe to use MAJORITY_APPLIED, LOCALLY_REDUNDANT?
-        if (redundantStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
+        // TODO (required): can we guarantee we will always eventually obtain a covering route if others are garbage collecting?
+        if (isCoveringRoute && redundantStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
             return vestigial(txnId);
 
         return NO;

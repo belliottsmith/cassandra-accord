@@ -58,17 +58,14 @@ public class StableThenRead extends ReadData
 
     public final long minEpoch;
     public final Commit.Kind kind;
-    public final Timestamp executeAt;
-    public final @Nullable PartialTxn partialTxn;
-    public final @Nullable PartialDeps partialDeps;
+    private @Nullable PartialDeps partialDeps;
     public final @Nullable FullRoute<?> route;
 
     public StableThenRead(Commit.Kind kind, Node.Id to, Topologies topologies, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps deps)
     {
-        super(to, topologies, txnId, route, executeAt.epoch());
+        super(to, topologies, txnId, route, null, executeAt, executeAt.epoch());
         this.minEpoch = topologies.oldestEpoch();
         this.kind = kind;
-        this.executeAt = executeAt;
         this.partialTxn = kind.withTxn.select(txn, scope, topologies, txnId, to);
         this.partialDeps = kind.withDeps.select(deps, scope);
         this.route = kind.withTxn.select(route);
@@ -76,11 +73,9 @@ public class StableThenRead extends ReadData
 
     protected StableThenRead(TxnId txnId, Participants<?> readScope, Commit.Kind kind, long minEpoch, Timestamp executeAt, @Nullable PartialTxn partialTxn, PartialDeps partialDeps, @Nullable FullRoute<?> fullRoute)
     {
-        super(txnId, readScope, executeAt.epoch());
+        super(txnId, readScope, partialTxn, executeAt, executeAt.epoch());
         this.minEpoch = minEpoch;
         this.kind = kind;
-        this.executeAt = executeAt;
-        this.partialTxn = partialTxn;
         this.partialDeps = partialDeps;
         this.route = fullRoute;
     }
@@ -102,9 +97,21 @@ public class StableThenRead extends ReadData
     }
 
     @Override
+    public void accept(CommitOrReadNack reply, Throwable failure)
+    {
+        super.accept(reply, failure);
+        partialDeps = null;
+    }
+
+    @Override
     public long minEpoch()
     {
         return minEpoch;
+    }
+
+    public @Nullable PartialDeps partialDeps()
+    {
+        return partialDeps;
     }
 
     @Override

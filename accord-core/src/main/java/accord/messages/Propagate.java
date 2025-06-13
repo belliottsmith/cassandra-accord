@@ -167,7 +167,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             untilEpoch = Math.max(untilEpoch, committedExecuteAt.epoch());
 
         StoreSelector selector = reportTo.refine(txnId, committedExecuteAt, route);
-        node.withEpochAtLeast(untilEpoch, propagate, () -> node.mapReduceConsumeLocal(propagate, selector, propagate));
+        node.withEpochAtLeast(untilEpoch, null, propagate, () -> node.mapReduceConsumeLocal(propagate, selector, propagate));
     }
 
     @Override

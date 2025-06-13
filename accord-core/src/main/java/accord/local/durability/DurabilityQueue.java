@@ -37,11 +37,11 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.AsyncExecutor;
 import accord.api.RoutingKey;
 import accord.coordinate.ExecuteSyncPoint.SyncPointErased;
 import accord.coordinate.Exhausted;
 import accord.coordinate.Timeout;
-import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -109,7 +109,7 @@ public class DurabilityQueue
 
     private synchronized void submit(SyncPoint<Range> syncPoint, @Nullable DurabilityRequest request, int attempt)
     {
-        AgentExecutor executor = node.commandStores().someExecutor();
+        AsyncExecutor executor = node.someExecutor();
         if (executor != null && inProgress.size() < maxConcurrency && !isInProgress(syncPoint.route))
         {
             start(syncPoint, request, attempt, executor);
@@ -240,7 +240,7 @@ public class DurabilityQueue
         }
     }
 
-    private void start(SyncPoint<Range> exclusiveSyncPoint, @Nullable DurabilityRequest request, int attempt, AgentExecutor executor)
+    private void start(SyncPoint<Range> exclusiveSyncPoint, @Nullable DurabilityRequest request, int attempt, AsyncExecutor executor)
     {
         logger.debug("{}: Awaiting durability for {}", exclusiveSyncPoint.syncId, exclusiveSyncPoint.route.toRanges());
         AsyncResult<DurabilityResult> coordinate = coordinateIncluding(node, exclusiveSyncPoint, request == null ? null : request.including, executor, attempt);
@@ -329,10 +329,7 @@ public class DurabilityQueue
 
     private synchronized void submitPending()
     {
-        AgentExecutor executor = node.commandStores().someExecutor();
-        if (executor == null)
-            return;
-
+        AsyncExecutor executor = node.someExecutor();
         List<Pending> couldNotSubmit = null;
         Pending next;
         while (null != (next = pending.poll()))

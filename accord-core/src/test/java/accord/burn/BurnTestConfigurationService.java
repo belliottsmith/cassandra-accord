@@ -27,9 +27,10 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.annotation.concurrent.GuardedBy;
 
+import accord.api.Agent;
+import accord.api.AsyncExecutor;
 import accord.api.TestableConfigurationService;
 import accord.impl.AbstractConfigurationService;
-import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.messages.Callback;
 import accord.messages.MessageType;
@@ -43,15 +44,15 @@ import accord.utils.async.AsyncResults;
 
 public class BurnTestConfigurationService extends AbstractConfigurationService.Minimal implements TestableConfigurationService
 {
-    private final AgentExecutor executor;
+    private final AsyncExecutor executor;
     private final Function<Node.Id, Node> lookup;
     private final Supplier<RandomSource> randomSupplier;
     private final TopologyUpdates topologyUpdates;
     private final Map<Long, FetchTopology> pendingEpochs = new HashMap<>();
 
-    public BurnTestConfigurationService(Node.Id node, AgentExecutor executor, Supplier<RandomSource> randomSupplier, Topology topology, Function<Node.Id, Node> lookup, TopologyUpdates topologyUpdates)
+    public BurnTestConfigurationService(Node.Id node, AsyncExecutor executor, Agent agent, Supplier<RandomSource> randomSupplier, Topology topology, Function<Node.Id, Node> lookup, TopologyUpdates topologyUpdates)
     {
-        super(node, executor.agent());
+        super(node, agent);
         this.executor = executor;
         this.randomSupplier = randomSupplier;
         this.lookup = lookup;

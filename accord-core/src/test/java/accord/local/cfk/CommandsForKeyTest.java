@@ -907,7 +907,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public AsyncChain<Data> read(Seekable key, SafeCommandStore commandStore, Timestamp executeAt, DataStore store)
+        public AsyncChain<Data> read(SafeCommandStore safeStore, Seekable key, Timestamp executeAt)
         {
             throw new UnsupportedOperationException();
         }
@@ -993,12 +993,6 @@ public class CommandsForKeyTest
         public Journal.Loader loader()
         {
             throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Agent agent()
-        {
-            return this;
         }
 
         @Override

@@ -34,7 +34,7 @@ public interface EventListener
     {
     }
 
-    default void onExecuted(Command cmd)
+    default void onPreApplied(Command cmd)
     {
     }
 

@@ -29,6 +29,7 @@ import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Assertions;
 
+import accord.api.AsyncExecutor;
 import accord.burn.TopologyUpdates;
 import accord.impl.PrefixedIntHashKey;
 import accord.impl.SizeOfIntersectionSorter;
@@ -36,7 +37,6 @@ import accord.impl.TestAgent;
 import accord.impl.TopologyFactory;
 import accord.impl.basic.RandomDelayQueue;
 import accord.impl.basic.SimulatedDelayedExecutorService;
-import accord.local.AgentExecutor;
 import accord.local.Node.Id;
 import accord.topology.Topologies;
 import accord.topology.Topology;
@@ -108,7 +108,7 @@ public abstract class TrackerReconciler<ST extends ShardTracker, T extends Abstr
 
     // TODO (testing): generalise and parameterise topology generation a bit more
     //     also, select a subset of the generated topologies to correctly simulate topology consumption logic
-    private static Stream<Topologies> topologies(RandomSource random, AgentExecutor executor)
+    private static Stream<Topologies> topologies(RandomSource random, AsyncExecutor executor)
     {
         TopologyFactory factory = new TopologyFactory(2 + random.nextInt(3), PrefixedIntHashKey.ranges(0, 4 + random.nextInt(12)));
         List<Id> nodes = cluster( 1 + random.nextInt(factory.shardRanges.length));

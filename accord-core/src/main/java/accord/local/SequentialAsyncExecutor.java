@@ -18,21 +18,11 @@
 
 package accord.local;
 
-import accord.api.Agent;
-import accord.utils.async.AsyncExecutor;
+import accord.api.AsyncExecutor;
 
-public interface AgentExecutor extends AsyncExecutor
+/**
+ * A single-threaded AsyncExecutor
+ */
+public interface SequentialAsyncExecutor extends AsyncExecutor
 {
-    Agent agent();
-
-    @Override
-    default void execute(Runnable command)
-    {
-        build(command).begin(agent());
-    }
-
-    default void maybeExecuteImmediately(Runnable command)
-    {
-        execute(command);
-    }
 }

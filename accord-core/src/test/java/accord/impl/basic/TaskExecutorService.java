@@ -28,10 +28,10 @@ import java.util.concurrent.RunnableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import accord.local.AgentExecutor;
+import accord.api.AsyncExecutor;
 import accord.utils.async.AsyncResults;
 
-public abstract class TaskExecutorService extends AbstractExecutorService implements AgentExecutor
+public abstract class TaskExecutorService extends AbstractExecutorService implements AsyncExecutor
 {
     static abstract class Task<T> extends AsyncResults.RunnableResult<T> implements Pending, RunnableFuture<T>
     {

@@ -107,9 +107,10 @@ public enum SaveStatus
     // TruncatedApplyWithOutcomeAndDeps exists to support re-populating CommandsForKey on replay with any dependencies needed for computing recovery superseding-rejects decisions
     // TODO (expected): test replay
     TruncatedApplyWithOutcome       (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         Apply,   CleaningUp),
-    TruncatedApply                  (Status.Truncated,              MaybeRoute, DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
+    TruncatedApply                  (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
     TruncatedUnapplied              (Status.Truncated,              MaybeRoute, DefinitionErased,   ExecuteAtKnown,     DepsErased,         WasApply,CleaningUp),
     // Vestigial means the command cannot be completed and is either pre-bootstrap, did not commit, or did not participate in this shard's epoch
+    // TODO (expected): should Vestigial NOT be a Truncated status? We should really only use Known or KnownMap to make decisions, so we don't interpret Truncated as implying a decision, e.g. in Invalidate (as of this commit)
     Vestigial                       (Status.Truncated,              MaybeRoute, DefinitionUnknown,  ExecuteAtUnknown,   DepsUnknown,        Unknown, CleaningUp),
     // NOTE: Erased should ONLY be adopted on a replica that knows EVERY shard has successfully applied the transaction at all healthy replicas (or else that it is durably invalidated)
     Erased                          (Status.Truncated,              MaybeRoute, DefinitionErased,   ExecuteAtErased,    DepsErased,         Outcome.Erased,CleaningUp),
@@ -424,7 +425,7 @@ public enum SaveStatus
         return a.compareTo(b) >= 0 ? av : bv;
     }
 
-    public static <T> T max(List<T> list, Function<T, SaveStatus> getStatus, Function<T, Ballot> getAcceptedOrCommittedBallot, Predicate<T> filter, boolean preferKnowledge)
+    public static <T> T max(List<T> list, Function<T, SaveStatus> getStatus, Function<T, Ballot> getAcceptedOrCommittedBallot, Predicate<T> filter)
     {
         T max = null;
         SaveStatus maxStatus = null;
@@ -460,6 +461,8 @@ public enum SaveStatus
     }
 
     // TODO (desired): this isn't a simple linear relationship - Committed has some more knowledge, but some less; PreAccepted has much less
+    //   also, Erased has more knowledge than Vestigial, but less knowledge then TruncatedX
+    //  Should probably move away from propagating SaveStatus altogether
     public boolean lowerHasMoreKnowledge(SaveStatus than)
     {
         if (this.is(Truncated) && !than.is(Status.NotDefined))

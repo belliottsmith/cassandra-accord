@@ -16,21 +16,10 @@
  * limitations under the License.
  */
 
-package accord.utils.async;
+package accord.utils;
 
-import java.util.concurrent.Callable;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
-
-public interface AsyncExecutor extends Executor
+public interface Reduce<I, O>
 {
-    default AsyncChain<?> build(Runnable task)
-    {
-        return build(Executors.callable(task));
-    }
-    default <T> AsyncChain<T> build(Runnable task, T result)
-    {
-        return build(Executors.callable(task, result));
-    }
-    <T> AsyncChain<T> build(Callable<T> task);
+    static <I, O> Reduce<I, O> toNull() { return (a, b) -> null; }
+    O reduce(I o1, I o2);
 }

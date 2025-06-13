@@ -18,8 +18,14 @@
 
 package accord.messages;
 
+import javax.annotation.Nullable;
+
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Node;
+import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
+import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
@@ -30,22 +36,32 @@ public class ReadTxnData extends ReadData
 {
     public static class SerializerSupport
     {
-        public static ReadTxnData create(TxnId txnId, Participants<?> scope, long executeAtEpoch)
+        public static ReadTxnData create(TxnId txnId, Participants<?> scope, @Nullable PartialTxn partialTxn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
         {
-            return new ReadTxnData(txnId, scope, executeAtEpoch);
+            return new ReadTxnData(txnId, scope, partialTxn, executeAt, executeAtEpoch, flags);
         }
     }
 
     private static final ExecuteOn EXECUTE_ON = new ExecuteOn(ReadyToExecute, ReadyToExecute);
 
-    public ReadTxnData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    public ReadTxnData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch)
     {
-        super(to, topologies, txnId, readScope, executeAtEpoch);
+        super(to, topologies, txnId, readScope, txn, executeAt, executeAtEpoch);
     }
 
-    public ReadTxnData(TxnId txnId, Participants<?> readScope, long executeAtEpoch)
+    public ReadTxnData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
     {
-        super(txnId, readScope, executeAtEpoch);
+        super(to, topologies, txnId, readScope, txn, executeAt, executeAtEpoch, flags);
+    }
+
+    public ReadTxnData(TxnId txnId, Participants<?> readScope, @Nullable PartialTxn partialTxn, @Nullable Timestamp executeAt, long executeAtEpoch)
+    {
+        super(txnId, readScope, partialTxn, executeAt, executeAtEpoch);
+    }
+
+    public ReadTxnData(TxnId txnId, Participants<?> readScope, @Nullable PartialTxn partialTxn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
+    {
+        super(txnId, readScope, partialTxn, executeAt, executeAtEpoch, flags);
     }
 
     @Override

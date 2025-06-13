@@ -18,6 +18,10 @@
 
 package accord.coordinate;
 
+import accord.local.Node;
+import accord.utils.SortedArrays;
+import accord.utils.SortedList;
+import accord.utils.SortedListSet;
 import accord.utils.TinyEnumSet;
 
 public enum ExecuteFlag
@@ -26,6 +30,7 @@ public enum ExecuteFlag
 
     public static final class ExecuteFlags extends TinyEnumSet<ExecuteFlag>
     {
+        private static final ExecuteFlag[] UNIVERSE = ExecuteFlag.values();
         private static final ExecuteFlags[] LOOKUP = new ExecuteFlags[1 << ExecuteFlag.values().length];
         static
         {
@@ -38,10 +43,113 @@ public enum ExecuteFlag
         public static ExecuteFlags get(ExecuteFlag a) { return LOOKUP[encode(a)]; }
         public static ExecuteFlags get(ExecuteFlag a, ExecuteFlag b) { return LOOKUP[encode(a) | encode(b)]; }
         public ExecuteFlags with(ExecuteFlag a) { return LOOKUP[bitset | encode(a)]; }
+        public ExecuteFlags without(ExecuteFlag a) { return LOOKUP[bitset & ~encode(a)]; }
         public ExecuteFlags or(ExecuteFlags that) { return LOOKUP[this.bitset | that.bitset]; }
         public ExecuteFlags and(ExecuteFlags that) { return LOOKUP[this.bitset & that.bitset]; }
         public boolean isEmpty() { return bitset == 0; }
         public int bits() { return bitset; }
         private ExecuteFlags(int bits) { super(bits); }
+
+        @Override
+        public String toString()
+        {
+            return toString(UNIVERSE);
+        }
+
+        public static void collect(CoordinationFlags into, Node.Id id, ExecuteFlags add, Object expectIfReadyToExecute, Object actualReadyToExecute)
+        {
+            if (add.contains(READY_TO_EXECUTE) && !expectIfReadyToExecute.equals(actualReadyToExecute))
+                add = add.without(READY_TO_EXECUTE);
+            into.add(id, add);
+        }
+    }
+
+    public interface CoordinationFlags
+    {
+        boolean isReadyToExecute(Node.Id node);
+        boolean hasUniqueHlc();
+        void add(Node.Id node, ExecuteFlags flags);
+
+        default ExecuteFlags get(Node.Id node)
+        {
+            ExecuteFlags result = ExecuteFlags.none();
+            if (hasUniqueHlc()) result = result.with(HAS_UNIQUE_HLC);
+            if (isReadyToExecute(node)) result = result.with(READY_TO_EXECUTE);
+            return result;
+        }
+
+        static CoordinationFlags none()
+        {
+            return ALWAYS_EMPTY;
+        }
+
+        static CoordinationFlags empty(SortedList<Node.Id> list)
+        {
+            return list.size() <= 64 ? new SmallCoordinationFlags(list) : new LargeCoordinationFlags(list);
+        }
+    }
+
+    private static final SmallCoordinationFlags ALWAYS_EMPTY = new SmallCoordinationFlags(new SortedArrays.SortedArrayList<>(new Node.Id[0]));
+    static
+    {
+        ALWAYS_EMPTY.hasUniqueHlc = false;
+    }
+
+    static class SmallCoordinationFlags extends SortedListSet.SmallSortedListSet<Node.Id> implements CoordinationFlags
+    {
+        boolean hasUniqueHlc = true;
+        private SmallCoordinationFlags(SortedList<Node.Id> list)
+        {
+            super(list);
+        }
+
+        @Override
+        public boolean isReadyToExecute(Node.Id node)
+        {
+            return contains(node);
+        }
+
+        @Override
+        public boolean hasUniqueHlc()
+        {
+            return hasUniqueHlc;
+        }
+
+        @Override
+        public void add(Node.Id node, ExecuteFlags flags)
+        {
+            hasUniqueHlc &= flags.contains(HAS_UNIQUE_HLC);
+            if (flags.contains(READY_TO_EXECUTE))
+                add(node);
+        }
+    }
+
+    static class LargeCoordinationFlags extends SortedListSet.LargeSortedListSet<Node.Id> implements CoordinationFlags
+    {
+        boolean hasUniqueHlc = true;
+        private LargeCoordinationFlags(SortedList<Node.Id> list)
+        {
+            super(list);
+        }
+
+        @Override
+        public boolean isReadyToExecute(Node.Id node)
+        {
+            return contains(node);
+        }
+
+        @Override
+        public boolean hasUniqueHlc()
+        {
+            return hasUniqueHlc;
+        }
+
+        @Override
+        public void add(Node.Id node, ExecuteFlags flags)
+        {
+            hasUniqueHlc &= flags.contains(HAS_UNIQUE_HLC);
+            if (flags.contains(READY_TO_EXECUTE))
+                add(node);
+        }
     }
 }

@@ -30,11 +30,12 @@ import javax.annotation.Nullable;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Result;
 import accord.api.RoutingKey;
-import accord.coordinate.ExecuteFlag.ExecuteFlags;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.RecoveryTracker;
 import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Accept;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -105,6 +106,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private final CoordinationAdapter<Result> adapter;
     private final Node node;
+    private final SequentialAsyncExecutor executor;
     private final Ballot ballot;
     private final TxnId txnId;
     private final Txn txn;
@@ -118,13 +120,14 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     private final RecoveryTracker tracker;
     private boolean isBallotPromised;
 
-    private Recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route,
+    private Recover(Node node, SequentialAsyncExecutor executor, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route,
                     @Nullable Timestamp committedExecuteAt, LatentStoreSelector reportTo,
                     BiConsumer<Outcome, Throwable> callback)
     {
         Invariants.require(txnId.isVisible());
         this.adapter = node.coordinationAdapter(txnId, Recovery);
         this.node = node;
+        this.executor = executor;
         this.ballot = ballot;
         this.txnId = txnId;
         this.txn = txn;
@@ -198,14 +201,14 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private static Recover recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
-        Recover recover = new Recover(node, topologies, ballot, txnId, txn, route, executeAt, reportTo, callback);
+        Recover recover = new Recover(node, node.someSequentialExecutor(), topologies, ballot, txnId, txn, route, executeAt, reportTo, callback);
         recover.start(topologies.nodes());
         return recover;
     }
 
     void start(Collection<Id> nodes)
     {
-        node.send(nodes, to -> new BeginRecovery(to, tracker.topologies(), txnId, committedExecuteAt, txn, route, ballot), this);
+        node.send(nodes, to -> new BeginRecovery(to, tracker.topologies(), txnId, committedExecuteAt, txn, route, ballot), executor, this);
     }
 
     @Override
@@ -297,7 +300,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     case PreApplied:
                     {
                         withStableDeps(merge, executeAt, (i, t) -> node.agent().acceptAndWrap(i, t), stableDeps -> {
-                            adapter.persist(node, tracker.topologies(), route, ballot, txnId, txn, executeAt, stableDeps, acceptOrCommitNotTruncated.writes, acceptOrCommitNotTruncated.result, (i, t) -> node.agent().acceptAndWrap(i, t));
+                            adapter.persist(node, executor, tracker.topologies(), route, ballot, CoordinationFlags.none(), txnId, txn, executeAt, stableDeps, acceptOrCommitNotTruncated.writes, acceptOrCommitNotTruncated.result, (i, t) -> node.agent().acceptAndWrap(i, t));
                         });
                         accept(acceptOrCommitNotTruncated.result, null);
                         return;
@@ -306,7 +309,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     case Stable:
                     {
                         withStableDeps(merge, executeAt, this, stableDeps -> {
-                            adapter.execute(node, tracker.topologies(), route, ballot, RECOVER, ExecuteFlags.none(), txnId, txn, executeAt, stableDeps, stableDeps, this);
+                            adapter.execute(node, executor, tracker.topologies(), route, ballot, RECOVER, CoordinationFlags.none(), txnId, txn, executeAt, stableDeps, stableDeps, this);
                         });
                         return;
                     }
@@ -315,7 +318,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                     case Committed:
                     {
                         withCommittedDeps(merge, executeAt, this, committedDeps -> {
-                            adapter.stabilise(node, tracker.topologies(), route, ballot, txnId, txn, executeAt, committedDeps, this);
+                            adapter.stabilise(node, executor, tracker.topologies(), route, ballot, txnId, txn, executeAt, committedDeps, this);
                         });
                         return;
                     }
@@ -495,18 +498,18 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void withCommittedDeps(LatestDeps.Merge merge, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        LatestDeps.withCommitted(adapter, node, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
+        LatestDeps.withCommitted(adapter, node, executor, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
     }
 
     private void withStableDeps(LatestDeps.Merge merge, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        LatestDeps.withStable(adapter, node, merge, Deps.NONE, route, null, null, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
+        LatestDeps.withStable(adapter, node, executor, merge, Deps.NONE, route, null, null, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
     }
 
     private void invalidate(SortedListMap<Id, RecoverOk> recoverOks)
     {
         Timestamp invalidateUntil = invalidateUntil(recoverOks);
-        proposeInvalidate(node, ballot, txnId, route.homeKey(), (success, fail) -> {
+        proposeInvalidate(node, executor, ballot, txnId, route.homeKey(), (success, fail) -> {
             if (fail != null) accept(null, fail);
             else commitInvalidate(invalidateUntil);
         });
@@ -523,7 +526,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void commitInvalidate(Timestamp invalidateUntil)
     {
-        node.withEpochAtLeast(invalidateUntil.epoch(), node.agent(), () -> {
+        node.withEpochAtLeast(invalidateUntil.epoch(), executor, node.agent(), () -> {
             Commit.Invalidate.commitInvalidate(node, txnId, route, invalidateUntil);
         });
         isDone = true;
@@ -538,8 +541,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     private void propose(Accept.Kind kind, Timestamp executeAt, Deps deps)
     {
-        node.withEpochAtLeast(executeAt.epoch(), this, () -> {
-            adapter.propose(node, null, route, kind, ballot, txnId, txn, executeAt, deps, this);
+        node.withEpochAtLeast(executeAt.epoch(), executor, this, () -> {
+            adapter.propose(node, executor, null, route, kind, ballot, txnId, txn, executeAt, deps, this);
         });
     }
 
@@ -554,7 +557,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
     AsyncResult<InferredFastPath> awaitEarlier(Node node, Deps waitOn, BlockedUntil blockedUntil)
     {
         long requireEpoch = waitOn.maxTxnId(txnId).epoch();
-        return node.withEpochAtLeast(requireEpoch, () -> {
+        return node.withEpochAtLeast(requireEpoch, executor, () -> {
             TxnId recoverId = this.txnId;
             List<AsyncResult<InferredFastPath>> requests = new ArrayList<>();
             for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
@@ -565,8 +568,8 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
                 Topologies topologies;
                 if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
-                else topologies = node.topology().forEpoch(participants, awaitId.epoch(), SHARE);
-                requests.add(SynchronousRecoverAwait.awaitAny(node, topologies, awaitId, blockedUntil, true, participants, recoverId));
+                else topologies = node.topology().forEpochAtLeast(participants, awaitId.epoch(), SHARE);
+                requests.add(SynchronousRecoverAwait.awaitAny(node, executor, topologies, awaitId, blockedUntil, true, participants, recoverId));
             }
             if (requests.isEmpty())
                 return AsyncResults.success(InferredFastPath.Accept);
@@ -618,7 +621,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             return AsyncResults.success(InferredFastPath.Accept);
 
         long requireEpoch = waitOn.maxTxnId(txnId).epoch();
-        return node.withEpochExact(requireEpoch, () -> {
+        return node.withEpochExact(requireEpoch, executor, () -> {
             TxnId recoverId = this.txnId;
             List<AsyncResult<InferredFastPath>> requests = new ArrayList<>();
             for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
@@ -634,7 +637,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 Topologies topologies;
                 if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
                 else topologies = node.topology().forEpoch(participants, awaitId.epoch(), SHARE);
-                requests.add(SynchronousRecoverAwait.awaitAny(node, topologies, awaitId, blockedUntil, true, participants, recoverId));
+                requests.add(SynchronousRecoverAwait.awaitAny(node, executor, topologies, awaitId, blockedUntil, true, participants, recoverId));
             }
             if (requests.isEmpty())
                 return AsyncResults.success(InferredFastPath.Accept);

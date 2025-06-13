@@ -323,8 +323,7 @@ public class Known
             case Unknown:
                 return false;
             case Apply:
-                // since Apply is universal, we can
-                return deps() == DepsErased;
+                return deps() == DepsErased || definition() == DefinitionErased;
             case Erased:
             case WasApply:
                 return true;

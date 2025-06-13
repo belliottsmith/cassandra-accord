@@ -16,33 +16,12 @@
  * limitations under the License.
  */
 
-package accord.utils;
+package accord.api;
 
-import java.util.function.BiFunction;
-import java.util.function.Function;
+import accord.local.SequentialAsyncExecutor;
 
-public interface MapReduce<I, O> extends Function<I, O>, Reduce<O, O>
+public interface AsyncExecutorFactory
 {
-    // TODO (desired, safety): ensure mutual exclusivity when calling each of these methods
-    @Override
-    O apply(I in);
-    O reduce(O o1, O o2);
-
-    static <I, O> MapReduce<I, O> of(Function<I, O> map, BiFunction<O, O, O> reduce)
-    {
-        return new MapReduce<I, O>()
-        {
-            @Override
-            public O apply(I in)
-            {
-                return map.apply(in);
-            }
-
-            @Override
-            public O reduce(O o1, O o2)
-            {
-                return reduce.apply(o1, o2);
-            }
-        };
-    }
+    AsyncExecutor someExecutor();
+    SequentialAsyncExecutor someSequentialExecutor();
 }

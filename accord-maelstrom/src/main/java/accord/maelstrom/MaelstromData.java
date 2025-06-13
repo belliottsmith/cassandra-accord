@@ -22,6 +22,7 @@ import java.util.TreeMap;
 
 import accord.api.Data;
 import accord.api.Key;
+import accord.primitives.Ranges;
 
 public class MaelstromData extends TreeMap<Key, Value> implements Data
 {
@@ -31,5 +32,16 @@ public class MaelstromData extends TreeMap<Key, Value> implements Data
         if (data != null)
             this.putAll(((MaelstromData)data));
         return this;
+    }
+
+    @Override
+    public Data without(Ranges ranges)
+    {
+        MaelstromData result = new MaelstromData();
+        forEach((key, value) -> {
+            if (!ranges.contains(key))
+                result.put(key, value);
+        });
+        return result;
     }
 }

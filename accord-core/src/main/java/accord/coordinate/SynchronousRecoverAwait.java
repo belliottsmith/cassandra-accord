@@ -24,6 +24,7 @@ import accord.api.ProgressLog.BlockedUntil;
 import accord.coordinate.Recover.InferredFastPath;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.RecoverAwait;
 import accord.messages.RecoverAwait.RecoverAwaitOk;
 import accord.primitives.Participants;
@@ -54,9 +55,9 @@ public class SynchronousRecoverAwait extends ReadCoordinator<RecoverAwaitOk>
 
     private InferredFastPath outcome = Unknown;
     private Participants<?> waitingOn;
-    public SynchronousRecoverAwait(Node node, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, boolean notifyProgressLog, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
+    public SynchronousRecoverAwait(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, boolean notifyProgressLog, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
     {
-        super(node, topologies, txnId);
+        super(node, executor, topologies, txnId);
         this.participants = participants;
         this.blockedUntil = blockedUntil;
         this.notifyProgressLog = notifyProgressLog;
@@ -65,17 +66,17 @@ public class SynchronousRecoverAwait extends ReadCoordinator<RecoverAwaitOk>
         this.waitingOn = participants;
     }
 
-    public static SynchronousRecoverAwait awaitAny(Node node, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
+    public static SynchronousRecoverAwait awaitAny(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
     {
-        SynchronousRecoverAwait result = new SynchronousRecoverAwait(node, topologies, txnId, participants, blockedUntil, notifyProgressLog, recoverId, callback);
+        SynchronousRecoverAwait result = new SynchronousRecoverAwait(node, executor, topologies, txnId, participants, blockedUntil, notifyProgressLog, recoverId, callback);
         result.start();
         return result;
     }
 
-    public static AsyncResult<InferredFastPath> awaitAny(Node node, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId)
+    public static AsyncResult<InferredFastPath> awaitAny(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId)
     {
         AsyncResult.Settable<InferredFastPath> result = AsyncResults.settable();
-        awaitAny(node, topologies, txnId, blockedUntil, notifyProgressLog, participants, recoverId, result.settingCallback());
+        awaitAny(node, executor, topologies, txnId, blockedUntil, notifyProgressLog, participants, recoverId, result.settingCallback());
         return result;
     }
 
@@ -86,7 +87,7 @@ public class SynchronousRecoverAwait extends ReadCoordinator<RecoverAwaitOk>
         {
             default: throw new UnhandledEnum(reply);
             case Unknown:
-                return Action.TryAlternative;
+                return Action.Reject;
 
             case Reject:
                 outcome = Reject;
@@ -116,7 +117,7 @@ public class SynchronousRecoverAwait extends ReadCoordinator<RecoverAwaitOk>
     @Override
     protected void contact(Id to)
     {
-        node.send(to, new RecoverAwait(to, topologies, txnId, participants, blockedUntil, notifyProgressLog, recoverId), this);
+        node.send(to, new RecoverAwait(to, topologies, txnId, participants, blockedUntil, notifyProgressLog, recoverId), executor, this);
     }
 }
 

@@ -32,6 +32,8 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 
+import static accord.local.StoreParticipants.Filter.LOAD;
+
 public abstract class SafeCommand
 {
     private final TxnId txnId;
@@ -94,6 +96,7 @@ public abstract class SafeCommand
         if (prev.participants() == participants)
             return prev;
 
+        participants = participants.filter(LOAD, safeStore, prev.txnId(), prev.executeAtIfKnown());
         Command update = incidentalUpdate(prev.updateParticipants(participants));
         safeStore.progressLog().update(safeStore, txnId, prev, update, false);
         return update;
@@ -163,6 +166,11 @@ public abstract class SafeCommand
         return update(safeStore, Command.applying(current().asExecuted()));
     }
 
+    public Command.Executed applying(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    {
+        return update(safeStore, Command.applying(current(), participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
+    }
+
     public Command.Executed applied(SafeCommandStore safeStore)
     {
         return update(safeStore, Command.applied(current().asExecuted()));
@@ -171,6 +179,11 @@ public abstract class SafeCommand
     public Command.Executed applied(SafeCommandStore safeStore, boolean forceUpdate)
     {
         return update(safeStore, Command.applied(current().asExecuted()), forceUpdate);
+    }
+
+    public Command.Executed applied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    {
+        return update(safeStore, Command.applied(current(), participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
     }
 
     public Command.NotDefined uninitialised()

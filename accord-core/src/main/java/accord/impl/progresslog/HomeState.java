@@ -28,7 +28,6 @@ import accord.local.CommandStores;
 import accord.local.CommandStores.IncludingSpecificStoreSelector;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.Status;
 import accord.primitives.ProgressToken;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -138,13 +137,7 @@ abstract class HomeState extends WaitingState
     {
         Invariants.require(!isHomeDoneOrUninitialised());
         Command command = safeCommand.current();
-        if (command.hasBeen(Status.Truncated))
-        {
-            // TODO (required): validate this better
-            setHomeDone(instance);
-            return;
-        }
-        Invariants.require(!command.hasBeen(Status.Truncated), "Command %s is truncated", command);
+        // note: we may truncate locally based on shard-specific criteria, but this doesn't mean we're globally persisted
 
         Invariants.require(command.durability() != null);
         // TODO (expected): when invalidated, safer to maintain HomeState until known to be globally invalidated
@@ -167,11 +160,6 @@ abstract class HomeState extends WaitingState
             return;
 
         Command command = safeCommand.current();
-        if (command.is(Status.Truncated))
-        {
-            state.setHomeDone(instance);
-            return;
-        }
 
         CoordinatePhase status = state.phase();
         if (status.isAtMostReadyToExecute() && state.homeProgress() == Querying)

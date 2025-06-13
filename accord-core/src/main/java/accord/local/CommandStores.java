@@ -40,6 +40,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
+import accord.api.AsyncExecutorFactory;
+import accord.api.AsyncExecutor;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.DataStore;
 import accord.api.Journal;
@@ -65,8 +67,10 @@ import accord.utils.Invariants;
 import accord.utils.MapReduce;
 import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
+import accord.utils.Reduce;
 import accord.utils.SearchableRangeList;
 import accord.utils.SimpleBitSet;
+import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -85,7 +89,7 @@ import static java.util.stream.Collectors.toList;
 /**
  * Manages the single threaded metadata shards
  */
-public abstract class CommandStores
+public abstract class CommandStores implements AsyncExecutorFactory
 {
     @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(CommandStores.class);
@@ -146,7 +150,7 @@ public abstract class CommandStores
         }
     }
 
-
+    // TODO (required): as we get more tables this will become expensive to allocate; we need to index first by prefix
     public static class StoreFinder extends SimpleBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
     {
         final int[] indexMap;
@@ -244,7 +248,7 @@ public abstract class CommandStores
 
     public interface Factory
     {
-        CommandStores create(NodeCommandStoreService time,
+        CommandStores create(NodeCommandStoreService node,
                              Agent agent,
                              DataStore store,
                              RandomSource random,
@@ -256,7 +260,7 @@ public abstract class CommandStores
 
     private static class StoreSupplier
     {
-        private final NodeCommandStoreService time;
+        private final NodeCommandStoreService node;
         private final Agent agent;
         private final DataStore store;
         private final ProgressLog.Factory progressLogFactory;
@@ -265,9 +269,9 @@ public abstract class CommandStores
         private final RandomSource random;
         private final Journal journal;
 
-        StoreSupplier(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, CommandStore.Factory shardFactory, Journal journal)
+        StoreSupplier(NodeCommandStoreService node, Agent agent, DataStore store, RandomSource random, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, CommandStore.Factory shardFactory, Journal journal)
         {
-            this.time = time;
+            this.node = node;
             this.agent = agent;
             this.store = store;
             this.random = random;
@@ -279,7 +283,7 @@ public abstract class CommandStores
 
         CommandStore create(int id, EpochUpdateHolder rangesForEpoch)
         {
-            return shardFactory.create(id, time, agent, this.store, progressLogFactory, listenersFactory, rangesForEpoch, journal);
+            return shardFactory.create(id, node, agent, this.store, progressLogFactory, listenersFactory, rangesForEpoch, journal);
         }
     }
 
@@ -307,6 +311,12 @@ public abstract class CommandStores
         public RangesForEpoch ranges()
         {
             return ranges;
+        }
+
+        boolean filter(long minEpoch, long maxEpoch, Unseekables<?> unseekables)
+        {
+            Ranges shardRanges = ranges.allBetween(minEpoch, maxEpoch);
+            return shardRanges != ranges.all() && !shardRanges.intersects(unseekables);
         }
 
         public String toString()
@@ -697,7 +707,7 @@ public abstract class CommandStores
         if (epoch <= prev.global.epoch())
             return new TopologyUpdate(prev, () -> done(epoch));
 
-        Topology newLocalTopology = newTopology.forNode(supplier.time.id()).trim();
+        Topology newLocalTopology = newTopology.forNode(supplier.node.id()).trim();
         Ranges addedGlobal = newTopology.ranges().without(prev.global.ranges());
         node.addNewRangesToDurableBefore(addedGlobal, epoch);
 
@@ -758,10 +768,10 @@ public abstract class CommandStores
         Supplier<EpochReady> bootstrap = bootstrapUpdates.isEmpty() ? () -> done(epoch) : () -> {
             List<EpochReady> list = bootstrapUpdates.stream().map(Supplier::get).collect(toList());
             return new EpochReady(epoch,
-                AsyncChains.reduce(list.stream().map(b -> b.metadata).collect(toList()), (a, b) -> null).beginAsResult(),
-                AsyncChains.reduce(list.stream().map(b -> b.coordinate).collect(toList()), (a, b) -> null).beginAsResult(),
-                AsyncChains.reduce(list.stream().map(b -> b.data).collect(toList()), (a, b) -> null).beginAsResult(),
-                AsyncChains.reduce(list.stream().map(b -> b.reads).collect(toList()), (a, b) -> null).beginAsResult()
+                AsyncChains.reduce(list.stream().map(b -> b.metadata).collect(toList()), Reduce.toNull()).beginAsResult(),
+                AsyncChains.reduce(list.stream().map(b -> b.coordinate).collect(toList()), Reduce.toNull()).beginAsResult(),
+                AsyncChains.reduce(list.stream().map(b -> b.data).collect(toList()), Reduce.toNull()).beginAsResult(),
+                AsyncChains.reduce(list.stream().map(b -> b.reads).collect(toList()), Reduce.toNull()).beginAsResult()
             );
         };
         return new TopologyUpdate(new Snapshot(result.toArray(new ShardHolder[0]), newLocalTopology, newTopology), bootstrap);
@@ -809,7 +819,7 @@ public abstract class CommandStores
         Snapshot snapshot = current;
         for (ShardHolder shard : snapshot.shards)
             list.add(shard.store.build(empty(), forEach));
-        return AsyncChains.reduce(list, (a, b) -> null);
+        return AsyncChains.reduce(list, Reduce.toNull());
     }
 
     public void forEachCommandStore(Consumer<CommandStore> forEach)
@@ -913,25 +923,70 @@ public abstract class CommandStores
         return reduced.begin(mapReduceConsume);
     }
 
-    // TODO (required): as we get more tables this will become expensive to allocate; we need to index first by prefix
     public <O> AsyncChain<O> mapReduce(PreLoadContext context, Unseekables<?> unseekables, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
-        return mapReduce(context, StoreFinder.selector(unseekables, minEpoch, maxEpoch), mapReduce);
+        // TODO (desired): we shouldn't need to allocate a new lambda here
+        return mapReduce(CommandStore::build, context, mapReduce, mapReduce, unseekables, minEpoch, maxEpoch);
+    }
+
+    public <O> Cancellable mapReduceConsume(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<? super O, ? extends O> reduce, BiConsumer<? super O, Throwable> consume)
+    {
+        AsyncChain<O> reduced = mapReduce(unseekables, minEpoch, maxEpoch, map, reduce);
+        return reduced.begin(consume);
+    }
+
+    public <O> AsyncChain<O> mapReduce(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<? super O, ? extends O> reducer)
+    {
+        return mapReduce((commandStore, i, f) -> f.apply(commandStore), null, map, reducer, unseekables, minEpoch, maxEpoch);
+    }
+
+    public <O, P1, P2> AsyncChain<O> mapReduce(TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<? super O, ? extends O> reducer, Unseekables<?> unseekables, long minEpoch, long maxEpoch)
+    {
+        return mapReduce(StoreFinder.selector(unseekables, minEpoch, maxEpoch), applyMap, p1, p2, reducer);
     }
 
     public <O> AsyncChain<O> mapReduce(PreLoadContext context, StoreSelector selector, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
-        AsyncChain<O> chain = null;
-        BiFunction<O, O, O> reducer = mapReduce::reduce;
+        return mapReduce(selector, CommandStore::build, context, mapReduce, mapReduce);
+    }
+
+    public <O, P1, P2> AsyncChain<O> mapReduce(StoreSelector selector, TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<? super O, ? extends O> reducer)
+    {
         Snapshot snapshot = current;
         Iterator<CommandStore> stores = selector.select(snapshot);
+        AsyncChain<O> chain = null;
         while (stores.hasNext())
         {
-            AsyncChain<O> next = stores.next().build(context, mapReduce);
-            chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
+            AsyncChain<O> next = applyMap.apply(stores.next(), p1, p2);
+            if (next != null)
+                chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
     }
+
+    protected <O> AsyncChain<O> mapReduce(PreLoadContext context, IntStream commandStoreIds, MapReduce<? super SafeCommandStore, O> mapReduce)
+    {
+        return mapReduce(context, snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
+    }
+
+    public <O> Cancellable mapReduceConsume(PreLoadContext context, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    {
+        AsyncChain<O> reduced = mapReduce(context, mapReduceConsume);
+        return reduced.begin(mapReduceConsume);
+    }
+
+    protected <O> AsyncChain<O> mapReduce(PreLoadContext context, MapReduce<? super SafeCommandStore, O> mapReduce)
+    {
+        AsyncChain<O> chain = null;
+        for (ShardHolder shardHolder : current.shards)
+        {
+            CommandStore commandStore = shardHolder.store;
+            AsyncChain<O> next = commandStore.build(context, mapReduce);
+            chain = chain != null ? AsyncChains.reduce(chain, next, mapReduce) : next;
+        }
+        return chain == null ? AsyncChains.success(null) : chain;
+    }
+
 
     public <O> AsyncChain<List<O>> map(Function<? super SafeCommandStore, O> mapper)
     {
@@ -949,29 +1004,22 @@ public abstract class CommandStores
         return AsyncChains.allOf(results);
     }
 
-    protected <O> AsyncChain<O> mapReduce(PreLoadContext context, IntStream commandStoreIds, MapReduce<? super SafeCommandStore, O> mapReduce)
-    {
-        return mapReduce(context, snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
-    }
-
-    public <O> Cancellable mapReduceConsume(PreLoadContext context, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
-    {
-        AsyncChain<O> reduced = mapReduce(context, mapReduceConsume);
-        return reduced.begin(mapReduceConsume);
-    }
-
-    protected <O> AsyncChain<O> mapReduce(PreLoadContext context, MapReduce<? super SafeCommandStore, O> mapReduce)
+    protected <O> AsyncChain<List<O>> map(PreLoadContext context, IntStream commandStoreIds, Function<? super SafeCommandStore, O> map)
     {
         // TODO (low priority, efficiency): avoid using an array, or use a scratch buffer
-        AsyncChain<O> chain = null;
-        BiFunction<O, O, O> reducer = mapReduce::reduce;
-        for (ShardHolder shardHolder : current.shards)
+        int[] ids = commandStoreIds.toArray();
+        if (ids.length == 1)
+            return forId(ids[0]).build(context, map).map(Collections::singletonList);
+
+        List<AsyncChain<O>> list = new ArrayList<>(ids.length);
+        for (int id : ids)
         {
-            CommandStore commandStore = shardHolder.store;
-            AsyncChain<O> next = commandStore.build(context, mapReduce);
-            chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
+            CommandStore commandStore = forId(id);
+            AsyncChain<O> next = commandStore.build(context, map);
+            list.add(next);
         }
-        return chain == null ? AsyncChains.success(null) : chain;
+
+        return AsyncChains.allOf(list);
     }
 
     /**
@@ -1022,18 +1070,17 @@ public abstract class CommandStores
             shard.store.shutdown();
     }
 
-    public CommandStore select(RoutingKey key)
+
+    @Override
+    public AsyncExecutor someExecutor()
     {
-        return select(RoutingKeys.of(key));
+        return someSequentialExecutor();
     }
 
-    public CommandStore select(Participants<?> participants)
+    @Override
+    public SequentialAsyncExecutor someSequentialExecutor()
     {
-        Snapshot snapshot = current;
-        StoreFinder stores = StoreFinder.find(snapshot, participants);
-        int i = stores.firstSetBit();
-        if (i < 0) return any();
-        return snapshot.shards[i].store;
+        return any();
     }
 
     @VisibleForTesting
@@ -1041,18 +1088,6 @@ public abstract class CommandStores
     {
         ShardHolder[] shards = current.shards;
         if (shards.length == 0) throw illegalState("Unable to get CommandStore; non defined");
-        return shards[supplier.random.nextInt(shards.length)].store;
-    }
-
-    public @Nullable AgentExecutor someExecutor()
-    {
-        CommandStore inStore = CommandStore.maybeCurrent();
-        if (inStore != null)
-            return inStore;
-
-        ShardHolder[] shards = current.shards;
-        if (shards.length == 0)
-            return null;
         return shards[supplier.random.nextInt(shards.length)].store;
     }
 

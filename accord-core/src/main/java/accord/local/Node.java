@@ -24,13 +24,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -39,6 +42,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
+import accord.api.AsyncExecutor;
 import accord.api.ConfigurationService;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.DataStore;
@@ -87,12 +91,11 @@ import accord.utils.MapReduceConsume;
 import accord.utils.PersistentField;
 import accord.utils.PersistentField.Persister;
 import accord.utils.RandomSource;
+import accord.utils.Reduce;
 import accord.utils.SortedList;
 import accord.utils.SortedListMap;
-import accord.utils.WrappableException;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncExecutor;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
@@ -103,11 +106,11 @@ import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
 import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
+import static accord.primitives.Txn.Kind.Read;
+import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.Any;
 import static accord.primitives.TxnId.Cardinality.cardinality;
 import static accord.primitives.TxnId.FastPath.Unoptimised;
-import static accord.utils.Invariants.illegalState;
-import static java.lang.String.format;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -186,6 +189,14 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private DurableBefore minDurableBefore = DurableBefore.EMPTY;
     private final ReentrantLock durableBeforeLock = new ReentrantLock();
     private final PersistentField<DurableBefore, DurableBefore> persistDurableBefore;
+
+    /**
+     * Used to guard some operations that should normally operate on consistent information, but in rare cases may need to repeat work.
+     * For simplicity we have a global stamp counter for this.
+     * At present, only used for managing unavailable() computations.
+     */
+    private volatile long stamp;
+    private static final AtomicLongFieldUpdater<Node> stampUpdater = AtomicLongFieldUpdater.newUpdater(Node.class, "stamp");
 
     public Node(Id id, MessageSink messageSink,
                 ConfigurationService configService, TimeService time, UniqueTimeService uniqueTime,
@@ -323,7 +334,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public AsyncResult<?> markDurable(DurableBefore addDurableBefore)
     {
-        return withEpochExact(addDurableBefore.maxEpoch(), () -> persistDurableBefore.mergeAndUpdate(DurableBefore.merge(durableBefore, addDurableBefore)))
+        return withEpochExact(addDurableBefore.maxEpoch(), (Executor)null, () -> persistDurableBefore.mergeAndUpdate(DurableBefore.merge(durableBefore, addDurableBefore)))
                .beginAsResult();
     }
 
@@ -388,15 +399,15 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     // TODO (required): audit use of withEpochAtLeast vs withEpochExact
     // TODO (required): audit error handling, as the refactor to provide epoch timeouts appears to have broken a number of coordination
     // TODO (expected): provide a deadline
-    public void withEpochAtLeast(EpochSupplier epochSupplier, BiConsumer<Void, Throwable> callback)
+    public void withEpochAtLeast(EpochSupplier epochSupplier, @Nullable Executor executor, BiConsumer<Void, Throwable> callback)
     {
         if (epochSupplier == null)
             callback.accept(null, null);
         else
-            withEpochAtLeast(epochSupplier.epoch(), callback);
+            withEpochAtLeast(epochSupplier.epoch(), executor, callback);
     }
 
-    public void withEpochAtLeast(long epoch, BiConsumer<Void, Throwable> callback)
+    public void withEpochAtLeast(long epoch, @Nullable Executor ifAsync, BiConsumer<Void, Throwable> callback)
     {
         if (topology.hasAtLeastEpoch(epoch))
         {
@@ -404,12 +415,12 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            topology.awaitEpoch(epoch).begin(callback);
+            topology.awaitEpoch(epoch, ifAsync).begin(callback);
             configService.fetchTopologyForEpoch(epoch);
         }
     }
 
-    public void withEpochAtLeast(long epoch, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
+    public void withEpochAtLeast(long epoch, @Nullable Executor ifAsync, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
     {
         if (topology.hasAtLeastEpoch(epoch))
         {
@@ -417,7 +428,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            topology.awaitEpoch(epoch).begin((success, fail) -> {
+            topology.awaitEpoch(epoch, ifAsync).begin((success, fail) -> {
                 if (fail != null) ifFailure.accept(null, fail);
                 else ifSuccess.run();
             });
@@ -425,7 +436,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public void withEpochExact(long epoch, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
+    public void withEpochExact(long epoch, @Nullable Executor ifAsync, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
     {
         if (epoch < topology.minEpoch())
         {
@@ -437,7 +448,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            topology.awaitEpoch(epoch).begin((success, fail) -> {
+            topology.awaitEpoch(epoch, ifAsync).begin((success, fail) -> {
                 if (fail != null) ifFailure.accept(null, onFailure.apply(fail));
                 else ifSuccess.run();
             });
@@ -446,7 +457,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     @Inline
-    public <T> AsyncChain<T> withEpochExact(long epoch, Supplier<? extends AsyncChain<T>> supplier)
+    public <T> AsyncChain<T> withEpochExact(long epoch, @Nullable Executor executor, Supplier<? extends AsyncChain<T>> supplier)
     {
         if (epoch < topology.minEpoch())
         {
@@ -458,30 +469,59 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            AsyncChain<T> res = topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get());
+            AsyncChain<T> res = topology.awaitEpoch(epoch, executor).flatMap(ignore -> supplier.get());
             configService.fetchTopologyForEpoch(epoch);
             return res;
         }
     }
 
     @Inline
-    public <T> AsyncChain<T> withEpochAtLeast(long epoch, Supplier<? extends AsyncChain<T>> supplier)
+    public <T> AsyncChain<T> withEpochAtLeast(long epoch, @Nullable Executor executor, Supplier<? extends AsyncChain<T>> supplier)
     {
-        if (epoch < topology.minEpoch() || topology.hasEpoch(epoch))
+        if (topology.hasAtLeastEpoch(epoch))
         {
             return supplier.get();
         }
         else
         {
-            AsyncChain<T> res = topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get());
+            AsyncChain<T> res = topology.awaitEpoch(epoch, executor).flatMap(ignore -> supplier.get());
             configService.fetchTopologyForEpoch(epoch);
             return res;
         }
     }
 
+    public void withEpochAtLeast(long epoch, @Nullable Executor ifAsync, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
+    {
+        if (topology.hasAtLeastEpoch(epoch))
+        {
+            ifSuccess.run();
+        }
+        else
+        {
+            topology.awaitEpoch(epoch, ifAsync).begin((success, fail) -> {
+                if (fail != null) ifFailure.accept(null, onFailure.apply(fail));
+                else ifSuccess.run();
+            });
+            configService.fetchTopologyForEpoch(epoch);
+        }
+    }
+
+
     public TopologyManager topology()
     {
         return topology;
+    }
+
+    @Override
+    public AsyncExecutor someExecutor()
+    {
+        return commandStores.someExecutor();
+    }
+
+    @Override
+    public SequentialAsyncExecutor someSequentialExecutor()
+    {
+        return commandStores.someSequentialExecutor();
     }
 
     public void shutdown()
@@ -528,19 +568,14 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return commandStores.forEach(context, selector, forEach);
     }
 
-    public AsyncChain<Void> forEachLocalSince(PreLoadContext context, Unseekables<?> unseekables, Timestamp since, Consumer<SafeCommandStore> forEach)
-    {
-        return commandStores.forEach(context, unseekables, since.epoch(), Long.MAX_VALUE, forEach);
-    }
-
-    public AsyncChain<Void> ifLocal(PreLoadContext context, RoutingKey key, long epoch, Consumer<SafeCommandStore> ifLocal)
-    {
-        return commandStores.ifLocal(context, key, epoch, epoch, ifLocal);
-    }
-
     public <T> Cancellable mapReduceConsumeLocal(TxnRequest<?> request, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
     {
         return commandStores.mapReduceConsume(request, request.scope(), minEpoch, maxEpoch, mapReduceConsume);
+    }
+
+    public <T> Cancellable mapReduceConsumeLocal(Unseekables<?> keys, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<T>> map, Reduce<? super T, ? extends T> reduce, BiConsumer<? super T, Throwable> consume)
+    {
+        return commandStores.mapReduceConsume(keys, minEpoch, maxEpoch, map, reduce, consume);
     }
 
     public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long atEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
@@ -579,14 +614,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         shard.nodes.forEach(node -> messageSink.send(node, send));
     }
 
-    public void send(Shard shard, Request send, Callback callback)
+    private void send(Shard shard, Request send, @Nonnull AsyncExecutor executor, Callback callback)
     {
-        send(shard, send, CommandStore.current(), callback);
-    }
-
-    private void send(Shard shard, Request send, AgentExecutor executor, Callback callback)
-    {
-        checkStore(executor);
         shard.nodes.forEach(node -> messageSink.send(node, send, executor, callback));
     }
 
@@ -602,26 +631,14 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         to.forEach(dst -> send(dst, requestFactory.apply(dst)));
     }
 
-    public <T> void send(Collection<Id> to, Request send, Callback<T> callback)
+    public <T> void send(Collection<Id> to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
     {
-        send(to, send, CommandStore.current(), callback);
-    }
-
-    public <T> void send(Collection<Id> to, Request send, AgentExecutor executor, Callback<T> callback)
-    {
-        checkStore(executor);
         checkIterationSafe(to);
         to.forEach(dst -> messageSink.send(dst, send, executor, callback));
     }
 
-    public <T> void send(Collection<Id> to, Function<Id, Request> requestFactory, Callback<T> callback)
+    public <T> void send(Collection<Id> to, Function<Id, Request> requestFactory, @Nonnull AsyncExecutor executor, Callback<T> callback)
     {
-        send(to, requestFactory, CommandStore.current(), callback);
-    }
-
-    public <T> void send(Collection<Id> to, Function<Id, Request> requestFactory, AgentExecutor executor, Callback<T> callback)
-    {
-        checkStore(executor);
         checkIterationSafe(to);
         to.forEach(dst -> messageSink.send(dst, requestFactory.apply(dst), executor, callback));
     }
@@ -643,27 +660,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     // send to a specific node
-    public <T> void send(Id to, Request send, Callback<T> callback)
+    public <T> void send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
     {
-        send(to, send, CommandStore.current(), callback);
-    }
-
-    // send to a specific node
-    public <T> void send(Id to, Request send, @Nullable AgentExecutor executor, Callback<T> callback)
-    {
-        if (executor == null) executor = CommandStore.current();
-        else checkStore(executor);
         messageSink.send(to, send, executor, callback);
-    }
-
-    private void checkStore(AsyncExecutor executor)
-    {
-        if (executor instanceof CommandStore)
-        {
-            CommandStore current = CommandStore.maybeCurrent();
-            if (current != null && current != executor)
-                throw illegalState(format("Used wrong CommandStore %s; current is %s", executor, current));
-        }
     }
 
     // send to a specific node
@@ -751,7 +750,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     private static TxnId newTxnId(long epoch, long now, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags, Node.Id node)
     {
-        Invariants.require(domain == Key || rw != Txn.Kind.Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
+        Invariants.require(domain == Key || rw != Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
         Invariants.require(domain == Range || rw != Txn.Kind.ExclusiveSyncPoint, "Key ExclusiveSyncPoint not supported without improvements to CommandsForKey for managing execution");
         TxnId txnId = new TxnId(epoch, now, flags, rw, domain, cardinality, node);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
@@ -762,15 +761,26 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     {
         Seekables<?, ?> keys = txn.keys();
         Txn.Kind kind = txn.kind();
+        return nextTxnId(keys, kind);
+    }
+
+    public TxnId nextTxnId(Seekables<?, ?> keys, Txn.Kind kind)
+    {
+        return nextTxnId(null, keys, kind);
+    }
+
+    public TxnId nextTxnId(@Nullable Timestamp min, Seekables<?, ?> keys, Txn.Kind kind)
+    {
         Domain domain = keys.domain();
         Cardinality cardinality = cardinality(domain, keys);
-        if (!usePrivilegedCoordinator())
-            return nextTxnId(kind, domain, cardinality);
 
-        long epoch = epoch();
-        long now = uniqueNow();
+        if (!usePrivilegedCoordinator() || (kind != Read && kind != Write))
+            return nextTxnId(min, kind, domain, cardinality);
+
+        long epoch = min == null ? epoch() : Math.max(min.epoch(), epoch());
+        long hlc = uniqueNow(min == null ? 0 : min.hlc());
         int flags = computeBestDefaultTxnIdFlags(keys, epoch);
-        TxnId txnId = new TxnId(epoch, now, flags, kind, domain, cardinality, id);
+        TxnId txnId = new TxnId(epoch, hlc, flags, kind, domain, cardinality, id);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
@@ -814,7 +824,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     // TODO (required): plumb deadlineNanos in (perhaps on integration side, but maybe introduce some context we can pass through for the MessageSink)
     public AsyncResult<Result> coordinate(TxnId txnId, Txn txn, long minEpoch, long deadlineNanos)
     {
-        AsyncResult<Result> result = withEpochExact(Math.max(txnId.epoch(), minEpoch), () -> initiateCoordination(txnId, txn)).beginAsResult();
+        AsyncResult<Result> result = withEpochExact(Math.max(txnId.epoch(), minEpoch), (Executor) null, () -> initiateCoordination(txnId, txn)).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
         result.invoke((success, fail) -> coordinating.remove(txnId, result));
         return result;
@@ -875,9 +885,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
                 return result;
         }
 
-        AsyncResult<Outcome> result = withEpochExact(txnId.epoch(), () -> {
+        SequentialAsyncExecutor executor = someSequentialExecutor();
+        AsyncResult<Outcome> result = withEpochExact(txnId.epoch(), executor, () -> {
             RecoverFuture<Outcome> future = new RecoverFuture<>();
-            RecoverWithRoute.recover(this, txnId, invalidIf, route, null, reportTo, future);
+            RecoverWithRoute.recover(this, executor, txnId, invalidIf, route, null, reportTo, future);
             return future;
         }).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
@@ -888,19 +899,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public void receive(Request request, Id from, ReplyContext replyContext)
     {
         long waitForEpoch = request.waitForEpoch();
-        if (waitForEpoch > topology.epoch())
-        {
-            configService.fetchTopologyForEpoch(waitForEpoch);
-            topology().awaitEpoch(waitForEpoch).invoke((ignored, failure) -> {
-                if (failure != null)
-                    agent().onUncaughtException(WrappableException.wrap(failure));
-                else
-                    receive(request, from, replyContext);
-            });
-            return;
-        }
-
-        Runnable processMsg = () -> {
+        withEpochAtLeast(waitForEpoch, null, agent, () -> {
             try
             {
                 request.process(this, from, replyContext);
@@ -909,8 +908,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             {
                 reply(from, replyContext, null, t);
             }
-        };
-        scheduler.now(processMsg);
+        });
     }
 
     public <R> CoordinationAdapter<R> coordinationAdapter(TxnId txnId, Kind kind)
@@ -965,5 +963,15 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public TimeService time()
     {
         return time;
+    }
+
+    public final long currentStamp()
+    {
+        return stamp;
+    }
+
+    public void updateStamp()
+    {
+        stampUpdater.incrementAndGet(this);
     }
 }

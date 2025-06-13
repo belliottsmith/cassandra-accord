@@ -18,12 +18,13 @@
 
 package accord.local;
 
+import accord.api.AsyncExecutorFactory;
 import accord.api.Timeouts;
 import accord.local.durability.DurabilityService;
 import accord.primitives.Timestamp;
 import accord.topology.TopologyManager;
 
-public interface NodeCommandStoreService extends TimeService, UniqueTimeService
+public interface NodeCommandStoreService extends TimeService, UniqueTimeService, AsyncExecutorFactory
 {
     long epoch();
     Node.Id id();
@@ -31,6 +32,8 @@ public interface NodeCommandStoreService extends TimeService, UniqueTimeService
     DurableBefore durableBefore();
     DurabilityService durability();
     TopologyManager topology();
+    long currentStamp();
+    void updateStamp();
 
     default Timestamp uniqueTimestamp()
     {

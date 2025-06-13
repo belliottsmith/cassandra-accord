@@ -49,13 +49,13 @@ import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
+import accord.api.Write;
 import accord.impl.progresslog.DefaultProgressLog;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.CommandSummaries;
-import accord.local.Commands;
 import accord.local.KeyHistory;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
@@ -84,6 +84,7 @@ import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResult;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
@@ -103,7 +104,6 @@ import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
-import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
@@ -155,12 +155,6 @@ public abstract class InMemoryCommandStore extends CommandStore
     public NavigableMap<RoutableKey, GlobalCommandsForKey> unsafeCommandsForKey()
     {
         return commandsForKey;
-    }
-
-    @Override
-    public Agent agent()
-    {
-        return agent;
     }
 
     public GlobalCommand commandIfPresent(TxnId txnId)
@@ -292,7 +286,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             Cleanup cleanup = Cleanup.shouldCleanup(FULL, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
             Invariants.require(command.hasBeen(Applied)
                                || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
-                               || (durableBefore().min(txnId) == NotDurable &&
+                               || (durableBefore().min(txnId) != UniversalOrInvalidated &&
                                       ((command.participants().stillExecutes() != null && command.participants().stillExecutes().isEmpty())
                                       || !Route.isFullRoute(command.route()))));
         }
@@ -671,7 +665,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         public DataStore dataStore()
         {
-            return commandStore().store;
+            return commandStore().dataStore;
         }
 
         @Override
@@ -828,7 +822,8 @@ public abstract class InMemoryCommandStore extends CommandStore
 
     public static class Synchronized extends InMemoryCommandStore
     {
-        Runnable active = null;
+        Runnable active;
+        Thread activeThread;
         final Queue<Runnable> queue = new ConcurrentLinkedQueue<>();
 
         public Synchronized(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, Journal journal)
@@ -842,20 +837,14 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return;
 
             active = queue.poll();
+            activeThread = Thread.currentThread();
             while (active != null)
             {
-                this.unsafeRunIn(() -> {
-                    try
-                    {
-                        active.run();
-                    }
-                    catch (Throwable t)
-                    {
-                        logger.error("Uncaught exception", t);
-                    }
-                });
+                try { active.run(); }
+                catch (Throwable t) { logger.error("Uncaught exception", t); }
                 active = queue.poll();
             }
+            activeThread = null;
         }
 
         private Cancellable enqueueAndRun(Runnable runnable)
@@ -870,7 +859,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         public boolean inStore()
         {
-            return CommandStore.maybeCurrent() == this;
+            return activeThread == Thread.currentThread();
         }
 
         @Override
@@ -935,7 +924,6 @@ public abstract class InMemoryCommandStore extends CommandStore
             // "this" is leaked before constructor is completed, but since all fields are "final" and set before "this"
             // is leaked, then visibility should not be an issue.
             executor.execute(() -> thread = Thread.currentThread());
-            executor.execute(() -> CommandStore.register(this));
         }
 
         void assertThread()
@@ -1176,19 +1164,20 @@ public abstract class InMemoryCommandStore extends CommandStore
                                                                      context(command, SYNC),
                                                                      (SafeCommandStore safeStore) -> {
                                                                          maybeApplyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
-                                                                             unsafeApplyWrites(safeStore, safeCommand, cmd);
+                                                                             applyWritesSync(safeStore, safeCommand, cmd);
                                                                          });
                                                                          return command;
                                                                      }));
         }
 
-        private void unsafeApplyWrites(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
+        private void applyWritesSync(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
         {
             Command.Executed executed = command.asExecuted();
             Participants<?> executes = executed.participants().stillExecutes();
             if (!executes.isEmpty())
             {
-                command.writes().applyUnsafe(safeStore, Commands.applyRanges(safeStore, command.executeAt()), command.partialTxn());
+                AsyncResult<Void> result = command.writes().apply(Write.InMemoryWrite::applySync, safeStore.commandStore(), executes, command.partialTxn()).beginAsResult();
+                Invariants.require(result.isDone());
                 safeCommand.applied(safeStore);
                 safeStore.notifyListeners(safeCommand, command);
             }

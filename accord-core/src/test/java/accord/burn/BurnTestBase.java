@@ -52,9 +52,11 @@ import java.util.zip.CRC32;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Key;
 import accord.api.ProtocolModifiers.Toggles;
+import accord.api.ProtocolModifiers.Toggles.FastExec;
 import accord.burn.random.FrequentLargeRange;
 import accord.impl.MessageListener;
 import accord.impl.PrefixedIntHashKey;
@@ -99,7 +101,7 @@ import accord.utils.Gens;
 import accord.utils.RandomSource;
 import accord.utils.UnhandledEnum;
 import accord.utils.Utils;
-import accord.utils.async.AsyncExecutor;
+import accord.api.AsyncExecutor;
 import accord.utils.async.TimeoutUtils;
 import accord.verify.StrictSerializabilityVerifier;
 import accord.verify.Verifier;
@@ -394,6 +396,10 @@ public class BurnTestBase
             timeoutDelays = delayGenerator(rnd, 500, 800, 1000, 10000);
         }
 
+        Toggles.setDataStoreDetectsFutureReads(random.nextBoolean());
+        Toggles.setFastReadExec(random.pick(FastExec.values()));
+        Toggles.setFastWriteExec(random.pick(FastExec.values()));
+
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
             // TODO (testing): meta-randomise scale of clock drift
@@ -406,7 +412,7 @@ public class BurnTestBase
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, ListAgent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
+        BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, Agent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should enver get a stale event");
         }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
@@ -521,7 +527,8 @@ public class BurnTestBase
         try
         {
             messageStatsMap = Cluster.run(toArray(nodes, Id[]::new), newPrefixes, listener, () -> queue,
-                                          (id, onStale, timeoutSupplier) -> globalExecutor.withAgent(agentSupplier.apply(onStale, timeoutSupplier)),
+                                          id -> globalExecutor,
+                                          agentSupplier,
                                           queue::checkFailures,
                                           responseSink, random::fork, timeServiceSupplier,
                                           topologyFactory, initialRequests::poll,

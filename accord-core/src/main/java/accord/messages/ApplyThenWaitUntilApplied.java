@@ -62,7 +62,6 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
         }
     }
 
-    public final Timestamp executeAt;
     public final FullRoute<?> route;
     public final PartialTxn txn;
     public final PartialDeps deps;
@@ -76,8 +75,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
 
     public ApplyThenWaitUntilApplied(Node.Id to, Topologies topologies, Timestamp executeAt, long executeAtEpoch, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, Participants<?> readScope, Writes writes, Result result)
     {
-        super(to, topologies, txnId, readScope, executeAtEpoch);
-        this.executeAt = executeAt;
+        super(to, topologies, txnId, readScope, executeAt, executeAtEpoch);
         Route<?> scope = computeScope(to, topologies, route);
         this.route = route;
         this.txn = txn.intersecting(scope, true);
@@ -88,8 +86,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
 
     protected ApplyThenWaitUntilApplied(TxnId txnId, Participants<?> readScope, long minEpoch, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, Result result)
     {
-        super(txnId, readScope, minEpoch, executeAt.epoch());
-        this.executeAt = executeAt;
+        super(txnId, readScope, minEpoch, executeAt, executeAt.epoch());
         this.route = route;
         this.txn = txn;
         this.deps = deps;

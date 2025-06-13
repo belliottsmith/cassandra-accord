@@ -35,6 +35,7 @@ import accord.api.RoutingKey;
 import accord.coordinate.CollectLatestDeps;
 import accord.coordinate.CoordinationAdapter;
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.primitives.Known.KnownDeps;
 import accord.topology.Topologies.SelectNodeOwnership;
 import accord.utils.Invariants;
@@ -65,11 +66,11 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         }
     }
 
-    public static void withCommitted(CoordinationAdapter<?> adapter, Node node, Merge merge, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
+    public static void withCommitted(CoordinationAdapter<?> adapter, Node node, SequentialAsyncExecutor executor, Merge merge, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
         if (!node.topology().hasEpoch(executeAt.epoch()))
         {
-            node.withEpochAtLeast(executeAt.epoch(), failureCallback, () -> withCommitted(adapter, node, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
+            node.withEpochAtLeast(executeAt.epoch(), executor, failureCallback, () -> withCommitted(adapter, node, executor, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
             return;
         }
 
@@ -81,7 +82,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         {
             // we include the committed deps in our proposal so that if we contact a replica that participates in one of the committed shards we include any deps it should see
             Deps propose = merge.mergeProposal(missing).with(committed);
-            adapter.proposeOnly(node, missing, missing, SHARE, route, SLOW, ballot, txnId, txn, executeAt, propose, (success, fail) -> {
+            adapter.proposeOnly(node, executor, missing, missing, SHARE, route, SLOW, ballot, txnId, txn, executeAt, propose, (success, fail) -> {
                 if (fail != null) failureCallback.accept(null, fail);
                 else
                 {
@@ -92,12 +93,12 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         }
     }
 
-    public static void withStable(CoordinationAdapter<?> adapter, Node node, Merge merge, Deps alreadyStableDeps, Route<?> require, @Nullable Route<?> sendTo, @Nullable SelectNodeOwnership selectSendTo, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
+    public static void withStable(CoordinationAdapter<?> adapter, Node node, SequentialAsyncExecutor executor, Merge merge, Deps alreadyStableDeps, Route<?> require, @Nullable Route<?> sendTo, @Nullable SelectNodeOwnership selectSendTo, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
     {
         Invariants.require(sendTo == null || selectSendTo != null);
         if (!node.topology().hasAtLeastEpoch(executeAt.epoch()))
         {
-            node.withEpochAtLeast(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
+            node.withEpochAtLeast(executeAt.epoch(), executor, failureCallback, () -> withStable(adapter, node, executor, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
             return;
         }
 
@@ -113,40 +114,40 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             Deps committed = stable.with(mergedCommitted.deps);
             if (propose.isEmpty())
             {
-                stabilise(adapter, node, committed, stabilise, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
+                stabilise(adapter, node, executor, committed, stabilise, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
             }
             else
             {
                 // we merge with committed to make sure we can send a full Commit to any replica that overlaps the stable and unstable ranges
                 Deps notaccepted = committed.with(merge.mergeProposal(propose));
-                adapter.proposeOnly(node, propose, sendTo == null ? propose : sendTo, sendTo == null ? SHARE : selectSendTo, route, SLOW, ballot, txnId, txn, executeAt, notaccepted, (success, fail) -> {
+                adapter.proposeOnly(node, executor, propose, sendTo == null ? propose : sendTo, sendTo == null ? SHARE : selectSendTo, route, SLOW, ballot, txnId, txn, executeAt, notaccepted, (success, fail) -> {
                     if (fail != null) failureCallback.accept(null, fail);
                     else
                     {
                         // TODO (desired): do we need to slice to those we were proposing, or can we just stabilise whatever we get back?
                         success = success.intersecting(propose).asFullUnsafe();
-                        stabilise(adapter, node, success.with(committed), stabilise, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
+                        stabilise(adapter, node, executor, success.with(committed), stabilise, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
                     }
                 });
             }
         }
     }
 
-    public static void stabilise(CoordinationAdapter<?> adapter, Node node, Deps deps, Route<?> stabilise, @Nullable Route<?> sendTo, SelectNodeOwnership selectSendTo, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
+    public static void stabilise(CoordinationAdapter<?> adapter, Node node, SequentialAsyncExecutor executor, Deps deps, Route<?> stabilise, @Nullable Route<?> sendTo, SelectNodeOwnership selectSendTo, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
     {
         Invariants.require(sendTo == null || selectSendTo != null);
-        adapter.stabiliseOnly(node, stabilise, sendTo == null ? stabilise : sendTo, sendTo == null ? SHARE : selectSendTo, route, ballot, txnId, txn, executeAt, deps, (success, fail) -> {
+        adapter.stabiliseOnly(node, executor, stabilise, sendTo == null ? stabilise : sendTo, sendTo == null ? SHARE : selectSendTo, route, ballot, txnId, txn, executeAt, deps, (success, fail) -> {
             if (fail != null) failureCallback.accept(null, fail);
             else withDeps.accept(deps);
         });
     }
 
-    public static void withStable(CoordinationAdapter<?> adapter, Node node, TxnId txnId, Timestamp executeAt, Txn txn, Deps alreadyStableDeps, Route<?> require, @Nullable Route<?> sendTo, SelectNodeOwnership selectSendTo, FullRoute<?> route, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
+    public static void withStable(CoordinationAdapter<?> adapter, Node node, SequentialAsyncExecutor executor, TxnId txnId, Timestamp executeAt, Txn txn, Deps alreadyStableDeps, Route<?> require, @Nullable Route<?> sendTo, SelectNodeOwnership selectSendTo, FullRoute<?> route, BiConsumer<?, ? super Throwable> failureCallback, Consumer<Deps> withDeps)
     {
         Invariants.require(sendTo == null || selectSendTo != null);
-        if (!node.topology().hasEpoch(executeAt.epoch()))
+        if (!node.topology().hasAtLeastEpoch(executeAt.epoch()))
         {
-            node.withEpochAtLeast(executeAt.epoch(), failureCallback, () -> withStable(adapter, node, txnId, executeAt, txn, alreadyStableDeps, require, sendTo, selectSendTo, route, failureCallback, withDeps));
+            node.withEpochAtLeast(executeAt.epoch(), executor, failureCallback, () -> withStable(adapter, node, executor, txnId, executeAt, txn, alreadyStableDeps, require, sendTo, selectSendTo, route, failureCallback, withDeps));
         }
         else if (require.isEmpty())
         {
@@ -163,7 +164,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                 else
                 {
                     Merge merge = merge(extraDeps, i -> i);
-                    LatestDeps.withStable(adapter, node, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
+                    LatestDeps.withStable(adapter, node, executor, merge, alreadyStableDeps, require, sendTo, selectSendTo, route, ballot, txnId, executeAt, txn, failureCallback, withDeps);
                 }
             });
         }

@@ -23,13 +23,15 @@ import java.util.function.BiConsumer;
 import accord.api.Data;
 import accord.api.Result;
 import accord.api.Timeouts;
-import accord.local.CommandStore;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.messages.Accept;
 import accord.messages.Commit;
@@ -38,7 +40,6 @@ import accord.messages.ReadData;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
-import accord.messages.ReadTxnData;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
 import accord.messages.StableThenRead;
@@ -57,9 +58,11 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
+import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
-import static accord.api.ProtocolModifiers.Toggles.sendMinimalStableMessages;
+import static accord.api.ProtocolModifiers.Toggles.sendOnlyReadStableMessages;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
+import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
@@ -75,7 +78,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (expected): return Waiting from ReadData if not ready to execute, and do not submit more than one speculative retry in this case
 // TODO (expected): by default, if we can execute locally, never contact a remote replica regardless of local outcome
-public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.Timeout
+public class ExecuteTxn extends ReadCoordinator<ReadReply>
 {
     final ExecutePath path;
     final Txn txn;
@@ -85,16 +88,16 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
     final Deps stableDeps;
     final Deps sendDeps;
     final Topologies allTopologies;
+    final CoordinationFlags flags;
     final BiConsumer<? super Result, Throwable> callback;
 
-    private Timeouts.RegisteredTimeout localTimeout;
-    private Participants<?> readScope;
+    private final Participants<?> readScope;
     private Data data;
     private long uniqueHlc;
 
-    ExecuteTxn(Node node, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
+    ExecuteTxn(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, topologies.forEpoch(executeAt.epoch()), txnId);
+        super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId);
         this.path = path;
         this.txn = txn;
         this.route = route;
@@ -103,7 +106,9 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
         this.executeAt = executeAt;
         this.stableDeps = stableDeps;
         this.sendDeps = sendDeps;
+        this.flags = flags;
         this.callback = callback;
+        this.readScope = txn == null ? route : route.intersecting(txn.keys());
         Invariants.require(!txnId.awaitsOnlyDeps());
         Invariants.require(!txnId.awaitsPreviouslyOwned());
     }
@@ -111,15 +116,16 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
     @Override
     protected void startOnceInitialised()
     {
-        if (permitLocalExecution() && tryIfUniversal(node.id()))
+        Node.Id self = node.id();
+        if (permitLocalExecution() && tryIfUniversal(self))
         {
-            new LocalExecute(txnId).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
+            new LocalExecute(txnId, flags.get(self)).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
         {
             // we can't safely take the fast path via PRIVILEGED_COORDINATOR optimisation if we aren't permitted to execute locally,
             // so we take the MEDIUM or SLOW path
-            adapter().propose(node, null, route, txnId.hasMediumPath() ? Accept.Kind.MEDIUM : Accept.Kind.SLOW,
+            adapter().propose(node, executor, null, route, txnId.hasMediumPath() ? Accept.Kind.MEDIUM : Accept.Kind.SLOW,
                               Ballot.ZERO, txnId, txn, executeAt, stableDeps, callback);
         }
         else
@@ -131,9 +137,11 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
     @Override
     protected void start(Iterable<Id> to)
     {
+        // TODO (desired): migrate to SortedListSet; or introduce a specialised version for integer keys; or introduce a hash equivalent
         IntHashSet readSet = new IntHashSet();
         to.forEach(i -> readSet.add(i.id));
-        Commit.stableAndRead(node, allTopologies, commitKind(), txnId, txn, route, executeAt, sendDeps, readSet, this, sendMinimalStableMessages() && path != RECOVER);
+        // TODO (desired): if READY_TO_EXECUTE send a simple read (skip setting Stable)
+        Commit.stableAndRead(node, executor, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, sendDeps, readSet, flags, sendOnlyReadStableMessages() && path != RECOVER, this);
     }
 
     private Commit.Kind commitKind()
@@ -151,19 +159,11 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
     @Override
     public void contact(Id to)
     {
-        CommandStore commandStore = CommandStore.currentOrElseSelect(node, route);
-        if (sendMinimalStableMessages() && path != RECOVER)
-        {
-            Request request = Commit.requestTo(to, true, allTopologies, commitKind(), Ballot.ZERO, txnId, txn, route, executeAt, sendDeps, false);
-            // we are always sending to a replica in the latest epoch and requesting a read, so onlyContactOldAndReadSet is a redundant parameter
-            node.send(to, request, commandStore, this);
-        }
-        else
-        {
-            if (readScope == null)
-                readScope = txn.read().keys().toParticipants();
-            node.send(to, new ReadTxnData(to, topologies(), txnId, readScope, executeAt.epoch()), commandStore, this);
-        }
+        ExecuteFlags flags = this.flags.get(to);
+        boolean alreadySentStable = !(sendOnlyReadStableMessages() && path != RECOVER);
+        Request request = Commit.requestTo(to, true, allTopologies, commitKind(), Ballot.ZERO, txnId, txn, route, readScope, executeAt, sendDeps, flags, alreadySentStable, false);
+        // we are always sending to a replica in the latest epoch and requesting a read, so onlyContactOldAndReadSet is a redundant parameter
+        node.send(to, request, executor, this);
     }
 
     @Override
@@ -195,17 +195,6 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
         {
             default: throw new UnhandledEnum(nack);
             case Waiting:
-                if (from.id == node.id().id)
-                {
-                    long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
-                    // TODO (expected): better abstractions for this
-                    CommandStore invokeOn = CommandStore.current();
-                    localTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
-                    {
-                        @Override public void timeout() { invokeOn.maybeExecuteImmediately(() -> onSlowResponse(node.id())); }
-                        @Override public int stripe() { return txnId.hashCode(); }
-                    }, slowAt, MICROSECONDS);
-                }
                 return Action.None;
 
             case Redundant:
@@ -224,11 +213,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
     @Override
     protected void onDone(Success success, Throwable failure)
     {
-        if (localTimeout != null)
-        {
-            localTimeout.cancel();
-            localTimeout = null;
-        }
+        // TODO (expected): if we fail on the fast path and we haven't sent any Stable messages, we should send them now to make recovery easier
         if (failure == null)
         {
             Timestamp executeAt = this.executeAt;
@@ -240,7 +225,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
 
             Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, data) : null;
             Result result = txn.result(txnId, executeAt, data);
-            adapter().persist(node, allTopologies, route, ballot, txnId, txn, executeAt, stableDeps, writes, result, callback);
+            adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, callback);
         }
         else
         {
@@ -262,28 +247,32 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
                '}';
     }
 
-    @Override
-    public void timeout()
+    /**
+     * This method is used by LocalExecute to decide if it may fast execute with the provided flags.
+     * LocalExecute is treated specially because the privileged coordinator optimisation requires that
+     * the coordinator record STABLE before sending further messages to any other replica.
+     * So, if the privileged coordinator optimisation is enabled and we _are_ the privileged coordinator
+     * taking the fast path, it is unsafe to perform a fast read (that skips updating the Accord state machine)
+     * because it would be unsafe to continue to the next phase until the local coordinator has updated its state machine.
+     * It woudl be possible to push this work onto the Persist phase, so that we have an equivalent LocalExecute that
+     * ensures PREAPPLIED is recorded at the local coordinator before any other replicas are sent Apply, but
+     * for now we simply disable this optimisation in this case.
+     */
+    boolean mayFastExecute(ExecuteFlags flags)
     {
-        onSlowResponse(node.id());
-        localTimeout = null;
-    }
-
-    @Override
-    public int stripe()
-    {
-        return txnId.hashCode();
+        return flags.contains(READY_TO_EXECUTE) && (!txnId.hasPrivilegedCoordinator() || path != FAST) && fastReadsMayBypassSafeStore(txnId);
     }
 
     class LocalExecute extends ReadData
     {
         private boolean committed;
         private final SafeCallback<ReadReply> callback;
+        private Timeouts.RegisteredTimeout slowTimeout;
 
-        public LocalExecute(TxnId txnId)
+        public LocalExecute(TxnId txnId, ExecuteFlags flags)
         {
-            super(txnId, route, executeAt.epoch());
-            this.callback = new SafeCallback<>(CommandStore.current(), ExecuteTxn.this);
+            super(txnId, route, mayFastExecute(flags) ? txn.intersecting(route, true) : null, ExecuteTxn.this.executeAt, ExecuteTxn.this.executeAt.epoch(), flags);
+            this.callback = new SafeCallback<>(executor, ExecuteTxn.this);
         }
 
         @Override
@@ -310,6 +299,15 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
             {
                 committed = true;
                 reply = Waiting;
+                long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
+                slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
+                {
+                    @Override public void timeout() { executor.maybeExecuteImmediately(() -> {
+                        onSlowResponse(node.id());
+                        slowTimeout = null;
+                    }); }
+                    @Override public int stripe() { return txnId.hashCode(); }
+                }, slowAt, MICROSECONDS);
             }
             super.accept(reply, failure);
         }
@@ -334,7 +332,12 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply> implements Timeouts.T
         @Override
         protected void reply(ReadReply reply, Throwable fail)
         {
-            // TODO (required): execute immediately if already on CommandStore
+            if (slowTimeout != null)
+            {
+                slowTimeout.cancel();
+                slowTimeout = null;
+            }
+            // TODO (expected): execute immediately if already on CommandStore
             if (fail == null) callback.success(node.id(), reply);
             else callback.failure(node.id(), fail);
         }

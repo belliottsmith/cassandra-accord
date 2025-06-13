@@ -18,7 +18,7 @@
 
 package accord.impl.mock;
 
-import accord.local.AgentExecutor;
+import accord.api.AsyncExecutor;
 import accord.local.Node.Id;
 import accord.messages.Callback;
 import accord.messages.Reply;
@@ -47,13 +47,13 @@ public interface Network
         return new MessageId(messageId);
     }
 
-    void send(Id from, Id to, Request request, AgentExecutor executor, Callback callback);
+    void send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback);
     void reply(Id from, Id replyingToNode, long replyingToMessage, Reply reply);
 
     Network BLACK_HOLE = new Network()
     {
         @Override
-        public void send(Id from, Id to, Request request, AgentExecutor executor, Callback callback)
+        public void send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback)
         {
             // TODO (easy, testing): log
         }

@@ -69,7 +69,6 @@ import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.TruncatedApply;
-import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.SaveStatus.TruncatedUnapplied;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.ReadyToExecute;
@@ -899,7 +898,7 @@ public abstract class Command implements ICommand
         public static WaitingOn none(Routable.Domain domain, Deps deps)
         {
             return new WaitingOn(deps.keyDeps.keys(), deps.rangeDeps,
-                                 new ImmutableBitSet(deps.keyDeps.keys().size()),
+                                 new ImmutableBitSet(deps.keyDeps.keys().size() + deps.rangeDeps.txnIdCount()),
                                  domain == Range ? new ImmutableBitSet(deps.rangeDeps.txnIdCount()) : null);
         }
 
@@ -1316,9 +1315,9 @@ public abstract class Command implements ICommand
                 waitingOn.reverseForEach(0, txnIdCount(), p1, p2, p3, p4, forEach);
             }
 
-            public <P1, P2, P3, P4> void forEachWaitingOnKey(P1 p1, P2 p2, P3 p3, IndexedTriConsumer<P1, P2, P3> forEach)
+            public <P1, P2, P3> void forEachWaitingOnKey(P1 p1, P2 p2, P3 p3, IndexedTriConsumer<P1, P2, P3> forEach)
             {
-                waitingOn.reverseForEach(txnIdCount(), keys.size(), p1, p2, p3, this, (pp1, pp2, pp3, pp4, i) -> forEach.accept(pp1, pp2, pp3, i - pp4.txnIdCount()));
+                waitingOn.reverseForEach(txnIdCount(), txnIdCount() + keys.size(), p1, p2, p3, this, (pp1, pp2, pp3, pp4, i) -> forEach.accept(pp1, pp2, pp3, i - pp4.txnIdCount()));
             }
 
             public WaitingOn build()
@@ -1502,9 +1501,19 @@ public abstract class Command implements ICommand
         return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), participants, promised, executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
     }
 
+    static Command.Executed applying(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    {
+        return executed(command.txnId(), SaveStatus.Applying, command.durability(), participants, command.promised(), executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
+    }
+
     static Command.Executed applying(Command.Executed command)
     {
         return executed(command, SaveStatus.Applying);
+    }
+
+    static Command.Executed applied(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    {
+        return executed(command.txnId(), SaveStatus.Applied, command.durability(), participants, command.promised(), executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
     }
 
     static Command.Executed applied(Command.Executed command)
@@ -1672,13 +1681,13 @@ public abstract class Command implements ICommand
                     break;
             }
         }
-        switch (validate.saveStatus().execution)
+        switch (saveStatus.execution)
         {
             case NotReady:
             case CleaningUp:
                 break;
             case ReadyToExclude:
-                Invariants.require(validate.saveStatus() != SaveStatus.Committed || validate.asCommitted().waitingOn == null);
+                Invariants.require(saveStatus != SaveStatus.Committed || validate.asCommitted().waitingOn == null);
                 break;
             case WaitingToExecute:
             case ReadyToExecute:

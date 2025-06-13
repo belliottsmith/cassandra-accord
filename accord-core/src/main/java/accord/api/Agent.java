@@ -20,15 +20,12 @@ package accord.api;
 
 import java.util.concurrent.TimeUnit;
 
-import javax.annotation.Nullable;
-
 import accord.api.ProgressLog.BlockedUntil;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
 import accord.messages.ReplyContext;
-import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Status.Phase;
@@ -38,8 +35,6 @@ import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.async.AsyncChain;
-
-import static accord.utils.Invariants.illegalState;
 
 /**
  * Facility for augmenting node behaviour at specific points
@@ -166,6 +161,4 @@ public interface Agent extends UncaughtExceptionListener
     // make sure the staleId is sufficiently stale
     AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean requested);
     long minStaleHlc(Node node, boolean requested);
-
-    default void onViolation(String message, Participants<?> participants, @Nullable TxnId notWitnessed, @Nullable Timestamp notWitnessedExecuteAt, @Nullable TxnId by, @Nullable Timestamp byEexecuteAt) { throw illegalState(message); }
 }

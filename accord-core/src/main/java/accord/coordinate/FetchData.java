@@ -24,6 +24,7 @@ import accord.coordinate.Infer.InvalidIf;
 import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.CommandStores.StoreSelector;
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.primitives.Known;
 import accord.messages.CheckStatus;
 import accord.messages.CheckStatus.CheckStatusOkFull;
@@ -62,6 +63,7 @@ public class FetchData extends CheckShards<Route<?>>
     // TODO (expected): separate keys we fetch deps and txns for
     public static class FetchRequest
     {
+        final SequentialAsyncExecutor executor;
         final Known fetch;
         final TxnId txnId;
         final InvalidIf invalidIf;
@@ -72,8 +74,9 @@ public class FetchData extends CheckShards<Route<?>>
         final StoreSelector reportTo;
         final BiConsumer<? super FetchResult, Throwable> callback;
 
-        public FetchRequest(Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> contactable, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+        public FetchRequest(SequentialAsyncExecutor executor, Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> contactable, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
         {
+            this.executor = executor;
             this.fetch = fetch;
             this.invalidIf = invalidIf;
             this.txnId = txnId;
@@ -98,7 +101,7 @@ public class FetchData extends CheckShards<Route<?>>
      */
     public static void fetchSpecific(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        fetchSpecific(node, query, maxRoute, new FetchRequest(fetch, txnId, invalidIf, executeAt, maxRoute, reportTo, callback));
+        fetchSpecific(node, query, maxRoute, new FetchRequest(node.someSequentialExecutor(), fetch, txnId, invalidIf, executeAt, maxRoute, reportTo, callback));
     }
 
     public static void fetchSpecific(Node node, Route<?> query, Route<?> maxRoute, FetchRequest request)
@@ -106,7 +109,7 @@ public class FetchData extends CheckShards<Route<?>>
         long srcEpoch = request.srcEpoch;
         if (!node.topology().hasAtLeastEpoch(srcEpoch))
         {
-            node.withEpochAtLeast(srcEpoch, request.callback, () -> fetchSpecific(node, query, maxRoute, request));
+            node.withEpochAtLeast(srcEpoch, request.executor, request.callback, () -> fetchSpecific(node, query, maxRoute, request));
             return;
         }
 
@@ -132,7 +135,7 @@ public class FetchData extends CheckShards<Route<?>>
     private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
         // TODO (desired, efficiency): restore behaviour of only collecting info if e.g. Committed or Executed
-        super(node, txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf);
+        super(node, node.someSequentialExecutor(), txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf);
         this.reportTo = reportTo;
         this.maxRoute = maxRoute;
         Invariants.requireArgument(routeWithHomeKey.contains(route.homeKey()), "route %s does not contain %s", routeWithHomeKey, route.homeKey());

@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Accept;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -39,9 +40,9 @@ public class ProposeOnly extends Propose<Deps>
     @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(ProposeOnly.class);
 
-    ProposeOnly(Node node, Topologies topologies, Route<?> sendTo, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback)
+    ProposeOnly(Node node, SequentialAsyncExecutor executor, Topologies topologies, Route<?> sendTo, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback)
     {
-        super(node, topologies, kind, ballot, txnId, txn, sendTo, route, executeAt, deps, callback);
+        super(node, executor, topologies, kind, ballot, txnId, txn, sendTo, route, executeAt, deps, callback);
     }
 
     @Override

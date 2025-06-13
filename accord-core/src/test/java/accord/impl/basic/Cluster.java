@@ -52,6 +52,8 @@ import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Agent;
+import accord.api.AsyncExecutor;
 import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.RoutingKey;
@@ -74,7 +76,6 @@ import accord.impl.basic.DelayedCommandStores.DelayedCommandStore;
 import accord.impl.list.ListAgent;
 import accord.impl.list.ListStore;
 import accord.impl.progresslog.DefaultProgressLogs;
-import accord.local.AgentExecutor;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -110,7 +111,6 @@ import accord.utils.LazyToString;
 import accord.utils.RandomSource;
 import accord.utils.ReflectionUtils;
 import accord.utils.Timestamped;
-import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
@@ -421,7 +421,7 @@ public class Cluster
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, ListAgent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
+        BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, Agent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should never get a stale event");
         }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
@@ -439,7 +439,8 @@ public class Cluster
                                                             prefixes,
                                                             MessageListener.get(),
                                                             () -> queue,
-                                                            (id, onStale, timeoutSupplier) -> globalExecutor.withAgent(agentSupplier.apply(onStale, timeoutSupplier)),
+                                                            (id) -> globalExecutor,
+                                                            agentSupplier,
                                                             queue::checkFailures,
                                                             ignore -> {},
                                                             randomSupplier,
@@ -614,7 +615,8 @@ public class Cluster
     }
 
     public static Map<MessageType, Stats> run(Id[] nodes, int[] prefixes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
-                                              TriFunction<Id, BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, AgentExecutor> nodeExecutorSupplier,
+                                              Function<Id, AsyncExecutor> nodeExecutorSupplier,
+                                              BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, Agent> agentSupplier,
                                               Runnable checkFailures, Consumer<Packet> responseSink,
                                               Supplier<RandomSource> randomSupplier,
                                               Supplier<TimeService> timeServiceSupplier,
@@ -623,7 +625,7 @@ public class Cluster
     {
         Topology topology = topologyFactory.toTopology(nodes);
         Map<Id, Node> nodeMap = new LinkedHashMap<>();
-        Map<Id, AgentExecutor> executorMap = new LinkedHashMap<>();
+        Map<Id, AsyncExecutor> executorMap = new LinkedHashMap<>();
         Map<Id, Journal> journalMap = new LinkedHashMap<>();
         try
         {
@@ -678,15 +680,16 @@ public class Cluster
                 MessageSink messageSink = sinks.create(id, timeouts);
                 TimeService timeService = timeServiceSupplier.get();
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
-                AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale, timeouts);
+                AsyncExecutor nodeExecutor = nodeExecutorSupplier.apply(id);
+                Agent agent = agentSupplier.apply(onStale, timeouts);
                 executorMap.put(id, nodeExecutor);
                 Journal journal = journalFactory.apply(id, random);
                 journalMap.put(id, journal);
-                BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
+                BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, agent, randomSupplier, topology, nodeMap::get, topologyUpdates);
                 DelayedCommandStores.CacheLoading cacheLoading = new RandomLoader(random).newLoader(journal);
                 Node node = new Node(id, messageSink, configService, timeService, new AtomicUniqueTimeWithStaleReservation(timeService),
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
-                                     nodeExecutor.agent(),
+                                     agent,
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
                                      DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
                                      journal.durableBeforePersister(), journal);
@@ -919,7 +922,7 @@ public class Cluster
                 Command afterCommand = e.getValue().value();
                 if (beforeCommand == null)
                 {
-                    Invariants.requireArgument(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus().compareTo(SaveStatus.Vestigial) >= 0);
+                    Invariants.require(afterCommand.is(Status.NotDefined) || afterCommand.saveStatus().compareTo(SaveStatus.Vestigial) >= 0);
                     continue;
                 }
                 if (afterCommand.hasBeen(Status.Truncated))

@@ -27,9 +27,9 @@ import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.AsyncExecutor;
 import accord.api.Scheduler;
 import accord.coordinate.Timeout;
-import accord.local.AgentExecutor;
 import accord.local.Node;
 import accord.messages.Callback;
 import accord.messages.GetDurableBefore;
@@ -151,11 +151,7 @@ public class GlobalDurability implements Callback<Object>
     {
         try
         {
-
-            AgentExecutor executor = node.commandStores().someExecutor();
-            if (executor == null)
-                return;
-
+            AsyncExecutor executor = node.someExecutor();
             synchronized (this)
             {
                 if (inflight >= maxConcurrency)

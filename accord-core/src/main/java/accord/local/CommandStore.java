@@ -31,7 +31,6 @@ import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantStatus.SomeStatus;
 import accord.primitives.RangeDeps;
 import accord.primitives.Routables;
-import accord.primitives.Route;
 import accord.primitives.Status.Durability;
 import accord.primitives.Unseekables;
 import accord.utils.async.AsyncChain;
@@ -47,7 +46,6 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -78,13 +76,12 @@ import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
 
 /**
  * Single threaded internal shard of accord transaction metadata
  */
-public abstract class CommandStore implements AgentExecutor
+public abstract class CommandStore implements SequentialAsyncExecutor
 {
     private static final Logger logger = LoggerFactory.getLogger(CommandStore.class);
 
@@ -136,17 +133,16 @@ public abstract class CommandStore implements AgentExecutor
                             Journal journal);
     }
 
-    private static final ThreadLocal<CommandStore> CURRENT_STORE = new ThreadLocal<>();
-
     protected final int id;
     protected final NodeCommandStoreService node;
     protected final Agent agent;
-    protected final DataStore store;
+    protected final DataStore dataStore;
     protected final ProgressLog progressLog;
     protected final LocalListeners listeners;
     protected final EpochUpdateHolder epochUpdateHolder;
 
     // Used in markShardStale to make sure the staleness includes in progress bootstraps
+    // TODO (desired): migrate to BTree
     private transient NavigableMap<TxnId, Ranges> bootstrapBeganAt = emptyBootstrapBeganAt(); // additive (i.e. once inserted, rolled-over until invalidated, and the floor entry contains additions)
     private RedundantBefore redundantBefore = RedundantBefore.EMPTY;
     private MaxConflicts maxConflicts = MaxConflicts.EMPTY;
@@ -188,7 +184,7 @@ public abstract class CommandStore implements AgentExecutor
     protected CommandStore(int id,
                            NodeCommandStoreService node,
                            Agent agent,
-                           DataStore store,
+                           DataStore dataStore,
                            ProgressLog.Factory progressLogFactory,
                            LocalListeners.Factory listenersFactory,
                            EpochUpdateHolder epochUpdateHolder)
@@ -196,7 +192,7 @@ public abstract class CommandStore implements AgentExecutor
         this.id = id;
         this.node = node;
         this.agent = agent;
-        this.store = store;
+        this.dataStore = dataStore;
         this.progressLog = progressLogFactory.create(this);
         this.listeners = listenersFactory.create(this);
         this.epochUpdateHolder = epochUpdateHolder;
@@ -211,7 +207,6 @@ public abstract class CommandStore implements AgentExecutor
 
     public abstract Journal.Loader loader();
 
-    @Override
     public Agent agent()
     {
         return agent;
@@ -270,12 +265,25 @@ public abstract class CommandStore implements AgentExecutor
 
     public void maybeExecuteImmediately(Runnable task)
     {
-        if (inStore()) task.run();
-        else           execute(task);
+        if (inStore())
+        {
+            try { task.run(); }
+            catch (Throwable t) { agent.onUncaughtException(t); }
+        }
+        else
+        {
+            execute(task);
+        }
     }
 
     public abstract AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
     public abstract <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
+
+    @Override
+    public void execute(Runnable command)
+    {
+        execute(command, agent);
+    }
 
     public void execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
     {
@@ -333,6 +341,7 @@ public abstract class CommandStore implements AgentExecutor
      */
     final void unsafeSetSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
     {
+        node.updateStamp();
         this.safeToRead = newSafeToRead;
     }
 
@@ -492,82 +501,10 @@ public abstract class CommandStore implements AgentExecutor
         return maxConflicts.get(keys);
     }
 
-    protected void unsafeRunIn(Runnable fn)
-    {
-        CommandStore prev = maybeCurrent();
-        CURRENT_STORE.set(this);
-        try
-        {
-            fn.run();
-        }
-        finally
-        {
-            if (prev == null) CURRENT_STORE.remove();
-            else CURRENT_STORE.set(prev);
-        }
-    }
-
-    protected <T> T unsafeRunIn(Callable<T> fn) throws Exception
-    {
-        CommandStore prev = maybeCurrent();
-        CURRENT_STORE.set(this);
-        try
-        {
-            return fn.call();
-        }
-        finally
-        {
-            if (prev == null) CURRENT_STORE.remove();
-            else CURRENT_STORE.set(prev);
-        }
-    }
-
     @Override
     public String toString()
     {
         return getClass().getSimpleName() + "{id=" + id + ", node=" + node.id().id + '}';
-    }
-
-    @Nullable
-    public static CommandStore maybeCurrent()
-    {
-        return CURRENT_STORE.get();
-    }
-
-    public static CommandStore current()
-    {
-        CommandStore cs = maybeCurrent();
-        if (cs == null)
-            throw illegalState("Attempted to access current CommandStore, but not running in a CommandStore");
-        return cs;
-    }
-
-    public static CommandStore currentOrElseSelect(Node node, Route<?> route)
-    {
-        CommandStore cs = maybeCurrent();
-        if (cs == null)
-            return node.commandStores().select(route);
-        return cs;
-    }
-
-    protected static void register(CommandStore store)
-    {
-        if (!store.inStore())
-            throw illegalState("Unable to register a CommandStore when not running in it; store " + store);
-        CURRENT_STORE.set(store);
-    }
-
-    public static void checkInStore()
-    {
-        CommandStore store = maybeCurrent();
-        if (store == null) throw illegalState("Expected to be running in a CommandStore but is not");
-    }
-
-    public static void checkNotInStore()
-    {
-        CommandStore store = maybeCurrent();
-        if (store != null)
-            throw illegalState("Expected to not be running in a CommandStore, but running in " + store);
     }
 
     /**
@@ -840,6 +777,11 @@ public abstract class CommandStore implements AgentExecutor
         }
     }
 
+    public final DataStore unsafeGetDataStore()
+    {
+        return dataStore;
+    }
+
     final synchronized void markSafeToRead(Timestamp forBootstrapAt, Timestamp at, Ranges ranges)
     {
         execute(empty(), safeStore -> {
@@ -912,5 +854,10 @@ public abstract class CommandStore implements AgentExecutor
     public static NavigableMap<Timestamp, Ranges> emptySafeToRead()
     {
         return ImmutableSortedMap.of(Timestamp.NONE, Ranges.EMPTY);
+    }
+
+    public NodeCommandStoreService node()
+    {
+        return node;
     }
 }

@@ -47,7 +47,7 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
 
     public ListFetchCoordinator(Node node, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore, ListStore listStore)
     {
-        super(node, ranges, syncPoint, fetchRanges, commandStore);
+        super(node, node.someSequentialExecutor(), ranges, syncPoint, fetchRanges, commandStore);
         this.listStore = listStore;
     }
 

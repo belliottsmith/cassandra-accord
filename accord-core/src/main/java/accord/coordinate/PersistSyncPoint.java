@@ -19,7 +19,9 @@
 package accord.coordinate;
 
 import accord.api.Result;
+import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Apply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -34,9 +36,9 @@ import accord.utils.SortedArrays;
 
 public class PersistSyncPoint extends Persist
 {
-    public PersistSyncPoint(Node node, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, FullRoute<?> route)
+    public PersistSyncPoint(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, FullRoute<?> route)
     {
-        super(node, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, informDurableOnDone, Apply.FACTORY);
+        super(node, executor, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, CoordinationFlags.none(), informDurableOnDone, Apply.FACTORY);
     }
 
     @Override
@@ -51,11 +53,11 @@ public class PersistSyncPoint extends Persist
         {
             for (Node.Id to : contact)
             {
-                Apply apply = factory.create(kind, to, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route);
+                Apply apply = factory.create(kind, to, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags.get(to));
                 if (apply == null)
                     tracker.recordSuccess(to);
                 else
-                    node.send(to, apply, this);
+                    node.send(to, apply, executor, this);
             }
         }
     }

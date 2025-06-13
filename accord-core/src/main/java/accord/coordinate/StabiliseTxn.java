@@ -22,6 +22,7 @@ import java.util.function.BiConsumer;
 
 import accord.api.Result;
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -34,9 +35,9 @@ import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 
 public class StabiliseTxn extends Stabilise<Result>
 {
-    StabiliseTxn(Node node, Topologies coordinates, Topologies all, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps unstableDeps, BiConsumer<? super Result, Throwable> callback)
+    StabiliseTxn(Node node, SequentialAsyncExecutor executor, Topologies coordinates, Topologies all, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps unstableDeps, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, coordinates, all, route, route, txnId, ballot, txn, executeAt, unstableDeps, callback);
+        super(node, executor, coordinates, all, route, route, txnId, ballot, txn, executeAt, unstableDeps, callback);
     }
 
     @Override

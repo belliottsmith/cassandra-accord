@@ -18,6 +18,7 @@
 
 package accord.api;
 
+import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -35,6 +36,12 @@ public interface Data
             Invariants.require(data == null || data == NOOP_DATA, "Can't mix no op Data with other implementations of Data");
             return NOOP_DATA;
         }
+
+        @Override
+        public Data without(Ranges ranges)
+        {
+            return this;
+        }
     };
 
     /**
@@ -42,9 +49,14 @@ public interface Data
      * This method may modify the current object and return itself.
      */
     Data merge(Data data);
+    Data without(Ranges ranges);
 
     /**
      * Optionally perform some validity checks prior to sending this object as a read reply
      */
-    default void validateReply(TxnId txnId, Timestamp executeAt) {}
+    default boolean validateReply(TxnId txnId, Timestamp executeAt, boolean futureReadPossible)
+    {
+        Invariants.require(!futureReadPossible);
+        return true;
+    }
 }

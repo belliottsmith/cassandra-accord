@@ -34,6 +34,7 @@ import accord.local.Command.WaitingOn.Update;
 import accord.local.CommandStores.RangesForEpochSupplier;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;
+import accord.local.cfk.SafeCommandsForKey;
 import accord.messages.Accept;
 import accord.messages.Commit;
 import accord.primitives.AbstractUnseekableKeys;
@@ -120,6 +121,7 @@ import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
+import static accord.utils.Invariants.nonNull;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 public class Commands
@@ -236,11 +238,11 @@ public class Commands
         return true;
     }
 
-    private static AcceptOutcome maybeRejectAccept(Ballot ballot, Timestamp executeAt, Command command)
+    private static AcceptOutcome maybeRejectAccept(Ballot ballot, Timestamp executeAt, Command command, boolean isNotAccept)
     {
         Status status = command.status();
         int compareStatus = status.compareTo(PreCommitted);
-        if (compareStatus > 0)
+        if (compareStatus >= 0 && (compareStatus > 0 || isNotAccept))
         {
             logger.trace("{}: skipping accept/notaccept - already committed/invalidated ({})", command.txnId(), status);
             return AcceptOutcome.Redundant;
@@ -269,7 +271,7 @@ public class Commands
     {
         final Command command = safeCommand.current();
         {
-            AcceptOutcome reject = maybeRejectAccept(ballot, executeAt, command);
+            AcceptOutcome reject = maybeRejectAccept(ballot, executeAt, command, false);
             if (reject != null)
                 return reject;
         }
@@ -293,7 +295,7 @@ public class Commands
     {
         final Command command = safeCommand.current();
         {
-            AcceptOutcome reject = maybeRejectAccept(ballot, null, command);
+            AcceptOutcome reject = maybeRejectAccept(ballot, null, command, true);
             if (reject != null)
                 return reject;
         }
@@ -482,6 +484,12 @@ public class Commands
 
     public static ApplyOutcome apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, Result result)
     {
+        return apply(SaveStatus.PreApplied, safeStore, safeCommand, participants, ballot, txnId, route, executeAt, deps, txn, writes, result);
+    }
+
+    public static ApplyOutcome apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, Result result)
+    {
+        Invariants.require(newSaveStatus == SaveStatus.PreApplied || newSaveStatus == Applying || newSaveStatus == SaveStatus.Applied);
         Command command = safeCommand.current();
         if (command.hasBeen(PreApplied))
         {
@@ -519,19 +527,54 @@ public class Commands
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
-        WaitingOn waitingOn = !command.hasBeen(Stable) ? initialiseWaitingOn(safeStore, txnId,  executeAt, participants, partialDeps)
-                                                       : command.asCommitted().waitingOn();
+        WaitingOn waitingOn = newSaveStatus != SaveStatus.PreApplied
+                              ? WaitingOn.none(txnId.domain(), partialDeps)
+                              : command.hasBeen(Stable)
+                                ? nonNull(command.asCommitted().waitingOn())
+                                : initialiseWaitingOn(safeStore, txnId,  executeAt, participants, partialDeps);
 
         Ballot promised = command.promised();
         if (promised.compareTo(ballot) <= 0)
             promised = ballot;
-        safeCommand.preapplied(safeStore, participants, promised, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
-        if (logger.isTraceEnabled())
-            logger.trace("{}: apply, status set to Executed with executeAt: {}, deps: {}", txnId, executeAt, partialDeps);
 
-        // must signal preapplied first, else we may be applied (and have cleared progress log state) already before maybeExecute exits
-        maybeExecute(safeStore, safeCommand, true, true);
-        safeStore.agent().eventListener().onExecuted(command);
+        if (newSaveStatus == SaveStatus.PreApplied && !waitingOn.isWaiting())
+            newSaveStatus = Applying;
+        if (newSaveStatus == Applying && (!txnId.is(Write) || writes == null || !writes.keys.intersects(participants.stillExecutes())))
+            newSaveStatus = SaveStatus.Applied;
+
+        switch (newSaveStatus)
+        {
+            default: throw UnhandledEnum.invalid(newSaveStatus);
+            case PreApplied:
+            {
+                Command.Executed executed = safeCommand.preapplied(safeStore, participants, ballot, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
+                logger.trace("{}: preapplied", executed.txnId());
+                // must signal preapplied first, else we may be applied (and have cleared progress log state) already before maybeExecute exits
+                safeStore.agent().eventListener().onPreApplied(executed);
+                maybeExecute(safeStore, safeCommand, true, true);
+                break;
+            }
+            case Applying:
+            {
+                Invariants.require(!waitingOn.isWaiting());
+                Command.Executed executed = safeCommand.applying(safeStore, participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
+                safeStore.agent().eventListener().onPreApplied(executed);
+                safeStore.notifyListeners(safeCommand, command);
+                logger.trace("{}: applying", executed.txnId());
+                applyChain(safeStore, executed).begin(safeStore.agent());
+                break;
+            }
+            case Applied:
+            {
+                Command.Executed executed = safeCommand.applied(safeStore, participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
+                safeStore.agent().eventListener().onPreApplied(executed);
+                safeStore.agent().eventListener().onApplied(executed, -1);
+                safeStore.notifyListeners(safeCommand, command);
+                break;
+            }
+        }
+        if (logger.isTraceEnabled())
+            logger.trace("{}: apply, status set to {} with executeAt: {}, deps: {}", txnId, newSaveStatus, executeAt, partialDeps);
 
         return promised == ballot ? ApplyOutcome.Success : ApplyOutcome.RaceWithRecovery;
     }
@@ -582,8 +625,8 @@ public class Commands
             return;
 
         safeCommand.applied(safeStore, forceApply);
+        safeStore.agent().eventListener().onApplied(command, t0);
         safeStore.notifyListeners(safeCommand, command);
-        if (t0 >= 0) safeStore.agent().eventListener().onApplied(command, t0);
     }
 
     /**
@@ -718,6 +761,16 @@ public class Commands
             if (dep == null || dep.isUnset() || !dep.current().hasBeen(PreCommitted))
                 return;
             updateWaitingOn(store, w, exec, upd, dep);
+        });
+
+        initialise.forEachWaitingOnKey(safeStore, initialise, waiting, (store, upd, cmd, i) -> {
+            SafeCommandsForKey safeCfk = store.ifLoadedAndInitialised(upd.keys.get(i));
+            if (safeCfk == null || safeCfk.isUnset())
+                return;
+
+            if (safeCfk.current().hasUniqueHlcAndIsReadyToExecute(cmd.txnId(), cmd.executeAt(), cmd.partialDeps()))
+                upd.removeWaitingOnKey(i);
+
         });
 
         return initialise;
@@ -1387,6 +1440,8 @@ public class Commands
         Known haveKnown = cur.known();
         Known expectKnown = newStatus.known;
 
+        // TODO (desired): addRoute adds some validation we aren't losing the route from the update in any StoreParticipant updates
+        //   but it might be nice to impose this earlier, or with some clearer semantics
         Invariants.require(addRoute == participants.route());
         if (expectKnown.has(FullRoute) && !isFullRoute(cur.route()) && !isFullRoute(addRoute))
             return INSUFFICIENT;

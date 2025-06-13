@@ -489,8 +489,9 @@ public class DefaultLocalListeners implements LocalListeners
 
             commandStore.execute(entry, safeStore -> {
                 SafeCommand safeCommand = safeStore.unsafeGet(entry);
-                SaveStatus saveStatus = safeCommand.current().saveStatus();
-                Invariants.require(saveStatus.compareTo(entry.await) >= 0);
+                Command command = safeCommand.current();
+                SaveStatus saveStatus = command.saveStatus();
+                Invariants.require(saveStatus.compareTo(entry.await) >= 0 || command.participants().stillTouches().isEmpty());
                 entry.notify(notifySink, safeStore, safeCommand);
             }, commandStore.agent());
             txnListeners = BTreeRemoval.remove(txnListeners, TxnListeners::compareListeners, entry);

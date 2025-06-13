@@ -24,11 +24,11 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.BiConsumer;
 
-public class AsyncChainCombiner<I> extends AsyncChains.Head<I[]>
+public abstract class AsyncChainCombiner<I, O> extends AsyncChains.Head<O>
 {
     private static final AtomicIntegerFieldUpdater<AsyncChainCombiner> REMAINING = AtomicIntegerFieldUpdater.newUpdater(AsyncChainCombiner.class, "remaining");
     private volatile Object state;
-    private volatile BiConsumer<? super I[], Throwable> callback;
+    private volatile BiConsumer<? super O, Throwable> callback;
     private volatile int remaining;
 
     public AsyncChainCombiner(List<? extends AsyncChain<? extends I>> inputs)
@@ -66,7 +66,7 @@ public class AsyncChainCombiner<I> extends AsyncChains.Head<I[]>
         I[] results = results();
         results[idx] = result;
         if (REMAINING.decrementAndGet(this) == 0)
-            callback.accept(results, null);
+            callback.accept(process(results), null);
     }
 
     private BiConsumer<I, Throwable> callbackFor(int idx)
@@ -74,8 +74,10 @@ public class AsyncChainCombiner<I> extends AsyncChains.Head<I[]>
         return (result, failure) -> callback(idx, result, failure);
     }
 
+    abstract O process(I[] inputs);
+
     @Override
-    protected Cancellable start(BiConsumer<? super I[], Throwable> callback)
+    protected Cancellable start(BiConsumer<? super O, Throwable> callback)
     {
         List<? extends AsyncChain<? extends I>> chains = inputs();
         state = new Object[chains.size()];

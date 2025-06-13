@@ -24,6 +24,7 @@ import javax.annotation.Nonnull;
 
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
 import accord.primitives.FullRoute;
 import accord.primitives.TxnId;
@@ -41,6 +42,7 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 abstract class AbstractCoordinatePreAccept<T, R> implements Callback<R>
 {
     final Node node;
+    final SequentialAsyncExecutor executor;
     final TxnId txnId;
     final FullRoute<?> route;
 
@@ -48,14 +50,15 @@ abstract class AbstractCoordinatePreAccept<T, R> implements Callback<R>
     final BiConsumer<T, Throwable> callback;
     private boolean isDone;
 
-    AbstractCoordinatePreAccept(Node node, FullRoute<?> route, @Nonnull TxnId txnId, BiConsumer<T, Throwable> callback)
+    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, BiConsumer<T, Throwable> callback)
     {
-        this(node, route, txnId, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
+        this(node, executor, route, txnId, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
     }
 
-    AbstractCoordinatePreAccept(Node node, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies, BiConsumer<T, Throwable> callback)
+    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies, BiConsumer<T, Throwable> callback)
     {
         this.node = node;
+        this.executor = executor;
         this.txnId = txnId;
         this.route = route;
         this.topologies = topologies;
@@ -128,7 +131,7 @@ abstract class AbstractCoordinatePreAccept<T, R> implements Callback<R>
         Invariants.require(!isDone);
         isDone = true;
         long latestEpoch = executeAtEpoch();
-        if (latestEpoch > topologies.currentEpoch()) node.withEpochExact(latestEpoch, callback, t -> WrappableException.wrap(t), () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
+        if (latestEpoch > topologies.currentEpoch()) node.withEpochExact(latestEpoch, executor, callback, t -> WrappableException.wrap(t), () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
         else onPreAccepted(topologies);
     }
 

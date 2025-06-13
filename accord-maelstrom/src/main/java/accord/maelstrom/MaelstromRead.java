@@ -19,7 +19,6 @@
 package accord.maelstrom;
 
 import accord.api.Data;
-import accord.api.DataStore;
 import accord.api.Key;
 import accord.api.Read;
 import accord.local.SafeCommandStore;
@@ -49,9 +48,12 @@ public class MaelstromRead implements Read
     }
 
     @Override
-    public AsyncChain<Data> read(Seekable key, SafeCommandStore commandStore, Timestamp executeAt, DataStore store)
+    public AsyncChain<Data> read(SafeCommandStore safeStore, Seekable key, Timestamp executeAt)
     {
-        MaelstromStore s = (MaelstromStore)store;
+        if (key == null)
+            return AsyncChains.success(new MaelstromData());
+
+        MaelstromStore s = (MaelstromStore)safeStore.dataStore();
         MaelstromData result = new MaelstromData();
         result.put((Key)key, s.get((Key)key));
         return AsyncChains.success(result);

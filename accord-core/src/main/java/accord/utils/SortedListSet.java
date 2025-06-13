@@ -26,12 +26,14 @@ import java.util.NoSuchElementException;
 // TODO (expected): make a hashing version of this class; have Node.Id support both approaches
 public abstract class SortedListSet<K extends Comparable<? super K>> extends AbstractSet<K>
 {
-    static class SmallSortedListSet<K extends Comparable<? super K>> extends SortedListSet<K>
+    private static final SmallSortedListSet ALWAYS_EMPTY = new SmallSortedListSet(new SortedArrays.SortedArrayList(new Comparable[0]));
+
+    public static class SmallSortedListSet<K extends Comparable<? super K>> extends SortedListSet<K>
     {
         long bits;
         int size;
 
-        private SmallSortedListSet(SortedList<K> list)
+        protected SmallSortedListSet(SortedList<K> list)
         {
             super(list);
         }
@@ -91,11 +93,11 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
         }
     }
 
-    static class LargeSortedListSet<K extends Comparable<? super K>> extends SortedListSet<K>
+    public static class LargeSortedListSet<K extends Comparable<? super K>> extends SortedListSet<K>
     {
         final SimpleBitSet bits;
 
-        LargeSortedListSet(SortedList<K> list)
+        protected LargeSortedListSet(SortedList<K> list)
         {
             super(list);
             this.bits = new SimpleBitSet(list.size());
@@ -153,6 +155,11 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
     public static <K extends Comparable<? super K>> SortedListSet<K> empty(SortedList<K> list)
     {
         return list.size() <= 64 ? new SmallSortedListSet<>(list) : new LargeSortedListSet<>(list);
+    }
+
+    public static <K extends Comparable<? super K>> SortedListSet<K> alwaysEmpty()
+    {
+        return ALWAYS_EMPTY;
     }
 
     final SortedList<K> list;
