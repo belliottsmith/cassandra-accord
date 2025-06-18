@@ -76,6 +76,7 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_DURABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_NOT_DURABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.ERASED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TO_SUMMARY_STATUS;
@@ -1573,7 +1574,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     private CommandsForKeyUpdate update(InternalStatus newStatus, Command updated, @Nullable LoadingPruned loading)
     {
         TxnId txnId = updated.txnId();
-        Invariants.requireArgument(updated.participants().hasTouched(key) || !manages(txnId));
+        Invariants.requireArgument(updated.participants().hasTouched(key) || !manages(txnId) || newStatus.compareTo(ERASED) >= 0);
 
         if (txnId.compareTo(redundantBefore()) < 0)
             return this;

@@ -435,7 +435,7 @@ public class Commands
         if (command.hasBeen(Truncated))
             return;
 
-        safeCommand.set(erased(command));
+        safeCommand.set(erased(txnId));
     }
 
     public static void commitInvalidate(SafeCommandStore safeStore, SafeCommand safeCommand, Unseekables<?> scope)
@@ -957,7 +957,7 @@ public class Commands
                 Invariants.require(command.saveStatus() != Erased);
 
             case EXPUNGE:
-                result = erased(command, newParticipants);
+                result = erased(command.txnId());
                 break;
         }
         return result;

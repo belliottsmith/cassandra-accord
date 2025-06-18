@@ -97,6 +97,7 @@ import static accord.impl.CommandChange.unsetIterable;
 import static accord.impl.CommandChange.validateFlags;
 import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.EXPUNGE;
+import static accord.local.Cleanup.INVALIDATE;
 import static accord.local.Cleanup.Input;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.Input.PARTIAL;
@@ -812,6 +813,14 @@ public class InMemoryJournal implements Journal
                         break;
                     case RESULT:
                         changes.put(RESULT, after.result());
+                        break;
+                    case CLEANUP:
+                        switch (after.saveStatus())
+                        {
+                            default: throw new UnhandledEnum(after.saveStatus());
+                            case Erased: changes.put(CLEANUP, ERASE); break;
+                            case Invalidated: changes.put(CLEANUP, INVALIDATE); break;
+                        }
                         break;
                     default: throw new UnhandledEnum(field);
                 }

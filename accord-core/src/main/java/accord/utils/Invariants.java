@@ -200,6 +200,12 @@ public class Invariants
             onUnexpected.accept(illegalState(format(fmt, p1, p2, p3)));
     }
 
+    public static void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, long p3)
+    {
+        if (!condition)
+            onUnexpected.accept(illegalState(format(fmt, p1, p2, p3)));
+    }
+
     public static <P> void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable P p3, Function<? super P, Object> transformP3)
     {
         if (!condition)
@@ -276,6 +282,12 @@ public class Invariants
     {
         if (!condition)
             throw illegalState(format(fmt, p1, p2, p3, p4));
+    }
+
+    public static void require(boolean condition, String fmt, long p1, long p2, long p3, Object p4, Object p5)
+    {
+        if (!condition)
+            throw illegalState(format(fmt, p1, p2, p3, p4, p5));
     }
 
     public static void require(boolean condition, String fmt, @Nullable Object p1)
