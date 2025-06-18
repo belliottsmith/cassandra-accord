@@ -459,6 +459,7 @@ public class CommandChange
             if (cleanup != null && addCleanup.compareTo(cleanup) <= 0)
                 return false;
 
+            hasUpdate = true;
             cleanup = addCleanup;
             if (!cleanup.appliesTo(saveStatus))
                 return false;
@@ -574,7 +575,7 @@ public class CommandChange
                     return vestigial(txnId, participants);
                 case Erased:
                     // TODO (expected): why are we saving Durability here for erased commands?
-                    return erased(txnId, durability, participants);
+                    return erased(txnId);
                 case Invalidated:
                     return invalidated(txnId, participants);
             }
@@ -709,6 +710,9 @@ public class CommandChange
         }
 
         flags |= eraseKnownFieldsMask[saveStatus.ordinal()];
+        if (saveStatus.compareTo(SaveStatus.Erased) >= 0 && (before == null || before.saveStatus() != saveStatus))
+            flags |= setChanged(CLEANUP, flags);
+
         return flags;
     }
 

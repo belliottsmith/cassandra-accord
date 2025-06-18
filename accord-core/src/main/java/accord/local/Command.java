@@ -67,6 +67,7 @@ import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
+import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.SaveStatus.TruncatedUnapplied;
@@ -398,20 +399,9 @@ public abstract class Command implements ICommand
 
     public static class Truncated extends Command
     {
-        public static Truncated erased(Command command)
+        public static Truncated erased(TxnId txnId)
         {
-            return erased(command, command.participants());
-        }
-
-        public static Truncated erased(Command command, StoreParticipants participants)
-        {
-            Durability durability = Durability.mergeAtLeast(command.durability(), UniversalOrInvalidated);
-            return erased(command.txnId(), durability, participants);
-        }
-
-        public static Truncated erased(TxnId txnId, Status.Durability durability, StoreParticipants participants)
-        {
-            return validate(new Truncated(txnId, SaveStatus.Erased, durability, participants, null, null, null, null));
+            return validate(new Truncated(txnId, SaveStatus.Erased, UniversalOrInvalidated, StoreParticipants.empty(txnId), null, null, null, null));
         }
 
         public static Truncated vestigial(Command command)
@@ -1587,6 +1577,9 @@ public abstract class Command implements ICommand
         Invariants.require(txnId.hasOnlyIdentityFlags(), "%s has non-identity flags", txnId);
 
         SaveStatus saveStatus = validate.saveStatus();
+        if (saveStatus == Erased)
+            return validate;
+
         StoreParticipants participants = validate.participants();
         Invariants.require(!participants.hasTouched().isEmpty() || saveStatus == Uninitialised, "%s(%s): hasTouched is empty. %s", txnId, saveStatus, participants);
         Known known = validate.known();

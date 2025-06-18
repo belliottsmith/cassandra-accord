@@ -178,7 +178,10 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         SaveStatus saveStatus = command.saveStatus();
         if (command.participants().isPureOwns() || (!saveStatus.known.deps().hasProposedOrDecidedDeps() && saveStatus.known.definition() != DefinitionKnown))
         {
-            Participants<?> validFor = query.owns().intersecting(command.participants().owns());
+            Participants<?> validFor = query.owns();
+            if (saveStatus != SaveStatus.Erased) // no StoreParticipants for Erased commands
+                validFor = validFor.intersecting(command.participants().owns());
+
             KnownMap result = KnownMap.create(validFor, saveStatus.known);
             if (validFor != query.owns())
                 result = KnownMap.merge(result, KnownMap.create(query.owns(), saveStatus.known.validForAll()));
