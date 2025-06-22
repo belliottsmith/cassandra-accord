@@ -739,7 +739,6 @@ public abstract class InMemoryCommandStore extends CommandStore
             final Kinds kinds = new Kinds(Read, ExclusiveSyncPoint);
             return commandsForRanges = new ByTxnIdSnapshot()
             {
-                @Override public boolean mayContainAny(Txn.Kind kind) { return kinds.test(kind); }
                 @Override public NavigableMap<Timestamp, Summary> byTxnId() { return summaries; }
             };
         }

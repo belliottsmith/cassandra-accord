@@ -85,7 +85,11 @@ public class DefaultLocalListeners implements LocalListeners
         public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, TxnId listenerId)
         {
             SafeCommand listener = safeStore.ifLoadedAndInitialised(listenerId);
-            if (listener != null) Commands.listenerUpdate(safeStore, listener, safeCommand);
+            if (listener != null && safeStore.tryRecurse())
+            {
+                try { Commands.listenerUpdate(safeStore, listener, safeCommand); }
+                finally { safeStore.unrecurse(); }
+            }
             else
             {
                 //noinspection SillyAssignment,ConstantConditions

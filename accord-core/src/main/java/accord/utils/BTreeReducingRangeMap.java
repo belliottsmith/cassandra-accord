@@ -156,6 +156,37 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
         return accumulator;
     }
 
+    public <V2, P1, P2> V2 foldl(RoutingKey start, RoutingKey end, QuadFunction<V, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2)
+    {
+        if (isEmpty())
+            return accumulator;
+
+        int treeSize = BTree.size(tree);
+        int startIdx = findIndex(start);
+        int startPos = startIdx < 0 ? (-1 - startIdx) : startIdx;
+        if (startIdx == treeSize - 1 || startPos == treeSize)
+            return accumulator;  // is last or out of bounds -> we are done
+        if (startIdx < 0) startPos = Math.max(0, startPos - 1); // inclusive
+
+        int endIdx = findIndex(end);
+        int endPos = endIdx < 0 ? (-1 - endIdx) : endIdx;
+        if (endPos == 0)
+            return accumulator;
+
+        endPos = Math.min(endPos - 1, treeSize - 2); // inclusive
+
+        Iterator<Entry<RoutingKey,V>> iterator = BTree.iterator(tree, startPos, endPos, BTree.Dir.ASC);
+
+        while (iterator.hasNext())
+        {
+            Entry<RoutingKey, V> entry = iterator.next();
+            if (entry.hasValue() && entry.value() != null)
+                accumulator = fold.apply(entry.value(), accumulator, p1, p2);
+        }
+
+        return accumulator;
+    }
+
     public int findIndex(RoutableKey key)
     {
         return BTree.findIndex(tree, EntryComparator.instance(), key);

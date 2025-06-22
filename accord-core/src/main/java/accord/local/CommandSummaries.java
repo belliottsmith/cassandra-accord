@@ -31,7 +31,6 @@ import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
@@ -107,7 +106,7 @@ public interface CommandSummaries
         {
             public interface Factory<L extends Loader>
             {
-                L create(Unseekables<?> searchKeysOrRanges, RedundantBefore redundantBefore, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep);
+                L create(@Nullable TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, RedundantBefore redundantBefore, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep);
             }
 
             protected final Unseekables<?> searchKeysOrRanges;
@@ -135,10 +134,10 @@ public interface CommandSummaries
                 Timestamp maxTxnId = primaryTxnId == null || keyHistory == KeyHistory.RECOVER || !primaryTxnId.is(ExclusiveSyncPoint) ? Timestamp.MAX : primaryTxnId;
                 TxnId findAsDep = primaryTxnId != null && keyHistory == KeyHistory.RECOVER ? primaryTxnId : null;
                 Kinds kinds = primaryTxnId == null ? AnyGloballyVisible : primaryTxnId.witnesses().or(keyHistory == KeyHistory.RECOVER ? primaryTxnId.witnessedBy() : Nothing);
-                return factory.create(keysOrRanges, redundantBefore, kinds, minTxnId, maxTxnId, findAsDep);
+                return factory.create(primaryTxnId, keysOrRanges, redundantBefore, kinds, minTxnId, maxTxnId, findAsDep);
             }
 
-            public Loader(Unseekables<?> searchKeysOrRanges, RedundantBefore redundantBefore, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep)
+            public Loader(@Nullable TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, RedundantBefore redundantBefore, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep)
             {
                 this.searchKeysOrRanges = searchKeysOrRanges;
                 this.redundantBefore = redundantBefore;
@@ -274,7 +273,6 @@ public interface CommandSummaries
     interface ByTxnIdSnapshot extends CommandSummaries
     {
         NavigableMap<Timestamp, Summary> byTxnId();
-        default boolean mayContainAny(Txn.Kind kind) { return true; }
 
         default boolean visit(Unseekables<?> keysOrRanges,
                               TxnId testTxnId,

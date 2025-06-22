@@ -287,20 +287,24 @@ class Updating
         return newMaxAppliedPreBootstrapWriteById;
     }
 
-    static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, InternalStatus newStatus, boolean mayExecute, Command command)
+    static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Command command)
     {
         Invariants.require(newStatus.hasDeps);
         Timestamp executeAt = command.executeAt();
-        if (!newStatus.hasExecuteAt || executeAt.equals(txnId)) executeAt = txnId;
+        if (!newStatus.hasExecuteAt || executeAt.equals(plainTxnId)) executeAt = plainTxnId;
         Ballot ballot = Ballot.ZERO;
         if (newStatus.hasBallot)
             ballot = command.acceptedOrCommitted();
 
-        Timestamp depsKnownBefore = newStatus.depsKnownBefore(txnId, executeAt);
+        // TODO (desired): is this the best place to encode this behaviour?
+        if (command.saveStatus().is(Status.Truncated))
+            return TxnInfo.create(plainTxnId, newStatus, mayExecute, executeAt, NO_TXNIDS, ballot);
+
+        Timestamp depsKnownBefore = newStatus.depsKnownBefore(plainTxnId, executeAt);
         MergeCursor<TxnId, DepList> deps = command.partialDeps().txnIds(cfk.key());
         deps.find(cfk.redundantBefore());
 
-        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, mayExecute, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
+        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, plainTxnId, newStatus, mayExecute, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
     }
 
     /**

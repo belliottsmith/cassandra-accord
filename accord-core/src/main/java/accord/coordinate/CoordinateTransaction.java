@@ -195,15 +195,17 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                     case PENDING:
                         this.cancel = cancel;
                         this.timeout = timeout;
-                        return;
+                        break;
                     case TIMEOUT:
-                        timeout = null;
+                        if (cancel != null)
+                            cancel.cancel();
+                        break;
                     case SUCCESS:
-                        cancel = null;
+                        if (timeout != null)
+                            timeout.cancel();
+                        break;
                 }
             }
-            if (cancel != null) cancel.cancel();
-            if (timeout != null) timeout.cancel();
         }
 
         @Override

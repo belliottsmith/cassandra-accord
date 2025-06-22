@@ -172,13 +172,24 @@ public class CheckpointIntervalArray<Ranges, Range, Key>
                 }
                 else if ((ri & BIT29) != 0)
                 {
+                    // TODO (expected): remove this logic in near future; have disabled this optimisation in the builder
                     subStart = ri & 0x1fffffff;
-                    subEnd = Integer.MAX_VALUE;
+                    subEnd = checkpointStart;
+                    for (int prevCheckpoint = checkpoint - 1; prevCheckpoint >= 0; --prevCheckpoint)
+                    {
+                        int prevHeaderBaseIndex = (prevCheckpoint / 4) * 5;
+                        int prevHeaderSubIndex = prevCheckpoint & 3;
+                        int prevHeaderListIndex = prevHeaderBaseIndex + 1 + prevHeaderSubIndex;
+                        int prevCheckpointStart = checkpointLists[prevHeaderListIndex];
+                        if (prevCheckpointStart <= subStart)
+                            break;
+                        subEnd = prevCheckpointStart;
+                    }
                 }
                 else
                 {
                     int length = ri & 0x1fffffff;
-                    subStart = checkpointLists[++i];
+                    subStart = checkpointLists[++i] & 0x7fffffff;
                     subEnd = subStart + length;
                 }
 

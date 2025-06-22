@@ -146,6 +146,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     private transient NavigableMap<TxnId, Ranges> bootstrapBeganAt = emptyBootstrapBeganAt(); // additive (i.e. once inserted, rolled-over until invalidated, and the floor entry contains additions)
     private RedundantBefore redundantBefore = RedundantBefore.EMPTY;
     private MaxConflicts maxConflicts = MaxConflicts.EMPTY;
+    private MaxDecidedRX maxDecidedRX = MaxDecidedRX.EMPTY;
     private int maxConflictsUpdates = 0;
     protected RangesForEpoch rangesForEpoch;
 
@@ -245,6 +246,11 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         return rangesForEpoch;
     }
 
+    public MaxDecidedRX unsafeGetMaxDecidedRX()
+    {
+        return maxDecidedRX;
+    }
+
     final void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
         rangesForEpoch = nonNull(newRangesForEpoch);
@@ -308,6 +314,11 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     public abstract void shutdown();
 
     protected abstract void registerTransitive(SafeCommandStore safeStore, RangeDeps deps);
+
+    protected void unsafeSetMaxDecidedRX(MaxDecidedRX newMaxDecidedRX)
+    {
+        this.maxDecidedRX = newMaxDecidedRX;
+    }
 
     protected void unsafeSetRejectBefore(RejectBefore newRejectBefore)
     {
@@ -453,7 +464,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         setMaxConflicts(updatedMaxConflicts);
     }
 
-    public final void markExclusiveSyncPoint(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
+    final void markExclusiveSyncPoint(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
     {
         // TODO (desired): narrow ranges to those that are owned
         Invariants.requireArgument(txnId.is(ExclusiveSyncPoint));
@@ -462,7 +473,12 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         unsafeSetRejectBefore(newRejectBefore);
     }
 
-    public final void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
+    final void markExclusiveSyncPointDecided(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
+    {
+        unsafeSetMaxDecidedRX(maxDecidedRX.update(ranges, txnId));
+    }
+
+    final void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
     {
         // TODO (desired): narrow ranges to those that are owned
         Invariants.requireArgument(txnId.is(ExclusiveSyncPoint));

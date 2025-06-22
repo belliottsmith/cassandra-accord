@@ -884,7 +884,7 @@ public class TopologyManager
     {
         Epochs epochs = this.epochs;
         // No epochs known to Accord
-        if (epochs.firstNonEmptyEpoch == -1)
+        if (epochs.firstNonEmptyEpoch == -1 || minEpoch > epochs.currentEpoch)
             return new TopologyRange(epochs.minEpoch(), epochs.currentEpoch, epochs.firstNonEmptyEpoch, Collections.emptyList());
 
         minEpoch = Math.max(minEpoch, epochs.minEpoch());
