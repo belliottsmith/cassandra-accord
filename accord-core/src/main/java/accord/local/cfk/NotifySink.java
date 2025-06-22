@@ -51,7 +51,11 @@ interface NotifySink
         public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc)
         {
             SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
-            if (safeCommand != null) notWaiting(safeStore, safeCommand, key, uniqueHlc);
+            if (safeCommand != null && safeStore.tryRecurse())
+            {
+                try { notWaiting(safeStore, safeCommand, key, uniqueHlc); }
+                finally { safeStore.unrecurse(); }
+            }
             else
             {
                 safeStore.commandStore().execute(txnId, safeStore0 -> {
@@ -70,7 +74,11 @@ interface NotifySink
         {
             TxnId txnId = notify.plainTxnId();
 
-            if (safeStore.canExecuteWith(txnId)) doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);
+            if (safeStore.canExecuteWith(txnId) && safeStore.tryRecurse())
+            {
+                try { doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk); }
+                finally { safeStore.unrecurse(); }
+            }
             else safeStore.commandStore().execute(txnId, safeStore0 -> {
                 doNotifyWaitingOn(safeStore0, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);
             }, safeStore.agent());
@@ -113,9 +121,10 @@ interface NotifySink
         private void doNotifyAlreadyReady(SafeCommandStore safeStore, TxnId txnId, RoutingKey key)
         {
             SafeCommandsForKey update = safeStore.ifLoadedAndInitialised(key);
-            if (update != null)
+            if (update != null && safeStore.tryRecurse())
             {
-                update.callback(safeStore, safeStore.unsafeGet(txnId).current());
+                try { update.callback(safeStore, safeStore.unsafeGet(txnId).current()); }
+                finally { safeStore.unrecurse(); }
             }
             else
             {

@@ -85,6 +85,7 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
     private static final int BIT31 = 0x80000000;
     private static final int BIT30 = 0x40000000;
     private static final int BIT29 = 0x20000000;
+    private static final int BIT28 = 0x10000000;
     static final int MIN_INDIRECT_LINK_LENGTH = 2;
 
     final Accessor<Ranges, Range, RoutingKey> accessor;
@@ -448,18 +449,23 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
             {
                 int index = t.index & ~BIT31;
                 int length = t.linkLength & ~BIT31;
+                Invariants.require(length < BIT30);
                 if (length <= 0xff && index <= 0xfffff)
                 {
                     lists[listCount++] = BIT31 | BIT30 | (length << 20) | index;
                 }
-                else if (t.linkLength >= 0 && length < BIT30)
-                {
-                    lists[listCount++] = BIT31 | BIT29 | index;
-                }
+//                This logic has been disabled.
+//                It is possible for some pathological cases to have the checkpoint lists run into one another.
+//                So that the search is not guaranteed to stop based on comparison, and an end index can only be computed
+//                by scanning the checkpoint list array, which is fine but not worth the complexity or saving 4 bytes
+//                else if (t.linkLength >= 0)
+//                {
+//                    lists[listCount++] = BIT31 | BIT29 | index;
+//                }
                 else
                 {
                     lists[listCount++] = BIT31 | length;
-                    lists[listCount++] = BIT31 | pending.count();
+                    lists[listCount++] = BIT31 | index;
                 }
             }
         }
@@ -1053,7 +1059,8 @@ public class CheckpointIntervalArrayBuilder<Ranges, Range, RoutingKey>
                         // we may want to reference this list from there
                         // so track count and position of first one to make a determination
                         ++openDirectCount;
-                        if (firstOpenDirect < 0) firstOpenDirect = count;
+                        if (firstOpenDirect < 0)
+                            firstOpenDirect = count;
                     }
                     else hasClosedDirect = true;
                 }

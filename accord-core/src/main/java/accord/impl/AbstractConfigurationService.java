@@ -345,9 +345,9 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         if (epochs.wasTruncated(ready.epoch))
             return;
 
-        ready.metadata.invokeIfSuccess(() -> epochs.acknowledge(ready));
-        ready.coordinate.invokeIfSuccess(() -> localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync));
-        ready.reads.invokeIfSuccess(() ->  localBootstrapsComplete(epochs.getOrCreate(ready.epoch).topology));
+        ready.metadata.invokeIfSuccess(() -> epochs.acknowledge(ready)).begin(agent);
+        ready.coordinate.invokeIfSuccess(() -> localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync)).begin(agent);
+        ready.reads.invokeIfSuccess(() ->  localBootstrapsComplete(epochs.getOrCreate(ready.epoch).topology)).begin(agent);
     }
 
     protected void topologyUpdatePostListenerNotify(Topology topology) {}

@@ -58,6 +58,7 @@ import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applied;
+import static accord.primitives.SaveStatus.Committed;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 import static accord.utils.Invariants.illegalArgument;
@@ -71,6 +72,21 @@ import static accord.utils.Invariants.illegalState;
  */
 public abstract class SafeCommandStore implements RangesForEpochSupplier, RedundantBeforeSupplier, CommandSummaries
 {
+    private static final int MAX_REENTRANCY = 100;
+    private int reentrancyCounter;
+    public boolean tryRecurse()
+    {
+        if (reentrancyCounter == MAX_REENTRANCY)
+            return false;
+        ++reentrancyCounter;
+        return true;
+    }
+    public void unrecurse()
+    {
+        --reentrancyCounter;
+        Invariants.require(reentrancyCounter >= 0);
+    }
+
     /**
      * If the transaction exists (with some associated data) in the CommandStore, return it. Otherwise return null.
      *
@@ -257,6 +273,12 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         {
             Ranges ranges = updated.participants().touches().toRanges();
             commandStore().markExclusiveSyncPoint(this, updated.txnId(), ranges);
+        }
+
+        if (newSaveStatus.compareTo(Committed) >= 0 && oldSaveStatus.compareTo(Committed) < 0 && !newSaveStatus.hasBeen(Status.Truncated))
+        {
+            Ranges ranges = updated.participants().owns().toRanges();
+            commandStore().markExclusiveSyncPointDecided(this, updated.txnId(), ranges);
         }
 
         if (newSaveStatus == Applied && (force || oldSaveStatus != Applied))

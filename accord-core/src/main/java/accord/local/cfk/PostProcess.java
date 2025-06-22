@@ -97,7 +97,11 @@ abstract class PostProcess
             {
                 safeStore = safeStore; // make it unsafe for use in lambda
                 SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
-                if (safeCommand != null) load(safeStore, safeCommand, safeCfk, notifySink);
+                if (safeCommand != null && safeStore.tryRecurse())
+                {
+                    try { load(safeStore, safeCommand, safeCfk, notifySink); }
+                    finally { safeStore.unrecurse(); }
+                }
                 else safeStore.commandStore().execute(contextFor(txnId, RoutingKeys.of(key), SYNC), safeStore0 -> {
                     load(safeStore0, safeStore0.unsafeGet(txnId), safeStore0.get(key), notifySink);
                 }, safeStore.agent());
@@ -205,13 +209,20 @@ abstract class PostProcess
             for (TxnId txnId : notify)
             {
                 SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
-                if (safeCommand != null)
+                if (safeCommand != null && safeStore.tryRecurse())
                 {
-                    CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, UPDATE, addUnmanageds);
-                    if (update != cfk)
+                    try
                     {
-                        Invariants.require(update.cfk() == cfk);
-                        nestedNotify.add(update.postProcess());
+                        CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, UPDATE, addUnmanageds);
+                        if (update != cfk)
+                        {
+                            Invariants.require(update.cfk() == cfk);
+                            nestedNotify.add(update.postProcess());
+                        }
+                    }
+                    finally
+                    {
+                        safeStore.unrecurse();
                     }
                 }
                 else

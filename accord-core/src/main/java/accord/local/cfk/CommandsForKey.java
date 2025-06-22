@@ -19,7 +19,6 @@
 package accord.local.cfk;
 
 import java.util.Arrays;
-import java.util.EnumMap;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.function.Predicate;
@@ -307,11 +306,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public static boolean needsUpdate(SafeCommandStore safeStore, Command prev, Command updated)
     {
-        InternalStatus newStatus = from(safeStore, updated);
+        InternalStatus newStatus = from(safeStore, updated, false);
         if (newStatus == null)
             return updated.known().is(ApplyAtKnown) && updated.executeAt().hasDistinctHlcAndUniqueHlc();
 
-        InternalStatus prevStatus = from(safeStore, prev);
+        InternalStatus prevStatus = from(safeStore, prev, false);
         if (prevStatus != newStatus)
             return true;
 
@@ -857,48 +856,64 @@ public class CommandsForKey extends CommandsForKeyUpdate
         APPLIED_NOT_EXECUTED /*(reserved)*/    (APPLIED,                              true, true, false, true),
         INVALIDATED                            (SummaryStatus.INVALIDATED,            false,false,false, false),
         ERASED                                 (SummaryStatus.NONE,                   false,false,false, false),
-        PRUNED                                 (SummaryStatus.NONE,                   false,false,false, false)
+        PRUNED                                 (SummaryStatus.NONE,                   false,false,false, false),
         ;
 
-        static final EnumMap<SaveStatus, InternalStatus> FROM_SAVE_STATUS = new EnumMap<>(SaveStatus.class);
+        static final InternalStatus[] FROM_SAVE_STATUS = new InternalStatus[SaveStatus.values().length];
+        static final InternalStatus[] FROM_SAVE_STATUS_FILTERED = new InternalStatus[SaveStatus.values().length];
         static final InternalStatus[] VALUES = values();
         static final SummaryStatus[] TO_SUMMARY_STATUS;
 
+        private static void putFromSaveStatus(SaveStatus from, InternalStatus to)
+        {
+            putFromSaveStatus(from, to, false);
+        }
+        
+        private static void putFromSaveStatus(SaveStatus from, InternalStatus to, boolean intermediate)
+        {
+            FROM_SAVE_STATUS[from.ordinal()] = to;
+            if (!intermediate)
+                FROM_SAVE_STATUS_FILTERED[from.ordinal()] = to;
+        }
+        
         static
         {
-            FROM_SAVE_STATUS.put(SaveStatus.PreAccepted, PREACCEPTED_WITHOUT_DEPS);
-            FROM_SAVE_STATUS.put(SaveStatus.PreAcceptedWithVote, PREACCEPTED_WITHOUT_DEPS);
-            FROM_SAVE_STATUS.put(SaveStatus.PreAcceptedWithDeps, PREACCEPTED_WITH_DEPS);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidate, NOTACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedInvalidateWithDefinition, NOTACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedMedium, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedMediumWithDefinition, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedMediumWithDefAndVote, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedSlow, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedSlowWithDefinition, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.AcceptedSlowWithDefAndVote, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommitted, PREACCEPTED_WITHOUT_DEPS);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefinition, PREACCEPTED_WITHOUT_DEPS);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDeps, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithFixedDeps, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefAndDeps, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.PreCommittedWithDefAndFixedDeps, ACCEPTED);
-            FROM_SAVE_STATUS.put(SaveStatus.Committed, COMMITTED);
-            FROM_SAVE_STATUS.put(SaveStatus.Stable, STABLE);
-            FROM_SAVE_STATUS.put(SaveStatus.ReadyToExecute, STABLE);
-            FROM_SAVE_STATUS.put(SaveStatus.PreApplied, STABLE);
-            // SaveStatus.Applying is a transient state; let PreApplied and Applied handle updates
-            FROM_SAVE_STATUS.put(SaveStatus.Applied, APPLIED_NOT_DURABLE);
-            // We don't map TruncatedApplyX or Erased as we want to retain them as APPLIED
+            putFromSaveStatus(SaveStatus.PreAccepted, PREACCEPTED_WITHOUT_DEPS);
+            putFromSaveStatus(SaveStatus.PreAcceptedWithVote, PREACCEPTED_WITHOUT_DEPS);
+            putFromSaveStatus(SaveStatus.PreAcceptedWithDeps, PREACCEPTED_WITH_DEPS);
+            putFromSaveStatus(SaveStatus.AcceptedInvalidate, NOTACCEPTED);
+            putFromSaveStatus(SaveStatus.AcceptedInvalidateWithDefinition, NOTACCEPTED);
+            putFromSaveStatus(SaveStatus.AcceptedMedium, ACCEPTED);
+            putFromSaveStatus(SaveStatus.AcceptedMediumWithDefinition, ACCEPTED);
+            putFromSaveStatus(SaveStatus.AcceptedMediumWithDefAndVote, ACCEPTED);
+            putFromSaveStatus(SaveStatus.AcceptedSlow, ACCEPTED);
+            putFromSaveStatus(SaveStatus.AcceptedSlowWithDefinition, ACCEPTED);
+            putFromSaveStatus(SaveStatus.AcceptedSlowWithDefAndVote, ACCEPTED);
+            putFromSaveStatus(SaveStatus.PreCommitted, PREACCEPTED_WITHOUT_DEPS);
+            putFromSaveStatus(SaveStatus.PreCommittedWithDefinition, PREACCEPTED_WITHOUT_DEPS);
+            putFromSaveStatus(SaveStatus.PreCommittedWithDeps, ACCEPTED);
+            putFromSaveStatus(SaveStatus.PreCommittedWithFixedDeps, ACCEPTED);
+            putFromSaveStatus(SaveStatus.PreCommittedWithDefAndDeps, ACCEPTED);
+            putFromSaveStatus(SaveStatus.PreCommittedWithDefAndFixedDeps, ACCEPTED);
+            putFromSaveStatus(SaveStatus.Committed, COMMITTED);
+            putFromSaveStatus(SaveStatus.Stable, STABLE);
+            putFromSaveStatus(SaveStatus.ReadyToExecute, STABLE);
+            putFromSaveStatus(SaveStatus.PreApplied, STABLE);
+            putFromSaveStatus(SaveStatus.Applying, STABLE);
+            putFromSaveStatus(SaveStatus.Applied, APPLIED_NOT_DURABLE);
+            putFromSaveStatus(SaveStatus.TruncatedApplyWithOutcome, APPLIED_DURABLE, true);
+            putFromSaveStatus(SaveStatus.TruncatedApply, APPLIED_DURABLE, true);
+            putFromSaveStatus(SaveStatus.TruncatedUnapplied, APPLIED_DURABLE, true);
+            putFromSaveStatus(SaveStatus.Erased, ERASED, true);
             // esp. to support pruning where we expect the prunedBefore entr*ies* to be APPLIED
             // Note importantly that we have multiple logical pruned befores - the last APPLIED
             // write per epoch is retained to cleanly support
             // TODO (desired): can we improve our semantics here to at least PRUNE truncated commands if there's a superseding APPLIED command?
             // TODO (desired): move all truncated to ERASED, but we have to handle the case we erase our prunedBefore boundary
-            FROM_SAVE_STATUS.put(SaveStatus.Vestigial, ERASED);
-            FROM_SAVE_STATUS.put(SaveStatus.Invalidated, INVALIDATED);
+            putFromSaveStatus(SaveStatus.Vestigial, ERASED);
+            putFromSaveStatus(SaveStatus.Invalidated, INVALIDATED);
             for (SaveStatus saveStatus : SaveStatus.values())
-                Invariants.require(FROM_SAVE_STATUS.get(saveStatus) != null || saveStatus.is(Status.Truncated) || saveStatus.is(Status.NotDefined) || saveStatus == SaveStatus.Applying);
+                Invariants.require(FROM_SAVE_STATUS[saveStatus.ordinal()] != null || saveStatus.is(Status.NotDefined));
 
             SummaryStatus[] summaryStatuses = SummaryStatus.values();
             TO_SUMMARY_STATUS = Arrays.copyOf(summaryStatuses, summaryStatuses.length + 1);
@@ -964,7 +979,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         @VisibleForTesting
         public static InternalStatus from(SaveStatus status)
         {
-            return FROM_SAVE_STATUS.get(status);
+            return FROM_SAVE_STATUS[status.ordinal()];
         }
 
         @VisibleForTesting
@@ -984,9 +999,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
             return result;
         }
 
-        public static InternalStatus from(SafeCommandStore safeStore, Command command)
+        public static InternalStatus from(SafeCommandStore safeStore, Command command, boolean includeIntermediate)
         {
-            InternalStatus status = from(command.saveStatus());
+            SaveStatus saveStatus = command.saveStatus();
+            InternalStatus status = (includeIntermediate ? FROM_SAVE_STATUS : FROM_SAVE_STATUS_FILTERED)[saveStatus.ordinal()];
             if (status == APPLIED_NOT_DURABLE && command.durability().isDurable())
                 status = APPLIED_DURABLE;
             if (status == PREACCEPTED_WITH_DEPS && command.txnId().node.equals(safeStore.node().id()) && !Ballot.ZERO.equals(command.promised()))
@@ -1345,7 +1361,6 @@ public class CommandsForKey extends CommandsForKeyUpdate
     {
         visitor.visitMaxAppliedHlc(maxUniqueHlc);
 
-        TxnId prunedBefore = prunedBefore();
         int end = insertPos(startedBefore);
         // We only filter durable transactions less than BOTH the txnId and executeAt of our max preceding write.
         // This is to avoid the following pre-bootstrap edge case, so this filtering can be made stricter in future:
@@ -1546,12 +1561,14 @@ public class CommandsForKey extends CommandsForKeyUpdate
     private CommandsForKeyUpdate update(SafeCommandStore safeStore, Command update, @Nullable LoadingPruned loading)
     {
         Invariants.require(manages(update.txnId()));
-        InternalStatus newStatus = from(safeStore, update);
+        InternalStatus newStatus = from(safeStore, update, true);
         if (newStatus == null)
         {
             if (loading == null)
             {
                 // handle replay of TruncatedApply with uniqueHlc
+                // note: this is no longer needed because we will replay TruncatedApply entries,
+                // but we keep the logic in case we modify that behaviour later
                 if (update.known().is(ApplyAtKnown))
                     return updateUniqueHlc(update.executeAt().uniqueHlc());
                 return this;
