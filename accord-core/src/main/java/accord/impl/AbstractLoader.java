@@ -22,6 +22,7 @@ import accord.api.Journal;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
+import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Participants;
@@ -55,7 +56,7 @@ public abstract class AbstractLoader implements Journal.Loader
                 {
                     command.writes()
                            .apply(safeStore, executes, command.partialTxn())
-                           .invoke(() -> unsafeStore.build(txnId, ss -> {
+                           .invoke(() -> unsafeStore.build(PreLoadContext.contextFor(txnId, "Replay"), ss -> {
                                Commands.postApply(ss, txnId, -1, true);
                            }))
                            .begin(safeStore.agent());

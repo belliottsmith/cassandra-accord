@@ -458,15 +458,15 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     @VisibleForTesting
     static class ReducingAsyncChain<V> extends AbstractReducingAsyncChain<V, V>
     {
-        private final Reduce<? super V, ? extends V> reducer;
+        private final Reduce<V, V> reducer;
 
-        private ReducingAsyncChain(List<? extends AsyncChain<? extends V>> list, Reduce<? super V, ? extends V> reducer)
+        private ReducingAsyncChain(List<? extends AsyncChain<? extends V>> list, Reduce<V, V> reducer)
         {
             super(list);
             this.reducer = reducer;
         }
 
-        private ReducingAsyncChain(AsyncChain<V> accum, AsyncChain<V> add, Reduce<? super V, ? extends V> reducer)
+        private ReducingAsyncChain(AsyncChain<V> accum, AsyncChain<V> add, Reduce<V, V> reducer)
         {
             super(accum, add);
             this.reducer = reducer;
@@ -703,34 +703,34 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         };
     }
 
-    public static <V> AsyncChain<V> reduce(List<? extends AsyncChain<? extends V>> chains, Reduce<? super V, ? extends V> reducer)
+    public static <V> AsyncChain<V> reduce(List<? extends AsyncChain<? extends V>> chains, Reduce<V, V> reducer)
     {
         if (chains.size() == 1)
             return (AsyncChain<V>) chains.get(0);
         return new ReducingAsyncChain<>(chains, reducer);
     }
 
-    public static <I, O> AsyncChain<O> reduce(List<? extends AsyncChain<? extends I>> chains, BiFunction<? super I, ? super O, ? extends O> reducer, O identity)
+    public static <I, O> AsyncChain<O> reduce(List<? extends AsyncChain<? extends I>> chains, Reduce<I, O> reducer, O identity)
     {
         switch (chains.size())
         {
             case 0: return AsyncChains.success(identity);
-            case 1: return chains.get(0).map(a -> reducer.apply(a, identity));
+            case 1: return chains.get(0).map(a -> reducer.reduce(identity, a));
         }
-        return new AbstractReducingAsyncChain<I, O>(chains)
+        return new AbstractReducingAsyncChain<>(chains)
         {
             @Override
             O process(I[] inputs)
             {
                 O result = identity;
                 for (I input : inputs)
-                    result = reducer.apply(input, identity);
+                    result = reducer.reduce(result, input);
                 return result;
             }
         };
     }
 
-    public static <V> AsyncChain<V> reduce(AsyncChain<V> accum, AsyncChain<V> add, Reduce<? super V, ? extends V> reducer)
+    public static <V> AsyncChain<V> reduce(AsyncChain<V> accum, AsyncChain<V> add, Reduce<V, V> reducer)
     {
         if (ReducingAsyncChain.match(accum, reducer))
         {

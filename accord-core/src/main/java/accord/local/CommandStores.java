@@ -81,7 +81,6 @@ import org.agrona.collections.Int2IntHashMap;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.ConfigurationService.EpochReady.done;
-import static accord.local.PreLoadContext.empty;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 import static java.util.stream.Collectors.toList;
@@ -813,17 +812,13 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return initial;
     }
 
-    public AsyncChain<Void> forEach(Consumer<SafeCommandStore> forEach)
+    public AsyncChain<Void> forEach(PreLoadContext context, Consumer<SafeCommandStore> forEach)
     {
         List<AsyncChain<Void>> list = new ArrayList<>();
         Snapshot snapshot = current;
         for (ShardHolder shard : snapshot.shards)
-            list.add(shard.store.build(empty(), forEach));
-
-        if (list.isEmpty())
-            return AsyncResults.success(null);
-
-        return AsyncChains.reduce(list, Reduce.toNull());
+            list.add(shard.store.build(context, forEach));
+        return AsyncChains.reduce(list, Reduce.toNull(), null);
     }
 
     public void forEachCommandStore(Consumer<CommandStore> forEach)
@@ -933,18 +928,18 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return mapReduce(CommandStore::build, context, mapReduce, mapReduce, unseekables, minEpoch, maxEpoch);
     }
 
-    public <O> Cancellable mapReduceConsume(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<? super O, ? extends O> reduce, BiConsumer<? super O, Throwable> consume)
+    public <O> Cancellable mapReduceConsume(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<O, O> reduce, BiConsumer<? super O, Throwable> consume)
     {
         AsyncChain<O> reduced = mapReduce(unseekables, minEpoch, maxEpoch, map, reduce);
         return reduced.begin(consume);
     }
 
-    public <O> AsyncChain<O> mapReduce(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<? super O, ? extends O> reducer)
+    public <O> AsyncChain<O> mapReduce(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<O, O> reducer)
     {
         return mapReduce((commandStore, i, f) -> f.apply(commandStore), null, map, reducer, unseekables, minEpoch, maxEpoch);
     }
 
-    public <O, P1, P2> AsyncChain<O> mapReduce(TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<? super O, ? extends O> reducer, Unseekables<?> unseekables, long minEpoch, long maxEpoch)
+    public <O, P1, P2> AsyncChain<O> mapReduce(TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<O, O> reducer, Unseekables<?> unseekables, long minEpoch, long maxEpoch)
     {
         return mapReduce(StoreFinder.selector(unseekables, minEpoch, maxEpoch), applyMap, p1, p2, reducer);
     }
@@ -954,7 +949,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return mapReduce(selector, CommandStore::build, context, mapReduce, mapReduce);
     }
 
-    public <O, P1, P2> AsyncChain<O> mapReduce(StoreSelector selector, TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<? super O, ? extends O> reducer)
+    public <O, P1, P2> AsyncChain<O> mapReduce(StoreSelector selector, TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<O, O> reducer)
     {
         Snapshot snapshot = current;
         Iterator<CommandStore> stores = selector.select(snapshot);
@@ -991,11 +986,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return chain == null ? AsyncChains.success(null) : chain;
     }
 
-
-    public <O> AsyncChain<List<O>> map(Function<? super SafeCommandStore, O> mapper)
-    {
-        return map(PreLoadContext.empty(), mapper);
-    }
 
     public <O> AsyncChain<List<O>> map(PreLoadContext context, Function<? super SafeCommandStore, O> mapper)
     {

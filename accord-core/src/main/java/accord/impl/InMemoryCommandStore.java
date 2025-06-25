@@ -56,7 +56,7 @@ import accord.local.CommandStore;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.CommandSummaries;
 import accord.local.Commands;
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
 import accord.local.RejectBefore;
@@ -88,8 +88,10 @@ import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
 import static accord.local.Cleanup.Input.FULL;
-import static accord.local.KeyHistory.ASYNC;
-import static accord.local.KeyHistory.NONE;
+import static accord.local.LoadKeys.ASYNC;
+import static accord.local.LoadKeys.NONE;
+import static accord.local.LoadKeysFor.READ_WRITE;
+import static accord.local.LoadKeysFor.WRITE;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
@@ -344,17 +346,16 @@ public abstract class InMemoryCommandStore extends CommandStore
             {
                 case Key:
                     RoutableKey key = (RoutableKey) unseekable;
-                    switch (context.keyHistory())
+                    switch (context.loadKeys())
                     {
                         case NONE:
                             continue;
                         case INCR:
                         case SYNC:
                         case ASYNC:
-                        case RECOVER:
                             commandsForKey.put(key, commandsForKey((RoutingKey) key).createSafeReference());
                             break;
-                        default: throw new UnsupportedOperationException("Unknown key history: " + context.keyHistory());
+                        default: throw new UnsupportedOperationException("Unknown key history: " + context.loadKeys());
                     }
                     break;
                 case Range:
@@ -634,7 +635,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         protected InMemorySafeCommandsForKey ifLoadedInternal(RoutingKey key)
         {
-            if (context.keyHistory() != NONE && context.keys().domain() == Range && context.keys().contains(key))
+            if (context.loadKeys() != NONE && context.keys().domain() == Range && context.keys().contains(key))
             {
                 GlobalCommandsForKey globalCfk = commandStore().commandsForKey.get(key);
                 if (globalCfk == null)
@@ -734,7 +735,8 @@ public abstract class InMemoryCommandStore extends CommandStore
             if (commandsForRanges != null)
                 return commandsForRanges;
 
-            Summary.Loader loader = Summary.Loader.loader(redundantBefore(), context.primaryTxnId(), context.keyHistory(), context.keys());
+            Invariants.require(context.loadKeysFor() != WRITE);
+            Summary.Loader loader = Summary.Loader.loader(redundantBefore(), context.primaryTxnId(), context.loadKeysFor(), context.keys());
             TreeMap<Timestamp, Summary> summaries = new TreeMap<>();
             for (RangeCommand rangeCommand : commandStore().rangeCommands.values())
             {
@@ -1151,7 +1153,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             this.commandStore = commandStore;
         }
 
-        private PreLoadContext context(Command command, KeyHistory keyHistory)
+        private PreLoadContext context(Command command, LoadKeys loadKeys)
         {
             TxnId txnId = command.txnId();
             AbstractUnseekableKeys keys = null;
@@ -1162,9 +1164,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                 keys = command.asCommitted().waitingOn.keys;
 
             if (keys != null)
-                return PreLoadContext.contextFor(txnId, keys, keyHistory);
+                return PreLoadContext.contextFor(txnId, keys, loadKeys, WRITE, "Replay");
 
-            return txnId;
+            return PreLoadContext.contextFor(txnId, "Replay");
         }
 
         protected TxnId loadInternal(Command command, SafeCommandStore safeStore)
@@ -1188,7 +1190,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         private AsyncChain<Void> apply(TxnId txnId)
         {
             return AsyncChains.success(commandStore.executeInContext(commandStore,
-                                                                     txnId,
+                                                                     PreLoadContext.contextFor(txnId, "Replay"),
                                                                      (SafeCommandStore safeStore) -> {
                                                                          initialiseState(safeStore, txnId);
                                                                          return null;

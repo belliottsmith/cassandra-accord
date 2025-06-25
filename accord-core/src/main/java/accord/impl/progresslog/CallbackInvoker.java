@@ -20,13 +20,16 @@ package accord.impl.progresslog;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
+import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.primitives.TxnId;
 
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 
-class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>
+class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>, PreLoadContext
 {
     static <P, V> CallbackInvoker<P, V> invokeWaitingCallback(DefaultProgressLog instance, TxnId txnId, P param, Callback<P, V> callback)
     {
@@ -70,7 +73,7 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>
     @Override
     public void accept(V success, Throwable fail)
     {
-        owner.commandStore.execute(txnId, safeStore -> {
+        owner.commandStore.execute(this, safeStore -> {
 
             // we load safeCommand first so that if it clears the progress log we abandon the callback
             SafeCommand safeCommand = safeStore.ifInitialised(txnId);
@@ -105,6 +108,19 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>
     public String toString()
     {
         return txnId + (isHome ? ":Home:" : ":Waiting:") + owner.commandStore;
+    }
+
+    @Nullable
+    @Override
+    public TxnId primaryTxnId()
+    {
+        return txnId;
+    }
+
+    @Override
+    public String reason()
+    {
+        return "Callback " + this;
     }
 }
 

@@ -20,7 +20,7 @@ package accord.messages;
 
 import javax.annotation.Nonnull;
 
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.primitives.FullRoute;
@@ -99,15 +99,21 @@ public class GetMaxConflict extends TxnRequest.WithUnsynced<GetMaxConflict.GetMa
     }
 
     @Override
+    public String reason()
+    {
+        return toString();
+    }
+
+    @Override
     public Unseekables<?> keys()
     {
         return scope;
     }
 
     @Override
-    public KeyHistory keyHistory()
+    public LoadKeys loadKeys()
     {
-        return KeyHistory.NONE;
+        return LoadKeys.NONE;
     }
 
     public static class GetMaxConflictOk implements Reply

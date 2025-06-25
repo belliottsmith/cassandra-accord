@@ -59,6 +59,12 @@ public class GetDurableBefore implements Request, PreLoadContext
         return null;
     }
 
+    @Override
+    public String reason()
+    {
+        return "GetDurableBefore";
+    }
+
     public static class DurableBeforeReply implements Reply
     {
         public final DurableBefore durableBeforeMap;

@@ -25,6 +25,7 @@ import javax.annotation.Nullable;
 import accord.api.Tracing;
 import accord.local.Commands;
 import accord.local.Node;
+import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Known;
@@ -100,7 +101,7 @@ public class FetchRoute extends CheckShards<Participants<?>>
             else
             {
                 StoreSelector selector = reportTo.refine(txnId, null, query);
-                node.mapReduceConsumeLocal(txnId, selector, new MapReduceConsume<>()
+                node.mapReduceConsumeLocal(PreLoadContext.contextFor(txnId, "Report Route"), selector, new MapReduceConsume<>()
                 {
                     @Override
                     public void accept(Object result, Throwable failure)

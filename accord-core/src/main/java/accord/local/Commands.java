@@ -77,8 +77,9 @@ import static accord.local.Commands.Validated.UPDATE_TXN_IGNORE_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_KEEP_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_AND_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_MERGE_DEPS;
-import static accord.local.KeyHistory.INCR;
-import static accord.local.KeyHistory.SYNC;
+import static accord.local.LoadKeys.INCR;
+import static accord.local.LoadKeys.SYNC;
+import static accord.local.LoadKeysFor.WRITE;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
@@ -655,7 +656,7 @@ public class Commands
         Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
         return command.writes().apply(safeStore, executes, command.partialTxn())
                       // TODO (expected): once we guarantee execution order KeyHistory can be ASYNC
-               .flatMap(unused -> unsafeStore.build(contextFor(txnId, executes, SYNC), ss -> {
+               .flatMap(unused -> unsafeStore.build(contextFor(txnId, executes, SYNC, WRITE, "Post Apply"), ss -> {
                    postApply(ss, txnId, t0, false);
                    return null;
                }));
@@ -1080,7 +1081,7 @@ public class Commands
             TxnId txnId = command.txnId();
             if (dependencyElision() == IF_DURABLE && CommandsForKey.manages(txnId))
             {
-                PreLoadContext context = PreLoadContext.contextFor(updated.participants().touches(), INCR);
+                PreLoadContext context = PreLoadContext.contextFor(updated.participants().touches(), INCR, WRITE, "Set Durable");
                 PreLoadContext execute = safeStore.canExecute(context);
                 if (execute != null)
                 {
@@ -1089,7 +1090,7 @@ public class Commands
                 if (execute != context)
                 {
                     if (execute != null)
-                        context = contextFor(context.keys().without(execute.keys()), INCR);
+                        context = contextFor(context.keys().without(execute.keys()), INCR, WRITE, "Set Durable");
 
                     Invariants.require(!context.keys().isEmpty());
                     safeStore = safeStore; // prevent accidental usage inside lambda
@@ -1297,6 +1298,12 @@ public class Commands
         public TxnId primaryTxnId()
         {
             return waitingId;
+        }
+
+        @Override
+        public String reason()
+        {
+            return "NotifyWaitingOn{waiting=" + waitingId + ",on=" + loadDepId + '}';
         }
 
         @Override

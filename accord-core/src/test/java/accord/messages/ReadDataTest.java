@@ -153,7 +153,7 @@ class ReadDataTest
     {
         // status=Commit, will listen waiting for ReadyToExecute; obsolete marked by status listener
         test(state -> {
-            state.forEach(store -> check(store.build(PreLoadContext.contextFor(state.txnId, state.route), safe -> {
+            state.forEach(store -> check(store.build(PreLoadContext.contextFor(state.txnId, "Test"), safe -> {
                 CheckedCommands.preaccept(safe, state.txnId, state.partialTxn, state.route);
                 CheckedCommands.accept(safe, state.txnId, Ballot.ZERO, state.partialRoute, state.executeAt, state.deps);
 
@@ -192,7 +192,7 @@ class ReadDataTest
             state.readyToExecute(store);
 
             store = stores.get(1);
-            check(store.build(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
+            check(store.build(PreLoadContext.contextFor(state.txnId, "Test"), safeStore -> {
                 StoreParticipants participants = StoreParticipants.notAccept(safeStore, state.route, state.txnId);
                 SafeCommand safeCommand = safeStore.get(state.txnId, participants);
                 Command prev = safeCommand.current();
@@ -210,7 +210,7 @@ class ReadDataTest
     {
         test(state -> {
             List<CommandStore> stores = stores(state);
-            stores.forEach(store -> check(store.build(PreLoadContext.contextFor(state.txnId, state.route), safeStore -> {
+            stores.forEach(store -> check(store.build(PreLoadContext.contextFor(state.txnId, "Test"), safeStore -> {
                 StoreParticipants participants = StoreParticipants.notAccept(safeStore, state.route, state.txnId);
                 SafeCommand command = safeStore.get(state.txnId, participants);
                 command.commitInvalidated(safeStore);
@@ -279,7 +279,7 @@ class ReadDataTest
 
         void readyToExecute(CommandStore store)
         {
-            check(store.build(PreLoadContext.contextFor(txnId, route), safe -> {
+            check(store.build(PreLoadContext.contextFor(txnId, "Test"), safe -> {
                 CheckedCommands.preaccept(safe, txnId, partialTxn, route);
                 CheckedCommands.accept(safe, txnId, Ballot.ZERO, partialRoute, executeAt, deps);
                 CheckedCommands.commit(safe, SaveStatus.Stable, Ballot.ZERO, txnId, route, partialTxn, executeAt, deps);
@@ -303,7 +303,7 @@ class ReadDataTest
             Mockito.when(write.apply(any(), any(), any(), any(), any())).thenReturn(writeResult);
             Writes writes = new Writes(txnId, executeAt, keys, write);
 
-            forEach(store -> check(store.build(PreLoadContext.contextFor(txnId, route), safe -> {
+            forEach(store -> check(store.build(PreLoadContext.contextFor(txnId, "Test"), safe -> {
                 CheckedCommands.apply(safe, txnId, route, executeAt, deps, partialTxn, writes, Mockito.mock(Result.class));
             })));
             return writeResult;

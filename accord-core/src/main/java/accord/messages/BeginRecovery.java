@@ -222,15 +222,27 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     }
 
     @Override
-    public KeyHistory keyHistory()
+    public LoadKeys loadKeys()
     {
-        return KeyHistory.RECOVER;
+        return LoadKeys.SYNC;
+    }
+
+    @Override
+    public LoadKeysFor loadKeysFor()
+    {
+        return LoadKeysFor.RECOVERY;
     }
 
     @Override
     public MessageType type()
     {
         return BEGIN_RECOVER_REQ;
+    }
+
+    @Override
+    public String reason()
+    {
+        return "Recover{" + txnId + '}';
     }
 
     @Override

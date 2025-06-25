@@ -350,5 +350,11 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
 
         @Override
         public MessageType type() { throw new UnsupportedOperationException(); }
+
+        @Override
+        public String reason()
+        {
+            return "Local Execute";
+        }
     }
 }

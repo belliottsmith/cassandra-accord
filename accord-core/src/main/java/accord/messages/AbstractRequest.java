@@ -190,4 +190,11 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
         if (cancel != null)
             cancel.cancel();
     }
+
+
+    @Override
+    public String reason()
+    {
+        return getClass().getSimpleName() + (txnId == null ? "" : "{" + txnId + '}');
+    }
 }

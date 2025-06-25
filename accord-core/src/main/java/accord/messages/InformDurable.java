@@ -20,7 +20,7 @@ package accord.messages;
 import javax.annotation.Nullable;
 
 import accord.local.Commands;
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.PreLoadContext;
@@ -110,7 +110,7 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     public Cancellable submit()
     {
         // TODO (expected): do not load from disk to perform this update, just write a delta to any journal
-        return node.mapReduceConsumeLocal(txnId, scope, minEpoch, maxEpoch, this);
+        return node.mapReduceConsumeLocal(this, scope, minEpoch, maxEpoch, this);
     }
 
     @Override
@@ -126,9 +126,9 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     }
 
     @Override
-    public KeyHistory keyHistory()
+    public LoadKeys loadKeys()
     {
-        return dependencyElision() == IF_DURABLE ? KeyHistory.ASYNC : KeyHistory.NONE;
+        return dependencyElision() == IF_DURABLE ? LoadKeys.ASYNC : LoadKeys.NONE;
     }
 
     @Override

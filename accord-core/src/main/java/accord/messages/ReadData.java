@@ -862,4 +862,10 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
             return true;
         }
     }
+
+    @Override
+    public String reason()
+    {
+        return getClass().getSimpleName();
+    }
 }

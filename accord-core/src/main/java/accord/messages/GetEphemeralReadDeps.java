@@ -23,7 +23,8 @@ import javax.annotation.Nullable;
 
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.DepsCalculator;
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
+import accord.local.LoadKeysFor;
 import accord.local.Node.Id;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
@@ -111,9 +112,15 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     }
 
     @Override
-    public KeyHistory keyHistory()
+    public LoadKeys loadKeys()
     {
-        return KeyHistory.SYNC;
+        return LoadKeys.SYNC;
+    }
+
+    @Override
+    public LoadKeysFor loadKeysFor()
+    {
+        return LoadKeysFor.READ_WRITE;
     }
 
     public static class GetEphemeralReadDepsOk implements Reply

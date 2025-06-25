@@ -39,6 +39,7 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
+import static accord.local.LoadKeysFor.RECOVERY;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Txn.Kind.AnyGloballyVisible;
@@ -120,20 +121,20 @@ public interface CommandSummaries
             // TODO (expected): provide executeAt to PreLoadContext so we can more aggressively filter what we load, esp. by Kind
             public static Loader loader(RedundantBefore redundantBefore, PreLoadContext context)
             {
-                return loader(redundantBefore, context.primaryTxnId(), context.keyHistory(), context.keys());
+                return loader(redundantBefore, context.primaryTxnId(), context.loadKeysFor(), context.keys());
             }
 
-            public static Loader loader(RedundantBefore redundantBefore, @Nullable TxnId primaryTxnId, KeyHistory keyHistory, Unseekables<?> keysOrRanges)
+            public static Loader loader(RedundantBefore redundantBefore, @Nullable TxnId primaryTxnId, LoadKeysFor loadKeysFor, Unseekables<?> keysOrRanges)
             {
-                return loader(redundantBefore, primaryTxnId, keyHistory, keysOrRanges, Loader::new);
+                return loader(redundantBefore, primaryTxnId, loadKeysFor, keysOrRanges, Loader::new);
             }
 
-            public static <L extends Loader> L loader(RedundantBefore redundantBefore, @Nullable TxnId primaryTxnId, KeyHistory keyHistory, Unseekables<?> keysOrRanges, Factory<L> factory)
+            public static <L extends Loader> L loader(RedundantBefore redundantBefore, @Nullable TxnId primaryTxnId, LoadKeysFor loadKeysFor, Unseekables<?> keysOrRanges, Factory<L> factory)
             {
                 TxnId minTxnId = redundantBefore.min(keysOrRanges, Bounds::gcBefore);
-                Timestamp maxTxnId = primaryTxnId == null || keyHistory == KeyHistory.RECOVER || !primaryTxnId.is(ExclusiveSyncPoint) ? Timestamp.MAX : primaryTxnId;
-                TxnId findAsDep = primaryTxnId != null && keyHistory == KeyHistory.RECOVER ? primaryTxnId : null;
-                Kinds kinds = primaryTxnId == null ? AnyGloballyVisible : primaryTxnId.witnesses().or(keyHistory == KeyHistory.RECOVER ? primaryTxnId.witnessedBy() : Nothing);
+                Timestamp maxTxnId = primaryTxnId == null || loadKeysFor == RECOVERY || !primaryTxnId.is(ExclusiveSyncPoint) ? Timestamp.MAX : primaryTxnId;
+                TxnId findAsDep = primaryTxnId != null && loadKeysFor == RECOVERY ? primaryTxnId : null;
+                Kinds kinds = primaryTxnId == null ? AnyGloballyVisible : primaryTxnId.witnesses().or(loadKeysFor == RECOVERY ? primaryTxnId.witnessedBy() : Nothing);
                 return factory.create(primaryTxnId, keysOrRanges, redundantBefore, kinds, minTxnId, maxTxnId, findAsDep);
             }
 

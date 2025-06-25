@@ -64,7 +64,7 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
             return;
 
         ListData listData = (ListData) data;
-        persisting.add(commandStore.build(PreLoadContext.empty(), safeStore -> {
+        persisting.add(commandStore.build((PreLoadContext.Empty) () -> "List Fetch", safeStore -> {
             listData.forEach((key, value) -> listStore.writeUnsafe(key, value));
         }).flatMap(ignore -> listStore.snapshot(true, received, syncPoint.syncId)).invoke((success, fail) -> {
             if (fail == null) success(from, received);

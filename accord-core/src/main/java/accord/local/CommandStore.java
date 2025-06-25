@@ -62,7 +62,6 @@ import org.agrona.collections.LongHashSet;
 
 import static accord.api.ConfigurationService.EpochReady.DONE;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
-import static accord.local.PreLoadContext.empty;
 import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
@@ -529,7 +528,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     final Supplier<EpochReady> bootstrapper(Node node, Ranges newRanges, long epoch)
     {
         return () -> {
-            AsyncResult<EpochReady> metadata = submit(empty(), safeStore -> {
+            AsyncResult<EpochReady> metadata = submit((PreLoadContext.Empty) () -> "New Epoch", safeStore -> {
                 Bootstrap bootstrap = new Bootstrap(node, this, epoch, newRanges);
                 bootstraps.add(bootstrap);
                 bootstrap.start(safeStore);
@@ -591,7 +590,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     Supplier<EpochReady> unbootstrap(long epoch, Ranges removedRanges)
     {
         return () -> {
-            AsyncResult<Void> done = submit(empty(), safeStore -> {
+            AsyncResult<Void> done = submit((PreLoadContext.Empty) () -> "Unbootstrap", safeStore -> {
                 for (Bootstrap prev : bootstraps)
                 {
                     Ranges abort = prev.allValid.slice(removedRanges, Minimal);
@@ -658,7 +657,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
                     return;
                 }
 
-                execute(PreLoadContext.empty(), safeStore0 -> {
+                execute((PreLoadContext.Empty) () -> "Mark Shard Durable", safeStore0 -> {
                     RedundantBefore addGc = RedundantBefore.create(slicedRanges, globalSyncId, GC_BEFORE_AND_LOCALLY_APPLIED);
                     safeStore0.upsertRedundantBefore(addGc);
                 }, agent());
@@ -744,7 +743,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     Supplier<EpochReady> initialise(long epoch, Ranges ranges)
     {
         return () -> {
-            AsyncResult<Void> done = execute(empty(), (safeStore) -> {
+            AsyncResult<Void> done = execute((PreLoadContext.Empty) () -> "Initialise New Epoch", (safeStore) -> {
                 // Merge in a base for any ranges that needs to be covered
                 Ranges newBootstrapRanges = ranges;
                 for (Ranges existing : bootstrapBeganAt.values())
@@ -802,7 +801,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     {
         if (safeToRead.values().stream().anyMatch(r -> r.intersects(ranges)))
         {
-            execute(empty(), safeStore -> {
+            execute((PreLoadContext.Empty) () -> "Mark Unsafe To Read", safeStore -> {
                 safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
             }, agent);
         }
@@ -815,7 +814,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     final synchronized void markSafeToRead(Timestamp forBootstrapAt, Timestamp at, Ranges ranges)
     {
-        execute(empty(), safeStore -> {
+        execute((PreLoadContext.Empty) () -> "Mark Safe To Read", safeStore -> {
             // TODO (required): handle weird edge cases like newer at having a lower HLC than prior existing at, but higher epoch
             Ranges validatedSafeToRead = redundantBefore.validateSafeToRead(forBootstrapAt, ranges);
             safeStore.setSafeToRead(purgeAndInsert(safeToRead, at, validatedSafeToRead));
