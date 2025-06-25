@@ -1344,6 +1344,9 @@ public abstract class Command implements ICommand
             }
         }
 
+        /**
+         * Note: we don't guarantee to maintain this once an actual uniqueHlc is known.
+         */
         public long minUniqueHlc()
         {
             return 0;

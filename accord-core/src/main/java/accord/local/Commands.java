@@ -527,6 +527,8 @@ public class Commands
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
+        // TODO (required): validate safe to fast apply against local state if running burn test
+        // note: we may overwrite minUniqueHlc here
         WaitingOn waitingOn = newSaveStatus != SaveStatus.PreApplied
                               ? WaitingOn.none(txnId.domain(), partialDeps)
                               : command.hasBeen(Stable)

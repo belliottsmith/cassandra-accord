@@ -32,6 +32,7 @@ import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
+import accord.local.Command.Committed;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.Node;
@@ -480,7 +481,11 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         Ranges unavailable = unavailable(safeStore, command);
         if (txnId.is(Write))
         {
-            long uniqueHlc = command.asCommitted().waitingOn().minUniqueHlc();
+            Committed committed = command.asCommitted();
+            long uniqueHlc = committed.waitingOn().minUniqueHlc();
+            if (committed.executeAt().hasDistinctHlcAndUniqueHlc())
+                uniqueHlc = committed.executeAt().uniqueHlc();
+
             if (uniqueHlc > 0)
             {
                 synchronized (this)
