@@ -81,4 +81,10 @@ public class ReadTxnData extends ReadData
     {
         return READ_REQ;
     }
+
+    @Override
+    public String reason()
+    {
+        return "Read";
+    }
 }

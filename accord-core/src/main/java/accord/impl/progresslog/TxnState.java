@@ -23,6 +23,7 @@ import javax.annotation.Nullable;
 import com.google.common.primitives.Ints;
 
 import accord.api.ProgressLog.BlockedUntil;
+import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -30,7 +31,7 @@ import accord.utils.UnhandledEnum;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-final class TxnState extends HomeState
+final class TxnState extends HomeState implements PreLoadContext
 {
     TxnState(TxnId txnId)
     {
@@ -162,5 +163,18 @@ final class TxnState extends HomeState
     public boolean isDone(TxnStateKind runKind)
     {
         return runKind == TxnStateKind.Home ? isHomeDone() : isWaitingDone();
+    }
+
+    @Nullable
+    @Override
+    public TxnId primaryTxnId()
+    {
+        return txnId;
+    }
+
+    @Override
+    public String reason()
+    {
+        return "Progress";
     }
 }

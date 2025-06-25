@@ -32,8 +32,10 @@ import java.util.List;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
-import static accord.local.KeyHistory.NONE;
-import static accord.local.KeyHistory.SYNC;
+import static accord.local.LoadKeys.NONE;
+import static accord.local.LoadKeys.SYNC;
+import static accord.local.LoadKeysFor.READ_WRITE;
+import static accord.local.LoadKeysFor.WRITE;
 
 /**
  * Lists txnids and keys of commands and commands for key that will be needed for an operation. Used
@@ -42,6 +44,7 @@ import static accord.local.KeyHistory.SYNC;
 public interface PreLoadContext
 {
     @Nullable TxnId primaryTxnId();
+    String reason();
 
     /**
      * @return ids of the {@link Command} objects that need to be loaded into memory before this operation is run
@@ -90,7 +93,8 @@ public interface PreLoadContext
      */
     default Unseekables<?> keys() { return RoutingKeys.EMPTY; }
 
-    default KeyHistory keyHistory() { return NONE; }
+    default LoadKeys loadKeys() { return NONE; }
+    default LoadKeysFor loadKeysFor() { return WRITE; }
 
     default boolean isEmpty()
     {
@@ -98,7 +102,7 @@ public interface PreLoadContext
         Invariants.require(additionalTxnId() == null);
         return isEmpty;
     }
-
+    
     /**
      * Is the provided PreLoadContext guaranteed to have a superset of our requested information?
      * Note that for this calculation we are asking if all the information we want is known to be available,
@@ -110,12 +114,14 @@ public interface PreLoadContext
         Unseekables<?> keys = keys();
         if (!keys.isEmpty())
         {
-            KeyHistory requiredHistory = keyHistory();
+            LoadKeys requiredHistory = loadKeys();
             if (requiredHistory != NONE)
             {
                 if (requiredHistory.compareTo(SYNC) < 0)
                     requiredHistory = SYNC;
-                if (requiredHistory.compareTo(superset.keyHistory()) < 0)
+                if (requiredHistory.compareTo(superset.loadKeys()) < 0)
+                    return false;
+                if (loadKeysFor().compareTo(superset.loadKeysFor()) > 0)
                     return false;
             }
 
@@ -139,10 +145,26 @@ public interface PreLoadContext
         }
     }
 
-    static PreLoadContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, KeyHistory keyHistory)
+    default String describe()
+    {
+        List<TxnId> txnIds = txnIds();
+        Unseekables<?> keys = keys();
+        return reason() + (txnIds.isEmpty() ? "" : " for " + txnIds) + (keys.isEmpty() ? "" : (txnIds.isEmpty() ? " for " : " and ") + keys());
+    }
+
+    static PreLoadContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
     {
         Invariants.require(primary == null ? additional == null : !primary.equals(additional));
-        return new Standard(primary, additional, keys, keyHistory);
+        return new PreLoadContext()
+        {
+            @Override public @Nullable TxnId primaryTxnId() { return primary; }
+            @Override public @Nullable TxnId additionalTxnId() { return additional; }
+            @Override public Unseekables<?> keys() { return keys; }
+            @Override public LoadKeys loadKeys() { return loadKeys; }
+            @Override public LoadKeysFor loadKeysFor() { return loadKeysFor; }
+            @Override public String reason() { return reason; }
+            @Override public String toString() { return describe(); }
+        };
     }
 
     default boolean contains(TxnId txnId)
@@ -151,100 +173,60 @@ public interface PreLoadContext
         return primaryTxnId != null && (txnId.equals(primaryTxnId) || txnId.equals(additionalTxnId()));
     }
 
-
-    class Standard implements PreLoadContext
+    static PreLoadContext contextFor(TxnId primary, TxnId additional, String reason)
     {
-        private final @Nullable TxnId primary;
-        private final @Nullable TxnId additional;
-        private final Unseekables<?> keys;
-        private final KeyHistory keyHistory;
-
-        public Standard(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, KeyHistory keyHistory)
+        return new PreLoadContext()
         {
-            Invariants.require(primary != null || additional == null);
-            this.primary = primary;
-            this.additional = additional;
-            this.keys = keys;
-            this.keyHistory = keyHistory;
-        }
+            @Override public @Nullable TxnId primaryTxnId() { return primary; }
+            @Override public @Nullable TxnId additionalTxnId() { return additional; }
+            @Override public String reason() { return reason; }
+            @Override public String toString() { return describe(); }
+        };
+    }
 
-        public String toString()
+    static PreLoadContext contextFor(TxnId primary, String reason)
+    {
+        return new PreLoadContext()
         {
-            return "PreLoadContext{" +
-                   "primary=" + primary +
-                   ", additional=" + additional +
-                   ", keys=" + keys +
-                   ", keyHistory=" + keyHistory +
-                   '}';
-        }
+            @Override public @Nullable TxnId primaryTxnId() { return primary; }
+            @Override public String reason() { return reason; }
+            @Override public String toString() { return describe(); }
+        };
+    }
 
-        @Override
-        @Nullable
-        public TxnId primaryTxnId()
+    static PreLoadContext contextFor(TxnId txnId, Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
+    {
+        return new PreLoadContext()
         {
-            return primary;
-        }
+            @Override public @Nullable TxnId primaryTxnId() { return txnId; }
+            @Override public Unseekables<?> keys() { return keys; }
+            @Override public LoadKeys loadKeys() { return loadKeys; }
+            @Override public LoadKeysFor loadKeysFor() { return loadKeysFor; }
+            @Override public String reason() { return reason; }
+            @Override public String toString() { return describe(); }
+        };
+    }
 
-        @Override
-        public TxnId additionalTxnId()
+    static PreLoadContext contextFor(RoutingKey key, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String describe)
+    {
+        return contextFor(RoutingKeys.of(key), loadKeys, loadKeysFor, describe);
+    }
+
+    static PreLoadContext contextFor(Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
+    {
+        return new PreLoadContext()
         {
-            return additional;
-        }
-
-        @Override
-        public Unseekables<?> keys() { return keys; }
-
-        @Override
-        public KeyHistory keyHistory()
-        {
-            return keyHistory;
-        }
+            @Override public @Nullable TxnId primaryTxnId() { return null; }
+            @Override public Unseekables<?> keys() { return keys; }
+            @Override public LoadKeys loadKeys() { return loadKeys; }
+            @Override public LoadKeysFor loadKeysFor() { return loadKeysFor; }
+            @Override public String reason() { return reason; }
+            @Override public String toString() { return describe(); }
+        };
     }
 
-    static PreLoadContext contextFor(TxnId primary, TxnId additional, Unseekables<?> keys)
+    interface Empty extends PreLoadContext
     {
-        return contextFor(primary, additional, keys, NONE);
+        @Override default @Nullable TxnId primaryTxnId() { return null; }
     }
-
-    static PreLoadContext contextFor(TxnId primary, TxnId additional)
-    {
-        return contextFor(primary, additional, RoutingKeys.EMPTY);
-    }
-
-    static PreLoadContext contextFor(TxnId txnId, Unseekables<?> keysOrRanges, KeyHistory keyHistory)
-    {
-        return contextFor(txnId, null, keysOrRanges, keyHistory);
-    }
-
-    static PreLoadContext contextFor(TxnId txnId, Unseekables<?> keysOrRanges)
-    {
-        return contextFor(txnId, keysOrRanges, NONE);
-    }
-
-    static PreLoadContext contextFor(RoutingKey key, KeyHistory keyHistory)
-    {
-        return contextFor(null, null, RoutingKeys.of(key), keyHistory);
-    }
-
-    static PreLoadContext contextFor(RoutingKey key)
-    {
-        return contextFor(key, NONE);
-    }
-
-    static PreLoadContext contextFor(Unseekables<?> keys)
-    {
-        return contextFor(null, null, keys);
-    }
-
-    static PreLoadContext contextFor(Unseekables<?> keys, KeyHistory keyHistory)
-    {
-        return contextFor(null, null, keys, keyHistory);
-    }
-
-    static PreLoadContext empty()
-    {
-        return EMPTY_PRELOADCONTEXT;
-    }
-
-    PreLoadContext EMPTY_PRELOADCONTEXT = contextFor(null, null, RoutingKeys.EMPTY);
 }

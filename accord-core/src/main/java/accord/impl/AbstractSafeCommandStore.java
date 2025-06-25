@@ -24,7 +24,7 @@ import java.util.NavigableMap;
 
 import accord.api.RoutingKey;
 import accord.local.CommandStore;
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
 import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
@@ -81,8 +81,16 @@ extends SafeCommandStore
         if (with.keys().domain() == Routable.Domain.Range)
             return with.isSubsetOf(this.context) ? with : null;
 
-        if (!context().keyHistory().satisfiesIfPresent(with.keyHistory()))
-            return null;
+        LoadKeys require = with.loadKeys();
+        if (require != LoadKeys.NONE)
+        {
+            PreLoadContext context = context();
+            if (!context.loadKeys().satisfiesIfPresent(require))
+                return null;
+
+            if (with.loadKeysFor().compareTo(context.loadKeysFor()) > 0)
+                return null;
+        }
 
         try (Caches caches = tryGetCaches())
         {
@@ -101,8 +109,8 @@ extends SafeCommandStore
                 add(safeCommand, caches);
             }
 
-            KeyHistory keyHistory = with.keyHistory();
-            if (keyHistory == KeyHistory.NONE)
+            LoadKeys loadKeys = with.loadKeys();
+            if (loadKeys == LoadKeys.NONE)
                 return with;
 
             List<RoutingKey> unavailable = null;
@@ -136,7 +144,7 @@ extends SafeCommandStore
             if (unavailable.size() == keys.size())
                 return null;
 
-            return PreLoadContext.contextFor(with.primaryTxnId(), with.additionalTxnId(), keys.without(RoutingKeys.ofSortedUnique(unavailable)), keyHistory);
+            return PreLoadContext.contextFor(with.primaryTxnId(), with.additionalTxnId(), keys.without(RoutingKeys.ofSortedUnique(unavailable)), loadKeys, context.loadKeysFor(), context.reason());
         }
     }
 

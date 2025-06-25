@@ -63,4 +63,10 @@ public class SetGloballyDurable implements Request, PreLoadContext
     {
         return null;
     }
+
+    @Override
+    public String reason()
+    {
+        return "SetGloballyDurable";
+    }
 }

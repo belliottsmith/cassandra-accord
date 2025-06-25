@@ -28,7 +28,8 @@ import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.DepsCalculator;
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
+import accord.local.LoadKeysFor;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -95,9 +96,15 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     }
 
     @Override
-    public KeyHistory keyHistory()
+    public LoadKeys loadKeys()
     {
-        return KeyHistory.SYNC;
+        return LoadKeys.SYNC;
+    }
+
+    @Override
+    public LoadKeysFor loadKeysFor()
+    {
+        return LoadKeysFor.READ_WRITE;
     }
 
     @Override

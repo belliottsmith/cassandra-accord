@@ -51,8 +51,9 @@ import accord.utils.SimpleBitSet;
 import accord.utils.SortedList;
 import accord.utils.async.AsyncChain;
 
-import static accord.local.KeyHistory.INCR;
-import static accord.local.KeyHistory.NONE;
+import static accord.local.LoadKeys.INCR;
+import static accord.local.LoadKeys.NONE;
+import static accord.local.LoadKeysFor.WRITE;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
@@ -230,7 +231,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (safeCfk != null)
             return maybeCleanup(safeCfk);
 
-        if (context().keyHistory() != NONE && context().keys().contains(key)) throw illegalState("%s was specified in %s but was not returned by getInternal(key)", key, context().keys());
+        if (context().loadKeys() != NONE && context().keys().contains(key)) throw illegalState("%s was specified in %s but was not returned by getInternal(key)", key, context().keys());
         else throw illegalArgument("%s was not specified in %s", key, context());
     }
 
@@ -382,7 +383,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             return;
 
         // TODO (expected): we don't want to insert any dependencies for those we only touch; we just need to record them as decided/applied for execution
-        PreLoadContext context = PreLoadContext.contextFor(next.txnId(), update, INCR);
+        PreLoadContext context = PreLoadContext.contextFor(next.txnId(), update, INCR, WRITE, "Update CommandsForKey");
         PreLoadContext execute = safeStore.canExecute(context);
         if (execute != null)
         {
@@ -391,7 +392,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (execute != context)
         {
             if (execute != null)
-                context = PreLoadContext.contextFor(next.txnId(), update.without(execute.keys()), INCR);
+                context = PreLoadContext.contextFor(next.txnId(), update.without(execute.keys()), INCR, WRITE, "Update CommandsForKey");
 
             Invariants.require(!context.keys().isEmpty());
             safeStore = safeStore; // prevent accidental usage inside lambda
@@ -459,7 +460,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
         // TODO (required): use StoreParticipants.executes()
         // TODO (required): consider how execution works for transactions that await future deps and where the command store inherits additional keys in execution epoch
-        PreLoadContext context = PreLoadContext.contextFor(txnId, keys, INCR);
+        PreLoadContext context = PreLoadContext.contextFor(txnId, keys, INCR, WRITE, "Update Unmanaged CommandsForKey");
         PreLoadContext execute = safeStore.canExecute(context);
         // TODO (expected): execute immediately for any keys we already have loaded, and save only those we haven't for later
         if (execute != null)
@@ -474,13 +475,13 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         else
         {
             if (execute != null)
-                context = PreLoadContext.contextFor(txnId, keys.without(execute.keys()), INCR);
+                context = PreLoadContext.contextFor(txnId, keys.without(execute.keys()), INCR, WRITE, "Update Unmanaged CommandsForKey");
 
             safeStore = safeStore;
             CommandStore unsafeStore = safeStore.commandStore();
             AsyncChain<Void> submit = unsafeStore.build(context, safeStore0 -> { updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys() , txnId, mode); });
             if (next.txnId().is(Range))
-                submit = submit.flatMap(success -> unsafeStore.build(PreLoadContext.empty(), safeStore0 -> { registerTransitive(safeStore0, txnId, next); }));
+                submit = submit.flatMap(success -> unsafeStore.build((PreLoadContext.Empty) () -> "Register Transitive Dependencies", safeStore0 -> { registerTransitive(safeStore0, txnId, next); }));
             submit.begin(safeStore.commandStore().agent);
         }
     }

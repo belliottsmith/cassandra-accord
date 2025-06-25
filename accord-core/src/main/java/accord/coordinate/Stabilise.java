@@ -42,7 +42,6 @@ import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListMap;
 import accord.utils.UnhandledEnum;
 
-import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ExecutePath.SLOW;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.messages.Commit.Kind.CommitWithTxn;
@@ -161,7 +160,7 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
 
     protected void onStabilised()
     {
-        adapter().execute(node, executor, allTopologies, route, ballot, ballot == Ballot.ZERO ? SLOW : RECOVER, CoordinationFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
+        adapter().execute(node, executor, allTopologies, route, ballot, SLOW, CoordinationFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
     }
 
     protected abstract CoordinationAdapter<R> adapter();

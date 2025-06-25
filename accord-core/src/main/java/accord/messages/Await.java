@@ -256,6 +256,12 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     }
 
     @Override
+    public String reason()
+    {
+        return "AwaitComplete{" + blockedUntil + ',' + txnId + '}';
+    }
+
+    @Override
     public MessageType type()
     {
         return AWAIT_REQ;
@@ -352,6 +358,12 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         public TxnId primaryTxnId()
         {
             return txnId;
+        }
+
+        @Override
+        public String reason()
+        {
+            return "AwaitComplete{" + newStatus + ',' + txnId + '}';
         }
 
         @Override

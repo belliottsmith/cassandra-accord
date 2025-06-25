@@ -23,6 +23,8 @@ import java.util.EnumMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 
+import javax.annotation.Nullable;
+
 import accord.api.LocalListeners;
 import accord.api.RemoteListeners;
 import accord.local.Command;
@@ -95,7 +97,7 @@ public class DefaultLocalListeners implements LocalListeners
                 //noinspection SillyAssignment,ConstantConditions
                 safeStore = safeStore; // prevent use in lambda
                 TxnId updatedId = safeCommand.txnId();
-                PreLoadContext context = PreLoadContext.contextFor(listenerId, updatedId);
+                PreLoadContext context = PreLoadContext.contextFor(listenerId, updatedId, "Notify");
                 safeStore.commandStore().execute(context, safeStore0 -> notify(safeStore0, listenerId, updatedId), safeStore.agent());
             }
         }
@@ -115,7 +117,7 @@ public class DefaultLocalListeners implements LocalListeners
     /*
      * A list that allows duplicates and sorts and removes duplicates on notify and when the list would have to resize
      */
-    static class TxnListeners extends TxnId
+    static class TxnListeners extends TxnId implements PreLoadContext
     {
         final SaveStatus await;
         TxnId[] listeners = NO_TXNIDS;
@@ -202,6 +204,19 @@ public class DefaultLocalListeners implements LocalListeners
             }
 
             listeners[count++] = listener;
+        }
+
+        @Nullable
+        @Override
+        public TxnId primaryTxnId()
+        {
+            return this;
+        }
+
+        @Override
+        public String reason()
+        {
+            return "Notify Listeners";
         }
     }
 

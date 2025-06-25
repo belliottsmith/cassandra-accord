@@ -26,7 +26,8 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Commands.AcceptOutcome;
 import accord.local.DepsCalculator;
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
+import accord.local.LoadKeysFor;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -50,7 +51,7 @@ import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFr
 import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
-import static accord.local.KeyHistory.SYNC;
+import static accord.local.LoadKeys.SYNC;
 import static accord.messages.MessageType.StandardMessage.ACCEPT_REQ;
 import static accord.messages.MessageType.StandardMessage.ACCEPT_RSP;
 import static accord.messages.MessageType.StandardMessage.NOT_ACCEPT_REQ;
@@ -194,9 +195,15 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     }
 
     @Override
-    public KeyHistory keyHistory()
+    public LoadKeys loadKeys()
     {
         return SYNC;
+    }
+
+    @Override
+    public LoadKeysFor loadKeysFor()
+    {
+        return LoadKeysFor.READ_WRITE;
     }
 
     @Override
@@ -409,6 +416,12 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         public String toString()
         {
             return "NotAccept{kind: " + status + ", ballot:" + ballot + ", txnId:" + txnId + ", key:" + participants + '}';
+        }
+
+        @Override
+        public String reason()
+        {
+            return status + "{" + txnId + '}';
         }
 
         @Override

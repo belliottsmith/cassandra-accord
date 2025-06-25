@@ -177,7 +177,7 @@ public class ReadEphemeralTxnData extends ReadData
             while (iter.hasNext())
             {
                 node.commandStores().forId(iter.nextValue())
-                    .execute(PreLoadContext.empty(), safeStore -> {
+                    .execute((PreLoadContext.Empty) () -> "Timeout Ephemeral Read", safeStore -> {
                         eraseEphemeralRead(safeStore, txnId);
                     }, node.agent());
             }
@@ -195,5 +195,11 @@ public class ReadEphemeralTxnData extends ReadData
     public MessageType type()
     {
         return READ_EPHEMERAL_REQ;
+    }
+
+    @Override
+    public String reason()
+    {
+        return "Ephemeral Read";
     }
 }

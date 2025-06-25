@@ -184,6 +184,12 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     }
 
     @Override
+    public String reason()
+    {
+        return "Propagate";
+    }
+
+    @Override
     public Void apply(SafeCommandStore safeStore)
     {
         long executeAtEpoch = committedExecuteAt == null ? txnId.epoch() : committedExecuteAt.epoch();

@@ -21,10 +21,10 @@ package accord.local;
 import accord.utils.UnhandledEnum;
 
 /**
- * For operations that need information on historical operations, this indicates the
- * amount of data needed.
+ * For operations that need information associated with keys, this indicates the
+ * amount of data needed, and whether it is needed immediately or asynchronously.
  */
-public enum KeyHistory
+public enum LoadKeys
 {
     NONE,
 
@@ -44,32 +44,25 @@ public enum KeyHistory
     /**
      * Load all keys into memory before processing the command.
      */
-    SYNC,
+    SYNC;
 
-    /**
-     * Load recovery information for all keys into memory before processing the command.
-     */
-    RECOVER;
-
-    public boolean satisfiesIfPresent(KeyHistory that)
+    public boolean satisfiesIfPresent(LoadKeys that)
     {
         return satisfies(that, ASYNC);
     }
 
-    public boolean satisfies(KeyHistory that)
+    public boolean satisfies(LoadKeys that)
     {
         return satisfies(that, SYNC);
     }
 
-    private boolean satisfies(KeyHistory that, KeyHistory ifSyncRequireAtLeast)
+    private boolean satisfies(LoadKeys that, LoadKeys ifSyncRequireAtLeast)
     {
         switch (that)
         {
             default: throw new UnhandledEnum(that);
             case NONE:
                 return true;
-            case RECOVER:
-                return this == that;
             case ASYNC:
             case INCR:
             case SYNC:

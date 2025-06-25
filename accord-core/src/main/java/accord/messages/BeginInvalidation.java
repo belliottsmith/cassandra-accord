@@ -124,6 +124,12 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
     }
 
     @Override
+    public String reason()
+    {
+        return "Invalidate{" + txnId + '}';
+    }
+
+    @Override
     public String toString()
     {
         return "BeginInvalidate{" +

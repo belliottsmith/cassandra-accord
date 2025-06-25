@@ -26,7 +26,7 @@ import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.Commands;
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
@@ -228,10 +228,10 @@ public class Apply extends TxnRequest<ApplyReply>
     }
 
     @Override
-    public KeyHistory keyHistory()
+    public LoadKeys loadKeys()
     {
         // TODO (expected): need to guarantee execution order then can make this ASYNC
-        return KeyHistory.SYNC;
+        return LoadKeys.SYNC;
     }
 
     @Override

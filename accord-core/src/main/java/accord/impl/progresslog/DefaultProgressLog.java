@@ -36,6 +36,7 @@ import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
@@ -66,7 +67,6 @@ import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.Command.NotDefined.uninitialised;
-import static accord.local.PreLoadContext.empty;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
@@ -333,7 +333,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             {
                 // the command might be invalidated, which should be established on load, so simply load the command
                 TxnId txnId = state.txnId;
-                safeStore.commandStore().execute(txnId, safeStore0 -> {
+                safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, "Clear Progress"), safeStore0 -> {
                     safeStore0.unsafeGet(txnId);
                 }, node.agent());
             }
@@ -512,7 +512,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             minEpoch = Math.min(awaitingEpochBuffer[i].run.txnId.epoch(), minEpoch);
         Invariants.requireArgument(minEpoch != Long.MAX_VALUE);
         isAwaitingEpoch = true;
-        node.withEpochAtLeast(minEpoch, commandStore, (success, fail) -> commandStore.execute(empty(), ss -> {
+        node.withEpochAtLeast(minEpoch, commandStore, (success, fail) -> commandStore.execute((PreLoadContext.Empty) () -> "Run ProgressLog", ss -> {
             isAwaitingEpoch = false;
             accept(ss);
         }, node.agent()));
@@ -597,7 +597,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         {
             while (i < readyToRun.size())
             {
-                commandStore.execute(empty(), readyToRun.get(i++), node.agent());
+                commandStore.execute((PreLoadContext.Empty) () -> "Run ProgressLog", readyToRun.get(i++), node.agent());
             }
         }
     }
@@ -610,14 +610,14 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     void addIfReadyElseSubmit(@Nullable SafeCommandStore safeStore, RunInvoker invoker, List<RunInvoker> ifReady)
     {
-        if (safeStore != null && safeStore.canExecuteWith(invoker.run.txnId))
+        if (safeStore != null && safeStore.canExecuteWith(invoker.run))
         {
             ifReady.add(invoker);
         }
         else
         {
             // TODO (required): if we fail execution, do we need to reschedule the state?
-            commandStore.execute(invoker.run.txnId, invoker, commandStore.agent());
+            commandStore.execute(invoker.run, invoker, commandStore.agent());
         }
     }
 
@@ -763,7 +763,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         {
             long now = node.elapsed(MICROSECONDS);
             if (timers.shouldWake(now))
-                commandStore.execute(empty(), this, node.agent());
+                commandStore.execute((PreLoadContext.Empty) () -> "Run ProgressLog", this, node.agent());
         }
     }
 

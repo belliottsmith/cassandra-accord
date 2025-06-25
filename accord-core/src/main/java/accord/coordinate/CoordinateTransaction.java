@@ -32,7 +32,8 @@ import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.DepsCalculator;
-import accord.local.KeyHistory;
+import accord.local.LoadKeys;
+import accord.local.LoadKeysFor;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -244,7 +245,6 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                     setFailure(new Preempted(txnId, route.homeKey()));
                 }
             }
-
         }
 
         @Override
@@ -346,9 +346,21 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         }
 
         @Override
-        public KeyHistory keyHistory()
+        public String reason()
         {
-            return KeyHistory.SYNC;
+            return "Local PreAccept";
+        }
+
+        @Override
+        public LoadKeys loadKeys()
+        {
+            return LoadKeys.SYNC;
+        }
+
+        @Override
+        public LoadKeysFor loadKeysFor()
+        {
+            return LoadKeysFor.READ_WRITE;
         }
 
         @Override

@@ -21,5 +21,5 @@ package accord.utils;
 public interface Reduce<I, O>
 {
     static <I, O> Reduce<I, O> toNull() { return (a, b) -> null; }
-    O reduce(I o1, I o2);
+    O reduce(O o1, I o2);
 }

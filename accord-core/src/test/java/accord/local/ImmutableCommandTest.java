@@ -136,7 +136,7 @@ public class ImmutableCommandTest
         }
 
         commands.execute(() -> {
-            SafeCommandStore safeStore = commands.beginOperation(PreLoadContext.contextFor(txnId, keys.toParticipants()));
+            SafeCommandStore safeStore = commands.beginOperation(PreLoadContext.contextFor(txnId, "Test"));
             try
             {
                 StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, txnId.epoch());
@@ -169,7 +169,7 @@ public class ImmutableCommandTest
             Assertions.assertEquals(Status.NotDefined, command.status());
             Assertions.assertNull(command.executeAt());
         }
-        PreLoadContext context = PreLoadContext.contextFor(txnId, keys.toParticipants());
+        PreLoadContext context = PreLoadContext.contextFor(txnId, "Test");
 
         setTopologyEpoch(support.local, 2);
         ((TestableConfigurationService)node.configService()).reportTopology(TopologyUtils.withEpoch(support.local.get(), 2));
@@ -178,7 +178,7 @@ public class ImmutableCommandTest
             StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, 2);
             Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txn.slice(FULL_RANGES, true), null, false);
         }));
-        commands.build(PreLoadContext.contextFor(txnId, txn.keys().toParticipants()), safeStore -> {
+        commands.build(PreLoadContext.contextFor(txnId, "Test"), safeStore -> {
             Command command = safeStore.get(txnId).current();
             Assertions.assertEquals(Status.PreAccepted, command.status());
             Assertions.assertEquals(expectedTimestamp, command.executeAt());

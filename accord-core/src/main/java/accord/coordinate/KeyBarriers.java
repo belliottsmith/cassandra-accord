@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.RoutingKey;
 import accord.local.CommandSummaries;
 import accord.local.Node;
+import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.durability.DurabilityService.SyncLocal;
@@ -49,7 +50,6 @@ import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
 import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
 import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.local.CommandSummaries.TestStartedAt.STARTED_AFTER;
-import static accord.local.PreLoadContext.contextFor;
 import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
 import static accord.local.durability.DurabilityService.SyncLocal.Self;
 import static accord.local.durability.DurabilityService.SyncRemote.NoRemote;
@@ -86,7 +86,7 @@ public class KeyBarriers
 
     public static AsyncChain<Found> find(Node node, Timestamp min, RoutingKey key, SyncLocal syncLocal, SyncRemote syncRemote)
     {
-        return node.commandStores().mapReduce(contextFor(key), RoutingKeys.of(key), min.epoch(), Long.MAX_VALUE, new Find(min, key, syncLocal, syncRemote));
+        return node.commandStores().mapReduce((PreLoadContext.Empty) () -> "Key Barrier", RoutingKeys.of(key), min.epoch(), Long.MAX_VALUE, new Find(min, key, syncLocal, syncRemote));
     }
 
     /*

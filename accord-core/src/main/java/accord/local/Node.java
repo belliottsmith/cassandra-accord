@@ -574,7 +574,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return commandStores.mapReduceConsume(request, request.scope(), minEpoch, maxEpoch, mapReduceConsume);
     }
 
-    public <T> Cancellable mapReduceConsumeLocal(Unseekables<?> keys, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<T>> map, Reduce<? super T, ? extends T> reduce, BiConsumer<? super T, Throwable> consume)
+    public <T> Cancellable mapReduceConsumeLocal(Unseekables<?> keys, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<T>> map, Reduce<T, T> reduce, BiConsumer<? super T, Throwable> consume)
     {
         return commandStores.mapReduceConsume(keys, minEpoch, maxEpoch, map, reduce, consume);
     }
@@ -925,8 +925,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public void updateMinHlc(long minHlc)
     {
-        commandStores().forEach(safeStore -> {
-            safeStore.commandStore().updateMinHlc(minHlc);
+        commandStores().forEach((commandStore, ranges) -> {
+            commandStore.updateMinHlc(minHlc);
         });
     }
 

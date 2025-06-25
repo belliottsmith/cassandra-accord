@@ -34,7 +34,8 @@ import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
 import static accord.local.Command.NotDefined.uninitialised;
-import static accord.local.KeyHistory.SYNC;
+import static accord.local.LoadKeys.SYNC;
+import static accord.local.LoadKeysFor.WRITE;
 import static accord.primitives.Status.Truncated;
 
 interface NotifySink
@@ -58,7 +59,7 @@ interface NotifySink
             }
             else
             {
-                safeStore.commandStore().execute(txnId, safeStore0 -> {
+                safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, "Notify"), safeStore0 -> {
                     notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc);
                 }, safeStore.agent());
             }
@@ -74,12 +75,13 @@ interface NotifySink
         {
             TxnId txnId = notify.plainTxnId();
 
-            if (safeStore.canExecuteWith(txnId) && safeStore.tryRecurse())
+            PreLoadContext context = PreLoadContext.contextFor(txnId, "Key Waiting On");
+            if (safeStore.canExecuteWith(context) && safeStore.tryRecurse())
             {
                 try { doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk); }
                 finally { safeStore.unrecurse(); }
             }
-            else safeStore.commandStore().execute(txnId, safeStore0 -> {
+            else safeStore.commandStore().execute(context, safeStore0 -> {
                 doNotifyWaitingOn(safeStore0, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);
             }, safeStore.agent());
         }
@@ -131,7 +133,7 @@ interface NotifySink
                 RoutingKeys keys = RoutingKeys.of(key);
                 //noinspection ConstantConditions,SillyAssignment
                 safeStore = safeStore; // prevent use in lambda
-                safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, keys, SYNC), safeStore0 -> {
+                safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, keys, SYNC, WRITE, "Notify"), safeStore0 -> {
                     doNotifyAlreadyReady(safeStore0, txnId, key);
                 }, safeStore.agent());
             }

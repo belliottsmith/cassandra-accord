@@ -44,7 +44,8 @@ import accord.utils.SortedArrays;
 import accord.utils.btree.BTree;
 
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
-import static accord.local.KeyHistory.SYNC;
+import static accord.local.LoadKeys.SYNC;
+import static accord.local.LoadKeysFor.WRITE;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
@@ -102,7 +103,7 @@ abstract class PostProcess
                     try { load(safeStore, safeCommand, safeCfk, notifySink); }
                     finally { safeStore.unrecurse(); }
                 }
-                else safeStore.commandStore().execute(contextFor(txnId, RoutingKeys.of(key), SYNC), safeStore0 -> {
+                else safeStore.commandStore().execute(contextFor(txnId, RoutingKeys.of(key), SYNC, WRITE, "Load Pruned CommandsForKey"), safeStore0 -> {
                     load(safeStore0, safeStore0.unsafeGet(txnId), safeStore0.get(key), notifySink);
                 }, safeStore.agent());
             }

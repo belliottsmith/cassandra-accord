@@ -28,6 +28,7 @@ import accord.local.CommandStores.StoreFinder;
 import accord.local.CommandStores.StoreSelector;
 import accord.local.Commands;
 import accord.local.Node;
+import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Status;
@@ -104,7 +105,7 @@ public class Infer
     }
 
     // TODO (required): audit all use cases
-    private static abstract class CleanupAndCallback<T> implements MapReduceConsume<SafeCommandStore, Void>
+    private static abstract class CleanupAndCallback<T> implements MapReduceConsume<SafeCommandStore, Void>, PreLoadContext
     {
         final Node node;
         final TxnId txnId;
@@ -129,7 +130,7 @@ public class Infer
 
         void start()
         {
-            node.mapReduceConsumeLocal(txnId, reportTo.refine(txnId, null, participants), this);
+            node.mapReduceConsumeLocal(this, reportTo.refine(txnId, null, participants), this);
         }
 
         @Override
@@ -152,6 +153,13 @@ public class Infer
         public void accept(Void result, Throwable failure)
         {
             callback.accept(param, failure);
+        }
+
+        @Nullable
+        @Override
+        public TxnId primaryTxnId()
+        {
+            return txnId;
         }
     }
 
@@ -182,6 +190,12 @@ public class Infer
             Invariants.require(!command.hasBeen(PreCommitted) || command.hasBeen(Status.Truncated), "Unexpected status for %s", command);
             Commands.commitInvalidate(safeStore, safeCommand, participants);
             return null;
+        }
+
+        @Override
+        public String reason()
+        {
+            return "Invalidate " + txnId + " with " + participants;
         }
     }
 }
