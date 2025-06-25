@@ -90,6 +90,7 @@ import org.agrona.collections.ObjectHashSet;
 
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.KeyHistory.ASYNC;
+import static accord.local.KeyHistory.NONE;
 import static accord.local.KeyHistory.SYNC;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.StoreParticipants.Filter.LOAD;
@@ -360,6 +361,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     break;
                 case Range:
                     // load range cfks here
+                    break;
             }
         }
         return createSafeStore(context, ranges, commands, commandsForKey);
@@ -629,6 +631,23 @@ public abstract class InMemoryCommandStore extends CommandStore
             if (command.isUnset()) command.uninitialised();
             commands.put(command.txnId(), command);
             return command;
+        }
+
+        @Override
+        protected InMemorySafeCommandsForKey ifLoadedInternal(RoutingKey key)
+        {
+            if (context.keyHistory() != NONE && context.keys().domain() == Range && context.keys().contains(key))
+            {
+                GlobalCommandsForKey globalCfk = commandStore().commandsForKey.get(key);
+                if (globalCfk == null)
+                    return null;
+
+                InMemorySafeCommandsForKey safeCfk = globalCfk.createSafeReference();
+                commandsForKey.put(key, safeCfk);
+                return safeCfk;
+            }
+
+            return super.ifLoadedInternal(key);
         }
 
         @Override

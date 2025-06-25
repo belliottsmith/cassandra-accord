@@ -148,8 +148,11 @@ public class InMemoryJournal implements Journal
             return null;
 
         Cleanup cleanup = builder.maybeCleanup(true, FULL, redundantBefore, durableBefore);
-        if (cleanup == EXPUNGE)
-            return null;
+        switch (cleanup)
+        {
+            case ERASE: return Command.Truncated.erased(txnId);
+            case EXPUNGE: return null;
+        }
         return builder.construct(redundantBefore);
     }
 

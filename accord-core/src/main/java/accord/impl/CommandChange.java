@@ -62,8 +62,10 @@ import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
+import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.EXPUNGE;
 import static accord.local.Cleanup.NO;
+import static accord.local.Cleanup.VESTIGIAL;
 import static accord.local.Command.Accepted.accepted;
 import static accord.local.Command.Committed.committed;
 import static accord.local.Command.Executed.executed;
@@ -147,6 +149,7 @@ public class CommandChange
                 mask |= setIsNullAndChanged(DURABILITY, mask);
             eraseKnownFieldsMask[i] = mask;
         }
+        eraseKnownFieldsMask[VESTIGIAL.ordinal()] = eraseKnownFieldsMask[ERASE.ordinal()];
     }
 
     private static <T> boolean forceFieldChangedToNullFlag(SaveStatus saveStatus, Predicate<T> predicate, T erased)
@@ -309,6 +312,19 @@ public class CommandChange
             if (!hasUpdate)
                 return NO;
 
+            if (cleanup != null)
+            {
+                switch (cleanup)
+                {
+                    case EXPUNGE:
+                        return EXPUNGE;
+                    case ERASE:
+                        if (EXPUNGE == Cleanup.shouldCleanup(input, txnId, null, SaveStatus.Erased, NotDurable, null, redundantBefore, durableBefore))
+                            return EXPUNGE;
+                        return ERASE;
+                }
+            }
+
             Durability durability = this.durability;
             if (durability == null) durability = NotDurable;
             StoreParticipants participants = this.participants;
@@ -316,8 +332,13 @@ public class CommandChange
             //  would be better to break this dependency, or otherwise encode it better.
             //  In particular it would be nice to avoid doing this twice for each command on load, as we also do this in SafeCommandStore.
             //  Perhaps we can special-case loading, and simply update the participants here so we can avoid doing it again on access
-            if (input == Input.FULL && participants != null)
-                participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus != null && saveStatus.known.isExecuteAtKnown() ? executeAt : null);
+            if (input == Input.FULL)
+            {
+                if (saveStatus == null)
+                    return EXPUNGE;
+                if (participants != null)
+                    participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.isExecuteAtKnown() ? executeAt : null);
+            }
             Cleanup cleanup = Cleanup.shouldCleanup(input, txnId, executeAt, saveStatus, durability, participants, redundantBefore, durableBefore);
             if (this.cleanup != null && this.cleanup.compareTo(cleanup) > 0)
                 cleanup = this.cleanup;
@@ -461,6 +482,7 @@ public class CommandChange
 
             hasUpdate = true;
             cleanup = addCleanup;
+            flags |= setChanged(CLEANUP);
             if (!cleanup.appliesTo(saveStatus))
                 return false;
             return forceSetNulls(clearFields, eraseKnownFieldsMask[cleanup.newStatus.ordinal()]);
@@ -534,6 +556,7 @@ public class CommandChange
             if (this.waitingOn != null)
                 waitingOn = this.waitingOn.provide(txnId, partialDeps, executesAtLeast, minUniqueHlc);
 
+            Invariants.require(saveStatus != null);
             switch (saveStatus.status)
             {
                 case NotDefined:
@@ -585,32 +608,55 @@ public class CommandChange
         {
             return "Builder {" +
                    "txnId=" + txnId
-                   + (isChanged(PARTICIPANTS, flags)      ? ", participants=" + participants : "")
-                   + (isChanged(SAVE_STATUS, flags)       ? ", saveStatus=" + saveStatus : "")
-                   + (isChanged(DURABILITY, flags)        ? ", durability=" + durability : "")
-                   + (isChanged(EXECUTE_AT, flags)        ? ", executeAt=" + executeAt : "")
-                   + (isChanged(PROMISED, flags)          ? ", promised=" + promised : "")
-                   + (isChanged(ACCEPTED, flags)          ? ", acceptedOrCommitted=" + acceptedOrCommitted : "")
-                   + (isChanged(PARTIAL_TXN, flags)       ? ", partialTxn=" + safeToString(partialTxn) : "")
-                   + (isChanged(PARTIAL_DEPS, flags)      ? ", partialDeps=" + partialDeps : "")
-                   + (isChanged(WAITING_ON, flags)        ? ", waitingOn=" + waitingOn : "")
-                   + (isChanged(MIN_UNIQUE_HLC, flags)    ? ", minUniqueHlc=" + minUniqueHlc : "")
-                   + (isChanged(EXECUTES_AT_LEAST, flags) ? ", executesAtLeast=" + executesAtLeast : "")
-                   + (isChanged(WRITES, flags)            ? ", writes=" + writes : "")
-                   + (isChanged(RESULT, flags)            ? ", result=" + result : "")
-                   + (isChanged(CLEANUP, flags)           ? ", cleanup=" + cleanup : "") +
-                   '}';
+                   + safeToString(PARTICIPANTS, flags, participants)
+                   + safeToString(SAVE_STATUS, flags, saveStatus)
+                   + safeToString(DURABILITY, flags, durability)
+                   + safeToString(EXECUTE_AT, flags, executeAt)
+                   + safeToString(PROMISED, flags, promised)
+                   + safeToString(ACCEPTED, flags, acceptedOrCommitted)
+                   + safeToString(PARTIAL_TXN, flags, partialTxn)
+                   + safeToString(PARTIAL_DEPS, flags, partialDeps)
+                   + safeToString(WAITING_ON, flags, waitingOn)
+                   + safeToString(MIN_UNIQUE_HLC, flags, minUniqueHlc)
+                   + safeToString(EXECUTES_AT_LEAST, flags, executesAtLeast)
+                   + safeToString(WRITES, flags, writes)
+                   + safeToString(RESULT, flags, result)
+                   + safeToString(CLEANUP, flags, cleanup)
+                   + '}';
         }
 
-        private static String safeToString(Object obj)
+        private static Object safeToString(Field field, int flags, Object obj)
         {
+            if (!isChanged(field, flags))
+                return "";
+
+            return field.name().toLowerCase() + '=' + safeToString(isNull(field, flags), obj);
+        }
+
+        private static Object safeToString(boolean isNull, Object obj)
+        {
+            if (isNull)
+            {
+                if (obj == null)
+                    return "null";
+
+                try
+                {
+                    return "null<" + obj + '>';
+                }
+                catch (Throwable t)
+                {
+                    return "null<err>";
+                }
+            }
+
             try
             {
                 return obj.toString();
             }
             catch (Throwable t)
             {
-                return "<error evaluating>";
+                return "<err>";
             }
         }
     }
@@ -694,7 +740,7 @@ public class CommandChange
             if (before.waitingOn() != after.waitingOn())
             {
                 flags |= setChanged(WAITING_ON);
-                flags |= addIdentityFlags(getMinUniqueHlc(before), getMinUniqueHlc(after), MIN_UNIQUE_HLC);
+                flags |= addIdentityFlags(0, getMinUniqueHlc(before), getMinUniqueHlc(after), MIN_UNIQUE_HLC);
             }
             flags |= addEqualityFlags(before.executesAtLeast(), after.executesAtLeast(), EXECUTES_AT_LEAST);
             flags |= addIdentityFlags(before.writes(), after.writes(), WRITES);
@@ -740,6 +786,13 @@ public class CommandChange
     private static int addIdentityFlags(long l, long r, Field field)
     {
         if (l == r) return 0;
+        return setChanged(field);
+    }
+
+    private static int addIdentityFlags(long treatAsNull, long l, long r, Field field)
+    {
+        if (l == r) return 0;
+        if (r == treatAsNull) return setIsNullAndChanged(field);
         return setChanged(field);
     }
 
@@ -813,9 +866,9 @@ public class CommandChange
     }
 
     @VisibleForTesting
-    public static boolean isNull(Field field, int oldFlags)
+    public static boolean isNull(Field field, int flags)
     {
-        return (oldFlags & (1 << field.ordinal())) != 0;
+        return (flags & (1 << field.ordinal())) != 0;
     }
 
     public static int unsetFieldIsNull(Field field, int oldFlags)
