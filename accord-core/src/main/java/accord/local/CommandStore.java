@@ -599,6 +599,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     final void markBootstrapping(SafeCommandStore safeStore, TxnId globalSyncId, Ranges ranges)
     {
         safeStore.setBootstrapBeganAt(bootstrap(globalSyncId, ranges, bootstrapBeganAt));
+        safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
         updateMaxConflicts(ranges, globalSyncId);
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, PRE_BOOTSTRAP_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);

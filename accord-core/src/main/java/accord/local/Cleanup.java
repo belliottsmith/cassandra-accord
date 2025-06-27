@@ -215,7 +215,7 @@ public enum Cleanup
             case ShardUniversal:
                 // TODO (required): consider how we guarantee not to break recovery of other shards if a majority on this shard are PRE_BOOTSTRAP
                 //   (if the condition is false and we fall through to removing Outcome)
-                if (participants.doesStillExecute())
+                if (input != FULL || participants.doesStillExecute())
                     return min.atLeast(truncateWithOutcome(txnId, min));
 
             case MajorityOrInvalidated:
@@ -233,23 +233,12 @@ public enum Cleanup
     private static Cleanup cleanupWithoutFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         // TODO (expected): consider if we can truncate more aggressively partial records, although we cannot infer anything from the fact they're undecided
-        if (input == PARTIAL || saveStatus.hasBeen(Truncated))
+        if (input == PARTIAL || saveStatus.hasBeen(Truncated) || saveStatus == Uninitialised)
             return NO;
 
         Invariants.require(!saveStatus.hasBeen(PreCommitted));
-        if (participants.route() == null)
-        {
-            // we don't want to erase something that we only don't own because it hasn't been initialised
-            if (saveStatus == Uninitialised)
-                return NO;
+        boolean isCovering = saveStatus.known.route() == CoveringRoute || txnId.compareTo(redundantBefore.minShardAndLocallyAppliedBefore()) <= 0;
 
-            if (txnId.compareTo(redundantBefore.minShardAndLocallyAppliedBefore()) >= 0)
-                return NO;
-
-            return vestigial(txnId);
-        }
-
-        boolean isCovering = saveStatus.known.route() == CoveringRoute;
         if (isCovering && txnId.isSyncPoint() && participants.owns().isEmpty())
         {
             RedundantStatus redundant = redundantBefore.status(txnId, null, participants.touches());
@@ -257,8 +246,8 @@ public enum Cleanup
                 return vestigial(txnId);
         }
 
-        RedundantStatus redundant = redundantBefore.status(txnId, null, participants.owns());
-        return cleanupUndecided(txnId, redundant, isCovering || redundantBefore.minShardAndLocallyAppliedBefore().compareTo(txnId) > 0);
+        RedundantStatus ownStatus = redundantBefore.status(txnId, null, participants.owns());
+        return cleanupUndecided(txnId, ownStatus, isCovering);
     }
 
     private static Cleanup cleanupIfUndecidedWithFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, RedundantStatus redundantStatus)
@@ -269,14 +258,14 @@ public enum Cleanup
         return cleanupUndecided(txnId, redundantStatus, true);
     }
 
-    private static Cleanup cleanupUndecided(TxnId txnId, RedundantStatus redundantStatus, boolean isCoveringRoute)
+    private static Cleanup cleanupUndecided(TxnId txnId, RedundantStatus ownStatus, boolean isCoveringRoute)
     {
-        if (redundantStatus.any(LOCALLY_APPLIED))
+        if (ownStatus.any(LOCALLY_APPLIED))
             return invalidate(txnId);
 
         // TODO (desired): safe to use MAJORITY_APPLIED, LOCALLY_REDUNDANT?
         // TODO (required): can we guarantee we will always eventually obtain a covering route if others are garbage collecting?
-        if (isCoveringRoute && redundantStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
+        if (isCoveringRoute && ownStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
             return vestigial(txnId);
 
         return NO;

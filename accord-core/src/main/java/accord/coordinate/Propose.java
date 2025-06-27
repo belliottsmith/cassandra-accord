@@ -44,6 +44,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.topology.TopologyManager;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.SortedListMap;
@@ -259,23 +260,29 @@ abstract class Propose<R> implements Callback<AcceptReply>
             this.debug = debug() ? new SortedListMap<>(topologies.nodes(), AcceptReply[]::new) : null;
         }
 
-        public static NotAccept proposeInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, BiConsumer<Void, Throwable> callback)
+        public static void proposeInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, BiConsumer<Void, Throwable> callback)
         {
-            return proposeNotAccept(node, executor, AcceptedInvalidate, ballot, txnId, invalidateWithParticipant, callback);
+            proposeNotAccept(node, executor, AcceptedInvalidate, ballot, txnId, invalidateWithParticipant, callback);
         }
 
-        public static NotAccept proposeNotAccept(Node node, SequentialAsyncExecutor executor, Status status, Ballot ballot, TxnId txnId, RoutingKey participatingKey, BiConsumer<Void, Throwable> callback)
+        public static void proposeNotAccept(Node node, SequentialAsyncExecutor executor, Status status, Ballot ballot, TxnId txnId, RoutingKey participatingKey, BiConsumer<Void, Throwable> callback)
         {
-            Participants<?> participants = Participants.singleton(txnId.domain(), participatingKey);
-            Topologies topologies = node.topology().forEpoch(participants, txnId.epoch(), SHARE);
-            NotAccept notAccept = new NotAccept(node, status, topologies, ballot, txnId, participants, callback);
-            node.send(topologies.nodes(), to -> new Accept.NotAccept(status, ballot, txnId, participants), executor, notAccept);
-            return notAccept;
+            try
+            {
+                Participants<?> participants = Participants.singleton(txnId.domain(), participatingKey);
+                Topologies topologies = node.topology().forEpoch(participants, txnId.epoch(), SHARE);
+                NotAccept notAccept = new NotAccept(node, status, topologies, ballot, txnId, participants, callback);
+                node.send(topologies.nodes(), to -> new Accept.NotAccept(status, ballot, txnId, participants), executor, notAccept);
+            }
+            catch (Throwable t)
+            {
+                callback.accept(null, t);
+            }
         }
 
-        public static NotAccept proposeAndCommitInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, Route<?> commitInvalidationTo, Timestamp invalidateUntil, BiConsumer<?, Throwable> callback)
+        public static void proposeAndCommitInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, Route<?> commitInvalidationTo, Timestamp invalidateUntil, BiConsumer<?, Throwable> callback)
         {
-            return proposeInvalidate(node, executor, ballot, txnId, invalidateWithParticipant, (success, fail) -> {
+            proposeInvalidate(node, executor, ballot, txnId, invalidateWithParticipant, (success, fail) -> {
                 if (fail != null)
                 {
                     callback.accept(null, fail);

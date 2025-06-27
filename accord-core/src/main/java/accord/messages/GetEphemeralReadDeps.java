@@ -29,6 +29,7 @@ import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -72,10 +73,10 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
         long latestEpoch = Math.max(safeStore.node().epoch(), node.epoch());
 
         // TODO (desired): only return failure if we've participated in a sync point that could migrate coordination to the newer epoch
-        if (latestEpoch > executionEpoch && safeStore.ranges().removed(executionEpoch, latestEpoch).intersects(scope))
+        StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, latestEpoch);
+        if (latestEpoch > executionEpoch && (safeStore.ranges().removed(executionEpoch, latestEpoch).intersects(participants.owns()) || node.topology().hasReplicationMaybeChanged(participants.owns(), executionEpoch)))
             return new GetEphemeralReadDepsOk(latestEpoch);
 
-        StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, latestEpoch);
         Deps deps;
         ExecuteFlags flags;
         try (DepsCalculator calculator = new DepsCalculator())

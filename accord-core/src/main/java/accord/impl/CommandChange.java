@@ -336,6 +336,7 @@ public class CommandChange
             {
                 if (saveStatus == null)
                     return EXPUNGE;
+                
                 if (participants != null)
                     participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.isExecuteAtKnown() ? executeAt : null);
             }
@@ -348,28 +349,21 @@ public class CommandChange
         public Cleanup maybeCleanup(boolean clearFields, Input input, RedundantBefore redundantBefore, DurableBefore durableBefore)
         {
             Cleanup cleanup = shouldCleanup(input, redundantBefore, durableBefore);
-            return maybeCleanup(clearFields, input, cleanup);
+            return maybeCleanup(clearFields, cleanup);
         }
 
-        public Cleanup maybeCleanup(boolean clearFields, Input input, Cleanup cleanup)
+        public Cleanup maybeCleanup(boolean clearFields, Cleanup cleanup)
         {
-            if (cleanup == NO || cleanup == EXPUNGE)
+            if (cleanup == NO)
                 return cleanup;
 
-            SaveStatus newSaveStatus = cleanup.newStatus;
-            if (saveStatus == null || saveStatus.compareTo(newSaveStatus) < 0)
+            forceSetNulls(clearFields, eraseKnownFieldsMask[cleanup.newStatus.ordinal()]);
+            if (this.cleanup == null || this.cleanup.compareTo(cleanup) < 0)
             {
-                if (input == Input.FULL)
-                {
-                    // TODO (expected): this special-casing should be declared in Cleanup
-                    if (newSaveStatus == SaveStatus.TruncatedApply && (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)))
-                        newSaveStatus = SaveStatus.TruncatedUnapplied;
-                    saveStatus = newSaveStatus;
-                }
-                forceSetNulls(clearFields, eraseKnownFieldsMask[newSaveStatus.ordinal()]);
+                this.hasUpdate = true;
+                this.flags |= setChanged(CLEANUP);
+                this.cleanup = cleanup;
             }
-
-            this.cleanup = cleanup;
             return cleanup;
         }
 
@@ -462,7 +456,7 @@ public class CommandChange
         // that is, if we cleared a non-null field or if we are already mask-only
         public boolean clearSuperseded(boolean clearFields, Builder superseding)
         {
-            int unset = flags & setFieldsMask(superseding.flags);
+            int unset = flags & setFieldsMask(superseding.flags & ~setChanged(CLEANUP));
             if (notNulls(unset) == 0 && notNulls(flags) != 0)
                 return false;
 
@@ -478,13 +472,14 @@ public class CommandChange
                 return false;
 
             if (cleanup != null && addCleanup.compareTo(cleanup) <= 0)
+            {
+                Invariants.require(isChanged(CLEANUP, flags));
                 return false;
+            }
 
             hasUpdate = true;
             cleanup = addCleanup;
             flags |= setChanged(CLEANUP);
-            if (!cleanup.appliesTo(saveStatus))
-                return false;
             return forceSetNulls(clearFields, eraseKnownFieldsMask[cleanup.newStatus.ordinal()]);
         }
 
@@ -546,8 +541,8 @@ public class CommandChange
                 return null;
 
             Invariants.require(txnId != null);
-            if (participants == null) participants = StoreParticipants.empty(txnId);
-            else participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.isExecuteAtKnown() ? executeAt : null);
+            if (participants != null)
+                participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus != null && saveStatus.known.isExecuteAtKnown() ? executeAt : null);
 
             if (durability == null)
                 durability = NotDurable;
@@ -555,6 +550,27 @@ public class CommandChange
             WaitingOn waitingOn = null;
             if (this.waitingOn != null)
                 waitingOn = this.waitingOn.provide(txnId, partialDeps, executesAtLeast, minUniqueHlc);
+
+            if (cleanup != null)
+            {
+                switch (cleanup)
+                {
+                    default: throw new UnhandledEnum(cleanup);
+                    case NO: break;
+                    case EXPUNGE: return null;
+                    case ERASE: return Command.Truncated.erased(txnId);
+                    case INVALIDATE: return Command.Truncated.invalidated(txnId, participants);
+                    case VESTIGIAL: return Command.Truncated.vestigial(txnId, participants);
+                    case TRUNCATE_WITH_OUTCOME:
+                        if (saveStatus.compareTo(SaveStatus.TruncatedApplyWithOutcome) < 0)
+                            saveStatus = SaveStatus.TruncatedApplyWithOutcome;
+                        break;
+                    case TRUNCATE:
+                        if (saveStatus.compareTo(SaveStatus.TruncatedApply) < 0)
+                            saveStatus = saveStatus.known.is(ApplyAtKnown) ? SaveStatus.TruncatedApply : SaveStatus.TruncatedUnapplied;
+                        break;
+                }
+            }
 
             Invariants.require(saveStatus != null);
             switch (saveStatus.status)
@@ -630,7 +646,7 @@ public class CommandChange
             if (!isChanged(field, flags))
                 return "";
 
-            return field.name().toLowerCase() + '=' + safeToString(isNull(field, flags), obj);
+            return ", " + field.name().toLowerCase() + '=' + safeToString(isNull(field, flags), obj);
         }
 
         private static Object safeToString(boolean isNull, Object obj)
