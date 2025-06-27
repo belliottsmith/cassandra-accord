@@ -184,7 +184,7 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         }
         else
         {
-            DurabilityResult result = new DurabilityResult(syncPoint, tracker.achievedLocal(node.id()), tracker.achievedRemote(), tracker.failures(), null);
+            DurabilityResult result = current();
             if (result.achievedRemote == SyncRemote.All)
             {
                 node.configService().reportEpochRetired(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);

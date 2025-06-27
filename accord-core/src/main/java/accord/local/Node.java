@@ -334,7 +334,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public AsyncResult<?> markDurable(DurableBefore addDurableBefore)
     {
-        return withEpochExact(addDurableBefore.maxEpoch(), (Executor)null, () -> persistDurableBefore.mergeAndUpdate(DurableBefore.merge(durableBefore, addDurableBefore)))
+        return withEpochExact(addDurableBefore.maxEpoch(), (Executor)null, () -> persistDurableBefore.mergeAndUpdate(addDurableBefore))
                .beginAsResult();
     }
 

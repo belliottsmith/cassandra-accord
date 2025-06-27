@@ -46,6 +46,7 @@ import accord.utils.ArrayBuffers;
 import accord.utils.ArrayBuffers.IntBuffers;
 import accord.utils.IndexedBiFunction;
 import accord.utils.IndexedConsumer;
+import accord.utils.IndexedFoldToLong;
 import accord.utils.IndexedIntFunction;
 import accord.utils.IndexedTriFunction;
 import accord.utils.SimpleBitSet;

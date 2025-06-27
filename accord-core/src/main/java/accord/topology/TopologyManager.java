@@ -1240,8 +1240,20 @@ public class TopologyManager
 
     public Topologies forEpoch(Unseekables<?> select, long epoch, SelectNodeOwnership selectNodeOwnership)
     {
-        EpochState state = epochs.get(epoch);
+        Epochs snapshot = epochs;
+        EpochState state = snapshot.get(epoch);
+        if (state == null)
+            throw new TopologyRetiredException(epoch, snapshot.minEpoch());
         return new Single(sorter, state.global.select(select, selectNodeOwnership));
+    }
+
+    public boolean hasReplicationMaybeChanged(Unseekables<?> select, long sinceEpoch)
+    {
+        Epochs snapshot = epochs;
+        if (snapshot.minEpoch() > sinceEpoch)
+            return true;
+
+        return atLeast(select, sinceEpoch, Long.MAX_VALUE, ignore -> Ranges.EMPTY, HasChangedReplication.INSTANCE);
     }
 
     public Topologies forEpochAtLeast(Unseekables<?> select, long epoch, SelectNodeOwnership selectNodeOwnership)
@@ -1485,6 +1497,51 @@ public class TopologyManager
         {
             select = (K)select.without(epoch.synced);
             return collector == null ? select : (K)collector.with((Participants) select);
+        }
+    }
+
+    static class ReplicationChangeTracker
+    {
+        int rf = -1;
+        boolean hasChanged;
+    }
+    static class HasChangedReplication implements TopologyManager.Collectors<ReplicationChangeTracker, Unseekables<?>, Boolean>
+    {
+        static final HasChangedReplication INSTANCE = new HasChangedReplication();
+
+        @Override
+        public ReplicationChangeTracker allocate(int size)
+        {
+            return new ReplicationChangeTracker();
+        }
+
+        @Override
+        public Boolean none()
+        {
+            return false;
+        }
+
+        @Override
+        public Boolean multi(ReplicationChangeTracker collector)
+        {
+            return collector.hasChanged;
+        }
+
+        @Override
+        public Boolean one(TopologyManager.EpochState epoch, Unseekables<?> select, boolean permitMissing)
+        {
+            return false;
+        }
+
+        @Override
+        public ReplicationChangeTracker update(ReplicationChangeTracker collector, TopologyManager.EpochState epoch, Unseekables<?> select, boolean permitMissing)
+        {
+            epoch.global.foldl(select, (shard, c, i1) -> {
+                if (c.rf < 0) c.rf = shard.rf;
+                else c.hasChanged |= c.rf != shard.rf;
+                return c;
+            }, collector);
+            return collector;
         }
     }
 

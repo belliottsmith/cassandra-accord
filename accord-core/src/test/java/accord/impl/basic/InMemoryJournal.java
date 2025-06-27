@@ -27,6 +27,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Objects;
 import java.util.TreeMap;
 
 import javax.annotation.Nonnull;
@@ -147,12 +148,7 @@ public class InMemoryJournal implements Journal
         if (builder == null)
             return null;
 
-        Cleanup cleanup = builder.maybeCleanup(true, FULL, redundantBefore, durableBefore);
-        switch (cleanup)
-        {
-            case ERASE: return Command.Truncated.erased(txnId);
-            case EXPUNGE: return null;
-        }
+        builder.maybeCleanup(true, FULL, redundantBefore, durableBefore);
         return builder.construct(redundantBefore);
     }
 
@@ -527,7 +523,7 @@ public class InMemoryJournal implements Journal
                 Input input = isPartialCompaction ? PARTIAL : FULL;
                 ++counter;
                 Cleanup cleanup = builder.shouldCleanup(input, store.unsafeGetRedundantBefore(), store.durableBefore());
-                cleanup = builder.maybeCleanup(true, input, cleanup);
+                cleanup = builder.maybeCleanup(true, cleanup);
                 if (cleanup != NO)
                 {
                     if (cleanup == EXPUNGE)
@@ -584,11 +580,16 @@ public class InMemoryJournal implements Journal
                     }
                 }
 
+                Builder before = reconstruct(diffs, ALL);
+                before.maybeCleanup(true, FULL, store.unsafeGetRedundantBefore(), store.durableBefore());
                 diffs.size -= removeCount;
                 diffs.flushed.removeAll(subset.flushed);
                 diffs.files.removeAll(subset.files);
                 diffs.files.add(new DiffFile(sorted));
                 diffs.sorted = null;
+                Builder after = reconstruct(diffs, ALL);
+                after.maybeCleanup(true, FULL, store.unsafeGetRedundantBefore(), store.durableBefore());
+                Invariants.require(Objects.equals(before.construct(store.unsafeGetRedundantBefore()), after.construct(store.unsafeGetRedundantBefore())));
             }
         }
     }

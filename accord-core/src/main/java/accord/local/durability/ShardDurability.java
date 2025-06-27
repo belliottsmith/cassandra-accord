@@ -285,8 +285,8 @@ public class ShardDurability
                 logger.info("Increased numberOfSplits to {} for shard {}", currentSplits, shard.range);
             }
             long retryDelay = node.agent().retrySyncPointDelay(node, retries, MICROSECONDS);
-            if (activeRequest != null)
-                logger.info("Retrying {} for {} in {}s", ranges, activeRequest.requestedBy, String.format("%.2f", retryDelay/1000_000.0));
+            if (activeRequest != null) logger.info("Retrying {} for {} in {}s", ranges, activeRequest.requestedBy, String.format("%.2f", retryDelay/1000_000.0));
+            else logger.debug("Retrying {} in {}s", ranges, String.format("%.2f", retryDelay/1000_000.0));
             scheduled = node.scheduler().selfRecurring(() -> {
                 synchronized (this)
                 {
@@ -313,8 +313,8 @@ public class ShardDurability
             }
             minHlc = Math.max(minHlc, node.agent().minStaleHlc(node, activeRequest != null));
             TxnId staleId = node.nextStaleTxnId(minEpoch, minHlc, ExclusiveSyncPoint, Domain.Range);
-            if (activeRequest != null)
-                logger.info("Initiating RX requested by {} for {} with TxnId {}. Remaining: {}.", activeRequest.requestedBy, ranges, staleId, active);
+            if (activeRequest != null) logger.info("Initiating RX requested by {} for {} with TxnId {}. Remaining: {}.", activeRequest.requestedBy, ranges, staleId, active);
+            else logger.debug("Initiating RX for durability of {} with TxnId {}.", ranges, staleId);
 
             scheduled = node.agent().awaitStaleId(node, staleId, activeIndex >= 0)
                             .flatMap(
