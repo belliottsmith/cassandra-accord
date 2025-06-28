@@ -974,9 +974,6 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         return foldl(ranges, Bounds::withoutWitnessed, ranges, txnId);
     }
 
-    /**
-     * Subtract any ranges we consider stale or pre-bootstrap
-     */
     public Ranges removeRetired(Ranges ranges)
     {
         return foldl(ranges, Bounds::withoutAnyRetired, ranges, r -> false);

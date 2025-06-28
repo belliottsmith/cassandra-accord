@@ -74,8 +74,9 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
     final DurabilityTracker tracker;
     final @Nullable AsyncExecutor executor;
     final Map<Node.Id, Object> debug;
+    final SettableResult<DurabilityResult> onQuorum = new SettableResult<>();
     final int attempt;
-    private Throwable failures = null;
+    private Throwable failures;
     boolean reportedQuorum;
     long retryInFutureEpoch;
 
@@ -104,6 +105,11 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         this.tracker = new DurabilityTracker(topologies, excludeSuccess);
         this.debug = Invariants.debug() ? new SortedListMap<>(tracker.nodes(), Object[]::new) : null;
         this.executor = executor;
+    }
+
+    public AsyncResult<DurabilityResult> onQuorum()
+    {
+        return onQuorum;
     }
 
     @Override
@@ -139,6 +145,20 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         }
     }
 
+    @Override
+    public boolean trySuccess(DurabilityResult success)
+    {
+        onQuorum.trySuccess(success);
+        return super.trySuccess(success);
+    }
+
+    @Override
+    public boolean tryFailure(Throwable failure)
+    {
+        onQuorum.tryFailure(failure);
+        return super.tryFailure(failure);
+    }
+
     protected void sendApply(Node.Id to)
     {
         CoordinateSyncPoint.sendApply(node, to, syncPoint, tracker.topologies());
@@ -161,8 +181,9 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         {
             if (tracker.hasQuorumSuccess() && !reportedQuorum)
             {
-                reportedQuorum = true;
-                node.durability().report(current());
+                DurabilityResult current = current();
+                onQuorum.trySuccess(current);
+                node.durability().report(current);
             }
             return;
         }
@@ -213,37 +234,40 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         return partialResult.merge(cur);
     }
 
-    public static AsyncResult<DurabilityResult> coordinate(Node node, SyncPoint<Range> exclusiveSyncPoint, int attempt)
+    public static ExecuteSyncPoint coordinate(Node node, SyncPoint<Range> exclusiveSyncPoint, int attempt)
     {
         return coordinate(node, ignore -> Collections.emptySet(), exclusiveSyncPoint, attempt);
     }
 
-    public static AsyncResult<DurabilityResult> coordinateIncluding(Node node, SyncPoint<Range> exclusiveSyncPoint, @Nullable Collection<Node.Id> including, int attempt)
+    public static ExecuteSyncPoint coordinateIncluding(Node node, SyncPoint<Range> exclusiveSyncPoint, @Nullable Collection<Node.Id> including, int attempt)
     {
         return coordinateIncluding(node, exclusiveSyncPoint, including, null, attempt);
     }
 
-    public static AsyncResult<DurabilityResult> coordinateIncluding(Node node, SyncPoint<Range> exclusiveSyncPoint, @Nullable Collection<Node.Id> including, AsyncExecutor executor, int attempt)
+    public static ExecuteSyncPoint coordinateIncluding(Node node, SyncPoint<Range> exclusiveSyncPoint, @Nullable Collection<Node.Id> including, AsyncExecutor executor, int attempt)
     {
         return coordinate(node, including == null ? ignore -> Collections.emptySet() : topologies -> topologies.nodes().without(including::contains), exclusiveSyncPoint, executor, attempt);
     }
 
-    public static AsyncResult<DurabilityResult> coordinate(Node node, Function<Topologies, Set<Node.Id>> excludeSuccess, SyncPoint<Range> exclusiveSyncPoint, int attempt)
+    public static ExecuteSyncPoint coordinate(Node node, Function<Topologies, Set<Node.Id>> excludeSuccess, SyncPoint<Range> exclusiveSyncPoint, int attempt)
     {
         return coordinate(node, excludeSuccess, exclusiveSyncPoint, null, attempt);
     }
 
-    public static AsyncResult<DurabilityResult> coordinate(Node node, Function<Topologies, Set<Node.Id>> excludeSuccess, SyncPoint<Range> exclusiveSyncPoint, AsyncExecutor executor, int attempt)
+    public static ExecuteSyncPoint coordinate(Node node, Function<Topologies, Set<Node.Id>> excludeSuccess, SyncPoint<Range> syncPoint, AsyncExecutor executor, int attempt)
     {
         try
         {
-            ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, exclusiveSyncPoint, excludeSuccess, executor, attempt);
+            ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, syncPoint, excludeSuccess, executor, attempt);
             coordinate.start();
             return coordinate;
         }
         catch (Throwable t)
         {
-            return AsyncResults.failure(t);
+            ExecuteSyncPoint fail = new ExecuteSyncPoint(node, syncPoint, new Topologies.Single(node.topology().sorter(), node.topology().current()), excludeSuccess, executor, attempt);
+            fail.tryFailure(t);
+            fail.onQuorum.tryFailure(t);
+            return fail;
         }
     }
 

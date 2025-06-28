@@ -309,18 +309,23 @@ public class CommandChange
 
         public Cleanup shouldCleanup(Input input, RedundantBefore redundantBefore, DurableBefore durableBefore)
         {
+            // Early return: No cleanup needed when no updates have been made to this command
             if (!hasUpdate)
                 return NO;
 
+            // Honor previously set cleanup requirements - cleanup levels are ordered by aggressiveness
             if (cleanup != null)
             {
                 switch (cleanup)
                 {
                     case EXPUNGE:
+                        // Already marked for complete removal from storage
                         return EXPUNGE;
                     case ERASE:
+                        // Check if erased command qualifies for full expungement
                         if (EXPUNGE == Cleanup.shouldCleanup(input, txnId, null, SaveStatus.Erased, NotDurable, null, redundantBefore, durableBefore))
                             return EXPUNGE;
+                        // Otherwise maintain erase-level cleanup
                         return ERASE;
                 }
             }
@@ -334,6 +339,7 @@ public class CommandChange
             //  Perhaps we can special-case loading, and simply update the participants here so we can avoid doing it again on access
             if (input == Input.FULL)
             {
+                // During full compaction, commands without save status can be completely expunged
                 if (saveStatus == null)
                     return EXPUNGE;
                 
@@ -341,6 +347,7 @@ public class CommandChange
                     participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.isExecuteAtKnown() ? executeAt : null);
             }
             Cleanup cleanup = Cleanup.shouldCleanup(input, txnId, executeAt, saveStatus, durability, participants, redundantBefore, durableBefore);
+            // Upgrade cleanup level iif a more aggressive cleanup was previously requested
             if (this.cleanup != null && this.cleanup.compareTo(cleanup) > 0)
                 cleanup = this.cleanup;
             return cleanup;

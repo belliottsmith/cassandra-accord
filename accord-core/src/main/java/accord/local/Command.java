@@ -1633,6 +1633,10 @@ public abstract class Command implements ICommand
                     break;
                 case ExecuteAtKnown:
                 case ApplyAtKnown:
+                    // TODO (expected): enable this invariant; requires rethinking how we update StoreParticipants on PreCommitted
+                    //     which must be done carefully as we cannot mess with touches()/Deps as the relationship there must be maintained
+                    //     for state machine correctness
+//                    Invariants.require(participants.executes() != null);
                 case ExecuteAtProposed:
                     Invariants.require(executeAt != null);
                     int c =  executeAt.compareTo(validate.txnId());

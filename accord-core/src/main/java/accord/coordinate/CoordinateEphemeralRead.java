@@ -77,8 +77,17 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
             return;
         }
 
-        Topologies topologies = node.topology().withUnsyncedEpochs(route, txnId, txnId);
-        CoordinateEphemeralRead coordinate = new CoordinateEphemeralRead(node, node.someSequentialExecutor(), topologies, route, txnId, txn, callback);
+        CoordinateEphemeralRead coordinate;
+        try
+        {
+            Topologies topologies = node.topology().withUnsyncedEpochs(route, txnId, txnId);
+            coordinate = new CoordinateEphemeralRead(node, node.someSequentialExecutor(), topologies, route, txnId, txn, callback);
+        }
+        catch (Throwable t)
+        {
+            callback.accept(null, t);
+            return;
+        }
         coordinate.start();
     }
 

@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 
 import org.slf4j.Logger;
@@ -32,6 +33,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Scheduler.Scheduled;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.coordinate.CoordinationFailed;
+import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.ShardDistributor;
 import accord.primitives.FullRoute;
@@ -70,6 +72,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 public class ShardDurability
 {
     private static final Logger logger = LoggerFactory.getLogger(ShardDurability.class);
+    private static final AtomicLong nextShardId = new AtomicLong();
 
     public static class Waiting
     {
@@ -89,9 +92,10 @@ public class ShardDurability
         }
     }
 
-    // TODO (required): support intra-shard parallelism
+    // TODO (expected): support intra-shard parallelism
     private class ShardScheduler
     {
+        final long id;
         Shard shard;
         boolean ticks, stopping, stopped, readyToStop;
 
@@ -110,6 +114,7 @@ public class ShardDurability
 
         long lastStartedAtMicros;
         long cycleStartedAtMicros;
+        DurableBefore.Entry cycleMin = DurableBefore.Entry.NONE;
         int retries;
 
         Cancellable scheduled;
@@ -120,6 +125,7 @@ public class ShardDurability
 
         private ShardScheduler()
         {
+            this.id = nextShardId.incrementAndGet();
         }
 
         synchronized void update(Shard newShard, int newNodeOffset, boolean newTicks)
@@ -138,16 +144,19 @@ public class ShardDurability
                 cycleLength = targetSplits;
                 nodeOffset = newNodeOffset;
                 ticks = newTicks;
-                resetCycleIndexes();
+                resetCycle();
                 readyToStop = !ticks;
             }
         }
 
-        synchronized void resetCycleIndexes()
+        synchronized void resetCycle()
         {
             long nowMicros = node.elapsed(MICROSECONDS);
             long cycleStart = nowMicros - (nowMicros % shardCycleTimeMicros);
             int globalCycleIndex = Math.toIntExact((nowMicros - cycleStart) / (shardCycleTimeMicros / cycleLength));
+
+            cycleMin = node.durableBefore().minEntry(Ranges.of(shard.range));
+            cycleStartedAtMicros = nowMicros;
             cycleOffset = (globalCycleIndex + nodeOffset) % cycleLength;
             activeIndex = nextIndex = -1;
             nextToIndex = ticks ? 1 : -1;
@@ -155,7 +164,7 @@ public class ShardDurability
 
         void markDefunct()
         {
-            logger.info("Marking shard durability scheduler for {} defunct", shard);
+            logger.info("Marking shard durability scheduler {} for {} defunct", id, shard);
         }
 
         synchronized void markDefunctSilent()
@@ -177,6 +186,9 @@ public class ShardDurability
         {
             if (active != null)
                 return;
+
+            while (waiting != null && waiting.request.isDone())
+                waiting = waiting.next;
 
             if (waiting != null && (activeIndex >= 0 || nextIndex == nextToIndex))
             {
@@ -204,6 +216,7 @@ public class ShardDurability
                     else
                     {
                         stopped = true;
+                        logger.info("Stopping shard durability scheduler {} for {}", id, shard);
                         node.scheduler().once(() -> {
                             synchronized (ShardDurability.this)
                             {
@@ -213,7 +226,7 @@ public class ShardDurability
                     }
                     return;
                 }
-                resetCycleIndexes();
+                resetCycle();
             }
             if (active != null)
                 start();
@@ -224,7 +237,9 @@ public class ShardDurability
             Object requestedBy = null;
             if (activeRequest != null)
                 requestedBy = activeRequest.requestedBy;
+
             durabilityQueue.submit(success, activeRequest);
+
             decrementBackoff();
             int index = activeIndex;
             active = active.without(ranges);
@@ -249,7 +264,8 @@ public class ShardDurability
                 long nowMicros = node.elapsed(MICROSECONDS);
                 long timeTakenSeconds = MICROSECONDS.toSeconds(nowMicros - cycleStartedAtMicros);
                 long targetTimeSeconds = MICROSECONDS.toSeconds(shardCycleTimeMicros);
-                logger.info("Successfully completed one cycle of durability scheduling for shard {} in {}s (vs {}s target)", shard.range, timeTakenSeconds, targetTimeSeconds);
+                logger.info("Successfully completed one consensus cycle for shard {} in {}s (vs {}s target)", shard.range, timeTakenSeconds, targetTimeSeconds);
+                reportDurableRanges(true, timeTakenSeconds);
             }
             else
             {
@@ -260,8 +276,37 @@ public class ShardDurability
                     long targetTimeSeconds = MICROSECONDS.toSeconds((index * shardCycleTimeMicros) / cycleLength);
                     long timeTakenSeconds = MICROSECONDS.toSeconds(nowMicros - cycleStartedAtMicros);
                     Range range = node.commandStores().shardDistributor().splitRange(shard.range, index - rfCycleSize, index, cycleLength);
-                    logger.info("Successfully completed {}/{} cycle of durability scheduling covering range {}. Completed in {}s (vs {}s target).", index/rfCycleSize, shard.rf(), range, timeTakenSeconds, targetTimeSeconds);
+                    logger.info("Successfully completed {}/{} consensus cycle for range {}. Completed in {}s (vs {}s target).", index/rfCycleSize, shard.rf(), range, timeTakenSeconds, targetTimeSeconds);
+                    reportDurableRanges(false, timeTakenSeconds);
                 }
+            }
+        }
+
+        private void reportDurableRanges(boolean completedCycle, long seconds)
+        {
+            DurableBefore durableBefore = node.durableBefore();
+            DurableBefore.Entry min = durableBefore.minEntry(Ranges.of(shard.range));
+            if (completedCycle)
+            {
+                if (min.equals(cycleMin)) logger.warn("Minimum durability {} for {} has not advanced in at least {} seconds.", min, shard.range, seconds);
+                else logger.info("Durability for {} at least {}.", min, shard.range);
+
+                String report = durableBefore.foldlWithBounds(Ranges.of(shard.range), (entry, sb, start, end) -> {
+                        if (sb.length() > 0)
+                            sb.append(", ");
+                        sb.append('(');
+                        sb.append(start);
+                        sb.append(",");
+                        sb.append(end);
+                        sb.append("]:");
+                        sb.append(entry);
+                        return sb;
+                    }, new StringBuilder(), ignore -> false).toString();
+                logger.info("{}", report);
+            }
+            else if (min.equals(cycleMin))
+            {
+                logger.info("Minimum durability {} for {} has not advanced in at least {} seconds.", min, shard.range, seconds);
             }
         }
 
@@ -384,6 +429,7 @@ public class ShardDurability
      * duration.
      */
     private long shardCycleTimeMicros = TimeUnit.SECONDS.toMicros(30);
+    private long shardCycleTimeoutDelayMicros = TimeUnit.HOURS.toMicros(1);
 
     private final NavigableMap<Range, ShardScheduler> shardSchedulers = new TreeMap<>(Range::compare);
     private final ConcurrencyControl syncPointControl = new ConcurrencyControl(8);
@@ -418,6 +464,11 @@ public class ShardDurability
         if (scheduled != null)
             scheduled.cancel();
         scheduled = node.scheduler().recurring(this::tick, shardCycleTimeMicros / targetShardSplits, MICROSECONDS);
+    }
+
+    public synchronized void setShardCycleTimeoutDelay(long newShardCycleTimeoutDelay, TimeUnit units)
+    {
+        shardCycleTimeoutDelayMicros = units.toMicros(newShardCycleTimeoutDelay);
     }
 
     /**
@@ -526,7 +577,10 @@ public class ShardDurability
         {
             ShardScheduler scheduler = prev.remove(shard.range);
             if (scheduler == null)
+            {
                 scheduler = new ShardScheduler();
+                logger.info("Starting shard durability scheduler {} for {}", scheduler.id, shard);
+            }
             shardSchedulers.put(shard.range, scheduler);
             scheduler.update(shard, shard.nodes.find(node.id()), true);
         }

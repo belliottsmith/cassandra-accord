@@ -637,6 +637,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         to.forEach(dst -> messageSink.send(dst, send, executor, callback));
     }
 
+    // TODO (required): callback must be invoked if for any reason send fails
     public <T> void send(Collection<Id> to, Function<Id, Request> requestFactory, @Nonnull AsyncExecutor executor, Callback<T> callback)
     {
         checkIterationSafe(to);
