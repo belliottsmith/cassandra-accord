@@ -222,6 +222,9 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         if (found.hasDecidedDeps())
             stableDeps = this.stableDeps.intersecting(participants.stillTouches()).reconstitutePartial(participants.stillTouches());
 
+        // TODO (required): hasAnyFullyTruncated could hit edge cases where two replicas are behind and cannot catch up and each participate in the others' result set
+        //     should either try to include all peers, or else exclude those that are e.g. pre-bootstrap or otherwise cannot catch up.
+        //     Maybe reconsider the logic more holistically, and introduce some strong invariants.
         boolean isShardTruncated = withQuorum == HasQuorum && known.hasAnyFullyTruncated(participants.stillTouches());
         if (isShardTruncated)
         {

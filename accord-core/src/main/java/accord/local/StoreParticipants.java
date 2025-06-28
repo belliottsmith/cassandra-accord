@@ -433,8 +433,7 @@ public class StoreParticipants
 
     public final StoreParticipants supplement(@Nullable StoreParticipants that)
     {
-        if (that == null) return this;
-        if (this == that) return this;
+        if (that == null || this == that) return this;
         return supplement(that.route(), that.hasTouched());
     }
 
@@ -465,6 +464,7 @@ public class StoreParticipants
     {
         route = Route.merge(route(), (Route)route);
         hasTouched = Participants.merge(hasTouched(), (Participants) hasTouched);
+
         return this.route == route && hasTouched() == hasTouched ? this : update(route, hasTouched);
     }
 

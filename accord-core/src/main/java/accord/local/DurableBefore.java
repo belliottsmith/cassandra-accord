@@ -23,6 +23,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
+import accord.local.durability.ShardDurability;
 import accord.primitives.AbstractRanges;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
@@ -57,6 +58,9 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 
     public static class Entry
     {
+        public static final Entry MAX = new Entry(TxnId.MAX, TxnId.MAX);
+        public static final Entry NONE = new Entry(TxnId.NONE, TxnId.NONE);
+
         public final @Nonnull TxnId majorityBefore, universalBefore;
 
         public Entry(@Nonnull TxnId majority, @Nonnull TxnId universalBefore)
@@ -66,12 +70,12 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
             this.universalBefore = universalBefore;
         }
 
-        private static Entry max(Entry a, Entry b)
+        public static Entry max(Entry a, Entry b)
         {
             return reduce(a, b, TxnId::max);
         }
 
-        private static Entry min(Entry a, Entry b)
+        public static Entry min(Entry a, Entry b)
         {
             return reduce(a, b, TxnId::min);
         }
@@ -122,7 +126,7 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         @Override
         public String toString()
         {
-            return "(" + majorityBefore + "," + universalBefore + ")";
+            return "(majority=" + majorityBefore + ",universal=" + universalBefore + ")";
         }
     }
 
@@ -190,7 +194,12 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 
     public Durability min(TxnId txnId, Unseekables<?> unseekables)
     {
-        return notDurableIfNull(foldl(unseekables, Entry::mergeMin, null, txnId, test -> test == NotDurable));
+        return notDurableIfNull(foldlWithDefault(unseekables, Entry::mergeMin, Entry.NONE, null, txnId, test -> test == NotDurable));
+    }
+
+    public Entry minEntry(Unseekables<?> unseekables)
+    {
+        return foldlWithDefault(unseekables, Entry::min, Entry.NONE, Entry.MAX);
     }
 
     public Durability max(TxnId txnId, Unseekables<?> unseekables)

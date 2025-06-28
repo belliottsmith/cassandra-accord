@@ -21,11 +21,14 @@ package accord.local.durability;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Timeouts;
+import accord.coordinate.ExecuteSyncPoint;
 import accord.local.Node;
 import accord.local.durability.DurabilityService.SyncLocal;
 import accord.local.durability.DurabilityService.SyncRemote;
@@ -35,7 +38,7 @@ import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.utils.async.AsyncResult;
+import accord.utils.Invariants;
 import accord.utils.async.AsyncResults;
 
 import static accord.local.durability.DurabilityService.SyncRemote.All;
@@ -45,11 +48,12 @@ import static accord.primitives.Routables.Slice.Minimal;
 public class DurabilityRequest
 {
     private static final Logger logger = LoggerFactory.getLogger(DurabilityRequest.class);
+
     static class DurableEvents
     {
         final long requestedAt;
         long lastAttemptAt;
-        AsyncResult<DurabilityResult> lastAttempt;
+        ExecuteSyncPoint lastAttempt;
         long durableAt;
         int attempts;
 
@@ -66,14 +70,15 @@ public class DurabilityRequest
     final SyncLocal local;
     final SyncRemote remote;
     final @Nullable Collection<Node.Id> including;
-    final long startedAt;
+    final long startedAt, timeoutAt;
+    Timeouts.RegisteredTimeout timeout;
 
     private Ranges agreed = Ranges.EMPTY;
     private Ranges achieved = Ranges.EMPTY;
 
     private LinkedHashMap<TxnId, DurableEvents> events;
 
-    DurabilityRequest(Object requestedBy, Timestamp min, Ranges ranges, SyncLocal local, SyncRemote remote, @Nullable Collection<Node.Id> including, long startedAt)
+    DurabilityRequest(Object requestedBy, Timestamp min, Ranges ranges, SyncLocal local, SyncRemote remote, @Nullable Collection<Node.Id> including, long startedAt, long timeoutAt)
     {
         this.requestedBy = requestedBy;
         this.min = min == null ? TxnId.NONE : min;
@@ -82,12 +87,14 @@ public class DurabilityRequest
         this.remote = remote;
         this.including = including;
         this.startedAt = startedAt;
+        this.timeoutAt = timeoutAt;
     }
 
-    public synchronized void reportAttempt(TxnId txnId, long now, AsyncResult<DurabilityResult> attempt)
+    public synchronized void reportAttempt(TxnId txnId, long now, ExecuteSyncPoint attempt)
     {
         DurableEvents e = events.get(txnId);
-        e.lastAttempt = attempt;
+        if (Invariants.debug())
+            e.lastAttempt = attempt;
         e.lastAttemptAt = now;
         e.attempts++;
     }
@@ -111,6 +118,24 @@ public class DurabilityRequest
         if (events == null)
             return null;
         return events.get(txnId);
+    }
+
+    boolean isDone()
+    {
+        return result.isDone();
+    }
+
+    void timeout()
+    {
+        if (result.tryFailure(new TimeoutException()))
+            logger.info("Durability request timeout {}", this);
+    }
+
+    void reportSuccess()
+    {
+        result.trySuccess(null);
+        Timeouts.RegisteredTimeout cancel = timeout;
+        if (cancel != null) cancel.cancel();
     }
 
     synchronized boolean report(DurabilityResult durability, long finishedAt)

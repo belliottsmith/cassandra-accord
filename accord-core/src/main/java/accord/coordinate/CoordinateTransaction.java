@@ -91,10 +91,17 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
 
-        SettableByCallback<Result> result = new SettableByCallback<>();
-        CoordinateTransaction coordinate = new CoordinateTransaction(node, node.someSequentialExecutor(), txnId, txn, route, result);
-        coordinate.start();
-        return result;
+        try
+        {
+            SettableByCallback<Result> result = new SettableByCallback<>();
+            CoordinateTransaction coordinate = new CoordinateTransaction(node, node.someSequentialExecutor(), txnId, txn, route, result);
+            coordinate.start();
+            return result;
+        }
+        catch (Throwable t)
+        {
+            return AsyncResults.failure(t);
+        }
     }
 
     @Override

@@ -46,6 +46,7 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -567,11 +568,29 @@ public abstract class CommandStore implements SequentialAsyncExecutor
             return DONE;
 
         TxnId minForEpoch = TxnId.minForEpoch(epoch);
-        ranges = redundantBefore.removeWitnessed(minForEpoch, ranges);
+        Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, ranges);
         AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
-        waitingOnSync.put(epoch, new WaitingOnSync(whenDone, ranges));
-        node.durability().close("[" + this + " Epoch " + epoch + ']', minForEpoch, ranges);
+        waitingOnSync.put(epoch, new WaitingOnSync(whenDone, remaining));
+        ensureReadyToCoordinate(epoch, ranges);
         return whenDone;
+    }
+
+    private void ensureReadyToCoordinate(long epoch, Ranges ranges)
+    {
+        TxnId minForEpoch = TxnId.minForEpoch(epoch);
+        node.durability().close("[" + this + " Epoch " + epoch + ']', minForEpoch, ranges, 1, TimeUnit.HOURS)
+            .begin((success, fail) -> {
+                if (fail != null)
+                {
+                    Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, ranges);
+                    remaining = redundantBefore.removeRetired(remaining);
+                    if (!remaining.isEmpty())
+                    {
+                        logger.error("Failed to close epoch {} for ranges {} on store {}. Retrying.", epoch, remaining, id);
+                        ensureReadyToCoordinate(epoch, remaining);
+                    }
+                }
+            });
     }
 
     Supplier<EpochReady> unbootstrap(long epoch, Ranges removedRanges)

@@ -136,10 +136,17 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
 
-        SettableByCallback<SyncPoint<U>> result = new SettableByCallback<>();
-        CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, node.someSequentialExecutor(), txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter, result);
-        coordinate.start();
-        return result;
+        try
+        {
+            SettableByCallback<SyncPoint<U>> result = new SettableByCallback<>();
+            CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, node.someSequentialExecutor(), txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter, result);
+            coordinate.start();
+            return result;
+        }
+        catch (Throwable t)
+        {
+            return AsyncResults.failure(t);
+        }
     }
 
     @Override

@@ -948,6 +948,12 @@ public class TopologyManager
     }
 
     // TODO (testing): test all of these methods when asking for epochs that have been cleaned up (and other code paths)
+
+    /**
+     * Returns topologies containing epochs where specified ranges haven't completed synchronization between min/max epochs.
+     * Can be used during coordination operations to ensure they contact all relevant nodes across topology changes,
+     * particularly when some ranges are still syncing after cluster membership changes.
+     */
     public Topologies withUnsyncedEpochs(Unseekables<?> select, Timestamp min, Timestamp max)
     {
         return withUnsyncedEpochs(select, min.epoch(), max.epoch());

@@ -23,6 +23,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import javax.annotation.Nullable;
 
@@ -30,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.ConfigurationService;
+import accord.api.Timeouts.Timeout;
 import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
@@ -53,7 +55,6 @@ public class DurabilityService implements ConfigurationService.Listener
     private final ShardDurability shards;
     private final GlobalDurability global;
 
-    // TODO (required): cancel or cleanup expired requests - they may become unsatisfiable
     private final Set<DurabilityRequest> requests = new LinkedHashSet<>();
 
     public DurabilityService(Node node)
@@ -73,10 +74,13 @@ public class DurabilityService implements ConfigurationService.Listener
         return global;
     }
 
-    public synchronized void start()
+    public void start()
     {
-        Invariants.require(!started);
-        started = true;
+        synchronized (this)
+        {
+            Invariants.require(!started);
+            started = true;
+        }
         Topology current = node.topology().current();
         shards.updateTopology(current);
         global.updateTopology(current);
@@ -84,51 +88,81 @@ public class DurabilityService implements ConfigurationService.Listener
         global.start();
     }
 
-    public synchronized void stop()
+    public void stop()
     {
         shards.stop();
         global.stop();
     }
 
-    public AsyncResult<Void> close(String requestedBy, Ranges ranges)
+    public AsyncResult<Void> close(String requestedBy, Ranges ranges, long timeoutDelay, TimeUnit timeoutUnits)
     {
-        return close(requestedBy, TxnId.NONE, ranges);
+        return close(requestedBy, TxnId.NONE, ranges, timeoutDelay, timeoutUnits);
     }
 
-    public AsyncResult<Void> close(Object requestedBy, Timestamp minBound, Ranges ranges)
+    public AsyncResult<Void> close(Object requestedBy, Timestamp minBound, Ranges ranges, long timeoutDelay, TimeUnit timeoutUnits)
     {
-        return submit(new DurabilityRequest(requestedBy, minBound, ranges, SyncLocal.NoLocal, SyncRemote.NoRemote, null, node.elapsed(MICROSECONDS))).result;
+        long startedAt = node.elapsed(MICROSECONDS);
+        long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
+        return submit(new DurabilityRequest(requestedBy, minBound, ranges, SyncLocal.NoLocal, SyncRemote.NoRemote, null, startedAt, timeoutAt)).result;
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Ranges ranges, SyncLocal local, SyncRemote remote)
+    public AsyncResult<Void> sync(Object requestedBy, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
-        return sync(requestedBy, TxnId.NONE, ranges, local, remote);
+        return sync(requestedBy, TxnId.NONE, ranges, local, remote, timeoutDelay, timeoutUnits);
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Timestamp minBound, Ranges ranges, SyncLocal local, SyncRemote remote)
+    public AsyncResult<Void> sync(Object requestedBy, Timestamp minBound, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
-        return submit(new DurabilityRequest(requestedBy, minBound, ranges, local, remote, null, node.elapsed(MICROSECONDS))).result;
+        long startedAt = node.elapsed(MICROSECONDS);
+        long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
+        return submit(new DurabilityRequest(requestedBy, minBound, ranges, local, remote, null, startedAt, timeoutAt)).result;
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote)
+    public AsyncResult<Void> sync(Object requestedBy, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
-        return sync(requestedBy, TxnId.NONE, ranges, include, local, remote);
+        return sync(requestedBy, TxnId.NONE, ranges, include, local, remote, timeoutDelay, timeoutUnits);
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Timestamp minBound, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote)
+    public AsyncResult<Void> sync(Object requestedBy, Timestamp minBound, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
-        return submit(new DurabilityRequest(requestedBy, minBound, ranges, local, remote, include, node.elapsed(MICROSECONDS))).result;
+        long startedAt = node.elapsed(MICROSECONDS);
+        long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
+        return submit(new DurabilityRequest(requestedBy, minBound, ranges, local, remote, include, startedAt, timeoutAt)).result;
     }
 
     private DurabilityRequest submit(DurabilityRequest request)
     {
-        synchronized (this)
-        {
-            requests.add(request);
-        }
+        register(request);
         logger.info("Requesting durability {}", request);
         shards.request(request);
         return request;
+    }
+
+    void register(DurabilityRequest request)
+    {
+        request.timeout = node.timeouts().registerAt(new Timeout()
+        {
+            @Override public int stripe() { return request.ranges.hashCode(); }
+            @Override public void timeout()
+            {
+                request.timeout();
+                unregister(request);
+            }
+        }, request.timeoutAt, MICROSECONDS);
+
+        synchronized (this)
+        {
+            if (!request.isDone()) // guard against unlikely scenario of timeout firing before we register here
+                requests.add(request);
+        }
+    }
+
+    void unregister(DurabilityRequest request)
+    {
+        synchronized (this)
+        {
+            requests.remove(request);
+        }
     }
 
     public void report(DurabilityResult durability)
@@ -161,7 +195,7 @@ public class DurabilityService implements ConfigurationService.Listener
         }
 
         for (DurabilityRequest next : notify)
-            next.result.trySuccess(null);
+            next.reportSuccess();
     }
 
     @Override

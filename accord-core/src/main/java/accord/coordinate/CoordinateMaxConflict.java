@@ -70,10 +70,17 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
         if (mismatch != null)
             return AsyncResults.failure(mismatch);
 
-        SettableByCallback<Timestamp> result = new SettableByCallback<>();
-        CoordinateMaxConflict coordinate = new CoordinateMaxConflict(node, node.someSequentialExecutor(), route, epoch, result);
-        coordinate.start();
-        return result;
+        try
+        {
+            SettableByCallback<Timestamp> result = new SettableByCallback<>();
+            CoordinateMaxConflict coordinate = new CoordinateMaxConflict(node, node.someSequentialExecutor(), route, epoch, result);
+            coordinate.start();
+            return result;
+        }
+        catch (Throwable t)
+        {
+            return AsyncResults.failure(t);
+        }
     }
 
     @Override

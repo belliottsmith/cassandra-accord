@@ -39,6 +39,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.AsyncExecutor;
 import accord.api.RoutingKey;
+import accord.coordinate.ExecuteSyncPoint;
 import accord.coordinate.ExecuteSyncPoint.SyncPointErased;
 import accord.coordinate.Exhausted;
 import accord.coordinate.Timeout;
@@ -75,8 +76,9 @@ public class DurabilityQueue
     private final Node node;
     private int maxConcurrency = 16;
 
-    private final ObjectHashSet<AsyncResult<?>> inProgress = new ObjectHashSet<>();
+    private final ObjectHashSet<ExecuteSyncPoint> inProgress = new ObjectHashSet<>();
     private final TreeMap<RoutingKey, RoutingKey> inProgressRanges = new TreeMap<>();
+    // TODO (desired): prioritise by least recently updated range
     private final Deque<Pending> pending = new ArrayDeque<>();
     private int pendingCounter, prunedAt;
 
@@ -134,14 +136,14 @@ public class DurabilityQueue
         return false;
     }
 
-    private void registerInProgress(SyncPoint<Range> syncPoint, AsyncResult<DurabilityResult> submitted)
+    private void registerInProgress(SyncPoint<Range> syncPoint, ExecuteSyncPoint submitted)
     {
         inProgress.add(submitted);
         for (Range range : syncPoint.route)
             inProgressRanges.put(range.start(), range.end());
     }
 
-    private void unregisterInProgress(SyncPoint<Range> syncPoint, AsyncResult<DurabilityResult> submitted)
+    private void unregisterInProgress(SyncPoint<Range> syncPoint, ExecuteSyncPoint submitted)
     {
         inProgress.remove(submitted);
         for (Range range : syncPoint.route)
@@ -243,77 +245,75 @@ public class DurabilityQueue
     private void start(SyncPoint<Range> exclusiveSyncPoint, @Nullable DurabilityRequest request, int attempt, AsyncExecutor executor)
     {
         logger.debug("{}: Awaiting durability for {}", exclusiveSyncPoint.syncId, exclusiveSyncPoint.route.toRanges());
-        AsyncResult<DurabilityResult> coordinate = coordinateIncluding(node, exclusiveSyncPoint, request == null ? null : request.including, executor, attempt);
+        ExecuteSyncPoint coordinate = coordinateIncluding(node, exclusiveSyncPoint, request == null ? null : request.including, executor, attempt);
         registerInProgress(exclusiveSyncPoint, coordinate);
         if (request != null)
             request.reportAttempt(exclusiveSyncPoint.syncId, node.elapsed(MICROSECONDS), coordinate);
 
-        coordinate.invoke((success, fail) -> {
+        coordinate.onQuorum().invoke((success, fail) -> {
             synchronized (this)
             {
                 unregisterInProgress(exclusiveSyncPoint, coordinate);
-                TxnId txnId = exclusiveSyncPoint.syncId;
-                Ranges ranges = exclusiveSyncPoint.route.toRanges();
-                String requestor = request != null ? " requested by " + request.requestedBy : "";
-                if (fail != null)
+                maybeSubmitPending();
+            }
+        });
+        coordinate.invoke((success, fail) -> {
+            TxnId txnId = exclusiveSyncPoint.syncId;
+            Ranges ranges = exclusiveSyncPoint.route.toRanges();
+            String requestor = request != null ? " requested by " + request.requestedBy : "";
+            if (fail != null)
+            {
+                if (logger.isTraceEnabled()) logger.trace("{}: failed awaiting durability for {}{}.", txnId, ranges, requestor, fail);
+                if (fail instanceof SyncPointErased || fail instanceof TopologyManager.TopologyRetiredException)
                 {
-                    if (logger.isTraceEnabled()) logger.trace("{}: failed awaiting durability for {}{}.", txnId, ranges, requestor, fail);
-                    if (fail instanceof SyncPointErased || fail instanceof TopologyManager.TopologyRetiredException)
-                    {
-                        // we can't succeed. if this was requested, and the request is still waiting, submit another coordination request
-                        // TODO (required): add back-off and expand this to all unknown exception outcomes
-                        if (request != null)
-                            node.durability().shards().request(request, request.stillWaiting(exclusiveSyncPoint.route));
-                        success();
-                        return;
-                    }
+                    // we can't succeed. if this was requested, and the request is still waiting, submit another coordination request
+                    // TODO (required): expand this to all unknown exception outcomes
+                    if (request != null)
+                        restart(exclusiveSyncPoint, request, attempt + 1);
+                    return;
                 }
-                if (success == null || (success.achievedRemote.compareTo(request == null ? All : request.remote) < 0))
-                {
-                    if (success != null)
-                        fail = success.failure;
+            }
+            if (success == null || (success.achievedRemote.compareTo(request == null ? All : request.remote) < 0))
+            {
+                if (success != null)
+                    fail = success.failure;
 
-                    if (fail instanceof Exhausted || success != null)
+                if (fail instanceof Exhausted || success != null)
+                {
+                    Collection<Node.Id> failedNodes = success != null ? success.excluding : ((Exhausted)fail).failedNodes();
+                    Ranges failedRanges = success != null ? exclusiveSyncPoint.route().toRanges() : ((Exhausted)fail).failedRanges();
+                    boolean log = failedNodes == null;
+                    if (!log)
                     {
-                        Collection<Node.Id> failedNodes = success != null ? success.excluding : ((Exhausted)fail).failedNodes();
-                        Ranges failedRanges = success != null ? exclusiveSyncPoint.route().toRanges() : ((Exhausted)fail).failedRanges();
-                        boolean log = failedNodes == null;
-                        if (!log)
-                        {
-                            Set<Node.Id> unlogged = new HashSet<>(failedNodes);
-                            for (Collection<Node.Id> logged : WARNINGS_LOGGED.tailMap(System.nanoTime() - MINUTES.toNanos(EXHAUSTED_LOG_INTERVAL_MINUTES)).values())
-                                unlogged.removeAll(logged);
-                            log = !unlogged.isEmpty();
-                        }
-                        if (log)
-                        {
-                            logger.info("{}: Incomplete durability for {}{}. {} were unsuccessful.", txnId, failedRanges, requestor, failedNodes == null ? "some nodes" : failedNodes);
-                            WARNINGS_LOGGED.headMap(System.nanoTime() - MINUTES.toNanos(EXHAUSTED_LOG_INTERVAL_MINUTES)).clear();
-                            WARNINGS_LOGGED.put(System.nanoTime(), failedNodes == null ? Collections.emptyList() : failedNodes);
-                        }
+                        Set<Node.Id> unlogged = new HashSet<>(failedNodes);
+                        for (Collection<Node.Id> logged : WARNINGS_LOGGED.tailMap(System.nanoTime() - MINUTES.toNanos(EXHAUSTED_LOG_INTERVAL_MINUTES)).values())
+                            unlogged.removeAll(logged);
+                        log = !unlogged.isEmpty();
                     }
-                    else
+                    if (log)
                     {
-                        if (fail instanceof Timeout) logger.info("{}: Timeout awaiting durability for {}{}", txnId, ranges, requestor, fail);
-                        else if (fail != null) logger.info("{}: Failed awaiting durability for {}{}; will retry", txnId, ranges, requestor, fail);
+                        logger.info("{}: Incomplete durability for {}{}. {} were unsuccessful.", txnId, failedRanges, requestor, failedNodes == null ? "some nodes" : failedNodes);
+                        WARNINGS_LOGGED.headMap(System.nanoTime() - MINUTES.toNanos(EXHAUSTED_LOG_INTERVAL_MINUTES)).clear();
+                        WARNINGS_LOGGED.put(System.nanoTime(), failedNodes == null ? Collections.emptyList() : failedNodes);
                     }
-                    retry(exclusiveSyncPoint, request, attempt + 1);
                 }
                 else
                 {
-                    if (request != null) logger.info("{}: Successfully achieved durability for {}{}.", txnId, ranges, requestor);
-                    else logger.debug("{}: Successfully achieved durability for {}.", txnId, ranges);
-                    success();
+                    if (fail instanceof Timeout) logger.info("{}: Timeout awaiting durability for {}{}", txnId, ranges, requestor, fail);
+                    else if (fail != null) logger.info("{}: Failed awaiting durability for {}{}; will retry", txnId, ranges, requestor, fail);
                 }
+                retry(exclusiveSyncPoint, request, attempt + 1);
+            }
+            else
+            {
+                if (request != null) logger.info("{}: Successfully achieved durability for {}{}.", txnId, ranges, requestor);
+                else logger.debug("{}: Successfully achieved durability for {}.", txnId, ranges);
             }
         });
     }
 
-    synchronized void retry(SyncPoint<Range> syncPoint, DurabilityRequest request, int attempt)
+    void retry(SyncPoint<Range> syncPoint, DurabilityRequest request, int attempt)
     {
-        if (inProgress.size() < maxConcurrency)
-            submitPending();
-
         long retryDelay = node.agent().retryDurabilityDelay(node, attempt, MICROSECONDS);
         Invariants.require(retryDelay > 0);
         if (request != null) logger.info("{}: Retrying durability for {} requested by {} in {}s.", syncPoint.syncId, syncPoint.route.toRanges(), request.requestedBy, String.format("%.3f", retryDelay/1000_000.0));
@@ -321,7 +321,15 @@ public class DurabilityQueue
         node.scheduler().selfRecurring(() -> submit(syncPoint, request, attempt), retryDelay, MICROSECONDS);
     }
 
-    synchronized void success()
+    void restart(SyncPoint<Range> syncPoint, DurabilityRequest request, int attempt)
+    {
+        long retryDelay = node.agent().retryDurabilityDelay(node, attempt, MICROSECONDS);
+        Invariants.require(retryDelay > 0);
+        logger.debug("{}: Restarting durability for {} in {}s.", syncPoint.syncId, syncPoint.route.toRanges(), String.format("%.3f", retryDelay/1000_000.0));
+        node.scheduler().selfRecurring(() -> node.durability().shards().request(request, request.stillWaiting(syncPoint.route)), retryDelay, MICROSECONDS);
+    }
+
+    synchronized void maybeSubmitPending()
     {
         if (inProgress.size() < maxConcurrency)
             submitPending();
