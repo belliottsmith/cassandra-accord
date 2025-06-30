@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
+import accord.api.CoordinatorEventListener;
 import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.impl.mock.MockStore;
@@ -32,6 +33,7 @@ import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
 import accord.messages.ReplyContext;
+import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
@@ -50,15 +52,20 @@ public class TestAgent implements Agent
 {
     private static final Logger logger = LoggerFactory.getLogger(TestAgent.class);
 
-    public static class RethrowAgent extends TestAgent
+    public static class RethrowAgent extends TestAgent implements CoordinatorEventListener
     {
         @Override
-        public void onRecover(Node node, Result success, Throwable fail)
+        public CoordinatorEventListener coordinatorEvents()
+        {
+            return this;
+        }
+
+        @Override
+        public void onRecoveryStopped(Node node, TxnId txnId, Ballot ballot, Result success, Throwable fail)
         {
             if (fail != null)
                 throw new AssertionError("Unexpected exception", fail);
         }
-
 
         @Override
         public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
@@ -78,14 +85,6 @@ public class TestAgent implements Agent
         {
             throw new AssertionError("Unexpected exception", t);
         }
-    }
-
-    @Override
-    public void onRecover(Node node, Result success, Throwable fail)
-    {
-        // do nothing, intended for use by implementations to decide what to do about recovered transactions
-        // specifically if and how they should inform clients of the result
-        // e.g. in Maelstrom we send the full result directly, in other impls we may simply acknowledge success via the coordinator
     }
 
     @Override

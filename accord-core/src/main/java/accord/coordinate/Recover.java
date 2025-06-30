@@ -151,7 +151,6 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         if (failure == null)
         {
             callback.accept(ProgressToken.APPLIED, null);
-            node.agent().eventListener().onRecover(txnId, ballot);
         }
         else if (failure instanceof Redundant)
         {
@@ -163,15 +162,9 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         else
         {
             callback.accept(null, WrappableException.wrap(failure));
-            if (failure instanceof Preempted)
-                node.agent().eventListener().onPreempted(txnId);
-            else if (failure instanceof Timeout)
-                node.agent().eventListener().onTimeout(txnId);
-            else if (failure instanceof Invalidated) // TODO (expected): should we tick this counter? we haven't invalidated anything
-                node.agent().eventListener().onInvalidated(txnId);
         }
 
-        node.agent().onRecover(node, result, failure);
+        node.agent().coordinatorEvents().onRecoveryStopped(node, txnId, ballot, result, failure);
     }
 
     public static Recover recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<Outcome, Throwable> callback, @Nullable Tracing tracing)
@@ -215,6 +208,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
 
     void start(Collection<Id> nodes)
     {
+        node.agent().coordinatorEvents().onRecoveryStarted(txnId, ballot);
         node.send(nodes, to -> new BeginRecovery(to, tracker.topologies(), txnId, committedExecuteAt, txn, route, ballot), executor, this);
     }
 

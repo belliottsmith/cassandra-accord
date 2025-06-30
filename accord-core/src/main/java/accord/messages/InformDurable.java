@@ -26,6 +26,7 @@ import accord.local.Node.Id;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.Ballot;
 import accord.primitives.Status;
 import accord.primitives.Status.Durability;
 import accord.local.StoreParticipants;
@@ -75,8 +76,9 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
         this.durability = durability;
     }
 
-    public static void informDefault(Node node, Topologies any, TxnId txnId, Route<?> route, Timestamp executeAt, Durability durability)
+    public static void informDefault(Node node, Topologies any, TxnId txnId, Route<?> route, @Nullable Ballot ballot, Timestamp executeAt, Durability durability)
     {
+        node.agent().coordinatorEvents().onDurable(durability, ballot, txnId);
         switch (informOfDurability())
         {
             default: throw new AssertionError("Unhandled InformOfDurability: " + informOfDurability());

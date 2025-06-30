@@ -29,7 +29,6 @@ import org.slf4j.LoggerFactory;
 import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.CoordinationAdapter.Adapters.SyncPointAdapter;
-import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
@@ -54,7 +53,6 @@ import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.AsyncResults.SettableByCallback;
 
-import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.messages.Apply.participates;
@@ -160,6 +158,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     {
         if (executeAt.is(REJECTED))
         {
+            node.agent().coordinatorEvents().onRejected(txnId);
             proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
         }
         else
@@ -168,9 +167,8 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
             if (txnId.is(ExclusiveSyncPoint) && txnId.epoch() == executeAt.epoch())
                 withFlags = txnId.addFlag(HLC_BOUND);
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
-            if (tracker.hasFastPathAccepted())
-                adapter.execute(node, executor, topologies, route, Ballot.ZERO, FAST, CoordinationFlags.none(), txnId, txn, withFlags, deps, deps, callback);
-            else if (tracker.hasMediumPathAccepted())
+            node.agent().coordinatorEvents().onPreAccepted(txnId);
+            if (tracker.hasMediumPathAccepted() && txnId.hasMediumPath())
                 adapter.propose(node, executor, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, callback);
             else
                 adapter.propose(node, executor, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);

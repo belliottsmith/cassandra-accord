@@ -1027,12 +1027,6 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void onRecover(Node node, Result success, Throwable fail)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next)
         {
             throw new UnsupportedOperationException();

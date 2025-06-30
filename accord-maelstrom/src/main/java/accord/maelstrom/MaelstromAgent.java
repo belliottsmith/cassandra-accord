@@ -21,6 +21,7 @@ package accord.maelstrom;
 import java.util.concurrent.TimeUnit;
 
 import accord.api.Agent;
+import accord.api.CoordinatorEventListener;
 import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.local.Command;
@@ -28,6 +29,7 @@ import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
 import accord.messages.ReplyContext;
+import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
@@ -43,12 +45,12 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class MaelstromAgent implements Agent
+public class MaelstromAgent implements Agent, CoordinatorEventListener
 {
     static final MaelstromAgent INSTANCE = new MaelstromAgent();
 
     @Override
-    public void onRecover(Node node, Result success, Throwable fail)
+    public void onRecoveryStopped(Node node, TxnId txnId, Ballot ballot, Result success, Throwable fail)
     {
         if (fail != null)
         {
@@ -77,6 +79,12 @@ public class MaelstromAgent implements Agent
     @Override
     public void onStale(Timestamp staleSince, Ranges ranges)
     {
+    }
+
+    @Override
+    public CoordinatorEventListener coordinatorEvents()
+    {
+        return this;
     }
 
     @Override

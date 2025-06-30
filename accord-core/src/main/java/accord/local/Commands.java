@@ -156,28 +156,39 @@ public class Commands
     private static AcceptOutcome preacceptOrRecover(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, SaveStatus newSaveStatus, TxnId txnId, Txn txn, @Nullable Deps deps, Ballot ballot)
     {
         final Command command = safeCommand.current();
-        if (command.hasBeen(Truncated))
-        {
-            logger.trace("{}: skipping preaccept - command is truncated", txnId);
-            return command.is(Invalidated) ? AcceptOutcome.RejectedBallot : participants.owns().isEmpty()
-                                             ? AcceptOutcome.Retired : AcceptOutcome.Truncated;
-        }
-
         int compareBallots = command.promised().compareTo(ballot);
-        if (compareBallots > 0)
+        if (command.hasBeen(Truncated) || compareBallots > 0)
         {
-            logger.trace("{}: skipping preaccept - higher ballot witnessed ({})", txnId, command.promised());
-            return AcceptOutcome.RejectedBallot;
+            AcceptOutcome outcome = !command.hasBeen(Truncated)
+                                        ? AcceptOutcome.RejectedBallot
+                                        : command.is(Invalidated)
+                                           ? AcceptOutcome.RejectedBallot
+                                           : participants.owns().isEmpty()
+                                             ? AcceptOutcome.Retired : AcceptOutcome.Truncated;
+
+            logger.trace("{}: skipping preaccept - {}", txnId, outcome);
+            safeStore.agent().localEvents().onRejectPreAccept(safeStore, command, outcome);
+            return outcome;
         }
 
         if (command.known().definition().isKnown())
         {
             Invariants.require(command.status() == Invalidated || command.executeAt() != null);
-            logger.trace("{}: skipping preaccept - already known ({})", txnId, command.status());
             // in case of Ballot.ZERO, we must either have a competing recovery coordinator or have late delivery of the
             // preaccept; in the former case we should abandon coordination, and in the latter we have already completed
-            safeCommand.updatePromised(ballot);
-            return ballot.equals(Ballot.ZERO) ? AcceptOutcome.Redundant : AcceptOutcome.Success;
+            AcceptOutcome outcome;
+            if (ballot.equals(Ballot.ZERO))
+            {
+                return AcceptOutcome.Redundant;
+            }
+            else
+            {
+                safeCommand.updatePromised(ballot);
+                outcome = AcceptOutcome.Success;
+            }
+            logger.trace("{}: skipping preaccept - {}", txnId, outcome);
+            safeStore.agent().localEvents().onRejectPreAccept(safeStore, command, outcome);
+            return outcome;
         }
 
         if (command.known().deps().hasProposedOrDecidedDeps()) participants = command.participants().supplement(participants);
@@ -214,27 +225,24 @@ public class Commands
             safeCommand.markDefined(safeStore, participants, ballot, partialTxn);
         }
 
+        safeStore.agent().localEvents().onPreAccepted(safeStore, command);
         safeStore.notifyListeners(safeCommand, command);
         return AcceptOutcome.Success;
     }
 
-    public static boolean preacceptInvalidate(SafeCommand safeCommand, Ballot ballot)
+    public static boolean preacceptInvalidate(SafeCommandStore safeStore, SafeCommand safeCommand, Ballot ballot)
     {
         Command command = safeCommand.current();
 
-        if (command.hasBeen(Status.Committed))
+        if (command.hasBeen(Status.Committed) || command.promised().compareTo(ballot) > 0)
         {
-            if (command.is(Truncated)) logger.trace("{}: skipping preacceptInvalidate - already truncated", command.txnId());
-            else if (command.is(Invalidated)) logger.trace("{}: skipping preacceptInvalidate - already invalidated", command.txnId());
-            else logger.trace("{}: skipping preacceptInvalidate - already committed", command.txnId());
+            AcceptOutcome outcome = command.hasBeen(Committed) ? AcceptOutcome.Redundant : AcceptOutcome.RejectedBallot;
+            logger.trace("{}: skipping preacceptInvalidate - {}", command.txnId(), outcome);
+            safeStore.agent().localEvents().onRejectPreNotAccept(safeStore, command, outcome);
             return false;
         }
 
-        if (command.promised().compareTo(ballot) > 0)
-        {
-            logger.trace("{}: skipping preacceptInvalidate - witnessed higher ballot ({})", command.txnId(), command.promised());
-            return false;
-        }
+        safeStore.agent().localEvents().onPreNotAccepted(safeStore, command);
         safeCommand.updatePromised(ballot);
         return true;
     }
@@ -274,7 +282,10 @@ public class Commands
         {
             AcceptOutcome reject = maybeRejectAccept(ballot, executeAt, command, false);
             if (reject != null)
+            {
+                safeStore.agent().localEvents().onRejectAccept(safeStore, command, reject);
                 return reject;
+            }
         }
 
         SaveStatus newSaveStatus = SaveStatus.get(kind == Accept.Kind.MEDIUM ? Status.AcceptedMedium : Status.AcceptedSlow, command.known());
@@ -286,7 +297,8 @@ public class Commands
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
-        safeCommand.accept(safeStore, newSaveStatus, participants, ballot, executeAt, partialTxn, partialDeps, ballot);
+        Command accepted = safeCommand.accept(safeStore, newSaveStatus, participants, ballot, executeAt, partialTxn, partialDeps, ballot);
+        safeStore.agent().localEvents().onAccepted(safeStore, accepted);
         safeStore.notifyListeners(safeCommand, command);
 
         return AcceptOutcome.Success;
@@ -298,11 +310,15 @@ public class Commands
         {
             AcceptOutcome reject = maybeRejectAccept(ballot, null, command, true);
             if (reject != null)
+            {
+                safeStore.agent().localEvents().onRejectNotAccept(safeStore, command, reject);
                 return reject;
+            }
         }
 
         logger.trace("{}: not accepted ({})", command.txnId(), status);
-        safeCommand.notAccept(safeStore, status, ballot);
+        Command notAccepted = safeCommand.notAccept(safeStore, status, ballot);
+        safeStore.agent().localEvents().onNotAccepted(safeStore, notAccepted);
         safeStore.notifyListeners(safeCommand, command);
         return AcceptOutcome.Success;
     }
@@ -315,13 +331,20 @@ public class Commands
     {
         final Command command = safeCommand.current();
         if (kind == StableFastPath && !command.promised().equals(Ballot.ZERO))
+        {
+            safeStore.agent().localEvents().onRejectCommitOrStable(safeStore, newSaveStatus, command, CommitOutcome.Rejected);
             return CommitOutcome.Rejected;
+        }
 
         SaveStatus curStatus = command.saveStatus();
         Invariants.requireArgument(newSaveStatus == SaveStatus.Committed || newSaveStatus == SaveStatus.Stable);
         if (newSaveStatus == SaveStatus.Committed && ballot.compareTo(command.promised()) < 0)
-            return curStatus.is(Truncated) || participants.owns().isEmpty()
-                   ? CommitOutcome.Redundant : CommitOutcome.Rejected;
+        {
+            CommitOutcome outcome = curStatus.is(Truncated) || participants.owns().isEmpty()
+                                    ? CommitOutcome.Redundant : CommitOutcome.Rejected;
+            safeStore.agent().localEvents().onRejectCommitOrStable(safeStore, newSaveStatus, command, outcome);
+            return outcome;
+        }
 
         if (curStatus.hasBeen(PreCommitted))
         {
@@ -334,13 +357,17 @@ public class Commands
             if (curStatus.compareTo(newSaveStatus) > 0 || curStatus.hasBeen(Stable))
             {
                 logger.trace("{}: skipping commit - already newer or stable ({})", txnId, command.status());
+                safeStore.agent().localEvents().onRejectCommitOrStable(safeStore, newSaveStatus, command, CommitOutcome.Redundant);
                 return CommitOutcome.Redundant;
             }
 
             if (curStatus == SaveStatus.Committed && newSaveStatus == SaveStatus.Committed)
             {
                 if (ballot.equals(command.acceptedOrCommitted()))
+                {
+                    safeStore.agent().localEvents().onRejectCommitOrStable(safeStore, newSaveStatus, command, CommitOutcome.Redundant);
                     return CommitOutcome.Redundant;
+                }
 
                 Invariants.require(ballot.compareTo(command.acceptedOrCommitted()) > 0);
             }
@@ -349,7 +376,10 @@ public class Commands
         participants = participants.filter(UPDATE, safeStore, txnId, executeAt);
         Validated validated = validate(ballot, newSaveStatus, command, participants, route, txn, deps, kind, executeAt);
         if (validated == INSUFFICIENT)
+        {
+            safeStore.agent().localEvents().onRejectCommitOrStable(safeStore, newSaveStatus, command, CommitOutcome.Insufficient);
             return CommitOutcome.Insufficient;
+        }
 
         PartialTxn partialTxn = prepareTxn(newSaveStatus, participants, command, txn);
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
@@ -362,15 +392,15 @@ public class Commands
         {
             WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, executeAt, participants, partialDeps);
             committed = safeCommand.stable(safeStore, participants, ballot, executeAt, partialTxn, partialDeps, waitingOn);
-            safeStore.agent().eventListener().onStable(committed);
+            safeStore.agent().localEvents().onStable(safeStore, committed);
             maybeExecute(safeStore, safeCommand, true, true);
         }
         else
         {
             Invariants.requireArgument(command.acceptedOrCommitted().compareTo(ballot) <= 0);
             committed = safeCommand.commit(safeStore, participants, ballot, executeAt, partialTxn, partialDeps);
+            safeStore.agent().localEvents().onCommitted(safeStore, committed);
             safeStore.notifyListeners(safeCommand, committed);
-            safeStore.agent().eventListener().onCommitted(committed);
         }
 
         return CommitOutcome.Success;
@@ -553,7 +583,7 @@ public class Commands
                 Command.Executed executed = safeCommand.preapplied(safeStore, participants, ballot, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
                 logger.trace("{}: preapplied", executed.txnId());
                 // must signal preapplied first, else we may be applied (and have cleared progress log state) already before maybeExecute exits
-                safeStore.agent().eventListener().onPreApplied(executed);
+                safeStore.agent().localEvents().onPreApplied(safeStore, executed);
                 maybeExecute(safeStore, safeCommand, true, true);
                 break;
             }
@@ -561,7 +591,7 @@ public class Commands
             {
                 Invariants.require(!waitingOn.isWaiting());
                 Command.Executed executed = safeCommand.applying(safeStore, participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
-                safeStore.agent().eventListener().onPreApplied(executed);
+                safeStore.agent().localEvents().onPreApplied(safeStore, executed);
                 safeStore.notifyListeners(safeCommand, command);
                 logger.trace("{}: applying", executed.txnId());
                 applyChain(safeStore, executed).begin(safeStore.agent());
@@ -570,8 +600,8 @@ public class Commands
             case Applied:
             {
                 Command.Executed executed = safeCommand.applied(safeStore, participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
-                safeStore.agent().eventListener().onPreApplied(executed);
-                safeStore.agent().eventListener().onApplied(executed, -1);
+                safeStore.agent().localEvents().onPreApplied(safeStore, executed);
+                safeStore.agent().localEvents().onApplied(safeStore, executed, -1);
                 safeStore.notifyListeners(safeCommand, command);
                 break;
             }
@@ -619,7 +649,7 @@ public class Commands
         }
     }
 
-    public static void postApply(SafeCommandStore safeStore, TxnId txnId, long t0, boolean forceApply)
+    public static void postApply(SafeCommandStore safeStore, TxnId txnId, long startedApplyAt, boolean forceApply)
     {
         SafeCommand safeCommand = safeStore.get(txnId);
         Command command = safeCommand.current();
@@ -628,7 +658,7 @@ public class Commands
             return;
 
         safeCommand.applied(safeStore, forceApply);
-        safeStore.agent().eventListener().onApplied(command, t0);
+        safeStore.agent().localEvents().onApplied(safeStore, command, startedApplyAt);
         safeStore.notifyListeners(safeCommand, command);
     }
 
@@ -651,13 +681,13 @@ public class Commands
         // TODO (required, API): do we care about tracking the write persistence latency, when this is just a memtable write?
         //  the only reason it will be slow is because Memtable flushes are backed-up (which will be reported elsewhere)
         // TODO (required): this is anyway non-monotonic and milliseconds granularity
-        long t0 = safeStore.node().elapsed(MICROSECONDS);
+        long startedApplyAt = safeStore.node().elapsed(MICROSECONDS);
         TxnId txnId = command.txnId();
         Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
         return command.writes().apply(safeStore, executes, command.partialTxn())
                       // TODO (expected): once we guarantee execution order KeyHistory can be ASYNC
                .flatMap(unused -> unsafeStore.build(contextFor(txnId, executes, SYNC, WRITE, "Post Apply"), ss -> {
-                   postApply(ss, txnId, t0, false);
+                   postApply(ss, txnId, startedApplyAt, false);
                    return null;
                }));
     }

@@ -98,7 +98,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     ExecuteTxn(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
         super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId);
-        this.path = path;
+        this.path = ballot == Ballot.ZERO ? path : RECOVER;
         this.txn = txn;
         this.route = route;
         this.ballot = ballot;
@@ -116,6 +116,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     @Override
     protected void startOnceInitialised()
     {
+        node.agent().coordinatorEvents().onExecuting(txnId, ballot, stableDeps, path);
         Node.Id self = node.id();
         if (permitLocalExecution() && tryIfUniversal(self))
         {

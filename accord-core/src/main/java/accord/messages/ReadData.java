@@ -312,6 +312,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     int c = status.compareTo(SaveStatus.Stable);
                     if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, null, participants);
                     else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, scope, null);
+                    node.agent().localEvents().onReadWaiting(safeStore, command);
                     return status.compareTo(SaveStatus.Stable) >= 0 ? null : Insufficient;
 
                 case OBSOLETE:
@@ -519,6 +520,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         else if (txnId.awaitsOnlyDeps()) this.executeAt = Timestamp.max(this.executeAt, executeAt);
         else Invariants.require(executeAt.equals(this.executeAt));
 
+        node.agent().localEvents().onReadStarted(safeStore, command);
         if (executes.isEmpty()) readComplete(unsafeStore, null, unavailable);
         else beginRead(safeStore, executeAt, command.partialTxn(), executes)
              .begin(readCallback(unsafeStore, unavailable));
