@@ -30,7 +30,8 @@ import java.util.function.LongSupplier;
 
 import javax.annotation.Nullable;
 
-import accord.api.ProgressLog;
+import accord.api.CoordinatorEventListener;
+import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Result;
 import accord.api.Scheduler;
 import accord.api.TraceEventType;
@@ -49,6 +50,7 @@ import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
 import accord.messages.ReplyContext;
+import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
@@ -71,7 +73,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class ListAgent implements InMemoryAgent
+public class ListAgent implements InMemoryAgent, CoordinatorEventListener
 {
     final Scheduler scheduler;
     final RandomSource rnd;
@@ -104,7 +106,7 @@ public class ListAgent implements InMemoryAgent
     }
 
     @Override
-    public void onRecover(Node node, Result success, Throwable fail)
+    public void onRecoveryStopped(Node node, TxnId txnId, Ballot ballot, Result success, Throwable fail)
     {
         if (fail != null)
         {
@@ -138,6 +140,12 @@ public class ListAgent implements InMemoryAgent
     public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
     {
         retryBootstrap.accept(retry);
+    }
+
+    @Override
+    public CoordinatorEventListener coordinatorEvents()
+    {
+        return this;
     }
 
     @Override
@@ -208,13 +216,13 @@ public class ListAgent implements InMemoryAgent
     }
 
     @Override
-    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
     @Override
-    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
     {
         int retryDelay = Math.min(16, 1 << retryCount);
         return units.convert(retryDelay, SECONDS);

@@ -27,22 +27,17 @@ import accord.primitives.Deps;
 import accord.primitives.Status.Durability;
 import accord.primitives.TxnId;
 
-// TODO (required): revisit the call-sites, and boundary with C*
 public interface CoordinatorEventListener
 {
-    default void onPreAccepted(TxnId txnId, Deps deps, boolean isStable)
+    default void onPreAccepted(TxnId txnId)
     {
     }
 
-    default void onAccepted(TxnId txnId, Ballot ballot, Deps deps, boolean isStable)
+    default void onAccepted(TxnId txnId, Ballot ballot)
     {
     }
 
-    default void onStabilised(TxnId txnId, Ballot ballot, Deps deps)
-    {
-    }
-
-    default void onExecuting(TxnId txnId, @Nullable Ballot ballot, @Nullable ExecutePath path)
+    default void onExecuting(TxnId txnId, @Nullable Ballot ballot, Deps deps, @Nullable ExecutePath path)
     {
     }
 

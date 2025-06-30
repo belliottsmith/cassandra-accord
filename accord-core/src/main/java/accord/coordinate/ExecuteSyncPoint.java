@@ -111,6 +111,17 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         return onQuorum;
     }
 
+    protected void start()
+    {
+        node.agent().coordinatorEvents().onExecuting(syncPoint.syncId, null, syncPoint.waitFor, null);
+        SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
+        // TODO (desired): special Apply message that doesn't resend deps if path=MEDIUM
+        Txn txn = node.agent().emptySystemTxn(Txn.Kind.ExclusiveSyncPoint, syncPoint.syncId.domain());
+        Result result = txn.result(syncPoint.syncId, syncPoint.executeAt, null);
+        if (contact == null) tryFailure(new Exhausted(syncPoint.syncId, syncPoint.route.homeKey(), null));
+        else node.send(contact, to -> new ApplyThenWaitUntilApplied(to, tracker.topologies(), syncPoint.executeAt, tracker.topologies().currentEpoch(), syncPoint.route, syncPoint.syncId, txn, syncPoint.waitFor, syncPoint.route, null, result), executor, this);
+    }
+
     @Override
     public void onSuccess(Node.Id from, ReadReply reply)
     {
@@ -268,15 +279,5 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
             fail.onQuorum.tryFailure(t);
             return fail;
         }
-    }
-
-    protected void start()
-    {
-        SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
-        // TODO (desired): special Apply message that doesn't resend deps if path=MEDIUM
-        Txn txn = node.agent().emptySystemTxn(Txn.Kind.ExclusiveSyncPoint, syncPoint.syncId.domain());
-        Result result = txn.result(syncPoint.syncId, syncPoint.executeAt, null);
-        if (contact == null) tryFailure(new Exhausted(syncPoint.syncId, syncPoint.route.homeKey(), null));
-        else node.send(contact, to -> new ApplyThenWaitUntilApplied(to, tracker.topologies(), syncPoint.executeAt, tracker.topologies().currentEpoch(), syncPoint.route, syncPoint.syncId, txn, syncPoint.waitFor, syncPoint.route, null, result), executor, this);
     }
 }

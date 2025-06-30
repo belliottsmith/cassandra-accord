@@ -77,7 +77,7 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
         }
         else
         {
-            boolean promised = Commands.preacceptInvalidate(safeCommand, ballot);
+            boolean promised = Commands.preacceptInvalidate(safeStore, safeCommand, ballot);
             supersededBy = promised ? null : safeCommand.current().promised();
             truncated = null;
         }

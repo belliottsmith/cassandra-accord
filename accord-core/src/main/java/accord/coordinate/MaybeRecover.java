@@ -136,7 +136,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                         if (tracing != null)
                             tracing.trace(null, "MaybeRecover found %s; reporting progress token %s", hasMadeProgress(full) ? "progress" : "no route", progressToken);
                         if (full.durability.isDurable())
-                            InformDurable.informDefault(node, topologies, txnId, query, full.executeAtIfKnown(), full.durability);
+                            InformDurable.informDefault(node, topologies, txnId, query, bumpBallot, full.executeAtIfKnown(), full.durability);
                         callback.accept(full.toProgressToken(), null);
                     }
                     else

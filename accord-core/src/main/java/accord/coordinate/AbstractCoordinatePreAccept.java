@@ -114,16 +114,6 @@ abstract class AbstractCoordinatePreAccept<T, R> implements Callback<R>
         // we may already be complete, as we may receive a failure from a later phase; but it's fine to redundantly mark done
         isDone = true;
         callback.accept(null, failure);
-        if (failure instanceof CoordinationFailed)
-        {
-            ((CoordinationFailed) failure).set(txnId, route.homeKey());
-            if (failure instanceof Timeout)
-                node.agent().eventListener().onTimeout(txnId);
-            else if (failure instanceof Preempted)
-                node.agent().eventListener().onPreempted(txnId);
-            else if (failure instanceof Invalidated)
-                node.agent().eventListener().onInvalidated(txnId);
-        }
     }
 
     final void onPreAcceptedOrNewEpoch()

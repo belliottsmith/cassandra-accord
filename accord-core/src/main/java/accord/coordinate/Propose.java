@@ -21,6 +21,7 @@ package accord.coordinate;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
+import accord.api.CoordinatorEventListener;
 import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
@@ -197,9 +198,10 @@ abstract class Propose<R> implements Callback<AcceptReply>
         //  In this case either id' needs to wait (which requires potentially more states like the alternative medium path)
         //  Or we must pick it up as an Unstable dependency here.
         Deps newDeps = mergeNewDeps();
-        Deps stableDeps = mergeDeps(newDeps);
-        if (kind == Kind.MEDIUM) adapter().execute(node, executor, acceptTracker.topologies(), route, ballot, MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, stableDeps, newDeps, callback);
-        else adapter().stabilise(node, executor, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, stableDeps, callback);
+        Deps deps = mergeDeps(newDeps);
+        node.agent().coordinatorEvents().onAccepted(txnId, ballot);
+        if (kind == Kind.MEDIUM) adapter().execute(node, executor, acceptTracker.topologies(), route, ballot, MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, callback);
+        else adapter().stabilise(node, executor, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, deps, callback);
         if (!Invariants.debug()) acceptOks.clear();
     }
 
@@ -288,6 +290,7 @@ abstract class Propose<R> implements Callback<AcceptReply>
                 }
                 else
                 {
+                    node.agent().coordinatorEvents().onInvalidated(txnId);
                     node.withEpochExact(invalidateUntil.epoch(), executor, callback, t -> WrappableException.wrap(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
                         callback.accept(null, new Invalidated(txnId, invalidateWithParticipant));

@@ -40,21 +40,10 @@ import accord.utils.async.AsyncChain;
 
 /**
  * Facility for augmenting node behaviour at specific points
- *
- * TODO (expected): rationalise LocalConfig and Agent
  */
 public interface Agent extends UncaughtExceptionListener
 {
     default @Nullable Tracing trace(TxnId txnId, TraceEventType eventType) { return null; }
-
-    /**
-     * For use by implementations to decide what to do about successfully recovered transactions.
-     * Specifically intended to define if and how they should inform clients of the result.
-     * e.g. in Maelstrom we send the full result directly, in other impls we may simply acknowledge success via the coordinator
-     *
-     * Note: may be invoked multiple times in different places
-     */
-    void onRecover(Node node, Result success, Throwable fail);
 
     /**
      * For use by implementations to decide what to do about timestamp inconsistency, i.e. two different timestamps
@@ -69,6 +58,16 @@ public interface Agent extends UncaughtExceptionListener
     void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure);
 
     void onStale(Timestamp staleSince, Ranges ranges);
+
+    default CoordinatorEventListener coordinatorEvents()
+    {
+        return CoordinatorEventListener.NOOP;
+    }
+
+    default LocalEventListener localEvents()
+    {
+        return LocalEventListener.NOOP;
+    }
 
     @Override
     void onUncaughtException(Throwable t);
@@ -111,11 +110,6 @@ public interface Agent extends UncaughtExceptionListener
      * Create an empty transaction that Accord can use for its own internal transactions.
      */
     Txn emptySystemTxn(Kind kind, Domain domain);
-
-    default EventListener eventListener()
-    {
-        return EventListener.NOOP;
-    }
 
     /**
      * For each shard, select a small number of replicas that should be preferred for listening to progress updates

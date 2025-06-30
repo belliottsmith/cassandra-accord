@@ -77,15 +77,12 @@ public abstract class AbstractReplayer implements Journal.Replayer
             {
                 CommandStore unsafeStore = safeStore.commandStore();
                 Participants<?> executes = command.participants().stillExecutes();
-                if (!executes.isEmpty())
-                {
-                    command.writes()
-                           .apply(safeStore, executes, command.partialTxn())
-                           .invoke(() -> unsafeStore.build(PreLoadContext.contextFor(txnId, "Replay"), ss -> {
-                               Commands.postApply(ss, txnId, -1, true);
-                           }))
-                           .begin(safeStore.agent());
-                }
+                command.writes()
+                       .apply(safeStore, executes, command.partialTxn())
+                       .invoke(() -> unsafeStore.build(PreLoadContext.contextFor(txnId, "Replay"), ss -> {
+                           Commands.postApply(ss, txnId, -1, true);
+                       }))
+                       .begin(safeStore.agent());
             }
             else Invariants.expect(command.hasBeen(Applied));
         }

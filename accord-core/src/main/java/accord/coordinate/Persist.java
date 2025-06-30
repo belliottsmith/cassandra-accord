@@ -99,7 +99,7 @@ public abstract class Persist implements Callback<ApplyReply>
                     // since we should only invoke Persist with sendTo != route when the remainder of the route is already persisted and truncated
                     // but we make this explicit for the caller with informDurableOnDone
                     isDone = true;
-                    InformDurable.informDefault(node, topologies, txnId, route, executeAt, Majority);
+                    InformDurable.informDefault(node, topologies, txnId, route, ballot, executeAt, Majority);
                 }
             case RaceWithRecovery:
                 // don't count this towards durability; otherwise it is possible (though very unlikely)
@@ -128,6 +128,7 @@ public abstract class Persist implements Callback<ApplyReply>
 
     public void start(Apply.Kind kind, Topologies all, Writes writes, Result result)
     {
+        node.agent().coordinatorEvents().onExecuted(txnId, ballot);
         // applyMinimal is used for transaction execution by the original coordinator so it's important to use
         // Node's Apply factory in case the factory has to do synchronous Apply.
         SortedArrays.SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();

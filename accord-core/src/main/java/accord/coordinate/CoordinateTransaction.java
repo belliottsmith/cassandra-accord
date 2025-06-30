@@ -39,7 +39,6 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
-import accord.messages.Accept;
 import accord.messages.PreAccept;
 import accord.messages.PreAccept.PreAcceptNack;
 import accord.messages.PreAccept.PreAcceptReply;
@@ -69,6 +68,8 @@ import static accord.coordinate.ExecuteFlag.CoordinationFlags.empty;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.local.Commands.AcceptOutcome.Success;
+import static accord.messages.Accept.Kind.MEDIUM;
+import static accord.messages.Accept.Kind.SLOW;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -128,8 +129,8 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                 // note: we merge all Deps regardless of witnessedAt. While we only need fast path votes,
                 // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
                 // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
+                node.agent().coordinatorEvents().onPreAccepted(txnId);
                 executeAdapter().execute(node, executor, topologies, route, Ballot.ZERO, FAST, flags, txnId, txn, txnId, deps, deps, callback);
-                node.agent().eventListener().onFastPathTaken(txnId, deps);
                 return;
             }
         }
@@ -138,21 +139,21 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             Deps deps = mergeFastOrMediumDeps(oks);
             if (deps != null)
             {
-                proposeAdapter().propose(node, executor, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, callback);
-                node.agent().eventListener().onMediumPathTaken(txnId, deps);
+                node.agent().coordinatorEvents().onPreAccepted(txnId);
+                proposeAdapter().propose(node, executor, topologies, route, MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, callback);
                 return;
             }
         }
         else if (executeAt.is(REJECTED))
         {
             proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
-            node.agent().eventListener().onRejected(txnId);
+            node.agent().coordinatorEvents().onRejected(txnId);
             return;
         }
 
         Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
-        proposeAdapter().propose(node, executor, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
-        node.agent().eventListener().onSlowPathTaken(txnId, deps);
+        node.agent().coordinatorEvents().onPreAccepted(txnId);
+        proposeAdapter().propose(node, executor, topologies, route, SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
     }
 
     private Deps mergeFastOrMediumDeps(SortedListMap<?, PreAcceptOk> oks)
