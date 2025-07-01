@@ -20,6 +20,7 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
+import accord.api.Tracing;
 import accord.coordinate.Infer.InvalidIf;
 import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.CommandStores.StoreSelector;
@@ -39,6 +40,7 @@ import accord.utils.Invariants;
 
 import javax.annotation.Nonnull;
 
+import static accord.api.TraceEventType.FETCH;
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 
 /**
@@ -73,8 +75,9 @@ public class FetchData extends CheckShards<Route<?>>
         final Participants<?> contactable;
         final StoreSelector reportTo;
         final BiConsumer<? super FetchResult, Throwable> callback;
+        final @Nullable Tracing tracing;
 
-        public FetchRequest(SequentialAsyncExecutor executor, Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> contactable, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+        public FetchRequest(SequentialAsyncExecutor executor, Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> contactable, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing tracing)
         {
             this.executor = executor;
             this.fetch = fetch;
@@ -85,6 +88,7 @@ public class FetchData extends CheckShards<Route<?>>
             this.srcEpoch = fetch.fetchEpoch(txnId, executeAt);
             this.contactable = contactable;
             this.reportTo = reportTo;
+            this.tracing = tracing;
         }
     }
 
@@ -101,7 +105,7 @@ public class FetchData extends CheckShards<Route<?>>
      */
     public static void fetchSpecific(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        fetchSpecific(node, query, maxRoute, new FetchRequest(node.someSequentialExecutor(), fetch, txnId, invalidIf, executeAt, maxRoute, reportTo, callback));
+        fetchSpecific(node, query, maxRoute, new FetchRequest(node.someSequentialExecutor(), fetch, txnId, invalidIf, executeAt, maxRoute, reportTo, callback, node.agent().trace(txnId, FETCH)));
     }
 
     public static void fetchSpecific(Node node, Route<?> query, Route<?> maxRoute, FetchRequest request)
@@ -188,6 +192,8 @@ public class FetchData extends CheckShards<Route<?>>
         Invariants.require((success == null) != (failure == null));
         if (failure != null)
         {
+            if (tracing != null)
+                tracing.trace(null, "%s completed with failure %s", getClass().getSimpleName(), failure);
             callback.accept(null, failure);
         }
         else
@@ -196,7 +202,7 @@ public class FetchData extends CheckShards<Route<?>>
                 Invariants.require(isSufficient(merged), "Status %s is not sufficient", merged);
 
             // TODO (expected): should we automatically trigger a new fetch if we find executeAt but did not request enough information? would be more robust
-            Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query(), maxRoute, reportTo, target, (CheckStatusOkFull) merged, callback);
+            Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query(), maxRoute, reportTo, target, (CheckStatusOkFull) merged, callback, tracing);
         }
     }
 }

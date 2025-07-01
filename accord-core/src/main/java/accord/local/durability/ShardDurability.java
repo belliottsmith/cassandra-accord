@@ -18,8 +18,10 @@
 
 package accord.local.durability;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
@@ -41,6 +43,7 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.SyncPoint;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topology;
@@ -95,6 +98,7 @@ public class ShardDurability
     // TODO (expected): support intra-shard parallelism
     private class ShardScheduler
     {
+        final boolean adhoc;
         final long id;
         Shard shard;
         boolean ticks, stopping, stopped, readyToStop;
@@ -123,8 +127,9 @@ public class ShardDurability
         DurabilityRequest activeRequest;
         Waiting waiting;
 
-        private ShardScheduler()
+        private ShardScheduler(boolean adhoc)
         {
+            this.adhoc = adhoc;
             this.id = nextShardId.incrementAndGet();
         }
 
@@ -164,11 +169,8 @@ public class ShardDurability
 
         void markDefunct()
         {
-            logger.info("Marking shard durability scheduler {} for {} defunct", id, shard);
-        }
-
-        synchronized void markDefunctSilent()
-        {
+            if (!adhoc)
+                logger.info("Marking shard durability scheduler {} for {} defunct", id, shard);
             stopping = true;
         }
 
@@ -220,7 +222,8 @@ public class ShardDurability
                         node.scheduler().once(() -> {
                             synchronized (ShardDurability.this)
                             {
-                                shardSchedulers.remove(shard.range, this);
+                                if (adhoc) adhocShardSchedulers.remove(shard.range, this);
+                                else shardSchedulers.remove(shard.range, this);
                             }
                         }, 0, MICROSECONDS);
                     }
@@ -429,9 +432,22 @@ public class ShardDurability
      * duration.
      */
     private long shardCycleTimeMicros = TimeUnit.SECONDS.toMicros(30);
-    private long shardCycleTimeoutDelayMicros = TimeUnit.HOURS.toMicros(1);
 
     private final NavigableMap<Range, ShardScheduler> shardSchedulers = new TreeMap<>(Range::compare);
+
+    /**
+     * Adhoc schedulers for ranges we don't own but have been asked to coordinate durability for.
+     *
+     * Nodes only maintain regular schedulers for the ranges they own, but sometimes a node may
+     * be asked to coordinate durability for ranges it doesn't own, such as during repair. Nothing
+     * requires these operations to be coordinated by an owning replica.
+     *
+     * When creating schedulers for non-owned ranges, we might accidentally pick a range that we DO own and
+     * overwrite the existing background scheduler for that range, causing us to stop running regular
+     * background actions once the adhoc operation completes. To avoid this possibility, we separate adhoc schedulers
+     * from regular schedulers to prevent accidental overwriting.
+     */
+    private final NavigableMap<Range, ShardScheduler> adhocShardSchedulers = new TreeMap<>(Range::compare);
     private final ConcurrencyControl syncPointControl = new ConcurrencyControl(8);
     private final DurabilityQueue durabilityQueue;
     private long latestEpoch;
@@ -466,11 +482,6 @@ public class ShardDurability
         scheduled = node.scheduler().recurring(this::tick, shardCycleTimeMicros / targetShardSplits, MICROSECONDS);
     }
 
-    public synchronized void setShardCycleTimeoutDelay(long newShardCycleTimeoutDelay, TimeUnit units)
-    {
-        shardCycleTimeoutDelayMicros = units.toMicros(newShardCycleTimeoutDelay);
-    }
-
     /**
      * Schedule regular invocations of CoordinateShardDurable and CoordinateGloballyDurable
      */
@@ -484,6 +495,8 @@ public class ShardDurability
     {
         for (ShardScheduler scheduler : shardSchedulers.values())
             scheduler.tick();
+        for (ShardScheduler scheduler : adhocShardSchedulers.values())
+            scheduler.tick();
     }
 
     public synchronized void stop()
@@ -491,7 +504,10 @@ public class ShardDurability
         stop = true;
         for (ShardScheduler scheduler : shardSchedulers.values())
             scheduler.markDefunct();
+        for (ShardScheduler scheduler : adhocShardSchedulers.values())
+            scheduler.markDefunct();
         shardSchedulers.clear();
+        adhocShardSchedulers.clear();
     }
 
     public synchronized void request(DurabilityRequest request)
@@ -509,6 +525,10 @@ public class ShardDurability
     {
         {
             Map.Entry<Range, ShardScheduler> e = shardSchedulers.floorEntry(range);
+            // we look up ceiling entry as well, because our comparison on both start and end
+            // means a match with the same start but higher end may be considered to sort after
+            if (e == null || e.getKey().compareIntersecting(range) != 0)
+                e = shardSchedulers.ceilingEntry(range);
             if (e != null)
             {
                 Range shardRange = e.getKey();
@@ -531,16 +551,18 @@ public class ShardDurability
         while (true)
         {
             // TODO (desired): seed the numberOfSplits based on our permanent shardScheduler average?
-            ShardScheduler shardScheduler = new ShardScheduler();
+            ShardScheduler scheduler = new ShardScheduler(true);
             Topology topology = node.topology().current();
             int i = topology.indexForKey(range.start());
             if (i >= 0 && !range.startInclusive() && range.start().equals(topology.get(i).range.end())) ++i;
             Invariants.require(i < 0 || topology.get(i).range.compareIntersecting(range) == 0);
             Shard shard = i >= 0 ? topology.get(i) : Shard.create(range, ofSorted(node.id()), ofSorted(node.id()));
-            shardScheduler.update(shard, 0, false);
-            shardScheduler.request(request, range.intersection(shard.range));
-            shardScheduler.markDefunctSilent();
-            shardSchedulers.put(shard.range, shardScheduler);
+            ShardScheduler existing = adhocShardSchedulers.putIfAbsent(shard.range, scheduler);
+            if (existing != null) scheduler = existing;
+            else logger.info("Starting adhoc shard durability scheduler {} for {}", scheduler.id, shard);
+            scheduler.update(shard, 0, false);
+            scheduler.request(request, range.intersection(shard.range));
+            scheduler.markDefunct();
             if (shard.range.contains(range))
                 break;
             range = range.newRange(shard.range.end(), range.end());
@@ -578,7 +600,7 @@ public class ShardDurability
             ShardScheduler scheduler = prev.remove(shard.range);
             if (scheduler == null)
             {
-                scheduler = new ShardScheduler();
+                scheduler = new ShardScheduler(false);
                 logger.info("Starting shard durability scheduler {} for {}", scheduler.id, shard);
             }
             shardSchedulers.put(shard.range, scheduler);
@@ -591,15 +613,19 @@ public class ShardDurability
 
     public synchronized ImmutableView immutableView()
     {
-        TreeMap<Range, ShardScheduler> schedulers = new TreeMap<>(Range::compare);
-        schedulers.putAll(shardSchedulers);
+        List<Map.Entry<Range, ShardScheduler>> schedulers = new ArrayList<>(shardSchedulers.entrySet());
+        if (!adhocShardSchedulers.isEmpty())
+        {
+            schedulers.addAll(adhocShardSchedulers.entrySet());
+            schedulers.sort(Map.Entry.comparingByKey(Range::compare));
+        }
         return new ImmutableView(schedulers);
     }
 
     public static class ImmutableView
     {
-        private final TreeMap<Range, ShardScheduler> schedulers;
-        ImmutableView(TreeMap<Range, ShardScheduler> schedulers)
+        private final List<Map.Entry<Range, ShardScheduler>> schedulers;
+        ImmutableView(List<Map.Entry<Range, ShardScheduler>> schedulers)
         {
             this.schedulers = schedulers;
         }
@@ -619,6 +645,8 @@ public class ShardDurability
 
         long lastStartedAtMicros;
         long cycleStartedAtMicros;
+        Timestamp min;
+        Object requestedBy;
         int retries;
 
         Ranges active;
@@ -627,7 +655,7 @@ public class ShardDurability
         public boolean advance()
         {
             if (iterator == null)
-                iterator = schedulers.entrySet().iterator();
+                iterator = schedulers.iterator();
 
             if (!iterator.hasNext())
             {
@@ -651,6 +679,8 @@ public class ShardDurability
                 this.currentSplits = scheduler.currentSplits;
                 this.lastStartedAtMicros = scheduler.lastStartedAtMicros;
                 this.cycleStartedAtMicros = scheduler.cycleStartedAtMicros;
+                this.min = scheduler.activeRequest != null ? scheduler.activeRequest.min : null;
+                this.requestedBy = scheduler.activeRequest != null ? scheduler.activeRequest.requestedBy : null;
                 this.retries = scheduler.retries;
                 this.active = scheduler.active;
                 this.waiting = scheduler.waiting;
@@ -718,6 +748,16 @@ public class ShardDurability
         public long cycleStartedAtMicros()
         {
             return cycleStartedAtMicros;
+        }
+
+        public Timestamp min()
+        {
+            return min;
+        }
+
+        public Object requestedBy()
+        {
+            return requestedBy;
         }
 
         public int retries()

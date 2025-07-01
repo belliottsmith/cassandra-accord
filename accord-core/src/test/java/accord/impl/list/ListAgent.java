@@ -28,9 +28,13 @@ import java.util.function.Consumer;
 import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 
+import javax.annotation.Nullable;
+
 import accord.api.Agent;
 import accord.api.ProgressLog;
 import accord.api.Result;
+import accord.api.TraceEventType;
+import accord.api.Tracing;
 import accord.coordinate.CoordinationFailed;
 import accord.coordinate.ExecuteSyncPoint;
 import accord.impl.basic.NodeSink;
@@ -106,6 +110,15 @@ public class ListAgent implements Agent
             if (result.requestId > Integer.MIN_VALUE)
                 node.reply(result.client, Network.replyCtxFor(result.requestId), result, null);
         }
+    }
+
+    @Nullable
+    @Override
+    public Tracing trace(TxnId txnId, TraceEventType eventType)
+    {
+        if (rnd.nextFloat() < 0.01f)
+            return (i1, i2) -> {};
+        return null;
     }
 
     @Override

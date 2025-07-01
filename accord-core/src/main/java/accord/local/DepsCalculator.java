@@ -65,9 +65,12 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
     {
         ExecuteFlags flags = ExecuteFlags.none();
         if (!hasUnappliedDependency)
+        {
             flags = flags.with(READY_TO_EXECUTE);
-        if (maxAppliedHlc < txnId.hlc())
-            flags = flags.with(HAS_UNIQUE_HLC);
+            // we don't know whether hlc is unique unless dependencies have applied
+            if (maxAppliedHlc < txnId.hlc())
+                flags = flags.with(HAS_UNIQUE_HLC);
+        }
         return flags;
     }
 

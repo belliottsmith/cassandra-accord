@@ -49,7 +49,6 @@ import accord.utils.SortedListMap;
 import accord.utils.UnhandledEnum;
 import accord.utils.WrappableException;
 import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults;
 import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;

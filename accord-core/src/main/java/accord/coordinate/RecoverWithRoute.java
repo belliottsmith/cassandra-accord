@@ -223,7 +223,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         propagate = full;
                     }
 
-                    Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, propagate, (s, f) -> callback.accept(f == null ? propagate.toProgressToken() : null, f));
+                    Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, propagate, (s, f) -> callback.accept(f == null ? propagate.toProgressToken() : null, f), null);
                     break;
                 }
 
@@ -271,12 +271,12 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 if (witnessedByInvalidation != null && witnessedByInvalidation.hasBeen(Status.PreCommitted))
                     throw illegalState("We previously invalidated, finding a status that should be recoverable");
 
-                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, full, (s, f) -> callback.accept(f == null ? INVALIDATED : null, f));
+                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, full, (s, f) -> callback.accept(f == null ? INVALIDATED : null, f), null);
                 break;
 
             case Erased:
                 // we should only be able to hit the Erased case if every participating shard has advanced past this TxnId, so we don't need to recover it
-                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, full, (s, f) -> callback.accept(f == null ? TRUNCATED_DURABLE_OR_INVALIDATED : null, f));
+                Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query, query, reportTo, null, full, (s, f) -> callback.accept(f == null ? TRUNCATED_DURABLE_OR_INVALIDATED : null, f), null);
                 break;
         }
     }

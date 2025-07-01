@@ -20,6 +20,7 @@ package accord.messages;
 import accord.api.ProtocolModifiers;
 import accord.api.Result;
 import accord.api.RoutingKey;
+import accord.api.Tracing;
 import accord.coordinate.FetchData.FetchResult;
 import accord.coordinate.Infer.InvalidIf;
 import accord.local.Cleanup;
@@ -92,7 +93,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     final Ballot acceptedOrCommitted;
     final Status.Durability durability;
     @Nullable final RoutingKey homeKey;
-    // this is a WHOLE NODE measure, so if commit epoch has more ranges we do not count as committed if we can only commit in coordination epoch
     final KnownMap known;
     final WithQuorum withQuorum;
     @Nullable final PartialTxn partialTxn;
@@ -101,6 +101,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     @Nullable final Writes writes;
     @Nullable final Result result;
     final BiConsumer<? super FetchResult, Throwable> callback;
+    final @Nullable Tracing trace;
 
     private transient volatile FetchResult fetchResult;
     private static final AtomicReferenceFieldUpdater<Propagate, FetchResult> fetchResultUpdater = AtomicReferenceFieldUpdater.newUpdater(Propagate.class, FetchResult.class, "fetchResult");
@@ -120,7 +121,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     @Nullable Timestamp committedExecuteAt,
     @Nullable Writes writes,
     @Nullable Result result,
-    BiConsumer<? super FetchResult, Throwable> callback)
+    BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing trace)
     {
         this.node = node;
         this.txnId = txnId;
@@ -141,12 +142,15 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.writes = writes;
         this.result = result;
         this.callback = callback;
+        this.trace = trace;
     }
 
-    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, WithQuorum withQuorum, Route<?> queried, Participants<?> contactable, LatentStoreSelector reportTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback)
+    public static void propagate(Node node, TxnId txnId, InvalidIf previouslyKnownToBeInvalidIf, long sourceEpoch, WithQuorum withQuorum, Route<?> queried, Participants<?> contactable, LatentStoreSelector reportTo, @Nullable Known target, CheckStatusOkFull full, BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing tracing)
     {
         if (full.maxKnowledgeSaveStatus.status == NotDefined && full.invalidIf == NotKnownToBeInvalid)
         {
+            if (tracing != null)
+                tracing.trace(null, "Found nothing for %s", txnId);
             callback.accept(new FetchResult(Nothing, queried.slice(0, 0)), null);
             return;
         }
@@ -158,9 +162,12 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         full = full.finish(queried, contactable, queried.with((Unseekables) contactable), withQuorum, previouslyKnownToBeInvalidIf);
         Route<?> route = Invariants.nonNull(full.route);
 
+        if (tracing != null)
+            tracing.trace(null, "Found %s for %s", full.map, txnId);
+
         Timestamp committedExecuteAt = full.executeAtIfKnown();
         Propagate propagate =
-            new Propagate(node, txnId, route, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, committedExecuteAt, full.writes, full.result, callback);
+            new Propagate(node, txnId, route, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, committedExecuteAt, full.writes, full.result, callback, tracing);
 
         long untilEpoch = txnId.epoch();
         if (committedExecuteAt != null)
@@ -185,7 +192,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         // TODO (expected): can we come up with a better more universal pattern for avoiding updating a command we don't intersect with?
         //   ideally integrated with safeStore.get()
         if (participants.owns().isEmpty() && safeStore.ifInitialised(txnId) == null)
+        {
+            if (trace != null)
+                trace.trace(safeStore.commandStore(), "Uninitialised and not owned; skipping");
             return null;
+        }
 
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
@@ -200,7 +211,10 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         switch (command.saveStatus().phase)
         {
             // Already know the outcome, waiting on durability so maybe update with new durability information which can also trigger cleanup
-            case Persist: return updateDurability(safeStore, safeCommand, participants);
+            case Persist:
+                if (trace != null)
+                    trace.trace(safeStore.commandStore(), "Already persisted; skipping");
+                return updateDurability(safeStore, safeCommand, participants);
             case Cleanup:
             case Invalidate:
                 return null;
@@ -265,6 +279,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         SaveStatus propagate = found.atLeast(currentlyKnown).propagatesSaveStatus();
         if (propagate.known.isSatisfiedBy(currentlyKnown))
         {
+            if (trace != null)
+                trace.trace(safeStore.commandStore(), "Already know at least as much as peer responses.");
             updateFetchResult(found, participants.owns());
             return updateDurability(safeStore, safeCommand, participants);
         }
@@ -281,23 +297,31 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 throw illegalState("Invalid states to propagate: " + propagate);
 
             case Invalidated:
+                if (trace != null)
+                    trace.trace(safeStore.commandStore(), "Invalidating");
                 Commands.commitInvalidate(safeStore, safeCommand, route);
                 break;
 
             case Applied:
             case PreApplied:
+                if (trace != null)
+                    trace.trace(safeStore.commandStore(), "Applying");
                 Invariants.require(committedExecuteAt != null);
                 // we must use the remote executeAt, as it might have a uniqueHlc we aren't aware of at commit
                 confirm(Commands.apply(safeStore, safeCommand, participants, Ballot.ZERO, txnId, route, committedExecuteAt, stableDeps, partialTxn, writes, result));
                 break;
 
             case Stable:
+                if (trace != null)
+                    trace.trace(safeStore.commandStore(), "Committing as stable");
                 confirm(Commands.commit(safeStore, safeCommand, participants, Stable, acceptedOrCommitted, txnId, route, partialTxn, executeAtIfKnown, stableDeps, null));
                 break;
 
             case Committed:
                 // TODO (expected): we can propagate Committed as Stable if we have any other Stable result AND a quorum of committedDeps
             case PreCommitted:
+                if (trace != null)
+                    trace.trace(safeStore.commandStore(), "Pre-committing");
                 confirm(Commands.precommit(safeStore, safeCommand, participants, txnId, executeAtIfKnown, promised));
                 // TODO (desired): would it be clearer to yield a SaveStatus so we can have PreCommittedWithDefinition
                 if (!found.definition().isKnown())
@@ -306,11 +330,19 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             case PreAccepted:
                 // only preaccept if we coordinate the transaction
                 if (safeStore.ranges().coordinates(txnId).intersects(route) && Route.isFullRoute(route))
+                {
+                    if (trace != null)
+                        trace.trace(safeStore.commandStore(), "Pre-accepting");
                     Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false);
+                }
 
             case NotDefined:
                 if (invalidIf == IfUncommitted)
+                {
+                    if (trace != null)
+                        trace.trace(safeStore.commandStore(), "Marking invalidIfUncommitted");
                     safeStore.progressLog().invalidIfUncommitted(txnId);
+                }
                 break;
         }
 
@@ -354,12 +386,20 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         Participants<?> stillTouches = participants.stillTouches();
         if (stillTouches.isEmpty())
+        {
+            if (trace != null)
+                trace.trace(safeStore.commandStore(), "No longer participating (stillTouches is empty); using knownForAny: %s", known.knownForAny());
             return known.knownForAny();
+        }
 
         RedundantStatus status = safeStore.redundantBefore().status(txnId, null, stillTouches);
         // try to see if we can safely purge the full command
         if (tryPurge(safeStore, safeCommand, status))
+        {
+            if (trace != null)
+                trace.trace(safeStore.commandStore(), "Redundant with status %s; purged", status);
             return null;
+        }
 
         // if the command has been truncated globally, then we should expect to apply it
         // if we cannot obtain enough information from a majority to do so then we have been left behind
@@ -379,11 +419,15 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             {
                 Invariants.require(notStaleTouches.containsAll(stillTouches));
                 Invariants.require(notStaleOwnsOrMayExecute.containsAll(stillOwnsOrMayExecute));
+                if (trace != null)
+                    trace.trace(safeStore.commandStore(), "No longer touches any keys that were found truncated");
                 return required;
             }
 
             if (stillOwnsOrMayExecute.isEmpty() && (!found.is(Outcome.Apply) || known.hasFullyTruncated(staleTouches)))
             {
+                if (trace != null)
+                    trace.trace(safeStore.commandStore(), "No longer owns or executes any keys that were found truncated; marking vestigial");
                 Commands.setTruncatedOrVestigial(safeStore, safeCommand, participants);
                 return null;
             }
@@ -391,22 +435,41 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         }
 
         Participants<?> stale = staleTouches.with((Participants) staleOwnsOrMayExecute);
+        // TODO (expected): could be that two replicas are stale but cannot catch up;
+        //  I think this condition is to ensure a full quorum has truncated (so we haven't raced with truncation)
+        //  should solve another way
         if (!known.hasFullyTruncated(stale))
+        {
+            if (trace != null)
+                trace.trace(safeStore.commandStore(), "Has participants %s that could not be fetched. Some responses were not truncated, so we may have raced with completion. Aborting.", stale);
             return null;
+        }
 
         // TODO (expected): trigger a refresh of redundantBefore; should be available on a peer
         // wait until we know the shard is ahead and we are behind
         if (!safeStore.redundantBefore().isShardOnlyApplied(txnId, stale))
+        {
+            if (trace != null)
+                trace.trace(safeStore.commandStore(), "Has participants %s that could not be fetched, but the shard(s) have not been marked universally durable so we will not mark ourselves stale. Aborting.", stale);
             return null;
+        }
 
         Participants<?> staleOnlyTouches = staleTouches.without(staleOwnsOrMayExecute);
         Invariants.expect(txnId.awaitsPreviouslyOwned() || staleOnlyTouches.isEmpty(), "%s is SHARD_ONLY_APPLIED, so we expect it to have been filtered from StoreParticipants", staleOnlyTouches);
         // TODO (expected): if the above last ditch doesn't work, see if only the stale ranges can't apply and do some shenanigans to apply partially and move on
         if (ProtocolModifiers.Toggles.markStaleIfCannotExecute(txnId))
         {
+            if (trace != null)
+                trace.trace(safeStore.commandStore(), "Has participants %s that could not be fetched and the shard(s) have been marked universally durable. We have marked ourselves stale, and will apply the remaining ranges.", stale);
+
             safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown == null ? txnId : executeAtIfKnown, stale.toRanges(), true);
             if (!stale.containsAll(stillTouches) || !stale.containsAll(stillOwnsOrMayExecute))
                 return required;
+        }
+        else
+        {
+            if (trace != null)
+                trace.trace(safeStore.commandStore(), "Has participants %s that could not be fetched and the shard(s) have been marked universally durable. This transaction type is configured not to induce staleness, so erasing.", stale);
         }
 
         // TODO (expected): we might prefer to adopt Redundant status, and permit ourselves to later accept the result of the execution and/or definition

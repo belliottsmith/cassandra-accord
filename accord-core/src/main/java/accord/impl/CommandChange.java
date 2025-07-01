@@ -223,6 +223,36 @@ public class CommandChange
             return durability;
         }
 
+        public Timestamp executeAt()
+        {
+            return executeAt;
+        }
+
+        public Timestamp executesAtLeast()
+        {
+            return executesAtLeast;
+        }
+
+        public PartialTxn partialTxn()
+        {
+            return partialTxn;
+        }
+
+        public PartialDeps partialDeps()
+        {
+            return partialDeps;
+        }
+
+        public Writes writes()
+        {
+            return writes;
+        }
+
+        public Result result()
+        {
+            return result;
+        }
+
         public StoreParticipants participants()
         {
             return participants;

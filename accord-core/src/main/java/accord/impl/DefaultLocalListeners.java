@@ -32,15 +32,12 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.local.StoreParticipants;
 import accord.primitives.SaveStatus;
 import accord.primitives.TxnId;
 import accord.utils.AsymmetricComparator;
 import accord.utils.Invariants;
 import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
-
-import static accord.local.StoreParticipants.Filter.UPDATE;
 
 // TODO (desired): evict to disk
 public class DefaultLocalListeners implements LocalListeners

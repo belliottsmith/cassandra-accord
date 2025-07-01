@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import javax.annotation.Nullable;
 
+import accord.api.Tracing;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
@@ -50,6 +51,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     final IncludeInfo includeInfo;
     final @Nullable Ballot bumpBallot;
     final Infer.InvalidIf previouslyKnownToBeInvalidIf;
+    final @Nullable Tracing tracing;
 
     protected CheckStatusOk merged;
     protected boolean truncated;
@@ -63,12 +65,18 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
 
     protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
+        this(node, executor, txnId, query, srcEpoch, includeInfo, bumpBallot, previouslyKnownToBeInvalidIf, null);
+    }
+
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, @Nullable Tracing tracing)
+    {
         super(node, executor, topologyFor(node, txnId, query, srcEpoch), txnId);
         this.sourceEpoch = srcEpoch;
         this.query = query;
         this.includeInfo = includeInfo;
         this.bumpBallot = bumpBallot;
         this.previouslyKnownToBeInvalidIf = previouslyKnownToBeInvalidIf;
+        this.tracing = tracing;
     }
 
     private static Topologies topologyFor(Node node, TxnId txnId, Unseekables<?> contact, long epoch)
@@ -81,6 +89,8 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     protected void contact(Id id)
     {
         Participants<?> unseekables = query.slice(topologies().computeRangesForNode(id));
+        if (tracing != null)
+            tracing.trace(null, "%s contacting %s for %s", getClass().getSimpleName(), id, unseekables);
         node.send(id, new CheckStatus(txnId, unseekables, sourceEpoch, includeInfo, bumpBallot), executor, this);
     }
 
@@ -89,10 +99,10 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
 
     protected Action checkSufficient(Id from, CheckStatusOk ok)
     {
-        if (isSufficient(from, ok))
-            return Action.Approve;
-
-        return Action.ApproveIfQuorum;
+        Action action = isSufficient(from, ok) ? Action.Approve : Action.ApproveIfQuorum;
+        if (tracing != null)
+            tracing.trace(null, "%s %s reply %s from %s", getClass().getSimpleName(), action, ok, from);
+        return action;
     }
 
     @Override
@@ -107,6 +117,9 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
         }
         else
         {
+            if (tracing != null)
+                tracing.trace(null, "%s received failure reply %s from %s", getClass().getSimpleName(), reply, from);
+
             switch ((CheckStatus.CheckStatusNack)reply)
             {
                 default: throw new AssertionError(String.format("Unexpected status: %s", reply));

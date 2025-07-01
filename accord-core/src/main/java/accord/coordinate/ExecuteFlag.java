@@ -58,8 +58,9 @@ public enum ExecuteFlag
 
         public static void collect(CoordinationFlags into, Node.Id id, ExecuteFlags add, Object expectIfReadyToExecute, Object actualReadyToExecute)
         {
-            if (add.contains(READY_TO_EXECUTE) && !expectIfReadyToExecute.equals(actualReadyToExecute))
-                add = add.without(READY_TO_EXECUTE);
+            // TODO (expected): this is overly restrictive, disabling the optimisation in multi shard cases; should only expect the parts the shard owns to be equal
+            if (add != none() && !expectIfReadyToExecute.equals(actualReadyToExecute))
+                add = none(); // HAS_UNIQUE_HLC only accurate if READY_TO_EXECUTE was also accurate
             into.add(id, add);
         }
     }

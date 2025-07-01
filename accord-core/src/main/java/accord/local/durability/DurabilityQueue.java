@@ -51,7 +51,6 @@ import accord.primitives.SyncPoint;
 import accord.primitives.TxnId;
 import accord.topology.TopologyManager;
 import accord.utils.Invariants;
-import accord.utils.async.AsyncResult;
 import org.agrona.collections.ObjectHashSet;
 
 import static accord.coordinate.ExecuteSyncPoint.coordinateIncluding;

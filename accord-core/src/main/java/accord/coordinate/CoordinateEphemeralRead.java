@@ -23,6 +23,7 @@ import java.util.function.BiConsumer;
 
 import accord.api.Result;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
@@ -166,7 +167,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
         Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
         topologies = node.topology().reselect(topologies, QuorumEpochIntersections.preaccept.include, route, executeAtEpoch, executeAtEpoch, SHARE, Owned);
         CoordinationFlags flags = oks.foldlNonNull((d, k, v, out) -> {
-            ExecuteFlag.ExecuteFlags.collect(out, k, v.flags, d, v.deps);
+            ExecuteFlags.collect(out, k, v.flags, d, v.deps);
             return out;
         }, deps, empty(oks.domain()));
         new ExecuteEphemeralRead(node, executor, topologies, route, txnId.withEpoch(executeAtEpoch), txn, deps, flags, callback).start();

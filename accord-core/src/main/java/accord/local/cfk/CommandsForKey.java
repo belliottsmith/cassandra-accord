@@ -1789,7 +1789,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 break;
         }
         if (maxAppliedWriteByExecuteAt >= 0) maxUniqueHlc = Math.max(maxUniqueHlc, committedByExecuteAt[maxAppliedWriteByExecuteAt].executeAt.hlc());
-        else maxUniqueHlc = Math.max(maxUniqueHlc, bounds.gcBefore.hlc());
+        else maxUniqueHlc = Math.max(maxUniqueHlc, bounds.gcBefore.hlc() - 1); // only guaranteed to witness those with strictly lower hlc; might be some txn agreed with higher flag bits
 
         return updater.update(key, bounds, isNewBoundsInfo, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds);
     }
@@ -2060,10 +2060,6 @@ public class CommandsForKey extends CommandsForKeyUpdate
         TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBounds));
         Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.gcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
-
-        long maxUniqueHlc = this.maxUniqueHlc;
-        if (maxUniqueHlc <= newBounds.gcBefore.hlc() && newBounds.gcBefore.is(HLC_BOUND))
-            maxUniqueHlc = 0;
 
         return notifyManagedPreBootstrap(this, newBounds, reconstructAndUpdateUnmanaged(key, newBounds, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds));
     }
@@ -2368,7 +2364,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (maxWrite != null && maxWrite.hlc() >= maxUniqueHlc)
             return false;
         TxnId gcBefore = redundantBefore();
-        return gcBefore.hlc() < maxUniqueHlc || !gcBefore.is(HLC_BOUND);
+        return gcBefore.hlc() <= maxUniqueHlc || !gcBefore.is(HLC_BOUND);
     }
 
     public static boolean reportLinearizabilityViolations()

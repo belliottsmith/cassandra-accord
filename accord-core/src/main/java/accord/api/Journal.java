@@ -19,11 +19,14 @@
 package accord.api;
 
 import java.util.Iterator;
+import java.util.List;
 import java.util.NavigableMap;
 import java.util.Objects;
+import java.util.function.Supplier;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.impl.CommandChange;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
@@ -47,6 +50,7 @@ public interface Journal
     void start(Node node);
 
     Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    default List<? extends Supplier<CommandChange.Builder>> debugCommand(int store, TxnId txnId) { throw new UnsupportedOperationException(); }
     Command.Minimal loadMinimal(int store, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
 
     // TODO (required): propagate exceptions (i.e. using OnDone instead of Runnable)
