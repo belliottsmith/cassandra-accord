@@ -24,6 +24,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.ProgressLog.BlockedUntil;
+import accord.api.Tracing;
 import accord.coordinate.AsynchronousAwait;
 import accord.coordinate.FetchData;
 import accord.coordinate.FetchRoute;
@@ -48,6 +49,7 @@ import accord.utils.UnhandledEnum;
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.Query.HOME;
 import static accord.api.ProgressLog.BlockedUntil.Query.SHARD;
+import static accord.api.TraceEventType.PROGRESS;
 import static accord.impl.progresslog.CallbackInvoker.invokeWaitingCallback;
 import static accord.impl.progresslog.PackedKeyTracker.bitSet;
 import static accord.impl.progresslog.PackedKeyTracker.clearRoundState;
@@ -378,17 +380,16 @@ abstract class WaitingState extends BaseTxnState
 
     final void runWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
     {
-        runInternal(safeStore, safeCommand, owner);
+        runInternal(safeStore, safeCommand, owner, owner.node.agent().trace(txnId, PROGRESS));
     }
 
-    private void runInternal(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
+    private void runInternal(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, @Nullable Tracing tracing)
     {
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
         Invariants.require(!owner.hasActive(Waiting, txnId));
         Invariants.require(command.saveStatus().compareTo(blockedUntil.unblockedFrom) < 0,
                            "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.unblockedFrom, command);
-
         set(safeStore, owner, blockedUntil, Querying);
         TxnId txnId = safeCommand.txnId();
         // first make sure we have enough information to obtain the command locally
@@ -397,6 +398,8 @@ abstract class WaitingState extends BaseTxnState
 
         if (!Route.isRoute(maxContactable))
         {
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Blocked until %s. Fetching route from %s", blockedUntil, maxContactable);
             fetchRoute(owner, blockedUntil, txnId, maxContactable);
             return;
         }
@@ -405,6 +408,8 @@ abstract class WaitingState extends BaseTxnState
         if (homeSatisfies().compareTo(blockedUntil) < 0)
         {
             // first wait until the homeKey has progressed to a point where it can answer our query; we don't expect our shards to know until then anyway
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Blocked until %s. Waiting for home key %s to satisfy.", blockedUntil, route.homeKey());
             awaitHomeKey(owner, blockedUntil, txnId, executeAt, route);
             return;
         }
@@ -420,6 +425,8 @@ abstract class WaitingState extends BaseTxnState
         {
             // we know it has been decided one way or the other by the home shard at least, so we attempt a fetch
             // including the home shard to get us to at least PreCommitted where we can safely wait on individual shards
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Blocked until %s; not currently decided. Fetching from %s for epochs [%d..%d].", blockedUntil, slicedRoute, lowEpoch, highEpoch);
             fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, slicedRoute.withHomeKey(), route);
             return;
         }
@@ -432,6 +439,8 @@ abstract class WaitingState extends BaseTxnState
         if (awaitRoute.isHomeKeyOnlyRoute())
         {
             // at this point we can switch to polling as we know someone has the relevant state
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Blocked until %s. Fetching %s%s for epochs [%d..%d].", blockedUntil, slicedRoute, slicedRoute == fetchRoute ? "" : " from " + fetchRoute, lowEpoch, highEpoch);
             fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, fetchRoute, route);
             return;
         }
@@ -457,6 +466,9 @@ abstract class WaitingState extends BaseTxnState
         int roundStart = roundIndex * roundSize;
         if (roundStart >= awaitRoute.size())
         {
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Blocked until %s. Fetching %s%s for epochs [%d..%d].", blockedUntil, slicedRoute, slicedRoute == fetchRoute ? "" : " from " + fetchRoute, lowEpoch, highEpoch);
+
             // all of the shards we are awaiting have been processed and found at least one replica that has the state needed to answer our query
             // at this point we can switch to polling as we know someone has the relevant state
             fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, fetchRoute, route);
@@ -467,6 +479,8 @@ abstract class WaitingState extends BaseTxnState
         awaitRoute = awaitRoute.slice(roundStart, roundEnd);
         // TODO (desired): use some mechanism (e.g. random chance or another counter)
         //   to either periodically fetch the whole remaining route or gradually increase the slice length
+        if (tracing != null)
+            tracing.trace(owner.commandStore, "Blocked until %s. Waiting for %s to satisfy; round %d of %d.", blockedUntil, awaitRoute, roundIndex, (awaitRoute.size() + (roundSize - 1))/roundSize);
         awaitSlice(owner, blockedUntil, txnId, executeAt, awaitRoute, (roundIndex << 1) | 1);
     }
 
@@ -481,14 +495,17 @@ abstract class WaitingState extends BaseTxnState
 
         Command command = safeCommand.current();
         Route<?> route = command.route();
+        Tracing tracing = owner.node.agent().trace(txnId, PROGRESS);
 
         if (fail == null)
         {
             if (route == null)
             {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Callback success, but route not found.");
                 Invariants.require(kind == CallbackKind.FetchRoute);
                 Invariants.require(ready == null);
-                state.retry(safeStore, safeCommand, owner, blockedUntil);
+                state.retry(safeStore, safeCommand, owner, blockedUntil, tracing);
                 return;
             }
 
@@ -518,14 +535,18 @@ abstract class WaitingState extends BaseTxnState
                 case AwaitHome:
                     if (ready.contains(route.homeKey()))
                     {
+                        if (tracing != null)
+                            tracing.trace(owner.commandStore, "Callback success. Home key ready.");
                         // the home shard was found to already have the necessary state, with no distributed await;
                         // we can immediately progress the state machine
                         Invariants.require(0 == state.awaitRoundIndex(roundSize));
                         Invariants.require(0 == state.awaitBitSet(roundSize));
-                        state.runInternal(safeStore, safeCommand, owner);
+                        state.runInternal(safeStore, safeCommand, owner, tracing);
                     }
                     else
                     {
+                        if (tracing != null)
+                            tracing.trace(owner.commandStore, "Callback success. Home key not ready; waiting async.");
                         // the home shard is not ready to answer our query, but we have registered our remote callback so can wait for it to contact us
                         state.set(safeStore, owner, blockedUntil, Awaiting);
                     }
@@ -545,7 +566,7 @@ abstract class WaitingState extends BaseTxnState
                             Invariants.expect((int) awaitRoute.findNextSameKindIntersection(roundStart, (Unseekables) ready, 0) / roundSize == roundIndex);
                             // TODO (desired): in this case perhaps upgrade to fetch for next round?
                             state.updateAwaitRound(roundIndex + 1, roundSize);
-                            state.runInternal(safeStore, safeCommand, owner);
+                            state.runInternal(safeStore, safeCommand, owner, tracing);
                         }
                         else
                         {
@@ -561,7 +582,7 @@ abstract class WaitingState extends BaseTxnState
                 case FetchRoute:
                     if (state.homeSatisfies().compareTo(blockedUntil) < 0)
                     {
-                        state.runInternal(safeStore, safeCommand, owner);
+                        state.runInternal(safeStore, safeCommand, owner, tracing);
                         return;
                     }
 
@@ -582,7 +603,7 @@ abstract class WaitingState extends BaseTxnState
                     {
                         // we don't think we have anything to wait for, but we have encountered some notReady responses; queue up a retry
                         state.setAwaitDone(roundSize);
-                        state.retry(safeStore, safeCommand, owner, blockedUntil);
+                        state.retry(safeStore, safeCommand, owner, blockedUntil, tracing);
                     }
                     else
                     {
@@ -590,7 +611,7 @@ abstract class WaitingState extends BaseTxnState
                         roundIndex = nextIndex / roundSize;
                         state.updateAwaitRound(roundIndex, roundSize);
                         state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
-                        state.runInternal(safeStore, safeCommand, owner);
+                        state.runInternal(safeStore, safeCommand, owner, tracing);
                     }
                 }
             }
@@ -598,7 +619,7 @@ abstract class WaitingState extends BaseTxnState
         else
         {
             safeStore.agent().onCaughtException(fail, "Failed fetching data for " + state);
-            state.retry(safeStore, safeCommand, owner, blockedUntil);
+            state.retry(safeStore, safeCommand, owner, blockedUntil, tracing);
         }
     }
 
@@ -645,6 +666,7 @@ abstract class WaitingState extends BaseTxnState
         if ((callbackId & 1) != 1)
             return;
 
+        Tracing tracing = owner.node.agent().trace(txnId, PROGRESS);
         BlockedUntil blockedUntil = blockedUntil();
         if (callbackId == AWAITING_HOME_KEY_CALLBACKID)
         {
@@ -655,19 +677,42 @@ abstract class WaitingState extends BaseTxnState
                 setHomeSatisfies(newHomeStatus);
 
             if (waitingProgress() != Awaiting)
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Received async home key callback %d but no longer Awaiting", callbackId);
                 return;
+            }
 
             if (newHomeStatus.compareTo(blockedUntil) < 0 || currentHomeStatus.compareTo(blockedUntil) >= 0)
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Received redundant async home key callback %d. Blocked until %s, home key now %s (previously %s)", callbackId, blockedUntil, newHomeStatus, currentHomeStatus);
                 return;
+            }
 
             SafeCommand safeCommand = safeStore.unsafeGet(txnId);
             if (safeCommand != null)
-                runInternal(safeStore, safeCommand, owner);
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Received async home key callback %d. Blocked until %s, home key now %s.", callbackId, blockedUntil, newHomeStatus);
+                runInternal(safeStore, safeCommand, owner, tracing);
+            }
         }
         else
         {
             if (waitingProgress() != Awaiting)
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Received async callback %d but no longer Awaiting", callbackId);
                 return;
+            }
+
+            if (newStatus.compareTo(blockedUntil.unblockedFrom) < 0)
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Received async callback %d with %s, insufficient for %s", callbackId, newStatus, blockedUntil);
+                return;
+            }
 
             callbackId >>= 1;
             SafeCommand safeCommand = Invariants.nonNull(safeStore.unsafeGet(txnId));
@@ -680,28 +725,46 @@ abstract class WaitingState extends BaseTxnState
             int roundIndex = awaitRoundIndex(roundSize);
             int updateBitSet = roundCallbackBitSet(owner, txnId, from, slicedRoute, callbackId, roundIndex, roundSize);
             if (updateBitSet == 0)
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Received async callback %d for already ready keys.", callbackId, blockedUntil);
                 return;
+            }
 
             int bitSet = awaitBitSet(roundSize);
             bitSet &= ~updateBitSet;
             setAwaitBitSet(bitSet, roundSize);
 
             if (bitSet == 0)
-                runInternal(safeStore, safeCommand, owner);
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Blocked until %s. Received async callback %d for waiting keys. Round complete.", blockedUntil, callbackId);
+
+                runInternal(safeStore, safeCommand, owner, tracing);
+            }
+            else
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Blocked until %s. Received async callback %d for waiting keys. %d keys still waiting this round.", blockedUntil, callbackId, Integer.bitCount(bitSet));
+            }
         }
     }
 
     // TODO (expected): use back-off counter here
-    private void retry(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, BlockedUntil blockedUntil)
+    private void retry(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, BlockedUntil blockedUntil, @Nullable Tracing tracing)
     {
         if (!contactEveryone())
         {
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Retrying immediately, without contact restrictions");
             setContactEveryone(true);
             // try again immediately with a query to all eligible replicas
-            runInternal(safeStore, safeCommand, owner);
+            runInternal(safeStore, safeCommand, owner, tracing);
         }
         else
         {
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Retry queued for later.");
             // queue a retry
             set(safeStore, owner, blockedUntil, Queued);
         }

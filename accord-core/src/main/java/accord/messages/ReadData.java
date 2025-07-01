@@ -137,9 +137,9 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public final Participants<?> scope;
     public final long executeAtEpoch;
     public final ExecuteFlags flags;
+    final boolean requiresListenersDuringExecution;
     protected @Nullable PartialTxn partialTxn;
     protected @Nullable Timestamp executeAt;
-    private boolean fastExec;
 
     private transient State state = State.PENDING; // TODO (low priority, semantics): respond with the Executed result we have stored?
 
@@ -171,6 +171,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         this.partialTxn = txn == null ? null : txn.intersecting(scope, true);
         this.executeAt = executeAt;
         this.executeAtEpoch = executeAtEpoch;
+        this.requiresListenersDuringExecution = requiresListenersDuringExecution(txnId, flags);
     }
 
     protected ReadData(TxnId txnId, Participants<?> scope, @Nullable PartialTxn partialTxn, @Nullable Timestamp executeAt, long executeAtEpoch)
@@ -186,6 +187,12 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         this.executeAt = executeAt;
         this.executeAtEpoch = executeAtEpoch;
         this.flags = flags;
+        this.requiresListenersDuringExecution = requiresListenersDuringExecution(txnId, flags);
+    }
+
+    private static boolean requiresListenersDuringExecution(TxnId txnId, ExecuteFlags flags)
+    {
+        return !txnId.is(EphemeralRead) && (!dataStoreDetectsFutureReads() || !flags.contains(HAS_UNIQUE_HLC));
     }
 
     protected abstract ExecuteOn executeOn();
@@ -259,10 +266,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         stamp = node.currentStamp();
 
         if (flags.contains(READY_TO_EXECUTE) && fastReadsMayBypassSafeStore(txnId) && partialTxn != null && executeAt != null && (txnId.is(EphemeralRead) || flags.contains(HAS_UNIQUE_HLC)))
-        {
-            fastExec = true;
             return node.commandStores().mapReduceConsume(scope, minEpoch(), executeAtEpoch, this::applyFastRead, this, this);
-        }
 
         return node.mapReduceConsumeLocal(this, scope, minEpoch(), executeAtEpoch, this);
     }
@@ -315,7 +319,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     return Redundant;
 
                 case EXECUTE:
-                    if (!dataStoreDetectsFutureReads())
+                    if (requiresListenersDuringExecution)
                         listeners.put(storeId, safeStore.register(txnId, this));
                     waitingOn.add(storeId);
                     ++waitingOnCount;
@@ -400,7 +404,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     if (waitingOn.add(storeId))
                         ++waitingOnCount;
 
-                    if (dataStoreDetectsFutureReads())
+                    if (!requiresListenersDuringExecution)
                         listeners.remove(storeId);
 
                     execute = true;
@@ -411,7 +415,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         {
             logger.trace("{}: executing read", command.txnId());
             read(safeStore, command);
-            return !dataStoreDetectsFutureReads();
+            return requiresListenersDuringExecution;
         }
         else
         {
@@ -709,7 +713,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        if (data != null && !data.validateReply(txnId, executeAt, fastExec)) reply(Redundant, null);
+        if (data != null && !data.validateReply(txnId, executeAt, !requiresListenersDuringExecution)) reply(Redundant, null);
         else reply(new ReadOk(unavailable, data, uniqueHlc), null);
     }
 

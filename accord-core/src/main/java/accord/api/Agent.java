@@ -20,6 +20,8 @@ package accord.api;
 
 import java.util.concurrent.TimeUnit;
 
+import javax.annotation.Nullable;
+
 import accord.api.ProgressLog.BlockedUntil;
 import accord.local.Command;
 import accord.local.Node;
@@ -43,6 +45,8 @@ import accord.utils.async.AsyncChain;
  */
 public interface Agent extends UncaughtExceptionListener
 {
+    default @Nullable Tracing trace(TxnId txnId, TraceEventType eventType) { return null; }
+
     /**
      * For use by implementations to decide what to do about successfully recovered transactions.
      * Specifically intended to define if and how they should inform clients of the result.

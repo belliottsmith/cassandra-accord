@@ -23,7 +23,6 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
-import accord.local.durability.ShardDurability;
 import accord.primitives.AbstractRanges;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;

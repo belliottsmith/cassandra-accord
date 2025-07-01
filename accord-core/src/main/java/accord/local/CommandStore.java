@@ -582,12 +582,11 @@ public abstract class CommandStore implements SequentialAsyncExecutor
             .begin((success, fail) -> {
                 if (fail != null)
                 {
-                    Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, ranges);
-                    remaining = redundantBefore.removeRetired(remaining);
+                    Ranges remaining = redundantBefore.removeRetired(redundantBefore.removeWitnessed(minForEpoch, ranges));
                     if (!remaining.isEmpty())
                     {
-                        logger.error("Failed to close epoch {} for ranges {} on store {}. Retrying.", epoch, remaining, id);
-                        ensureReadyToCoordinate(epoch, remaining);
+                        logger.error("Failed to close epoch {} for ranges {} on store {}. Retrying.", epoch, remaining, id, fail);
+                        node.someExecutor().execute(() -> ensureReadyToCoordinate(epoch, remaining));
                     }
                 }
             });

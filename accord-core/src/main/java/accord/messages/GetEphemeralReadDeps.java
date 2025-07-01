@@ -29,7 +29,6 @@ import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
-import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
