@@ -175,7 +175,7 @@ public interface Journal
      */
     interface Loader
     {
-        AsyncChain<Command> load(TxnId txnId);
+        AsyncChain<?> load(TxnId txnId);
     }
 
 

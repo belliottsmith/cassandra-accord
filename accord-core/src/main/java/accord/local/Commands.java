@@ -618,7 +618,7 @@ public class Commands
         }
     }
 
-    protected static void postApply(SafeCommandStore safeStore, TxnId txnId, long t0, boolean forceApply)
+    public static void postApply(SafeCommandStore safeStore, TxnId txnId, long t0, boolean forceApply)
     {
         SafeCommand safeCommand = safeStore.get(txnId);
         Command command = safeCommand.current();
@@ -662,7 +662,7 @@ public class Commands
     }
 
     @VisibleForImplementation
-    public static AsyncChain<Void> applyWrites(SafeCommandStore safeStore, PreLoadContext context, Command command)
+    public static AsyncChain<Void> replayWrites(SafeCommandStore safeStore, PreLoadContext context, Command command)
     {
         CommandStore unsafeStore = safeStore.commandStore();
         Command.Executed executed = command.asExecuted();

@@ -18,18 +18,16 @@
 
 package accord.impl;
 
-import java.util.function.BiConsumer;
-
 import accord.api.Journal;
-import accord.local.Cleanup;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.Commands;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.Participants;
 import accord.primitives.SaveStatus;
 import accord.primitives.TxnId;
 
-import static accord.local.Cleanup.Input.FULL;
 import static accord.primitives.SaveStatus.PreApplied;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
@@ -37,27 +35,31 @@ import static accord.primitives.Txn.Kind.Write;
 
 public abstract class AbstractLoader implements Journal.Loader
 {
-    protected Command loadInternal(Command command, SafeCommandStore safeStore)
-    {
-        TxnId txnId = command.txnId();
-        Cleanup cleanup = Cleanup.shouldCleanup(FULL, safeStore, command, command.participants());
-        if (cleanup != Cleanup.NO)
-            command = Commands.purge(safeStore, command, cleanup);
-
-        return safeStore.unsafeGetNoCleanup(txnId).update(safeStore, command);
-    }
-
-    protected void maybeApplyWrites(TxnId txnId, SafeCommandStore safeStore, BiConsumer<SafeCommand, Command> apply)
+    protected void maybeApplyWrites(SafeCommandStore safeStore, TxnId txnId)
     {
         SafeCommand safeCommand = safeStore.unsafeGet(txnId);
         Command command = safeCommand.current();
         if (command.is(Stable) || command.saveStatus() == PreApplied)
         {
-            Commands.maybeExecute(safeStore, safeCommand, command, true, true);
+            if (Commands.maybeExecute(safeStore, safeCommand, command, true, true))
+                return;
         }
         else if (command.txnId().is(Write) && command.saveStatus().compareTo(SaveStatus.Stable) >= 0 && !command.hasBeen(Truncated))
         {
-            apply.accept(safeCommand, command);
+            CommandStore unsafeStore = safeStore.commandStore();
+            Command.Executed executed = command.asExecuted();
+            Participants<?> executes = executed.participants().stillExecutes();
+            if (!executes.isEmpty())
+            {
+                command.writes()
+                       .apply(safeStore, executes, command.partialTxn())
+                       .invoke(() -> unsafeStore.build(txnId, ss -> {
+                           Commands.postApply(ss, txnId, -1, true);
+                       }))
+                       .begin(safeStore.agent());
+                return;
+            }
         }
+        safeCommand.update(safeStore, command, true);
     }
 }
