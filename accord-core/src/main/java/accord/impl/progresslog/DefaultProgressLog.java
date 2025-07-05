@@ -195,41 +195,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         TxnState state = null;
         Route<?> beforeRoute = before.route();
         Route<?> afterRoute = after.route();
-        if (afterRoute != null && (beforeRoute == null || force))
-        {
-            RoutingKey homeKey = afterRoute.homeKey();
-            Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
-            boolean isHome = coordinateRanges.contains(homeKey);
-            state = get(txnId);
-            if (isHome)
-            {
-                if (state == null)
-                    state = insert(txnId);
-
-                if (after.durability().isDurableOrInvalidated())
-                {
-                    state.setHomeDoneAndMaybeRemove(this);
-                    state = maybeFetch(safeStore, txnId, after, state);
-                }
-                else
-                {
-                    state.set(safeStore, this, Undecided, Queued);
-                }
-            }
-            else if (state != null)
-            {
-                // not home shard
-                state.setHomeDone(this);
-            }
-        }
-        else if (after.durability().isDurableOrInvalidated() && (force || !before.durability().isDurableOrInvalidated()))
-        {
-            state = get(txnId);
-            if (state != null)
-                state.setHomeDoneAndMaybeRemove(this);
-
-            state = maybeFetch(safeStore, txnId, after, state);
-        }
+        if (force || (afterRoute != null && beforeRoute == null) || (after.durability().isDurableOrInvalidated() && !before.durability().isDurableOrInvalidated()))
+            state = updateHomeState(safeStore, after, get(txnId));
 
         SaveStatus beforeSaveStatus = before.saveStatus();
         SaveStatus afterSaveStatus = after.saveStatus();
@@ -260,7 +227,51 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
     }
 
-    private TxnState maybeFetch(SafeCommandStore safeStore, TxnId txnId, Command after, TxnState state)
+    private TxnState updateHomeState(SafeCommandStore safeStore, Command after, @Nullable TxnState state)
+    {
+        Route<?> route = after.route();
+        if (after.durability().isDurableOrInvalidated())
+        {
+            // command is durable, so we don't need to coordinate it - whether we're the home shard or not
+            if (state != null)
+                state.setHomeDone(this);
+
+            // ... and we should be able to fetch its outcome if we need it
+            state = maybeFetch(safeStore, after, state);
+
+            if (state != null && state.maybeRemove(this))
+                state = null;
+
+            return state;
+        }
+
+        if (route == null)
+            return state; // we don't know if we're the home shard
+
+        TxnId txnId = after.txnId();
+        RoutingKey homeKey = route.homeKey();
+        Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
+        boolean isHome = coordinateRanges.contains(homeKey);
+        state = get(txnId);
+        if (isHome)
+        {
+            if (state == null)
+                state = insert(txnId);
+
+            Invariants.require(!after.durability().isDurableOrInvalidated());
+            if (!state.isHomeInitialised())
+                state.set(safeStore, this, Undecided, Queued); // initialise
+        }
+        else if (state != null)
+        {
+            // not home shard
+            state.setHomeDone(this);
+        }
+
+        return state;
+    }
+
+    private TxnState maybeFetch(SafeCommandStore safeStore, Command after, TxnState state)
     {
         if (after.hasBeen(PreApplied))
             return state;
@@ -273,7 +284,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         {
             // this command should be ready to apply locally, so fetch it
             if (state == null)
-                state = insert(txnId);
+                state = insert(after.txnId());
             state.waiting().setBlockedUntil(safeStore, this, CanApply);
         }
         return state;
@@ -388,6 +399,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (!blockedBy.txnId().isVisible())
             return;
 
+
         Command command = blockedBy.current();
         if (command == null) command = uninitialised(blockedBy.txnId());
         SaveStatus saveStatus = command.saveStatus();
@@ -419,7 +431,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (blockedOnStoreParticipants != null) updatedParticipants = updatedParticipants.supplementOrMerge(saveStatus, blockedOnStoreParticipants);
         if (blockedOnStoreParticipants2 != null) updatedParticipants = updatedParticipants.supplementOrMerge(saveStatus, blockedOnStoreParticipants2);
         if (participants != updatedParticipants)
-            update = update.updateParticipants(updatedParticipants);
+            update = command.updateParticipants(updatedParticipants);
 
         if (update != command)
             command = blockedBy.incidentalUpdate(update);
@@ -438,6 +450,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         //                             later topology that wasn't covered by its coordination
         TxnState state = ensure(blockedBy.txnId());
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
+        // in case progress log hasn't been updated (e.g. bug on replay), force an update to the command's state since we're about to wait on it
+        if (!state.isHomeInitialised() && command.route() != null)
+            updateHomeState(safeStore, command, state);
     }
 
     @Override

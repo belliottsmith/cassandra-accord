@@ -49,13 +49,13 @@ import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
-import accord.api.Write;
 import accord.impl.progresslog.DefaultProgressLog;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.CommandSummaries;
+import accord.local.Commands;
 import accord.local.KeyHistory;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
@@ -84,7 +84,6 @@ import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncResult;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
@@ -1169,46 +1168,42 @@ public abstract class InMemoryCommandStore extends CommandStore
             return txnId;
         }
 
-        private AsyncChain<Command> load(Command command)
+        protected TxnId loadInternal(Command command, SafeCommandStore safeStore)
+        {
+            TxnId txnId = command.txnId();
+            Cleanup cleanup = Cleanup.shouldCleanup(FULL, safeStore, command, command.participants());
+            if (cleanup != Cleanup.NO)
+                command = Commands.purge(safeStore, command, cleanup);
+
+            safeStore.unsafeGetNoCleanup(txnId).update(safeStore, command);
+            return txnId;
+        }
+
+        private AsyncChain<TxnId> load(Command command)
         {
             return AsyncChains.success(commandStore.executeInContext(commandStore,
                                                                      context(command, ASYNC),
                                                                      (SafeCommandStore safeStore) -> loadInternal(command, safeStore)));
         }
 
-        private AsyncChain<Command> apply(Command command)
+        private AsyncChain<Void> apply(TxnId txnId)
         {
             return AsyncChains.success(commandStore.executeInContext(commandStore,
-                                                                     context(command, SYNC),
+                                                                     txnId,
                                                                      (SafeCommandStore safeStore) -> {
-                                                                         maybeApplyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
-                                                                             applyWritesSync(safeStore, safeCommand, cmd);
-                                                                         });
-                                                                         return command;
+                                                                         maybeApplyWrites(safeStore, txnId);
+                                                                         return null;
                                                                      }));
         }
 
-        private void applyWritesSync(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
-        {
-            Command.Executed executed = command.asExecuted();
-            Participants<?> executes = executed.participants().stillExecutes();
-            if (!executes.isEmpty())
-            {
-                AsyncResult<Void> result = command.writes().apply(Write.InMemoryWrite::applySync, safeStore.commandStore(), executes, command.partialTxn()).beginAsResult();
-                Invariants.require(result.isDone());
-                safeCommand.applied(safeStore);
-                safeStore.notifyListeners(safeCommand, command);
-            }
-        }
-
         @Override
-        public AsyncChain<Command> load(TxnId txnId)
+        public AsyncChain<Void> load(TxnId txnId)
         {
             // TODO (required): consider this race condition some more:
             //      - can we avoid double-applying?
             //      - is this definitely safe?
             if (commandStore.hasCommand(txnId))
-                return apply(commandStore.command(txnId).value());
+                return apply(txnId);
 
             Command command = commandStore.journal.loadCommand(commandStore.id, txnId, commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
             if (command == null)

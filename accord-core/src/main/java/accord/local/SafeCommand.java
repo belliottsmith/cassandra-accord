@@ -64,7 +64,7 @@ public abstract class SafeCommand
         return update(safeStore, update, false);
     }
 
-    private <C extends Command> C update(SafeCommandStore safeStore, C update, boolean force)
+    public <C extends Command> C update(SafeCommandStore safeStore, C update, boolean force)
     {
         Command prev = current();
         if (prev == update)

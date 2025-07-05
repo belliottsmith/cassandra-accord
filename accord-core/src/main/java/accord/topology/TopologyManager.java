@@ -193,24 +193,28 @@ public class TopologyManager
             }
         }
 
-        boolean recordClosed(Ranges ranges)
+        // returns those ranges that weren't already closed, so that they can be propagated to lower epochs
+        Ranges recordClosed(Ranges ranges)
         {
-            if (closed.containsAll(ranges))
-                return false;
+            ranges = ranges.without(closed);
+            if (ranges.isEmpty())
+                return ranges;
             closed = closed.union(MERGE_ADJACENT, ranges);
             Invariants.require(closed.mergeTouching() == closed);
-            return true;
+            return ranges.without(addedRanges);
         }
 
-        boolean recordRetired(Ranges ranges)
+        // returns those ranges that weren't already retired, so that they can be propagated to lower epochs
+        Ranges recordRetired(Ranges ranges)
         {
-            if (retired.containsAll(ranges))
-                return false;
+            ranges = ranges.without(retired);
+            if (ranges.isEmpty())
+                return ranges;
             closed = closed.union(MERGE_ADJACENT, ranges);
             retired = retired.union(MERGE_ADJACENT, ranges);
             Invariants.require(closed.mergeTouching() == closed);
             Invariants.require(retired.mergeTouching() == retired);
-            return true;
+            return ranges.without(addedRanges);
         }
 
         Topology global()
@@ -434,7 +438,9 @@ public class TopologyManager
                 Invariants.require(epoch < minEpoch(), "Could not find epoch %d. Min: %d, current: %d", epoch, minEpoch(), currentEpoch);
                 return; // notification came for an already truncated epoch
             }
-            while (epochs[i].recordClosed(ranges) && ++i < epochs.length) {}
+
+            while (!ranges.isEmpty() && i < epochs.length)
+                ranges = epochs[i++].recordClosed(ranges);
         }
 
         /**
@@ -458,8 +464,8 @@ public class TopologyManager
                     return;
             }
 
-            for (int i = retiredIdx; i < epochs.length; i++)
-                epochs[i].recordRetired(ranges);
+            for (int i = retiredIdx; !ranges.isEmpty() && i < epochs.length; i++)
+                ranges = epochs[i].recordRetired(ranges);
         }
 
         private Notifications pending(long epoch)
