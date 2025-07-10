@@ -418,7 +418,7 @@ public class TopologyManager
          * Mark the epoch as "closed" for the provided ranges; this means that no new transactions
          * that intersect with this range may be proposed in the epoch (they will be rejected).
          */
-        public void epochClosed(Ranges ranges, long epoch)
+        public Ranges epochClosed(Ranges ranges, long epoch)
         {
             Invariants.requireArgument(epoch > 0);
             int i;
@@ -436,18 +436,20 @@ public class TopologyManager
             if (i == -1)
             {
                 Invariants.require(epoch < minEpoch(), "Could not find epoch %d. Min: %d, current: %d", epoch, minEpoch(), currentEpoch);
-                return; // notification came for an already truncated epoch
+                return Ranges.EMPTY; // notification came for an already truncated epoch
             }
 
+            Ranges report = ranges = epochs[i++].recordClosed(ranges);
             while (!ranges.isEmpty() && i < epochs.length)
                 ranges = epochs[i++].recordClosed(ranges);
+            return report;
         }
 
         /**
          * Mark the epoch as "retired" for the provided ranges; this means that all transactions that can be
          * proposed for this epoch have now been executed globally.
          */
-        public void epochRetired(Ranges ranges, long epoch)
+        public Ranges epochRetired(Ranges ranges, long epoch)
         {
             Invariants.requireArgument(epoch > 0);
             int retiredIdx;
@@ -461,11 +463,14 @@ public class TopologyManager
             {
                 retiredIdx = indexOf(epoch);
                 if (retiredIdx < 0)
-                    return;
+                    return Ranges.EMPTY;
             }
 
-            for (int i = retiredIdx; !ranges.isEmpty() && i < epochs.length; i++)
-                ranges = epochs[i].recordRetired(ranges);
+            int i = retiredIdx;
+            Ranges report = ranges = epochs[i++].recordRetired(ranges);
+            while (!ranges.isEmpty() && i < epochs.length)
+                ranges = epochs[i++].recordRetired(ranges);
+            return report;
         }
 
         private Notifications pending(long epoch)
@@ -1557,7 +1562,7 @@ public class TopologyManager
         }
     }
 
-    public interface Collectors<C, K, T>
+    interface Collectors<C, K, T>
     {
         C allocate(int size);
         C update(C collector, EpochState epoch, K select, boolean permitMissing);

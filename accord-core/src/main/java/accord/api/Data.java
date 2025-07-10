@@ -42,6 +42,12 @@ public interface Data
         {
             return this;
         }
+
+        @Override
+        public boolean validateReply(TxnId txnId, Timestamp executeAt, boolean futureReadPossible)
+        {
+            return true;
+        }
     };
 
     /**
