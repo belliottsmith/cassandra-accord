@@ -1793,4 +1793,36 @@ public class SortedArrays
         values[i] = values[j];
         values[j] = t;
     }
+
+    public static <T extends Comparable<? super T>> SimpleBitSet toSimpleBitSet(SortedArrays.SortedArrayList<T> superset,
+                                                                                SortedArrays.SortedArrayList<T> subset)
+    {
+        SimpleBitSet bitSet = new SimpleBitSet(superset.size());
+        int subsetIndex = 0;
+        for (int i = 0; i < superset.size(); i++)
+        {
+            long ri = SortedArrays.findNextIntersection(superset.array, i, subset.array, subsetIndex);
+            if (ri < 0)
+                break;
+            i = (int) (ri);
+            subsetIndex = (int) (ri >>> 32);
+
+            bitSet.set(i);
+        }
+        Invariants.require(bitSet.getSetBitCount() <= subset.size(), "Generated bit set is larger than the subset!");
+        return bitSet;
+    }
+
+    public static <T extends Comparable<? super T>> SortedArrays.SortedArrayList<T> fromSimpleBitSet(SortedArrays.SortedArrayList<T> superset,
+                                                                                                     SimpleBitSet bitSet,
+                                                                                                     IntFunction<T[]> alloc)
+    {
+        SortedArrays.SortedArrayList.Builder<T> builder = new SortedArrays.SortedArrayList.Builder<>(alloc.apply(bitSet.getSetBitCount()));
+        for (int i = bitSet.firstSetBit(); i >= 0 ; i = bitSet.nextSetBit(i + 1))
+        {
+            if (bitSet.get(i))
+                builder.add(superset.get(i));
+        }
+        return builder.build();
+    }
 }
