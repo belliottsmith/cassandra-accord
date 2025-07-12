@@ -376,9 +376,9 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         long lastAcked = epochs.lastAcknowledged();
         if (lastAcked == 0 && lastReceived > 0)
         {
-            logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), epochs.minEpoch(), executor());
+            logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), epochs.minEpoch());
             epochs.acknowledgeFuture(epochs.minEpoch())
-                  .invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync))
+                  .invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync), executor())
                   .begin(agent);
             return;
         }

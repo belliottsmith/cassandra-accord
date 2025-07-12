@@ -90,7 +90,6 @@ import org.agrona.collections.ObjectHashSet;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.KeyHistory.ASYNC;
 import static accord.local.KeyHistory.NONE;
-import static accord.local.KeyHistory.SYNC;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
@@ -1191,7 +1190,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             return AsyncChains.success(commandStore.executeInContext(commandStore,
                                                                      txnId,
                                                                      (SafeCommandStore safeStore) -> {
-                                                                         maybeApplyWrites(safeStore, txnId);
+                                                                         initialiseState(safeStore, txnId);
                                                                          return null;
                                                                      }));
         }

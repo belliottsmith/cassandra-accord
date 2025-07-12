@@ -20,6 +20,9 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
+import accord.api.Tracing;
 import accord.local.Command;
 import accord.local.CommandStores.StoreFinder;
 import accord.local.CommandStores.StoreSelector;
@@ -111,8 +114,9 @@ public class Infer
         final Participants<?> participants;
         final T param;
         final BiConsumer<T, Throwable> callback;
+        final Tracing tracing;
 
-        private CleanupAndCallback(Node node, TxnId txnId, StoreSelector reportTo, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
+        private CleanupAndCallback(Node node, TxnId txnId, StoreSelector reportTo, Participants<?> participants, T param, BiConsumer<T, Throwable> callback, Tracing tracing)
         {
             this.node = node;
             this.txnId = txnId;
@@ -120,6 +124,7 @@ public class Infer
             this.participants = participants;
             this.param = param;
             this.callback = callback;
+            this.tracing = tracing;
         }
 
         void start()
@@ -152,19 +157,19 @@ public class Infer
 
     static class InvalidateAndCallback<T> extends CleanupAndCallback<T>
     {
-        private InvalidateAndCallback(Node node, TxnId txnId, StoreSelector selector, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
+        private InvalidateAndCallback(Node node, TxnId txnId, StoreSelector selector, Participants<?> participants, T param, BiConsumer<T, Throwable> callback, @Nullable Tracing tracing)
         {
-            super(node, txnId, selector, participants, param, callback);
+            super(node, txnId, selector, participants, param, callback, tracing);
         }
 
-        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
+        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, long lowEpoch, long highEpoch, Participants<?> participants, T param, BiConsumer<T, Throwable> callback, @Nullable Tracing tracing)
         {
-            new InvalidateAndCallback<>(node, txnId, StoreFinder.selector(participants, lowEpoch, highEpoch), participants, param, callback).start();
+            new InvalidateAndCallback<>(node, txnId, StoreFinder.selector(participants, lowEpoch, highEpoch), participants, param, callback, tracing).start();
         }
 
-        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, StoreSelector selector, Participants<?> participants, T param, BiConsumer<T, Throwable> callback)
+        public static <T> void locallyInvalidateAndCallback(Node node, TxnId txnId, StoreSelector selector, Participants<?> participants, T param, BiConsumer<T, Throwable> callback, @Nullable Tracing tracing)
         {
-            new InvalidateAndCallback<>(node, txnId, selector, participants, param, callback).start();
+            new InvalidateAndCallback<>(node, txnId, selector, participants, param, callback, tracing).start();
         }
 
         @Override
@@ -172,6 +177,8 @@ public class Infer
         {
             // we're applying an invalidation, so the record will not be cleaned up until the whole range is truncated
             Command command = safeCommand.current();
+            if (tracing != null)
+                tracing.trace(safeStore.commandStore(), "Invalidating (from %s)", command.saveStatus());
             Invariants.require(!command.hasBeen(PreCommitted) || command.hasBeen(Status.Truncated), "Unexpected status for %s", command);
             Commands.commitInvalidate(safeStore, safeCommand, participants);
             return null;

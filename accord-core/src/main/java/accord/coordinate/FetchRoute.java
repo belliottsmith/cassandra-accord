@@ -20,6 +20,9 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
+import accord.api.Tracing;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.SafeCommand;
@@ -33,6 +36,7 @@ import accord.primitives.Route;
 import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 
+import static accord.api.TraceEventType.FETCH;
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.local.CommandStores.*;
@@ -46,28 +50,31 @@ public class FetchRoute extends CheckShards<Participants<?>>
 {
     final LatentStoreSelector reportTo;
     final BiConsumer<Route<?>, Throwable> callback;
-    FetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
+
+    FetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback, @Nullable Tracing tracing)
     {
-        super(node, node.someSequentialExecutor(), txnId, contactable, IncludeInfo.Route, null, invalidIf);
+        super(node, node.someSequentialExecutor(), txnId, contactable, txnId.epoch(), IncludeInfo.Route, null, invalidIf, tracing);
         this.reportTo = reportTo;
         this.callback = callback;
     }
 
-    public static void fetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> unseekables, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
+    public static void fetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> unseekables, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback, Tracing tracing)
     {
         if (!node.topology().hasEpoch(txnId.epoch()))
         {
-            node.withEpochAtLeast(txnId.epoch(), null, callback, () -> fetchRoute(node, txnId, invalidIf, unseekables, reportTo, callback));
+            if (tracing != null)
+                tracing.trace(null, "Waiting for epoch %d", txnId.epoch());
+            node.withEpochAtLeast(txnId.epoch(), null, callback, () -> fetchRoute(node, txnId, invalidIf, unseekables, reportTo, callback, tracing));
             return;
         }
 
-        FetchRoute fetchRoute = new FetchRoute(node, txnId, invalidIf, unseekables, reportTo, callback);
+        FetchRoute fetchRoute = new FetchRoute(node, txnId, invalidIf, unseekables, reportTo, callback, tracing);
         fetchRoute.start();
     }
 
     public static void fetchRoute(Node node, TxnId txnId, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
     {
-        fetchRoute(node, txnId, NotKnownToBeInvalid, contactable, reportTo, callback);
+        fetchRoute(node, txnId, NotKnownToBeInvalid, contactable, reportTo, callback, node.agent().trace(txnId, FETCH));
     }
 
     @Override
@@ -88,7 +95,7 @@ public class FetchRoute extends CheckShards<Participants<?>>
                 Known known = Nothing;
                 if (merged != null)
                     known = merged.finish(query, query, query, success.withQuorum, previouslyKnownToBeInvalidIf).knownFor(txnId, query, query);
-                reportRouteNotFound(node, success.withQuorum, known, txnId, query, reportTo, callback);
+                reportRouteNotFound(node, success.withQuorum, known, txnId, query, reportTo, callback, tracing);
             }
             else
             {
@@ -120,13 +127,16 @@ public class FetchRoute extends CheckShards<Participants<?>>
         }
     }
 
-    private static void reportRouteNotFound(Node node, WithQuorum withQuorum, Known found, TxnId txnId, Participants<?> participants, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
+    private static void reportRouteNotFound(Node node, WithQuorum withQuorum, Known found, TxnId txnId, Participants<?> participants, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback, @Nullable Tracing tracing)
     {
         switch (found.outcome())
         {
             default: throw new AssertionError("Unknown outcome: " + found.outcome());
             case Abort:
-                locallyInvalidateAndCallback(node, txnId, reportTo.refine(txnId, null, participants), participants, null, callback);
+                if (tracing != null)
+                    tracing.trace(null, "No Route. Found %s; invalidating", found);
+
+                locallyInvalidateAndCallback(node, txnId, reportTo.refine(txnId, null, participants), participants, null, callback, tracing);
                 break;
 
             case Unknown:
@@ -134,6 +144,10 @@ public class FetchRoute extends CheckShards<Participants<?>>
                 {
                     Invalidate.invalidate(node, txnId, participants, false, reportTo, (outcome, throwable) -> callback.accept(null, throwable));
                     break;
+                }
+                else if (tracing != null)
+                {
+                    tracing.trace(null, "No Route. Found %s; cannot invalidate (%s, %s)", found, withQuorum, found.canProposeInvalidation());
                 }
             case Erased:
             case WasApply:

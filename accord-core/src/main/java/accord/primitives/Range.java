@@ -489,5 +489,4 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     {
         return (startInclusive() ? "[" : "(") + start().printableSuffix() + "," + end().printableSuffix() + (endInclusive() ? ']' : ')');
     }
-
 }

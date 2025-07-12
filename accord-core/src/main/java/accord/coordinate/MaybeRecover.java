@@ -135,7 +135,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
                 case Abort:
                     commitInvalidate(node, txnId, Route.merge(full.route, (Route) query), txnId.epoch());
-                    locallyInvalidateAndCallback(node, txnId, txnId.epoch(), txnId.epoch(), someRoute, full.toProgressToken(), callback);
+                    locallyInvalidateAndCallback(node, txnId, txnId.epoch(), txnId.epoch(), someRoute, full.toProgressToken(), callback, null);
                     break;
             }
         }

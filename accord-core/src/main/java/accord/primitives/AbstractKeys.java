@@ -20,12 +20,15 @@ package accord.primitives;
 
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers.ObjectBuffers;
@@ -172,9 +175,45 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     @Override
     public String toString()
     {
-        return stream().map(Object::toString).collect(Collectors.joining(",", "[", "]"));
+        return toString("", null);
     }
 
+    protected String toString(String suffix, @Nullable Function<? super K, String> keySuffixes)
+    {
+        if (isEmpty() && suffix.isEmpty())
+            return "[]";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append('[');
+        int i = 0;
+        while (i < keys.length)
+        {
+            if (i > 0) sb.append(", ");
+            Object prefix = keys[i].prefix();
+            int j = i + 1;
+            while (j < keys.length && Objects.equals(prefix, keys[j].prefix()))
+                ++j;
+            if (prefix != null)
+            {
+                sb.append(prefix);
+                sb.append(':');
+                sb.append('[');
+            }
+            while (i < j)
+            {
+                K key = keys[i++];
+                sb.append(key.printableSuffix());
+                if (keySuffixes != null)
+                    sb.append(keySuffixes.apply(key));
+                if (i < j) sb.append(',');
+            }
+            if (prefix != null)
+                sb.append(']');
+        }
+        sb.append(suffix);
+        sb.append(']');
+        return sb.toString();
+    }
 
     // TODO (expected, efficiency): accept cached buffers
     protected K[] slice(AbstractRanges ranges, IntFunction<K[]> factory)

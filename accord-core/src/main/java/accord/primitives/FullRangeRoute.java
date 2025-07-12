@@ -62,11 +62,4 @@ public class FullRangeRoute extends RangeRoute implements FullRoute<Range>
     {
         return this;
     }
-
-    @Override
-    public String toString()
-    {
-        return "{homeKey:" + homeKey + ',' + super.toString() + '}';
-    }
-
 }

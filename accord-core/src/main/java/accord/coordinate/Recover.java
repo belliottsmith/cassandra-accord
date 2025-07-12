@@ -530,7 +530,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             Commit.Invalidate.commitInvalidate(node, txnId, route, invalidateUntil);
         });
         isDone = true;
-        locallyInvalidateAndCallback(node, txnId, reportTo.refine(txnId, null, route), route, ProgressToken.INVALIDATED, callback);
+        locallyInvalidateAndCallback(node, txnId, reportTo.refine(txnId, null, route), route, ProgressToken.INVALIDATED, callback, null);
     }
 
     private void propose(Accept.Kind kind, Timestamp executeAt, List<RecoverOk> recoverOkList)
