@@ -18,6 +18,8 @@
 
 package accord.primitives;
 
+import java.util.Objects;
+
 import accord.utils.Invariants;
 
 import accord.api.RoutingKey;
@@ -163,5 +165,12 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
     private KeyRoute select(RoutingKey[] newKeys)
     {
         return newKeys == keys ? this : new PartialKeyRoute(homeKey, newKeys);
+    }
+
+    @Override
+    public String toString()
+    {
+        boolean containsHomeKey = containsHomeKey();
+        return toString(containsHomeKey ? "" : "(homeKey:" + homeKey + ')', containsHomeKey ? test -> test.equals(homeKey) ? "*" : "" : null);
     }
 }

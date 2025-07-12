@@ -185,4 +185,9 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
         return super.equals(that) && homeKey.equals(((RangeRoute)that).homeKey);
     }
 
+    @Override
+    public String toString()
+    {
+        return "{homeKey:" + homeKey + ',' + super.toString() + '}';
+    }
 }

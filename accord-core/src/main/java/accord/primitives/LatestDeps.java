@@ -20,6 +20,7 @@ package accord.primitives;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -269,6 +270,19 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             return known + "," + ballot
                    + (localDeps == null ? "" : ",local:" + localDeps.keyDeps.toBriefString() + "/" + localDeps.rangeDeps.toBriefString())
                    + (coordinatedDeps == null ? "" : ",coordinated:" + coordinatedDeps.keyDeps.toBriefString() + "/" + coordinatedDeps.rangeDeps.toBriefString());
+        }
+
+        @Override
+        public boolean equals(Object obj)
+        {
+            if (!(obj instanceof LatestEntry))
+                return false;
+
+            LatestEntry that = (LatestEntry) obj;
+            return this.known == that.known
+                   && Objects.equals(this.ballot, that.ballot)
+                   && Objects.equals(this.localDeps, that.localDeps)
+                   && Objects.equals(this.coordinatedDeps, that.coordinatedDeps);
         }
     }
 
