@@ -17,13 +17,25 @@
  */
 package accord.local;
 
-import accord.api.RoutingKey;
-import accord.primitives.Routables;
-import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
-import accord.utils.BTreeReducingRangeMap;
+import javax.annotation.Nullable;
 
-public class MaxDecidedRX extends BTreeReducingRangeMap<TxnId>
+import accord.api.RoutingKey;
+import accord.api.VisibleForImplementation;
+import accord.primitives.Range;
+import accord.primitives.Ranges;
+import accord.primitives.Routable.Domain;
+import accord.primitives.Routables;
+import accord.primitives.Txn;
+import accord.primitives.TxnId;
+import accord.primitives.Unseekable;
+import accord.primitives.Unseekables;
+import accord.utils.Invariants;
+import accord.utils.ReducingRangeMap;
+
+import static accord.primitives.TxnId.maxIfNull;
+import static accord.primitives.TxnId.noneIfNull;
+
+public class MaxDecidedRX extends ReducingRangeMap<TxnId>
 {
     public static final MaxDecidedRX EMPTY = new MaxDecidedRX();
 
@@ -32,25 +44,81 @@ public class MaxDecidedRX extends BTreeReducingRangeMap<TxnId>
         super();
     }
 
-    private MaxDecidedRX(boolean inclusiveEnds, Object[] tree)
+    private MaxDecidedRX(boolean inclusiveEnds, RoutingKey[] starts, TxnId[] values)
     {
-        super(inclusiveEnds, tree);
+        super(inclusiveEnds, starts, values);
     }
 
-    TxnId get(Routables<?> keysOrRanges)
+    TxnId min(Routables<?> keysOrRanges)
     {
-        return foldl(keysOrRanges, TxnId::max, TxnId.NONE);
+        return noneIfNull(foldlWithDefault(keysOrRanges, TxnId::nonNullOrMin, null, TxnId.NONE));
+    }
+
+    TxnId max(Routables<?> keysOrRanges)
+    {
+        return maxIfNull(foldlWithDefault(keysOrRanges, TxnId::nonNullOrMax, null, TxnId.MAX));
+    }
+
+    TxnId min(Range range)
+    {
+        return noneIfNull(foldlWithDefault(Ranges.of(range), TxnId::nonNullOrMin, null, TxnId.NONE));
+    }
+
+    TxnId max(Range range)
+    {
+        return maxIfNull(foldlWithDefault(Ranges.of(range), TxnId::nonNullOrMax, null, TxnId.MAX));
+    }
+
+    public @Nullable TxnId minDecidedDependencyId(Unseekables<?> keysOrRanges, TxnId txnId)
+    {
+        Invariants.require(txnId.is(Txn.Kind.ExclusiveSyncPoint));
+        // first check max, as if this is later we don't know that we can safely filter
+        TxnId maxDecidedId = max(keysOrRanges);
+        if (maxDecidedId.compareTo(txnId) < 0)
+            return min(keysOrRanges);
+        return null;
+    }
+
+    @VisibleForImplementation
+    public @Nullable TxnId minDecidedDependencyId(Unseekable keyOrRange, TxnId txnId)
+    {
+        Invariants.require(txnId.is(Txn.Kind.ExclusiveSyncPoint));
+        if (keyOrRange.domain() == Domain.Key)
+        {
+            TxnId minMaxDecidedId = get((RoutingKey) keyOrRange);
+            if (minMaxDecidedId.compareTo(txnId) < 0)
+                return minMaxDecidedId;
+        }
+        else
+        {
+            // first check max, as if this is later we don't know that we can safely filter
+            Range range = (Range) keyOrRange;
+            TxnId maxDecidedId = max(range);
+            if (maxDecidedId.compareTo(txnId) < 0)
+                return min(range);
+        }
+        return null;
+    }
+
+    @VisibleForImplementation
+    public static @Nullable TxnId minDecidedDependencyId(MaxDecidedRX maxDecidedRX, Unseekables<?> keysOrRanges, TxnId txnId)
+    {
+        return maxDecidedRX == null ? null : maxDecidedRX.minDecidedDependencyId(keysOrRanges, txnId);
+    }
+
+    public TxnId get(RoutingKey key)
+    {
+        return TxnId.noneIfNull(super.get(key));
     }
 
     public MaxDecidedRX update(Unseekables<?> keysOrRanges, TxnId maxId)
     {
-        // note: we use mergeMax to ensure we take the maximum epoch and hlc independently from any conflict
-        //  this is particularly essential for propagating unique HLCs, so that bootstrap recipients don't
-        //  begin serving reads too early
-        return update(this, keysOrRanges, maxId, TxnId::max, MaxDecidedRX::new, Builder::new);
+        if (keysOrRanges.isEmpty())
+            return this;
+        return merge(this, create(keysOrRanges, maxId, Builder::new), TxnId::max, Builder::new);
     }
 
-    private static class Builder extends AbstractBoundariesBuilder<RoutingKey, TxnId, MaxDecidedRX>
+    static class Builder extends AbstractBoundariesBuilder<RoutingKey, TxnId, MaxDecidedRX>
     {
         protected Builder(boolean inclusiveEnds, int capacity)
         {
@@ -58,9 +126,10 @@ public class MaxDecidedRX extends BTreeReducingRangeMap<TxnId>
         }
 
         @Override
-        protected MaxDecidedRX buildInternal(Object[] tree)
+        protected MaxDecidedRX buildInternal()
         {
-            return new MaxDecidedRX(inclusiveEnds, tree);
+            return new MaxDecidedRX(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new TxnId[0]));
         }
     }
+
 }

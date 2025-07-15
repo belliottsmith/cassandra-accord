@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import accord.api.TraceEventType;
 import accord.coordinate.tracking.InvalidationTracker;
 import accord.coordinate.tracking.InvalidationTracker.InvalidationShardTracker;
 import accord.coordinate.tracking.RequestStatus;
@@ -42,6 +43,7 @@ import accord.utils.UnhandledEnum;
 
 import javax.annotation.Nullable;
 
+import static accord.api.TraceEventType.RECOVER;
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
 import static accord.primitives.Status.AcceptedMedium;
@@ -219,7 +221,8 @@ public class Invalidate implements Callback<InvalidateReply>
                         if (!invalidateWith.containsAll(fullRoute))
                             witnessedByInvalidation = null;
                     }
-                    RecoverWithRoute.recover(node, executor, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportTo, callback);
+                    RecoverWithRoute.recover(node, executor, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportTo, callback,
+                                             node.agent().trace(txnId, RECOVER));
                     return;
 
                 case Invalidated:

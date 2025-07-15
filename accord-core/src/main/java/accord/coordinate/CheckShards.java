@@ -60,7 +60,11 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
     {
         this(node, executor, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf);
-        Invariants.require(txnId.isVisible());
+    }
+
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, @Nullable Tracing tracing)
+    {
+        this(node, executor, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf, tracing);
     }
 
     protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
@@ -77,6 +81,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
         this.bumpBallot = bumpBallot;
         this.previouslyKnownToBeInvalidIf = previouslyKnownToBeInvalidIf;
         this.tracing = tracing;
+        Invariants.require(txnId.isVisible());
     }
 
     private static Topologies topologyFor(Node node, TxnId txnId, Unseekables<?> contact, long epoch)

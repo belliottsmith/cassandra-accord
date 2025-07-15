@@ -100,6 +100,9 @@ public class ListRead implements Read
     @Override
     public AsyncChain<Data> readDirect(CommandStore unsafeStore, Seekable key, Timestamp executeAt)
     {
+        if (key == null)
+            return AsyncChains.success(new ListData());
+        
         ListStore s = (ListStore)unsafeStore.unsafeGetDataStore();
         logger.trace("submitting READ on {} at {} key:{}", unsafeStore.node(), executeAt, key);
         return executor.apply(unsafeStore).build(() -> {

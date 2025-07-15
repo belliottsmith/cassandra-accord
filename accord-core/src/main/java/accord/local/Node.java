@@ -56,6 +56,7 @@ import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.api.Timeouts;
 import accord.api.TopologySorter;
+import accord.api.Tracing;
 import accord.coordinate.CoordinateEphemeralRead;
 import accord.coordinate.CoordinateTransaction;
 import accord.coordinate.CoordinationAdapter;
@@ -883,7 +884,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, StoreSelector reportTo)
+    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, StoreSelector reportTo, @Nullable Tracing tracing)
     {
         {
             AsyncResult<? extends Outcome> result = coordinating.get(txnId);
@@ -894,7 +895,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         SequentialAsyncExecutor executor = someSequentialExecutor();
         AsyncResult<Outcome> result = withEpochExact(txnId.epoch(), executor, () -> {
             RecoverFuture<Outcome> future = new RecoverFuture<>();
-            RecoverWithRoute.recover(this, executor, txnId, invalidIf, route, null, reportTo, future);
+            RecoverWithRoute.recover(this, executor, txnId, invalidIf, route, null, reportTo, future, tracing);
             return future;
         }).beginAsResult();
         coordinating.putIfAbsent(txnId, result);

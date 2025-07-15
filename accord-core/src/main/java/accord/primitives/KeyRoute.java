@@ -18,8 +18,6 @@
 
 package accord.primitives;
 
-import java.util.Objects;
-
 import accord.utils.Invariants;
 
 import accord.api.RoutingKey;

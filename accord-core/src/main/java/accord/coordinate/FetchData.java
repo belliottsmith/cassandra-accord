@@ -193,7 +193,7 @@ public class FetchData extends CheckShards<Route<?>>
         if (failure != null)
         {
             if (tracing != null)
-                tracing.trace(null, "%s completed with failure %s", getClass().getSimpleName(), failure);
+                tracing.trace(null, "%s completed with failure %s", getClass().getSimpleName(), Tracing.format(failure));
             callback.accept(null, failure);
         }
         else

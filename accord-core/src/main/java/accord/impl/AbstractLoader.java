@@ -50,8 +50,7 @@ public abstract class AbstractLoader implements Journal.Loader
             if (command.txnId().is(Write))
             {
                 CommandStore unsafeStore = safeStore.commandStore();
-                Command.Executed executed = command.asExecuted();
-                Participants<?> executes = executed.participants().stillExecutes();
+                Participants<?> executes = command.participants().stillExecutes();
                 if (!executes.isEmpty())
                 {
                     command.writes()

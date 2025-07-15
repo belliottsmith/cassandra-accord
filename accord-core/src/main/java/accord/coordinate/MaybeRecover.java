@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import accord.api.Tracing;
 import accord.local.CommandStores.StoreSelector;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.InformDurable;
@@ -31,6 +32,7 @@ import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.utils.UnhandledEnum;
 
+import static accord.api.TraceEventType.RECOVER;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 import static accord.primitives.WithQuorum.HasQuorum;
@@ -48,7 +50,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
     MaybeRecover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, StoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         // we only want to enquire with the home shard, but we prefer maximal route information for running Invalidation against, if necessary
-        super(node, executor, txnId, someRoute.withHomeKey(), IncludeInfo.Route, null, invalidIf);
+        super(node, executor, txnId, someRoute.withHomeKey(), IncludeInfo.Route, null, invalidIf, node.agent().trace(txnId, RECOVER));
         this.prevProgress = prevProgress;
         this.callback = callback;
         this.reportTo = reportTo;
@@ -82,12 +84,17 @@ public class MaybeRecover extends CheckShards<Route<?>>
         //  this can be helpful in mitigating flakiness and helping forward progress for large transactions spanning many shards
         if (fail != null)
         {
+            if (tracing != null)
+                tracing.trace(null, "MaybeRecover failed: " + Tracing.format(fail));
             callback.accept(null, fail);
         }
         else
         {
             Invariants.require(merged != null);
             CheckStatusOk full = merged.finish(this.query, this.query, this.query, success.withQuorum, previouslyKnownToBeInvalidIf);
+            if (tracing != null)
+                tracing.trace(null, "MaybeRecover merged: " + full);
+
             Known known = full.maxKnown();
             Route<?> someRoute = full.route;
 
@@ -95,6 +102,8 @@ public class MaybeRecover extends CheckShards<Route<?>>
             {
                 default: throw new UnhandledEnum(known.outcome());
                 case Unknown:
+                {
+
                     // ErasedOrInvalidated takes Unknown, and so permits invalidation to be initiated.
                     // This might prima facie seem unsafe, as ErasedOrInvalidated might mean the command
                     // has been executed and erased, in which case it is not safe to invalidate.
@@ -106,37 +115,57 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     // TODO (expected): replicas may be stale in this case, and should detect this and stop attempting to coordinate/invalidate.
                     if (success.withQuorum == HasQuorum && known.canProposeInvalidation() && !Route.isFullRoute(full.route))
                     {
+                        if (tracing != null)
+                            tracing.trace(null, "MaybeRecover found quorum permitting invalidation: " + known);
+
                         // for correctness reasons, we have not necessarily preempted the initial pre-accept round and
                         // may have raced with it, so we must attempt to recover anything we see pre-accepted.
                         Invalidate.invalidate(node, txnId, someRoute, callback);
                         break;
                     }
+                    if (tracing != null)
+                        tracing.trace(null, "MaybeRecover found quorum of Unknown that did not permit invalidation; falling through.");
                     // fall through otherwise to recovery
-
+                }
                 case Apply:
+                {
                     // we have included the home key, and one that witnessed the definition has responded, so it should also know the full route
                     if (hasMadeProgress(full) || !Route.isFullRoute(someRoute))
                     {
+                        ProgressToken progressToken = full.toProgressToken();
+                        if (tracing != null)
+                            tracing.trace(null, "MaybeRecover found %s; reporting progress token %s", hasMadeProgress(full) ? "progress" : "no route", progressToken);
                         if (full.durability.isDurable())
                             InformDurable.informDefault(node, topologies, txnId, query, full.executeAtIfKnown(), full.durability);
                         callback.accept(full.toProgressToken(), null);
                     }
                     else
                     {
-                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportTo).invoke(callback);
+                        if (tracing != null)
+                            tracing.trace(null, "MaybeRecover invoking RecoverWithRoute");
+                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportTo, tracing).begin(callback);
                     }
                     break;
-
+                }
                 case WasApply:
                 case Erased:
+                {
                     // TODO (required): if we're home replica, don't want to cancel coordination without either invalidating or applying unless we're stale
-                    callback.accept(full.toProgressToken(), null);
+                    ProgressToken progressToken = full.toProgressToken();
+                    if (tracing != null)
+                        tracing.trace(null, "MaybeRecover found %s which cannot be recovered; reporting %s", known.outcome(), progressToken);
+                    callback.accept(progressToken, null);
                     break;
-
+                }
                 case Abort:
+                {
+                    if (tracing != null)
+                        tracing.trace(null, "MaybeRecover found Abort; invalidating locally", known.outcome());
+
                     commitInvalidate(node, txnId, Route.merge(full.route, (Route) query), txnId.epoch());
                     locallyInvalidateAndCallback(node, txnId, txnId.epoch(), txnId.epoch(), someRoute, full.toProgressToken(), callback, null);
                     break;
+                }
             }
         }
     }
