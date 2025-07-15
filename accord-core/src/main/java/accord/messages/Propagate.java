@@ -150,7 +150,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         if (full.maxKnowledgeSaveStatus.status == NotDefined && full.invalidIf == NotKnownToBeInvalid)
         {
             if (tracing != null)
-                tracing.trace(null, "Found nothing for %s", txnId);
+                tracing.trace(null, "Found nothing");
             callback.accept(new FetchResult(Nothing, queried.slice(0, 0)), null);
             return;
         }
@@ -163,7 +163,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         Route<?> route = Invariants.nonNull(full.route);
 
         if (tracing != null)
-            tracing.trace(null, "Found %s for %s", full.map, txnId);
+            tracing.trace(null, "Found %s", full.map);
 
         Timestamp committedExecuteAt = full.executeAtIfKnown();
         Propagate propagate =

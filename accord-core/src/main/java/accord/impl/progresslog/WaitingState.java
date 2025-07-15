@@ -49,7 +49,7 @@ import accord.utils.UnhandledEnum;
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.Query.HOME;
 import static accord.api.ProgressLog.BlockedUntil.Query.SHARD;
-import static accord.api.TraceEventType.PROGRESS;
+import static accord.api.TraceEventType.WAIT_PROGRESS;
 import static accord.impl.progresslog.CallbackInvoker.invokeWaitingCallback;
 import static accord.impl.progresslog.PackedKeyTracker.bitSet;
 import static accord.impl.progresslog.PackedKeyTracker.clearRoundState;
@@ -380,7 +380,7 @@ abstract class WaitingState extends BaseTxnState
 
     final void runWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
     {
-        runInternal(safeStore, safeCommand, owner, owner.node.agent().trace(txnId, PROGRESS));
+        runInternal(safeStore, safeCommand, owner, owner.node.agent().trace(txnId, WAIT_PROGRESS));
     }
 
     private void runInternal(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, @Nullable Tracing tracing)
@@ -495,7 +495,7 @@ abstract class WaitingState extends BaseTxnState
 
         Command command = safeCommand.current();
         Route<?> route = command.route();
-        Tracing tracing = owner.node.agent().trace(txnId, PROGRESS);
+        Tracing tracing = owner.node.agent().trace(txnId, WAIT_PROGRESS);
 
         if (fail == null)
         {
@@ -666,7 +666,7 @@ abstract class WaitingState extends BaseTxnState
         if ((callbackId & 1) != 1)
             return;
 
-        Tracing tracing = owner.node.agent().trace(txnId, PROGRESS);
+        Tracing tracing = owner.node.agent().trace(txnId, WAIT_PROGRESS);
         BlockedUntil blockedUntil = blockedUntil();
         if (callbackId == AWAITING_HOME_KEY_CALLBACKID)
         {

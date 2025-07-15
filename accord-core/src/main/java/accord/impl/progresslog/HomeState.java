@@ -21,6 +21,7 @@ package accord.impl.progresslog;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.api.Tracing;
 import accord.coordinate.MaybeRecover;
 import accord.coordinate.Outcome;
 import accord.local.Command;
@@ -33,6 +34,7 @@ import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
 import static accord.api.ProgressLog.BlockedUntil.CanCoordinateExecution;
+import static accord.api.TraceEventType.HOME_PROGRESS;
 import static accord.impl.progresslog.CallbackInvoker.invokeHomeCallback;
 import static accord.impl.progresslog.CoordinatePhase.Done;
 import static accord.impl.progresslog.CoordinatePhase.ReadyToExecute;
@@ -135,6 +137,7 @@ abstract class HomeState extends WaitingState
 
     final void runHome(DefaultProgressLog instance, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
+        Tracing tracing = instance.node.agent().trace(safeCommand.txnId(), HOME_PROGRESS);
         Invariants.require(!isHomeDoneOrUninitialised());
         Command command = safeCommand.current();
         // note: we may truncate locally based on shard-specific criteria, but this doesn't mean we're globally persisted
@@ -145,28 +148,41 @@ abstract class HomeState extends WaitingState
         Invariants.require(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog");
 
         ProgressToken maxProgressToken = instance.savedProgressToken(txnId).merge(command);
-
         CallbackInvoker<ProgressToken, Outcome> invoker = invokeHomeCallback(instance, txnId, maxProgressToken, HomeState::recoverCallback);
-
         CommandStores.StoreSelector reportTo = new IncludingSpecificStoreSelector(safeStore.commandStore().id());
+
+        if (tracing != null)
+            tracing.trace(safeStore.commandStore(), "Invoking MaybeRecover with progress token %s", maxProgressToken);
+
         instance.debugActive(MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, reportTo, invoker), invoker);
         set(safeStore, instance, ReadyToExecute, Querying);
     }
 
     static void recoverCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog instance, TxnId txnId, @Nullable ProgressToken prevProgressToken, Outcome success, Throwable fail)
     {
+        Tracing tracing = instance.node.agent().trace(safeCommand.txnId(), HOME_PROGRESS);
         HomeState state = instance.get(txnId);
         if (state == null)
+        {
+            if (tracing != null)
+                tracing.trace(safeStore.commandStore(), "No HomeState to process recovery callback");
             return;
+        }
 
         Command command = safeCommand.current();
-
         CoordinatePhase status = state.phase();
         if (status.isAtMostReadyToExecute() && state.homeProgress() == Querying)
         {
             if (fail != null)
             {
+                if (tracing != null)
+                {
+                    tracing.trace(safeStore.commandStore(), "Failed to recover: " + Tracing.format(fail));
+                    tracing.trace(safeStore.commandStore(), "Waiting to retry (%d) with progress token %s", state.homeRetryCounter(), prevProgressToken);
+                }
+
                 safeStore.agent().onCaughtException(fail, "Failed recovering " + state);
+
                 // re-save prior progress token
                 if (prevProgressToken != null && prevProgressToken.compareTo(command) > 0)
                     instance.saveProgressToken(command.txnId(), prevProgressToken);
@@ -181,15 +197,27 @@ abstract class HomeState extends WaitingState
 
                 if (token.durability.isDurableOrInvalidated())
                 {
+                    if (tracing != null)
+                        tracing.trace(safeStore.commandStore(), "Callback: progress token %s reports durable; marking home state done.", token);
                     state.setHomeDoneAndMaybeRemove(instance);
                 }
                 else
                 {
+                    if (tracing != null)
+                        tracing.trace(safeStore.commandStore(), "Callback: progress token %s reports not durable; saving token and scheduling retry (%d).", token, state.homeRetryCounter());
                     if (prevProgressToken != null && token.compareTo(command) > 0)
                         instance.saveProgressToken(command.txnId(), token);
+                    state.incrementHomeRetryCounter();
                     state.set(safeStore, instance, status, Queued);
                 }
             }
+        }
+        else if (tracing != null)
+        {
+            if (status == Done)
+                tracing.trace(safeStore.commandStore(), "Callback: received, but already done");
+            else
+                tracing.trace(safeStore.commandStore(), "Callback: received, but not querying");
         }
     }
 

@@ -19,5 +19,5 @@ package accord.api;
 
 public enum TraceEventType
 {
-    FETCH, PROGRESS
+    FETCH, HOME_PROGRESS, WAIT_PROGRESS, RECOVER
 }

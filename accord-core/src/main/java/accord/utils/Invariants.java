@@ -54,7 +54,7 @@ public class Invariants
     private static boolean IS_PARANOID = PARANOIA_COMPUTE > 0 || PARANOIA_MEMORY > 0;
     private static Consumer<RuntimeException> onUnexpected = System.getProperty("accord.testing", "false").equals("true")
                                                              ? fail -> { throw fail; }
-                                                             : fail -> logger.warn("Invariant failed", fail);
+                                                             : fail -> logger.error("Invariant failed", fail);
     private static final boolean DEBUG = System.getProperty("accord.debug", "false").equals("true");
 
     public static boolean isParanoid()
@@ -135,87 +135,87 @@ public class Invariants
     public static boolean expect(boolean condition)
     {
         if (!condition)
-            onUnexpected.accept(illegalState());
+            onUnexpected.accept(createIllegalState(null));
         return condition;
     }
 
     public static void expect(boolean condition, String msg)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(msg));
+            onUnexpected.accept(createIllegalState(msg));
     }
 
     public static void expect(boolean condition, String fmt, int p1)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1)));
+            onUnexpected.accept(createIllegalState(format(fmt, p1)));
     }
 
     public static void expect(boolean condition, String fmt, int p1, int p2)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1, p2)));
+            onUnexpected.accept(createIllegalState(format(fmt, p1, p2)));
     }
 
     public static void expect(boolean condition, String fmt, long p1)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1)));
+            onUnexpected.accept(createIllegalState(format(fmt, p1)));
     }
 
     public static void expect(boolean condition, String fmt, long p1, long p2)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1, p2)));
+            onUnexpected.accept(createIllegalState(format(fmt, p1, p2)));
     }
 
     public static void expect(boolean condition, String fmt, @Nullable Object p1)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1)));
+            onUnexpected.accept(createIllegalState(format(fmt, p1)));
     }
 
     public static <P> void expect(boolean condition, String fmt, @Nullable P p1, Function<? super P, ?> transformP)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, transformP.apply(p1))));
+            onUnexpected.accept(createIllegalState(format(fmt, transformP.apply(p1))));
     }
 
     public static void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1, p2)));
+            onUnexpected.accept(createIllegalState(format(fmt, p1, p2)));
     }
 
     public static <P> void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable P p2, Function<? super P, ?> transformP2)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1, transformP2.apply(p2))));
+            onUnexpected.accept(createIllegalState(format(fmt, p1, transformP2.apply(p2))));
     }
 
 
     public static void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable Object p3)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1, p2, p3)));
+            onUnexpected.accept(createIllegalState(format(fmt, p1, p2, p3)));
     }
 
     public static void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, long p3)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1, p2, p3)));
+            onUnexpected.accept(createIllegalState(format(fmt, p1, p2, p3)));
     }
 
     public static <P> void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2, @Nullable P p3, Function<? super P, Object> transformP3)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, p1, p2, transformP3.apply(p3))));
+            onUnexpected.accept(createIllegalState(format(fmt, p1, p2, transformP3.apply(p3))));
     }
 
     public static void expect(boolean condition, String fmt, Object... args)
     {
         if (!condition)
-            onUnexpected.accept(illegalState(format(fmt, args)));
+            onUnexpected.accept(createIllegalState(format(fmt, args)));
     }
 
     public static void require(boolean condition)

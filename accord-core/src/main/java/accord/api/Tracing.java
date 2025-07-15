@@ -32,4 +32,11 @@ public interface Tracing
         catch (Throwable t) { message = "Could not format \"" + fmt + "\" with " + Arrays.toString(args) + " (" + t.getLocalizedMessage() + ")"; }
         trace(store, message);
     }
+
+    static String format(Throwable failure)
+    {
+        StackTraceElement[] ste = failure.getStackTrace();
+        return failure.getClass().getSimpleName() + ":" + failure.getLocalizedMessage()
+               + (ste.length > 0 ? " (@" + ste[0].getClassName() + "." + ste[0].getMethodName() + ":" + ste[0].getLineNumber() + ")" : "");
+    }
 }

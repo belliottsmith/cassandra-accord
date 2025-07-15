@@ -502,6 +502,16 @@ public class TxnId extends Timestamp implements PreLoadContext
         return new TxnId(epochMsb(epoch), 0, Id.NONE);
     }
 
+    public static TxnId noneIfNull(TxnId id)
+    {
+        return id == null ? NONE : id;
+    }
+
+    public static TxnId maxIfNull(TxnId id)
+    {
+        return id == null ? MAX : id;
+    }
+
     private static final Pattern PARSE = Pattern.compile("\\[(?<epoch>[0-9]+),(?<hlc>[0-9]+),(?<flags>[0-9]+)\\([KR][REWSXL]\\),(?<node>[0-9]+)]");
     public static TxnId parse(String txnIdString)
     {
