@@ -34,6 +34,7 @@ public interface Pending
         {
             Invariants.require(activeOrigin == null);
             activeOrigin = newActive.origin();
+            Invariants.require(activeOrigin != null);
         }
 
         public static void clearActiveOrigin()

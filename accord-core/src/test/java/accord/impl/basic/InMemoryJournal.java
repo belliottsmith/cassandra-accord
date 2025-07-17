@@ -605,7 +605,7 @@ public class InMemoryJournal implements Journal
             Map<TxnId, List<Diff>> diffs = new TreeMap<>();
 
             InMemoryCommandStore commandStore = (InMemoryCommandStore) commandStores.forId(commandStoreId);
-            Loader loader = commandStore.loader();
+            Replayer replayer = commandStore.replayer();
 
             for (Map.Entry<TxnId, Diffs> e : diffEntry.getValue().entrySet())
                 diffs.put(e.getKey(), e.getValue().sorted(true));
@@ -614,9 +614,10 @@ public class InMemoryJournal implements Journal
             {
                 if (e.getValue().isEmpty()) continue;
 
-                AsyncResult<?> res = loader.load(e.getKey()).beginAsResult();
+                AsyncResult<?> res = replayer.replay(e.getKey()).beginAsResult();
                 AsyncChains.getUnchecked(res);
             }
+
         }
     }
 

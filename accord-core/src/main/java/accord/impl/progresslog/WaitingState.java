@@ -349,7 +349,7 @@ abstract class WaitingState extends BaseTxnState
     void setWaitingDone(DefaultProgressLog owner)
     {
         set(null, owner, CanApply, NoneExpected);
-        owner.clearActive(Waiting, txnId);
+        owner.clearPending(Waiting, txnId);
         clearWaitingRetryCounter();
     }
 
@@ -360,7 +360,7 @@ abstract class WaitingState extends BaseTxnState
         {
             clearAwaitState();
             clearWaitingRetryCounter();
-            owner.clearActive(Waiting, txnId);
+            owner.clearPending(Waiting, txnId);
             set(safeStore, owner, blockedUntil, Queued);
         }
     }
@@ -374,7 +374,7 @@ abstract class WaitingState extends BaseTxnState
             set(null, owner, isDone ? CanApply : currentlyBlockedUntil, NoneExpected);
             if (isDone)
                 maybeRemove(owner);
-            owner.clearActive(Waiting, txnId);
+            owner.clearPending(Waiting, txnId);
         }
     }
 
@@ -387,7 +387,7 @@ abstract class WaitingState extends BaseTxnState
     {
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
-        Invariants.require(!owner.hasActive(Waiting, txnId));
+        Invariants.require(!owner.hasPending(Waiting, txnId));
         Invariants.require(command.saveStatus().compareTo(blockedUntil.unblockedFrom) < 0,
                            "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.unblockedFrom, command);
         set(safeStore, owner, blockedUntil, Querying);

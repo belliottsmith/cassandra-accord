@@ -25,7 +25,10 @@ import accord.api.Read;
 import accord.api.Result;
 import accord.api.Update;
 import accord.api.Write;
+import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
@@ -33,11 +36,9 @@ import accord.primitives.Seekable;
 import accord.primitives.Seekables;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
 public class MockStore implements DataStore
@@ -159,8 +160,8 @@ public class MockStore implements DataStore
     }
 
     @Override
-    public AsyncResult<Void> snapshot(Ranges ranges, TxnId before)
+    public void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore reportOnSuccess)
     {
-        return AsyncResults.success(null);
+        commandStore.execute((PreLoadContext.Empty)() -> "Report CommandStore Durable", safeStore -> safeStore.upsertRedundantBefore(reportOnSuccess));
     }
 }

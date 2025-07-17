@@ -42,8 +42,7 @@ public class IntrusiveLinkedList<O extends IntrusiveLinkedListNode> extends Intr
 
     public void addFirst(O add)
     {
-        if (add.next != null)
-            throw new IllegalStateException();
+        Invariants.requireArgument(add.next == null);
         add(this, add, next);
     }
 

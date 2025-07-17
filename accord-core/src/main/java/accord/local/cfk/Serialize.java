@@ -478,6 +478,7 @@ public class Serialize
                 long bits = txn.status().ordinal();
                 int bitIndex = 4;
 
+                // TODO (desired): these are all single bit flags, so we could do explicit shift and mask to produce this value
                 int statusHasExecuteAt = txn.hasExecuteAt() ? 1 : 0;
                 int statusHasDeps = txn.hasDeps() ? 1 : 0;
                 int statusHasBallot = txn.hasBallot() ? 1 : 0;

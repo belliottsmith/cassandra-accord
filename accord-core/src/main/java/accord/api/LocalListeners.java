@@ -84,4 +84,9 @@ public interface LocalListeners
      * Erase all listeners for transactions with a lower {@codfe TxnId} than {@code clearBefore}.
      */
     void clearBefore(CommandStore safeStore, TxnId clearBefore);
+
+    /**
+     * Erase all listeners; used only for resetting state
+     */
+    void clear();
 }

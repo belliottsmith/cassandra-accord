@@ -194,6 +194,11 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         return values.length;
     }
 
+    public boolean isEmpty()
+    {
+        return values.length == 0;
+    }
+
     RangeIterator rangeIterator()
     {
         return new RangeIterator();
@@ -607,5 +612,10 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             return leftIsInclusive;
         else
             return rightIsInclusive;
+    }
+
+    public K[] unsafeStarts()
+    {
+        return starts;
     }
 }

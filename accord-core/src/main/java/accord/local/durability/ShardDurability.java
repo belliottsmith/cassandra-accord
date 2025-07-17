@@ -138,7 +138,7 @@ public class ShardDurability
             Invariants.require(shard == null || shard.range.equals(newShard.range));
             shard = newShard;
             ShardDistributor shardDistributor = node.commandStores().shardDistributor();
-            maxSplits = Math.min(maxNumberOfShardSplits, shardDistributor.numberOfSplitsPossible(newShard.range));
+            maxSplits = Math.min(maxShardSplits, shardDistributor.numberOfSplitsPossible(newShard.range));
             int targetSplits = Math.min(targetShardSplits, maxSplits);
             if (currentSplits == 0 || currentSplits < targetSplits)
             {
@@ -305,7 +305,7 @@ public class ShardDurability
                         sb.append(entry);
                         return sb;
                     }, new StringBuilder(), ignore -> false).toString();
-                logger.info("{}", report);
+                logger.debug("{}", report);
             }
             else if (min.equals(cycleMin))
             {
@@ -424,7 +424,7 @@ public class ShardDurability
      * In each cycle, attempt to split the range into this many pieces; if we fail, we increase the number of pieces
      */
     private int targetShardSplits = 64;
-    private int maxNumberOfShardSplits = 1 << 10;
+    private int maxShardSplits = 1 << 10;
 
     /*
      * Target for how often the entire ring should be processed in microseconds. Every node will start at an offset in the current round that is based
@@ -463,7 +463,7 @@ public class ShardDurability
 
     public void setMaxShardSplits(int maxNumberOfShardSplits)
     {
-        this.maxNumberOfShardSplits = maxNumberOfShardSplits;
+        this.maxShardSplits = maxNumberOfShardSplits;
     }
 
     public synchronized void setTargetShardSplits(int targetShardSplits)
@@ -482,8 +482,9 @@ public class ShardDurability
         scheduled = node.scheduler().recurring(this::tick, shardCycleTimeMicros / targetShardSplits, MICROSECONDS);
     }
 
-    public synchronized void reconfigure(int targetShardSplits, long newShardCycleTime, TimeUnit units)
+    public synchronized void reconfigure(int targetShardSplits, int maxShardSplits, long newShardCycleTime, TimeUnit units)
     {
+        this.maxShardSplits = maxShardSplits;
         this.targetShardSplits = BitUtil.findNextPositivePowerOfTwo(targetShardSplits);
         this.shardCycleTimeMicros = units.toMicros(newShardCycleTime);
         Invariants.require(scheduled == null);

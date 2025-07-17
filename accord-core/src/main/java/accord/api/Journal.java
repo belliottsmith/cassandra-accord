@@ -47,13 +47,20 @@ import org.agrona.collections.Int2ObjectHashMap;
  */
 public interface Journal
 {
+    enum Load
+    {
+        ALL,
+        PURGEABLE,
+        MINIMAL
+    }
+
     void start(Node node);
 
     Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     default List<? extends Supplier<CommandChange.Builder>> debugCommand(int store, TxnId txnId) { throw new UnsupportedOperationException(); }
     Command.Minimal loadMinimal(int store, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
 
-    // TODO (required): propagate exceptions (i.e. using OnDone instead of Runnable)
+    // TODO (required): propagate exceptions
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
     Iterator<? extends TopologyUpdate> replayTopologies();
@@ -163,25 +170,11 @@ public interface Journal
         }
     }
 
-    enum Load
-    {
-        ALL,
-        PURGEABLE,
-        MINIMAL
-    }
-
     /**
      * Helper for CommandStore to restore Command states.
      */
-    interface Loader
+    interface Replayer
     {
-        AsyncChain<?> load(TxnId txnId);
-    }
-
-
-    interface OnDone
-    {
-        void success();
-        void failure(Throwable t);
+        AsyncChain<?> replay(TxnId txnId);
     }
 }

@@ -62,8 +62,10 @@ import org.agrona.collections.LongHashSet;
 
 import static accord.api.ConfigurationService.EpochReady.DONE;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
-import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_DURABLE;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_APPLIED_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_DATA_STORE_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.MAJORITY_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.PRE_BOOTSTRAP_ONLY;
@@ -202,7 +204,9 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     public void restore() {};
 
-    public abstract Journal.Loader loader();
+    public abstract Journal.Replayer replayer();
+    // expected to invoke safeStore.upsertRedundantBefore at some future point, when the commandStore state is durably persisted
+    protected abstract void ensureDurable(Ranges ranges, RedundantBefore onCommandStoreDurable);
 
     public Agent agent()
     {
@@ -478,10 +482,12 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     {
         // TODO (desired): narrow ranges to those that are owned
         Invariants.requireArgument(txnId.is(ExclusiveSyncPoint));
-        RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, txnId, LOCALLY_APPLIED_ONLY));
-        safeStore.upsertRedundantBefore(newRedundantBefore);
-        unsafeSetRedundantBefore(newRedundantBefore);
-        updatedRedundantBefore(safeStore, txnId, ranges);
+        RedundantBefore addNow = RedundantBefore.create(ranges, txnId, LOCALLY_APPLIED_ONLY);
+        safeStore.upsertRedundantBefore(addNow);
+        RedundantBefore addOnDataStoreDurable = RedundantBefore.create(ranges, txnId, LOCALLY_DURABLE_TO_DATA_STORE_ONLY);
+        RedundantBefore addOnCommandStoreDurable = RedundantBefore.create(ranges, txnId, LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY);
+        dataStore.ensureDurable(this, ranges, addOnDataStoreDurable);
+        ensureDurable(ranges, addOnCommandStoreDurable);
     }
 
     /**
@@ -616,7 +622,6 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         updateMaxConflicts(ranges, globalSyncId);
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, PRE_BOOTSTRAP_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
-        updatedRedundantBefore(safeStore, globalSyncId, ranges);
     }
 
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
@@ -628,9 +633,8 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         SomeStatus status = durability.compareTo(Durability.UniversalOrInvalidated) >= 0 ? SHARD_APPLIED_ONLY : MAJORITY_APPLIED_ONLY;
         final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
         TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, Bounds::maxLocallyAppliedBefore);
-        RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, globalSyncId, status);
-        safeStore.upsertRedundantBefore(addShardRedundant);
-        updatedRedundantBefore(safeStore, globalSyncId, slicedRanges);
+        RedundantBefore addNow = RedundantBefore.create(slicedRanges, globalSyncId, status);
+        safeStore.upsertRedundantBefore(addNow);
 
         if (status != SHARD_APPLIED_ONLY)
             return;
@@ -649,23 +653,12 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         // TODO (desired): not all systems care about HLC_BOUND for GC, make configurable
         if (globalSyncId.is(HLC_BOUND) || !requiresUniqueHlcs())
         {
-            safeStore = safeStore; // make unusable in lambda
-            safeStore.dataStore().snapshot(slicedRanges, globalSyncId).begin((success, fail) -> {
-                if (fail != null)
-                {
-                    agent.onCaughtException(fail, "Unsuccessful dataStore snapshot; unable to update GC markers");
-                    return;
-                }
-
-                execute((PreLoadContext.Empty) () -> "Mark Shard Durable", safeStore0 -> {
-                    RedundantBefore addGc = RedundantBefore.create(slicedRanges, globalSyncId, GC_BEFORE_AND_LOCALLY_APPLIED);
-                    safeStore0.upsertRedundantBefore(addGc);
-                }, agent());
-            });
+            RedundantBefore addOnDataStoreDurable = RedundantBefore.create(slicedRanges, globalSyncId, GC_BEFORE_AND_LOCALLY_DURABLE);
+            dataStore.ensureDurable(this, slicedRanges, addOnDataStoreDurable);
         }
     }
 
-    protected void updatedRedundantBefore(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
+    protected void updatedRedundantBefore(SafeCommandStore safeStore, RedundantBefore added)
     {
         TxnId clearWaitingBefore = redundantBefore.minShardAndLocallyAppliedBefore();
         TxnId clearAllBefore = TxnId.min(clearWaitingBefore, durableBefore().min.majorityBefore);
@@ -675,9 +668,8 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     protected void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
-        RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY));
-        unsafeSetRedundantBefore(newRedundantBefore);
-        updatedRedundantBefore(safeStore, syncId, ranges);
+        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
+        safeStore.upsertRedundantBefore(addRedundantBefore);
 
         if (waitingOnSync.isEmpty())
             return;

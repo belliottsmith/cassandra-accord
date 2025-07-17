@@ -990,10 +990,12 @@ public class CommandsForKeyTest
             return true;
         }
 
-        public Journal.Loader loader()
+        public Journal.Replayer replayer()
         {
             throw new UnsupportedOperationException();
         }
+
+        @Override protected void ensureDurable(Ranges ranges, RedundantBefore onDataStoreDurable) {}
 
         @Override
         public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)

@@ -30,13 +30,16 @@ import java.util.function.LongSupplier;
 
 import javax.annotation.Nullable;
 
-import accord.api.Agent;
 import accord.api.ProgressLog;
 import accord.api.Result;
+import accord.api.Scheduler;
 import accord.api.TraceEventType;
 import accord.api.Tracing;
 import accord.coordinate.CoordinationFailed;
 import accord.coordinate.ExecuteSyncPoint;
+import accord.impl.InMemoryAgent;
+import accord.impl.InMemoryCommandStore;
+import accord.impl.InMemoryCommandStore.Snapshot;
 import accord.impl.basic.NodeSink;
 import accord.impl.basic.Packet;
 import accord.impl.basic.SimulatedFault;
@@ -60,6 +63,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.local.Node.Id.NONE;
 import static com.google.common.base.Functions.identity;
@@ -67,8 +71,9 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class ListAgent implements Agent
+public class ListAgent implements InMemoryAgent
 {
+    final Scheduler scheduler;
     final RandomSource rnd;
     final long timeout;
     final Consumer<Throwable> onFailure;
@@ -80,9 +85,11 @@ public class ListAgent implements Agent
     final LongSupplier queueTimeMillis;
     final TimeService time;
     final NodeSink.TimeoutSupplier timeoutSupplier;
+    final Int2ObjectHashMap<Snapshotter<Snapshot>> snapshotters = new Int2ObjectHashMap<>();
 
-    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time, NodeSink.TimeoutSupplier timeoutSupplier)
+    public ListAgent(Scheduler scheduler, RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time, NodeSink.TimeoutSupplier timeoutSupplier)
     {
+        this.scheduler = scheduler;
         this.rnd = rnd;
         this.timeout = timeout;
         this.onFailure = onFailure;
@@ -139,17 +146,15 @@ public class ListAgent implements Agent
         onStale.accept(staleSince, ranges);
     }
 
-    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class));
+    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class, Snapshotter.SnapshotAborted.class));
     @Override
     public void onUncaughtException(Throwable t)
     {
         if (expectedExceptions.contains(t.getClass()))
             return;
 
-        // TODO (required): why are we now seeing SnapshotAborted? Nothing inherently wrong with it, but should find out what has changed.
         if (!(t instanceof CoordinationFailed)
-            && !(t.getCause() instanceof CancellationException)
-            && !(t instanceof ListStore.SnapshotAborted))
+            && !(t.getCause() instanceof CancellationException))
             onFailure.accept(t);
     }
 
@@ -271,5 +276,20 @@ public class ListAgent implements Agent
     public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
         return unit.convert(timeoutSupplier.expiresAt(), MICROSECONDS);
+    }
+
+    @Override
+    public AsyncResult<Void> snapshot(InMemoryCommandStore commandStore)
+    {
+        Snapshotter<Snapshot> snapshotter = snapshotters.computeIfAbsent(commandStore.id(), ignore -> new Snapshotter<>(scheduler, rnd));
+        return snapshotter.snapshot(false, (AsyncResult<Snapshot>) Snapshot.snapshot(commandStore));
+    }
+
+    public void restore(InMemoryCommandStore commandStore)
+    {
+        Snapshotter<Snapshot> snapshotter = snapshotters.get(commandStore.id());
+        if (snapshotter == null)
+            return;
+        snapshotter.restore(snapshot -> snapshot.restore(commandStore));
     }
 }

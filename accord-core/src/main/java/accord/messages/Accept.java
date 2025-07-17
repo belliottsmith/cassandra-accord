@@ -74,8 +74,10 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     public final Kind kind;
     public final Ballot ballot;
     public final Timestamp executeAt;
-    public final PartialDeps partialDeps;
+    private PartialDeps partialDeps;
     public final boolean isPartialAccept;
+
+    public PartialDeps partialDeps() { return partialDeps; }
 
     public Accept(Id to, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, FullRoute<?> route, Timestamp executeAt, Deps deps, boolean isPartialAccept)
     {
@@ -192,6 +194,14 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     public Cancellable submit()
     {
         return node.mapReduceConsumeLocal(this, minEpoch, executeAt.epoch(), this);
+    }
+
+    @Override
+    protected void acceptInternal(AcceptReply reply, Throwable failure)
+    {
+        // finished processing, null out large objects
+        partialDeps = null;
+        super.acceptInternal(reply, failure);
     }
 
     @Override

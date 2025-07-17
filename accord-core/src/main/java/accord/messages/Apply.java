@@ -77,19 +77,24 @@ public class Apply extends TxnRequest<ApplyReply>
         Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> scope, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute, ExecuteFlags flags);
     }
 
+    public enum Kind { Minimal, Maximal }
+
     public final Kind kind;
     public final Ballot ballot;
     public final Timestamp executeAt;
-    public final PartialDeps deps; // not much benefit in nullability, as we try only to commit to readers, so most recipients will need to receive deps
-    public final @Nullable PartialTxn txn;
+    private PartialDeps deps; // not much benefit in nullability, as we try only to commit to readers, so most recipients will need to receive deps
+    private @Nullable PartialTxn txn;
     public final @Nullable FullRoute<?> fullRoute;
-    public final @Nullable Writes writes;
-    public final Result result;
+    private @Nullable Writes writes;
+    private Result result;
     public final long minEpoch;
     public final long maxEpoch;
     public final ExecuteFlags flags;
 
-    public enum Kind { Minimal, Maximal }
+    public PartialTxn   txn() { return txn; }
+    public PartialDeps deps() { return deps; }
+    public Writes    writes() { return writes; }
+    public Result    result() { return result; }
 
     protected Apply(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute, ExecuteFlags flags)
     {
@@ -149,6 +154,16 @@ public class Apply extends TxnRequest<ApplyReply>
         Route<?> route = bestRoute();
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, maxEpoch);
         return apply(safeStore, participants);
+    }
+
+    @Override
+    protected void acceptInternal(ApplyReply reply, Throwable failure)
+    {
+        txn = null;
+        deps = null;
+        writes = null;
+        result = null;
+        super.acceptInternal(reply, failure);
     }
 
     // TODO (desired): always applyDirect reads, whether or not the replica is ready, as reads are no-ops (note: affects linearizability warnings)

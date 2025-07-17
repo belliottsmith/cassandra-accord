@@ -101,9 +101,9 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    public Task<?> build(Runnable task)
+    public Task<Void> build(Runnable task)
     {
-        return (Task<?>) super.submit(task);
+        return (Task<Void>) super.submit(task);
     }
 
     @Override

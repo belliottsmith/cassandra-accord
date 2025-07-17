@@ -21,14 +21,12 @@ package accord.coordinate;
 import java.util.concurrent.ExecutionException;
 import java.util.function.BiConsumer;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import accord.api.LocalListeners;
 import accord.api.Result;
 import accord.impl.mock.MockCluster;
 import accord.impl.mock.MockStore;
-import accord.impl.progresslog.DefaultProgressLogs;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -57,12 +55,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 public class CoordinateTransactionTest
 {
-    @AfterEach
-    public void tearDown()
-    {
-        DefaultProgressLogs.unsafePauseForTesting(false);
-    }
-
     @Test
     void simpleTest() throws Throwable
     {

@@ -99,8 +99,8 @@ public class StableThenRead extends ReadData
     @Override
     public void accept(CommitOrReadNack reply, Throwable failure)
     {
-        super.accept(reply, failure);
         partialDeps = null;
+        super.accept(reply, failure);
     }
 
     @Override

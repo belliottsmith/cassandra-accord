@@ -57,6 +57,7 @@ import accord.api.Journal;
 import accord.api.Key;
 import accord.api.ProtocolModifiers.Toggles;
 import accord.api.ProtocolModifiers.Toggles.FastExec;
+import accord.api.Scheduler;
 import accord.burn.random.FrequentLargeRange;
 import accord.impl.MessageListener;
 import accord.impl.PrefixedIntHashKey;
@@ -99,6 +100,7 @@ import accord.utils.DefaultRandom;
 import accord.utils.Gen;
 import accord.utils.Gens;
 import accord.utils.RandomSource;
+import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.Utils;
 import accord.api.AsyncExecutor;
@@ -412,8 +414,8 @@ public class BurnTestBase
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, Agent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
-        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
+        TriFunction<BiConsumer<Timestamp, Ranges>, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (onStale, scheduler, timeoutSupplier) -> new ListAgent(scheduler, random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
+        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(null, random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should enver get a stale event");
         }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
         Verifier verifier = createVerifier(keyCount * prefixCount);

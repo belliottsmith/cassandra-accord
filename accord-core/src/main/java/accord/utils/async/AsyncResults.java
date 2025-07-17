@@ -19,6 +19,7 @@
 package accord.utils.async;
 
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
@@ -263,6 +264,37 @@ public class AsyncResults
         {
             if (throwable == null) trySuccess(v);
             else tryFailure(throwable);
+        }
+    }
+
+    public static class CountingResult extends AbstractResult<Void>
+    {
+        private volatile int count;
+        private static final AtomicIntegerFieldUpdater<CountingResult> countUpdater = AtomicIntegerFieldUpdater.newUpdater(CountingResult.class, "count");
+
+        public CountingResult(int initialCount)
+        {
+            count = initialCount;
+            if (initialCount == 0)
+                trySuccess(null);
+        }
+
+        public void decrement()
+        {
+            if (0 == countUpdater.decrementAndGet(this))
+                trySuccess(null);
+        }
+
+        public void increment()
+        {
+            if (0 == countUpdater.getAndIncrement(this))
+                throw new IllegalStateException("Count was already zero");
+        }
+
+        @Override
+        public boolean tryFailure(Throwable throwable)
+        {
+            return super.tryFailure(throwable);
         }
     }
 

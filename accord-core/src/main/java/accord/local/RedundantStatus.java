@@ -28,6 +28,8 @@ import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.RedundantStatus.Coverage.SOME;
 import static accord.local.RedundantStatus.Property.GC_BEFORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_COMMAND_STORE;
+import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
 import static accord.local.RedundantStatus.Property.MAJORITY_APPLIED;
@@ -86,32 +88,46 @@ public class RedundantStatus
          * See also {@link SafeCommandStore#safeToReadAt()}.
          * TODO (expected): do we need to distinguish this case from DEFUNCT?
          */
-        PRE_BOOTSTRAP_OR_STALE             (true, true,  LT, LOCALLY_DEFUNCT),
-        PRE_BOOTSTRAP                      (true, true,  LT, PRE_BOOTSTRAP_OR_STALE),
+        PRE_BOOTSTRAP_OR_STALE             ( true,  true,  LT, LOCALLY_DEFUNCT),
+        PRE_BOOTSTRAP                      ( true,  true,  LT, PRE_BOOTSTRAP_OR_STALE),
 
         LOCALLY_WITNESSED                  (false,  true,  LE),
         // we've applied a sync point locally covering the transaction, but the transaction itself may not have applied
         LOCALLY_SYNCED                     (false,  true,  LE, LOCALLY_REDUNDANT),
-        LOCALLY_APPLIED                    (true, false, LE, LOCALLY_SYNCED),
+        LOCALLY_APPLIED                    ( true, false,  LE, LOCALLY_SYNCED),
 
         /**
          * We have fully executed until across all a majority of replicas for the range in question,
          * but not necessarily ourselves.
          */
-        MAJORITY_APPLIED                 (false,  true,  LE),
+        MAJORITY_APPLIED                   (false,  true,  LE),
 
         /**
          * We have fully executed until across all healthy non-bootstrapping replicas for the range in question,
          * but not necessarily ourselves.
          */
-        SHARD_APPLIED                      (false, true, LE, MAJORITY_APPLIED),
+        SHARD_APPLIED                      (false,  true,  LE, MAJORITY_APPLIED),
 
         TRUNCATE_BEFORE                    (false,  true,  LT, SHARD_APPLIED, LOCALLY_SYNCED),
         GC_BEFORE                          (false,  true,  LT, TRUNCATE_BEFORE),
 
         // not persisted
         WAS_OWNED                          (false,  false, LT, LOCALLY_DEFUNCT),
-        NOT_OWNED                          (false, false, LT),
+        NOT_OWNED                          (false,  false, LT),
+
+        // added later, so vaguely out of order (but no specific order to this enum)
+
+        /**
+         * We have applied the preceding transactions durably to the store, so that we can safely truncate the Write
+         * information as we will not need to replay it to the store
+         */
+        LOCALLY_DURABLE_TO_DATA_STORE      (false, false,  LE, LOCALLY_APPLIED),
+
+        /**
+         * We have applied the preceding transactions durably to all summary structures, so that on restart we do
+         * not need to replay the transaction to restore any internal state.
+         */
+        LOCALLY_DURABLE_TO_COMMAND_STORE   (false, false,  LE, LOCALLY_APPLIED),
         ;
 
 
@@ -158,7 +174,9 @@ public class RedundantStatus
         public static final SomeStatus LOCALLY_APPLIED_ONLY = oneSlow(LOCALLY_APPLIED);
         public static final SomeStatus MAJORITY_APPLIED_ONLY = oneSlow(MAJORITY_APPLIED);
         public static final SomeStatus SHARD_APPLIED_ONLY = oneSlow(SHARD_APPLIED);
-        public static final SomeStatus GC_BEFORE_AND_LOCALLY_APPLIED = multi(GC_BEFORE, LOCALLY_APPLIED);
+        public static final SomeStatus LOCALLY_DURABLE_TO_DATA_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_DATA_STORE);
+        public static final SomeStatus LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_COMMAND_STORE);
+        public static final SomeStatus GC_BEFORE_AND_LOCALLY_DURABLE = multi(GC_BEFORE, LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE);
 
         final short encoded;
         public SomeStatus(short encoded)

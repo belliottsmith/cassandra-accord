@@ -177,17 +177,17 @@ public class ListRequest implements Request
                     }
 
                     node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
-                    node.scheduler().once(() -> checkOnResult(homeKey, id, 0, null), 5L, TimeUnit.MINUTES);
+                    node.scheduler().once(() -> checkOnResult(homeKey, id, 0, null), 1L, TimeUnit.MINUTES);
                 }
                 else if (fail instanceof SimulatedFault)
                 {
                     node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
-                    node.scheduler().once(() -> checkOnResult(null, id, 0, null), 5L, TimeUnit.MINUTES);
+                    node.scheduler().once(() -> checkOnResult(null, id, 0, null), 1L, TimeUnit.MINUTES);
                 }
                 else if (fail instanceof CancellationException)
                 {
                     node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
-                    node.scheduler().once(() -> checkOnResult(null, id, 0, null), 5L, TimeUnit.MINUTES);
+                    node.scheduler().once(() -> checkOnResult(null, id, 0, null), 1L, TimeUnit.MINUTES);
                 }
                 else
                 {
@@ -236,7 +236,7 @@ public class ListRequest implements Request
                     if (attempt < 1000 && (f instanceof Timeout || f instanceof SimulatedFault || f instanceof Exhausted))
                     {
                         if (attempt < 100) checkOnResult(finalHomeKey, txnId, attempt + 1, f);
-                        else node.scheduler().once(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), 5L, TimeUnit.MINUTES);
+                        else node.scheduler().once(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), retryDelay(attempt), TimeUnit.MINUTES);
                     }
                     else
                     {
@@ -263,7 +263,7 @@ public class ListRequest implements Request
                         if (attempt < 100)
                         {
                             node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, txnId), null);
-                            node.scheduler().once(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), 5L, TimeUnit.MINUTES);
+                            node.scheduler().once(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), retryDelay(attempt), TimeUnit.MINUTES);
                         }
                         else
                         {
@@ -275,6 +275,11 @@ public class ListRequest implements Request
                 }
             }));
         }
+    }
+
+    private static long retryDelay(int attempts)
+    {
+        return attempts <= 1 ? 1 : Math.min(5, attempts);
     }
 
     private final String description;

@@ -28,9 +28,6 @@ import java.util.function.Consumer;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.local.Command;
@@ -46,6 +43,7 @@ import accord.primitives.ProgressToken;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
+import accord.utils.ArrayBuffers;
 import accord.utils.ArrayBuffers.BufferList;
 import accord.utils.Invariants;
 import accord.utils.LogGroupTimers;
@@ -76,10 +74,10 @@ import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (expected): for transactions that span multiple progress logs (notably: sync points) we need to coordinate *fetching* to avoid redundant work
+// TODO (expected): report transactions not making progress
+// TODO (desired): evict to disk
 public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStore>
 {
-    private static final Logger logger = LoggerFactory.getLogger(DefaultProgressLog.class);
-
     final Node node;
     final CommandStore commandStore;
 
@@ -95,10 +93,10 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
      * These callbacks are required to have hashCode() == txnId.hashCode() and equals(txnId) == true,
      * so that we can manage overriding callbacks on the relevant TxnState.
      */
-    private final ObjectHashSet<Object> activeWaiting = new ObjectHashSet<>();
-    private final ObjectHashSet<Object> activeHome = new ObjectHashSet<>();
+    private final ObjectHashSet<Object> pendingWaiting = new ObjectHashSet<>();
+    private final ObjectHashSet<Object> pendingHome = new ObjectHashSet<>();
 
-    private final Long2ObjectHashMap<Object> debugActive =  Invariants.debug() ? new Long2ObjectHashMap<>() : null;
+    private final Long2ObjectHashMap<Object> active = new Long2ObjectHashMap<>();
     private final Map<TxnId, StackTraceElement[]> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
 
     private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
@@ -106,15 +104,19 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     // The tasks whose timers have elapsed and are going to be run
     // The queue is drained here first before processing tasks so that tasks can modify the queue
-    private Object[] runBuffer;
-    private int runBufferCount;
+    private Object[] runBuffer = EMPTY_RUN_BUFFER;
+    private int runBufferIndex, runBufferCount;
     private RunInvoker[] awaitingEpochBuffer = EMPTY_AWAITING_EPOCH_BUFFER;
     private int awaitingEpochBufferCount;
     private boolean isAwaitingEpoch;
+    private boolean processing;
+
+    private volatile boolean stopped;
+    private int maxConcurrency = 128;
 
     private long nextInvokerId;
 
-    DefaultProgressLog(Node node, CommandStore commandStore)
+    protected DefaultProgressLog(Node node, CommandStore commandStore)
     {
         this.node = node;
         this.commandStore = commandStore;
@@ -351,6 +353,22 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
     }
 
+    @Override
+    public void start()
+    {
+        commandStore.maybeExecuteImmediately(() -> {
+            stopped = false;
+            accept(null);
+        });
+    }
+
+    @Override
+    public void stop()
+    {
+        stopped = true;
+    }
+
+    @Override
     public void clear()
     {
         timers.clear();
@@ -358,13 +376,13 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         stateMap = BTree.empty();
         progressTokenMap = BTree.empty();
 
-        activeWaiting.clear();
-        activeHome.clear();
+        pendingWaiting.clear();
+        pendingHome.clear();
         if (debugDeleted != null)
             debugDeleted.clear();
 
         runBuffer = EMPTY_RUN_BUFFER;
-        runBufferCount = 0;
+        runBufferIndex = runBufferCount = 0;
     }
 
     private void clear(TxnState state)
@@ -466,26 +484,22 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     @Override
     public void accept(@Nullable SafeCommandStore safeStore)
     {
+        if (stopped || processing)
+            return;
+
         long nowMicros = node.elapsed(TimeUnit.MICROSECONDS);
+        processing = true;
         try
         {
-            if (DefaultProgressLogs.pauseForTest(this))
+            processAwaitingEpoch();
+            try (BufferList<TxnState> preRunBuffer = new BufferList<>())
             {
-                logger.info("Skipping progress log because it is paused for test");
-                return;
-            }
-
-            try (BufferList<RunInvoker> readyToRun = safeStore == null ? null : new BufferList<>())
-            {
-                processAwaitingEpoch(safeStore, readyToRun);
                 // drain to a buffer to avoid reentrancy in timers
-                runBuffer = EMPTY_RUN_BUFFER;
-                runBufferCount = 0;
-                timers.advance(nowMicros, this, DefaultProgressLog::addToRunBuffer);
-                processRunBuffer(safeStore, nowMicros, readyToRun);
-                cachedAny().forceDiscard(runBuffer, runBufferCount);
-                processReadyToRun(safeStore, readyToRun);
+                timers.advance(nowMicros, preRunBuffer, BufferList::add);
+                updateRunBuffer(nowMicros, preRunBuffer);
             }
+            processRunBuffer(safeStore);
+
             if (awaitingEpochBufferCount > 0)
                 rerunWithPendingEpoch();
         }
@@ -493,13 +507,44 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         {
             node.agent().onUncaughtException(t);
         }
+        finally
+        {
+            processing = false;
+        }
     }
 
-    private void addToRunBuffer(TxnState add)
+    private void addToRunBuffer(RunInvoker readyToRun)
     {
         if (runBufferCount == runBuffer.length)
-            runBuffer = cachedAny().resize(runBuffer, runBufferCount, Math.max(8, runBuffer.length * 2));
-        runBuffer[runBufferCount++] = add;
+        {
+            int newCount = runBufferCount - runBufferIndex;
+            Object[] newBuffer = cachedAny().get(Math.max(8, newCount * 2));
+            replaceRunBuffer(newBuffer);
+        }
+        runBuffer[runBufferCount++] = readyToRun;
+    }
+
+    private void replaceRunBuffer(Object[] newBuffer)
+    {
+        Object[] prevBuffer = runBuffer;
+        int prevCount = runBufferCount;
+        int newCount = prevCount - runBufferIndex;
+        System.arraycopy(prevBuffer, runBufferIndex, newBuffer, 0, newCount);
+        runBuffer = newBuffer;
+        runBufferIndex = 0;
+        runBufferCount = newCount;
+        if (prevBuffer.length >= ArrayBuffers.MIN_BUFFER_SIZE)
+            cachedAny().forceDiscard(prevBuffer, prevCount);
+    }
+
+    private void maybeShrinkRunBuffer()
+    {
+        if (runBuffer.length <= (runBufferCount - runBufferIndex)/2)
+        {
+            int newCount = runBufferCount - runBufferIndex;
+            Object[] newBuffer = new Object[newCount + (newCount/2)];
+            replaceRunBuffer(newBuffer);
+        }
     }
 
     private void rerunWithPendingEpoch()
@@ -518,13 +563,12 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }, node.agent()));
     }
 
-    private void processRunBuffer(@Nullable SafeCommandStore safeStore, long nowMicros, List<RunInvoker> readyToRun)
+    private void updateRunBuffer(long nowMicros, List<TxnState> preRunBuffer)
     {
         long hasEpoch = node.topology().epoch();
 
-        for (int i = 0; i < runBufferCount; ++i)
+        for (TxnState run : preRunBuffer)
         {
-            TxnState run = (TxnState) runBuffer[i];
             Invariants.require(!run.isScheduled());
             TxnStateKind runKind = run.wasScheduledTimer();
             validatePreRunState(run, runKind);
@@ -547,8 +591,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             long epoch = run.txnId.epoch();
             if (epoch <= hasEpoch)
             {
-                addIfReadyElseSubmit(safeStore, invoker(run, runKind), readyToRun);
-                if (invokeBoth) addIfReadyElseSubmit(safeStore, invoker(run, runKind.other()), readyToRun);
+                addToRunBuffer(invoker(run, runKind));
+                if (invokeBoth) addToRunBuffer(invoker(run, runKind.other()));
             }
             else
             {
@@ -559,12 +603,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
                 if (invokeBoth) awaitingEpochBuffer[awaitingEpochBufferCount++] = invoker(run, runKind.other());
             }
         }
-
-        Arrays.fill(runBuffer, 0, runBufferCount, null);
-        runBufferCount = 0;
     }
 
-    private void processAwaitingEpoch(@Nullable SafeCommandStore safeStore, List<RunInvoker> readyToRun)
+    private void processAwaitingEpoch()
     {
         if (awaitingEpochBufferCount == 0)
             return;
@@ -574,7 +615,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         for (int i = 0 ; i < awaitingEpochBufferCount ; ++i)
         {
             RunInvoker awaiting = awaitingEpochBuffer[i];
-            if (awaiting.run.txnId.epoch() <= hasEpoch) addIfReadyElseSubmit(safeStore, awaiting, readyToRun);
+            if (awaiting.run.txnId.epoch() <= hasEpoch) addToRunBuffer(awaiting);
             else awaitingEpochBuffer[retainCount++] = awaiting;
         }
         awaitingEpochBufferCount = retainCount;
@@ -582,24 +623,33 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         else if (retainCount < awaitingEpochBuffer.length / 2) awaitingEpochBuffer = Arrays.copyOf(awaitingEpochBuffer, retainCount);
     }
 
-    private void processReadyToRun(SafeCommandStore safeStore, List<RunInvoker> readyToRun)
+    private void processRunBuffer(SafeCommandStore safeStore)
     {
-        if (safeStore == null || readyToRun.isEmpty())
-            return;
-
-        int i = 0;
-        try
+        while (runBufferIndex < runBufferCount)
         {
-            while (i < readyToRun.size())
-                readyToRun.get(i++).accept(safeStore);
-        }
-        finally
-        {
-            while (i < readyToRun.size())
+            if (active.size() >= maxConcurrency)
             {
-                commandStore.execute((PreLoadContext.Empty) () -> "Run ProgressLog", readyToRun.get(i++), node.agent());
+                maybeShrinkRunBuffer();
+                return;
             }
+
+            RunInvoker run = (RunInvoker) runBuffer[runBufferIndex];
+            if (safeStore == null || !safeStore.canExecuteWith(run))
+            {
+                maybeShrinkRunBuffer();
+                commandStore.execute(run, this);
+                return;
+            }
+
+            ++runBufferIndex;
+            try { run.accept(safeStore); }
+            catch (Throwable t) { node.agent().onUncaughtException(t); }
         }
+
+        if (runBuffer.length > ArrayBuffers.MIN_BUFFER_SIZE)
+            cachedAny().forceDiscard(runBuffer, runBufferCount);
+        runBufferIndex = runBufferCount = 0;
+        runBuffer = EMPTY_RUN_BUFFER;
     }
 
     private void validatePreRunState(TxnState run, TxnStateKind kind)
@@ -608,27 +658,14 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         Invariants.require(progress != NoneExpected && progress != Querying);
     }
 
-    void addIfReadyElseSubmit(@Nullable SafeCommandStore safeStore, RunInvoker invoker, List<RunInvoker> ifReady)
-    {
-        if (safeStore != null && safeStore.canExecuteWith(invoker.run))
-        {
-            ifReady.add(invoker);
-        }
-        else
-        {
-            // TODO (required): if we fail execution, do we need to reschedule the state?
-            commandStore.execute(invoker.run, invoker, commandStore.agent());
-        }
-    }
-
     RunInvoker invoker(TxnState run, TxnStateKind runKind)
     {
         RunInvoker invoker = new RunInvoker(nextInvokerId(), run, runKind);
-        registerActive(runKind, run.txnId, invoker);
+        registerPending(runKind, run.txnId, invoker);
         return invoker;
     }
 
-    class RunInvoker implements Consumer<SafeCommandStore>
+    class RunInvoker implements Consumer<SafeCommandStore>, PreLoadContext
     {
         final long id;
         final TxnState run;
@@ -644,7 +681,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         @Override
         public void accept(SafeCommandStore safeStore)
         {
-            if (!deregisterActive(runKind, this))
+            if (!complete(safeStore, runKind, id, this))
                 return; // we've been cancelled
 
             // we have to read safeCommand first as it may become truncated on load, which may clear the progress log and invalidate us
@@ -690,6 +727,18 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         {
             return run.txnId.hashCode();
         }
+
+        @Override
+        public TxnId primaryTxnId()
+        {
+            return run.txnId;
+        }
+
+        @Override
+        public String reason()
+        {
+            return "Invoke " + runKind + " Progress Log";
+        }
     }
 
     long nextInvokerId()
@@ -697,43 +746,40 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         return nextInvokerId++;
     }
 
-    ObjectHashSet<Object> active(TxnStateKind kind)
+    ObjectHashSet<Object> pending(TxnStateKind kind)
     {
-        return kind == Waiting ? activeWaiting : activeHome;
+        return kind == Waiting ? pendingWaiting : pendingHome;
     }
 
-    void registerActive(TxnStateKind kind, TxnId txnId, Object object)
+    void registerPending(TxnStateKind kind, TxnId txnId, Object object)
     {
-        ObjectHashSet<Object> active = active(kind);
-        Invariants.require(!active.contains(txnId));
-        active.add(object);
+        ObjectHashSet<Object> pending = pending(kind);
+        Invariants.require(!pending.contains(txnId));
+        pending.add(object);
     }
 
-    boolean hasActive(TxnStateKind kind, TxnId txnId)
+    boolean hasPending(TxnStateKind kind, TxnId txnId)
     {
-        return active(kind).contains(txnId);
+        return pending(kind).contains(txnId);
     }
 
-    void debugActive(Object debug, CallbackInvoker<?, ?> invoker)
+    void start(CallbackInvoker<?, ?> invoker, Object task)
     {
-        if (debugActive != null)
-            debugActive.put(invoker.id, debug);
+        active.put(invoker.id, task);
     }
 
-    void undebugActive(CallbackInvoker<?, ?> invoker)
+    boolean complete(SafeCommandStore safeStore, TxnStateKind kind, long id, Object active)
     {
-        if (debugActive != null)
-            debugActive.remove(invoker.id);
+        this.active.remove(id);
+        boolean result = pending(kind).remove(active);
+        if (runBufferIndex < runBufferCount)
+            accept(safeStore);
+        return result;
     }
 
-    boolean deregisterActive(TxnStateKind kind, Object object)
+    void clearPending(TxnStateKind kind, TxnId txnId)
     {
-        return active(kind).remove(object);
-    }
-
-    void clearActive(TxnStateKind kind, TxnId txnId)
-    {
-        active(kind).remove(txnId);
+        pending(kind).remove(txnId);
     }
 
     void unschedule(TxnState state)
@@ -765,6 +811,17 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             if (timers.shouldWake(now))
                 commandStore.execute((PreLoadContext.Empty) () -> "Run ProgressLog", this, node.agent());
         }
+    }
+
+    public void setMaxConcurrency(int maxConcurrency)
+    {
+        Invariants.requireArgument(maxConcurrency >= 1);
+        this.maxConcurrency = maxConcurrency;
+    }
+
+    public int maxConcurrency()
+    {
+        return maxConcurrency;
     }
 
     public ImmutableView immutableView()
@@ -885,6 +942,4 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             return current.homeRetryCounter();
         }
     }
-
-
 }

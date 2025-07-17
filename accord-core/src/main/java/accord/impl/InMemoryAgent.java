@@ -16,24 +16,12 @@
  * limitations under the License.
  */
 
-package accord.impl.progresslog;
+package accord.impl;
 
-import accord.api.ProgressLog;
-import accord.local.CommandStore;
-import accord.local.Node;
+import accord.api.Agent;
+import accord.utils.async.AsyncResult;
 
-public class DefaultProgressLogs implements ProgressLog.Factory
+public interface InMemoryAgent extends Agent
 {
-    protected final Node node;
-
-    public DefaultProgressLogs(Node node)
-    {
-        this.node = node;
-    }
-
-    @Override
-    public DefaultProgressLog create(CommandStore commandStore)
-    {
-        return new DefaultProgressLog(node, commandStore);
-    }
+    AsyncResult<Void> snapshot(InMemoryCommandStore commandStore);
 }

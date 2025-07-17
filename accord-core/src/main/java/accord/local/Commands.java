@@ -1070,14 +1070,14 @@ public class Commands
         if (command.durability().compareTo(durability) >= 0)
             return command;
 
-        Command updated = supplementParticipants(command, participants);
+        Command updated = supplementParticipants(safeStore, safeCommand, participants);
         participants = updated.participants();
         if (executeAt != null && command.status().hasBeen(Committed) && !command.executeAt().equals(executeAt))
             safeStore.agent().onInconsistentTimestamp(command, command.asCommitted().executeAt(), executeAt);
 
         if (command.durability().compareTo(durability) < 0)
         {
-            updated = updated.updateDurability(durability);
+            updated = safeCommand.update(safeStore, updated.updateDurability(durability));
             TxnId txnId = command.txnId();
             if (dependencyElision() == IF_DURABLE && CommandsForKey.manages(txnId))
             {
@@ -1101,7 +1101,6 @@ public class Commands
             }
         }
 
-        updated = safeCommand.update(safeStore, updated);
         if (maybeCleanup(safeStore, safeCommand, updated, participants))
             updated = safeCommand.current();
 

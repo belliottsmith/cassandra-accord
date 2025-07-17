@@ -34,7 +34,6 @@ import javax.annotation.Nullable;
 
 import static accord.local.LoadKeys.NONE;
 import static accord.local.LoadKeys.SYNC;
-import static accord.local.LoadKeysFor.READ_WRITE;
 import static accord.local.LoadKeysFor.WRITE;
 
 /**

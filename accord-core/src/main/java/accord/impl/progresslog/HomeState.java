@@ -129,7 +129,7 @@ abstract class HomeState extends WaitingState
 
         if (newPhase.compareTo(phase()) > 0)
         {
-            instance.clearActive(Home, txnId);
+            instance.clearPending(Home, txnId);
             clearHomeRetryCounter();
             set(safeStore, instance, newPhase, newProgress);
         }
@@ -154,7 +154,7 @@ abstract class HomeState extends WaitingState
         if (tracing != null)
             tracing.trace(safeStore.commandStore(), "Invoking MaybeRecover with progress token %s", maxProgressToken);
 
-        instance.debugActive(MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, reportTo, invoker), invoker);
+        instance.start(invoker, MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, reportTo, invoker));
         set(safeStore, instance, ReadyToExecute, Querying);
     }
 
@@ -225,7 +225,7 @@ abstract class HomeState extends WaitingState
     {
         set(null, instance, Done, NoneExpected);
         clearHomeRetryCounter();
-        instance.clearActive(Home, txnId);
+        instance.clearPending(Home, txnId);
     }
 
     void setHomeDoneAndMaybeRemove(DefaultProgressLog instance)

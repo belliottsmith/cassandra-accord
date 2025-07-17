@@ -117,9 +117,9 @@ public class ReadEphemeralTxnData extends ReadData
     @Override
     public void accept(CommitOrReadNack reply, Throwable failure)
     {
-        super.accept(reply, failure);
         partialDeps = null;
         route = null;
+        super.accept(reply, failure);
     }
 
     @Override
