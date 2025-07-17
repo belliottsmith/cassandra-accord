@@ -23,14 +23,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import accord.api.Key;
 import accord.api.DataStore;
+import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
-import accord.primitives.TxnId;
 import accord.utils.Timestamped;
-import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults;
 import accord.utils.async.AsyncResults.SettableResult;
 
 public class MaelstromStore implements DataStore
@@ -62,8 +62,7 @@ public class MaelstromStore implements DataStore
     }
 
     @Override
-    public AsyncResult<Void> snapshot(Ranges ranges, TxnId before)
+    public void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore reportOnSuccess)
     {
-        return AsyncResults.success(null);
-    }
-}
+        commandStore.execute((PreLoadContext.Empty)() -> "Report CommandStore Durable", safeStore -> safeStore.upsertRedundantBefore(reportOnSuccess));
+    }}

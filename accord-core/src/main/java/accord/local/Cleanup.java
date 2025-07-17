@@ -37,6 +37,7 @@ import static accord.local.Cleanup.Input.PARTIAL;
 import static accord.local.RedundantStatus.Property.GC_BEFORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
+import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.NOT_OWNED;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
@@ -194,6 +195,9 @@ public enum Cleanup
         }
 
         Invariants.paranoid(redundant.all(SHARD_APPLIED));
+
+        if (!redundant.all(LOCALLY_DURABLE_TO_DATA_STORE) && participants.doesStillExecute())
+            return truncateWithOutcome(txnId, min);
 
         if (saveStatus.compareTo(Vestigial) >= 0)
         {

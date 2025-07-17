@@ -73,9 +73,9 @@ import accord.impl.PrefixedIntHashKey;
 import accord.impl.SizeOfIntersectionSorter;
 import accord.impl.TopologyFactory;
 import accord.impl.basic.DelayedCommandStores.DelayedCommandStore;
+import accord.impl.basic.TestProgressLogs.TestProgressLog;
 import accord.impl.list.ListAgent;
 import accord.impl.list.ListStore;
-import accord.impl.progresslog.DefaultProgressLogs;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -111,6 +111,7 @@ import accord.utils.LazyToString;
 import accord.utils.RandomSource;
 import accord.utils.ReflectionUtils;
 import accord.utils.Timestamped;
+import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
@@ -240,6 +241,7 @@ public class Cluster
     final MessageListener messageListener;
     int clock;
     BiFunction<Id, Id, Link> links;
+    long droppedAt;
 
     public Cluster(RandomSource random, MessageListener messageListener, Supplier<PendingQueue> queueSupplier, Runnable checkFailures, Function<Id, Node> lookup, Function<Id, Journal> journalLookup, IntSupplier rf, Consumer<Packet> responseSink)
     {
@@ -315,7 +317,7 @@ public class Cluster
     {
         checkFailures.run();
         // All remaining tasks are recurring
-        if (!hasNonRecurring())
+        if (!hasNonRecurring() && pending.nowInMillis() > droppedAt + TimeUnit.MINUTES.toMillis(1L))
             return false;
 
         Pending next = pending.poll();
@@ -379,6 +381,8 @@ public class Cluster
     {
         if (trace.isTraceEnabled())
             trace.trace("{} DROP[{}] (from:{}, to:{}, {}:{}, body:{})", clock++, lookup.apply(to).epoch(), from, to, message instanceof Reply ? "replyTo" : "id", id, message);
+        if (!RecurringPendingRunnable.isRecurring(Pending.Global.activeOrigin()))
+            droppedAt = pending.nowInMillis();
     }
 
     public void onDone(Runnable run)
@@ -421,8 +425,8 @@ public class Cluster
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, Agent> agentSupplier = (onStale, timeoutSupplier) -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
-        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
+        TriFunction<BiConsumer<Timestamp, Ranges>, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (onStale, scheduler, timeoutSupplier) -> new ListAgent(scheduler, randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
+        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(null, randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should never get a stale event");
         }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
         TopologyFactory topologyFactory = new TopologyFactory(initialTopology.maxRf(), initialTopology.ranges().stream().toArray(Range[]::new))
@@ -616,7 +620,7 @@ public class Cluster
 
     public static Map<MessageType, Stats> run(Id[] nodes, int[] prefixes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
                                               Function<Id, AsyncExecutor> nodeExecutorSupplier,
-                                              BiFunction<BiConsumer<Timestamp, Ranges>, NodeSink.TimeoutSupplier, Agent> agentSupplier,
+                                              TriFunction<BiConsumer<Timestamp, Ranges>, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier,
                                               Runnable checkFailures, Consumer<Packet> responseSink,
                                               Supplier<RandomSource> randomSupplier,
                                               Supplier<TimeService> timeServiceSupplier,
@@ -674,7 +678,7 @@ public class Cluster
                 @Override public TimeUnit units() { return MILLISECONDS; }
             };
             TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, prefixes, topology, topologyUpdates, nodeMap::get, schemaApply);
-            List<DurabilityService> durabilityService = new ArrayList<>();
+            List<DurabilityService> durabilityServices = new ArrayList<>();
             List<Service> services = new ArrayList<>();
             for (Id id : nodes)
             {
@@ -683,7 +687,7 @@ public class Cluster
                 TimeService timeService = timeServiceSupplier.get();
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
                 AsyncExecutor nodeExecutor = nodeExecutorSupplier.apply(id);
-                Agent agent = agentSupplier.apply(onStale, timeouts);
+                Agent agent = agentSupplier.apply(onStale, scheduler, timeouts);
                 executorMap.put(id, nodeExecutor);
                 Journal journal = journalFactory.apply(id, random);
                 journalMap.put(id, journal);
@@ -693,16 +697,16 @@ public class Cluster
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      agent,
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
-                                     DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
+                                     TestProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
                                      journal.durableBeforePersister(), journal);
                 journal.start(node);
                 DurabilityService durability = node.durability();
                 // TODO (desired): randomise
                 durability.shards().setShardCycleTime(30, SECONDS);
                 durability.global().setGlobalCycleTime(180, SECONDS);
-                durabilityService.add(durability);
+                durabilityServices.add(durability);
                 nodeMap.put(id, node);
-                durabilityService.add(new DurabilityService(node));
+                durabilityServices.add(new DurabilityService(node));
             }
 
             Runnable updateDurabilityRate;
@@ -714,7 +718,7 @@ public class Cluster
                     int c = targetSplits.getAsInt();
                     int s = shardCycleTimeSeconds.getAsInt() * topologyFactory.rf;
                     int g = globalCycleTimeSeconds.getAsInt();
-                    durabilityService.forEach(d -> {
+                    durabilityServices.forEach(d -> {
                         d.shards().setTargetShardSplits(c);
                         d.shards().setShardCycleTime(s, SECONDS);
                         d.global().setGlobalCycleTime(g, SECONDS);
@@ -722,6 +726,15 @@ public class Cluster
                 };
             }
             updateDurabilityRate.run();
+
+            Runnable updateProgressLogConcurrency;
+            {
+                updateProgressLogConcurrency = () -> {
+                    nodeMap.values().forEach(node -> node.commandStores().forEachCommandStore(cs -> ((TestProgressLog)cs.unsafeProgressLog()).setMaxConcurrency(random.nextInt(1, 16))));
+                };
+            }
+            updateProgressLogConcurrency.run();
+
             schemaApply.onUpdate(topology);
 
             Pending.Global.setNoActiveOrigin();
@@ -737,6 +750,8 @@ public class Cluster
                 sinks.links = sinks.linkConfig.overrideLinks.apply(nodesList);
                 if (random.decide(0.1f))
                     updateDurabilityRate.run();
+                if (random.decide(0.1f))
+                    updateProgressLogConcurrency.run();
             }, 5L, SECONDS);
 
             Scheduled reconfigure = clusterScheduler.recurring(configRandomizer::maybeUpdateTopology, 1, SECONDS);
@@ -757,15 +772,16 @@ public class Cluster
                 // Clean data and restore from snapshot
                 ListStore listStore = (ListStore) nodeMap.get(id).commandStores().dataStore();
                 NavigableMap<RoutableKey, Timestamped<int[]>> prevData = listStore.copyOfCurrentData();
-                listStore.clear();
-                listStore.restoreFromSnapshot();
-
-                // We are simulating node restart, so its remote listeners will also be gone
-                ((DefaultRemoteListeners) nodeMap.get(id).remoteListeners()).clear();
                 Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores.all());
 
+                listStore.clear();
+                // We are simulating node restart, so its remote listeners will also be gone
+                ((DefaultRemoteListeners) nodeMap.get(id).remoteListeners()).clear();
                 for (CommandStore store : stores.all())
-                    ((InMemoryCommandStore) store).clearForTesting();
+                {
+                    InMemoryCommandStore commandStore = (InMemoryCommandStore) store;
+                    commandStore.clear();
+                }
 
                 // Replay journal
                 Journal journal = journalMap.get(id);
@@ -781,7 +797,9 @@ public class Cluster
                 if (lastUpdate != null)
                     ((DelayedCommandStores) nodeMap.get(id).commandStores()).validateShardStateForTesting(lastUpdate);
 
-                stores = nodeMap.get(id).commandStores();
+                listStore.restore();
+                for (CommandStore store : stores.all())
+                    ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
                 journal.replay(stores);
 
                 // Re-enable safety checks
@@ -793,12 +811,12 @@ public class Cluster
                 trace.debug("Done with replay.");
             }, () -> random.nextInt(10, 30), SECONDS);
 
-            durabilityService.forEach(DurabilityService::start);
+            durabilityServices.forEach(DurabilityService::start);
             services.forEach(Service::start);
 
             Runnable stop = () -> {
                 reconfigure.cancel();
-                durabilityService.forEach(DurabilityService::stop);
+                durabilityServices.forEach(DurabilityService::stop);
                 purge.cancel();
                 restart.cancel();
                 services.forEach(Service::close);
@@ -1033,51 +1051,6 @@ public class Cluster
         void start();
         @Override
         void close();
-    }
-
-    private static abstract class AbstractService implements Service, Runnable
-    {
-        protected final Node node;
-        protected final RandomSource rs;
-        private Scheduled scheduled;
-
-        protected AbstractService(Node node, RandomSource rs)
-        {
-            this.node = node;
-            this.rs = rs;
-        }
-
-        @Override
-        public void start()
-        {
-            Invariants.require(scheduled == null, "Start already called...");
-            this.scheduled = node.scheduler().recurring(this, 1, SECONDS);
-        }
-
-        protected abstract void doRun() throws Exception;
-
-        @Override
-        public final void run()
-        {
-            try
-            {
-                doRun();
-            }
-            catch (Throwable t)
-            {
-                node.agent().onUncaughtException(t);
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            if (scheduled != null)
-            {
-                scheduled.cancel();
-                scheduled = null;
-            }
-        }
     }
 
     private static BiFunction<Id, Id, Link> partition(List<Id> nodes, RandomSource random, int rf, BiFunction<Id, Id, Link> up)

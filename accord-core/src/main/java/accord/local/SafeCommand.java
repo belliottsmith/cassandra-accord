@@ -70,6 +70,7 @@ public abstract class SafeCommand
         if (prev == update && !force)
             return update;
 
+        Invariants.require(prev == null || update == SaveStatus.max(update, prev, Command::saveStatus, Command::acceptedOrCommitted) || update.saveStatus() == SaveStatus.Erased || update.saveStatus() == SaveStatus.Vestigial);
         set(update);
         safeStore.progressLog().update(safeStore, txnId, prev, update, force);
         safeStore.update(prev, update, force);

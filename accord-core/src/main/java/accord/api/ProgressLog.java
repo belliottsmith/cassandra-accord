@@ -219,6 +219,8 @@ public interface ProgressLog
      */
     void clear(TxnId txnId);
 
+    void start();
+    void stop();
     void clear();
 
     /**
@@ -240,6 +242,8 @@ public interface ProgressLog
         @Override public void invalidIfUncommitted(TxnId txnId) {}
         @Override public void clear(TxnId txnId) {}
         @Override public void clearBefore(SafeCommandStore safeStore, TxnId clearWaitingBefore, TxnId clearAnyBefore) {}
+        @Override public void start() {}
+        @Override public void stop() {}
         @Override public void clear() {}
     }
 }

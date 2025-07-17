@@ -516,4 +516,10 @@ public class DefaultLocalListeners implements LocalListeners
             txnListeners = BTreeRemoval.remove(txnListeners, TxnListeners::compareListeners, entry);
         }
     }
+
+    public void clear()
+    {
+        txnListeners = BTree.empty();
+        complexListeners.clear();
+    }
 }

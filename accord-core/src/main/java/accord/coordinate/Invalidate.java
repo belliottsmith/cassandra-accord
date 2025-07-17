@@ -20,7 +20,6 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
-import accord.api.TraceEventType;
 import accord.coordinate.tracking.InvalidationTracker;
 import accord.coordinate.tracking.InvalidationTracker.InvalidationShardTracker;
 import accord.coordinate.tracking.RequestStatus;

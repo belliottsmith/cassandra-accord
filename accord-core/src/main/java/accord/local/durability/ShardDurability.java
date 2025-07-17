@@ -305,7 +305,7 @@ public class ShardDurability
                         sb.append(entry);
                         return sb;
                     }, new StringBuilder(), ignore -> false).toString();
-                logger.info("{}", report);
+                logger.debug("{}", report);
             }
             else if (min.equals(cycleMin))
             {

@@ -425,7 +425,23 @@ public enum SaveStatus
         return a.compareTo(b) >= 0 ? av : bv;
     }
 
-    public static <T> T max(List<T> list, Function<T, SaveStatus> getStatus, Function<T, Ballot> getAcceptedOrCommittedBallot, Predicate<T> filter)
+    public static <T> T max(T av, T bv, Function<T, SaveStatus> getStatus, Function<T, Ballot> getAcceptedOrCommittedBallot)
+    {
+        SaveStatus a = getStatus.apply(av), b = getStatus.apply(bv);
+
+        if (a == b)
+            return av;
+
+        if (a.phase != b.phase)
+            return a.phase.compareTo(b.phase) > 0 ? av : bv;
+
+        if (a.phase.tieBreakWithBallot)
+            return getAcceptedOrCommittedBallot.apply(av).compareTo(getAcceptedOrCommittedBallot.apply(bv)) >= 0 ? av : bv;
+
+        return a.compareTo(b) >= 0 ? av : bv;
+    }
+
+    public static <T> T maxOfList(List<T> list, Function<T, SaveStatus> getStatus, Function<T, Ballot> getAcceptedOrCommittedBallot, Predicate<T> filter)
     {
         T max = null;
         SaveStatus maxStatus = null;

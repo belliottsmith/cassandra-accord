@@ -238,17 +238,17 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
 
         public static InvalidateReply max(InvalidateReply[] invalidateReplies, Shard shard, SortedList<Id> nodeIds)
         {
-            return SaveStatus.max(nodeIds.select(invalidateReplies, shard.nodes), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
+            return SaveStatus.maxOfList(nodeIds.select(invalidateReplies, shard.nodes), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
         }
 
         public static InvalidateReply max(InvalidateReply[] invalidateReplies)
         {
-            return SaveStatus.max(Arrays.asList(invalidateReplies), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
+            return SaveStatus.maxOfList(Arrays.asList(invalidateReplies), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
         }
 
         public static InvalidateReply maxNotTruncated(InvalidateReply[] invalidateReplies)
         {
-            return SaveStatus.max(Arrays.asList(invalidateReplies), r -> r.maxKnowledgeStatus, r -> r.accepted, r -> r != null && !r.maxKnowledgeStatus.is(Status.Truncated));
+            return SaveStatus.maxOfList(Arrays.asList(invalidateReplies), r -> r.maxKnowledgeStatus, r -> r.accepted, r -> r != null && !r.maxKnowledgeStatus.is(Status.Truncated));
         }
     }
 }

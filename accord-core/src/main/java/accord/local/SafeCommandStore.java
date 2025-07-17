@@ -33,12 +33,10 @@ import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.local.cfk.UpdateUnmanagedMode;
 import accord.primitives.AbstractUnseekableKeys;
-import accord.primitives.FullRoute;
 import accord.primitives.KeyDeps;
 import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
-import accord.primitives.Routables;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -342,6 +340,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     protected void unsafeUpsertRedundantBefore(RedundantBefore addRedundantBefore)
     {
         commandStore().unsafeUpsertRedundantBefore(addRedundantBefore);
+        commandStore().updatedRedundantBefore(this, addRedundantBefore);
     }
 
     public void setBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)
@@ -366,7 +365,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
         TxnId txnId = next.txnId();
         if (CommandsForKey.manages(txnId)) updateManagedCommandsForKey(this, prev, next);
-        if (!CommandsForKey.managesExecution(txnId) && next.hasBeen(Status.Stable) && !next.hasBeen(Status.Truncated) && !prev.hasBeen(Status.Stable))
+        if (!CommandsForKey.managesExecution(txnId) && next.hasBeen(Status.Stable) && !next.hasBeen(Status.Truncated) && (force || !prev.hasBeen(Status.Stable)))
             updateUnmanagedCommandsForKey(this, next, REGISTER);
         // TODO (expected): register deps during Accept phase to more quickly sync epochs
 //        else if (txnId.is(Range) && next.known().deps.hasProposedOrDecidedDeps())

@@ -18,12 +18,13 @@
 
 package accord.api;
 
+import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
 import accord.utils.async.AsyncResult;
 
 /**
@@ -124,5 +125,5 @@ public interface DataStore
      * must be durable once the AsyncResult completes successfully. That is, a restart of the node must
      * restore the DataStore to a state on or after the point at which snapshot was invoked.
      */
-    AsyncResult<Void> snapshot(Ranges ranges, TxnId before);
+    void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore reportOnSuccess);
 }

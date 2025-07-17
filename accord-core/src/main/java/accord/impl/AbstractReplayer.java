@@ -23,21 +23,46 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
 import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.local.StoreParticipants;
 import accord.primitives.Participants;
 import accord.primitives.SaveStatus;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
+import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_COMMAND_STORE;
+import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.PreApplied;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Txn.Kind.Write;
 
-public abstract class AbstractLoader implements Journal.Loader
+public abstract class AbstractReplayer implements Journal.Replayer
 {
+    final RedundantBefore redundantBefore;
+    final TxnId minReplay;
+
+    protected AbstractReplayer(RedundantBefore redundantBefore)
+    {
+        this.redundantBefore = redundantBefore;
+        this.minReplay = TxnId.noneIfNull(redundantBefore.foldl((b, v) -> TxnId.nonNullOrMin(v, TxnId.min(b.maxBound(LOCALLY_DURABLE_TO_DATA_STORE), b.maxBound(LOCALLY_DURABLE_TO_COMMAND_STORE))), null, ignore -> false));
+    }
+
+    protected boolean maybeShouldReplay(TxnId txnId)
+    {
+        return txnId.compareTo(minReplay) >= 0;
+    }
+
+    protected boolean shouldReplay(TxnId txnId, StoreParticipants participants)
+    {
+        Participants<?> search = participants.route();
+        if (search == null) search = participants.hasTouched();
+        return redundantBefore.foldlWithDefault(search, (b, v, id) -> v || b.maxBoundBoth(LOCALLY_DURABLE_TO_COMMAND_STORE, LOCALLY_DURABLE_TO_DATA_STORE).compareTo(id) <= 0, RedundantBefore.Bounds.NONE, false, txnId, i -> i);
+    }
+
     protected void initialiseState(SafeCommandStore safeStore, TxnId txnId)
     {
         SafeCommand safeCommand = safeStore.unsafeGet(txnId);

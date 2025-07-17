@@ -44,7 +44,7 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>, PreLoadContext
     static <P, V> CallbackInvoker<P, V> invokeCallback(TxnStateKind kind, DefaultProgressLog owner, TxnId txnId, P param, Callback<P, V> callback)
     {
         CallbackInvoker<P, V> invoker = new CallbackInvoker<>(owner, kind, owner.nextInvokerId(), txnId, param, callback);
-        owner.registerActive(kind, txnId, invoker);
+        owner.registerPending(kind, txnId, invoker);
         return invoker;
     }
 
@@ -77,14 +77,13 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>, PreLoadContext
 
             // we load safeCommand first so that if it clears the progress log we abandon the callback
             SafeCommand safeCommand = safeStore.ifInitialised(txnId);
-            if (!owner.deregisterActive(kind(), this))
+            if (!owner.complete(safeStore, kind(), id, this))
                 return;
 
             if (safeCommand == null)
                 return;
-            callback.callback(safeStore, safeCommand, owner, txnId, param, success, fail);
-            owner.undebugActive(this);
 
+            callback.callback(safeStore, safeCommand, owner, txnId, param, success, fail);
         }, owner.commandStore.agent());
     }
 

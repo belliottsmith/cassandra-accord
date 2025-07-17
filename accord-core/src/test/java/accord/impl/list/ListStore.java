@@ -18,16 +18,12 @@
 
 package accord.impl.list;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -38,6 +34,8 @@ import accord.api.Scheduler;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.Node;
+import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -58,7 +56,7 @@ import org.agrona.collections.LongArrayList;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 
-public class ListStore implements DataStore, ConfigurationService.Listener
+public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataStore, ConfigurationService.Listener
 {
     private static class ChangeAt
     {
@@ -128,14 +126,10 @@ public class ListStore implements DataStore, ConfigurationService.Listener
         }
     }
 
-    public static class SnapshotAborted extends RuntimeException { SnapshotAborted() { super("Snapshot aborted due to earlier snapshot being restored"); } }
-
     static final boolean VERIFY_ACCESS = Boolean.getBoolean(System.getProperty("accord.test.verify_liststore_access", "true"));
 
     static final Timestamped<int[]> EMPTY = new Timestamped<>(Timestamp.NONE, new int[0], Arrays::toString);
     final NavigableMap<RoutableKey, Timestamped<int[]>> data = new TreeMap<>();
-    final RandomSource random;
-    final Scheduler scheduler;
 
     private final List<ChangeAt> addedAts = new ArrayList<>();
     private final List<ChangeAt> removedAts = new ArrayList<>();
@@ -147,7 +141,7 @@ public class ListStore implements DataStore, ConfigurationService.Listener
     // used to make sure removes are applied in epoch order and not in the order sync points complete in
     private final LongArrayList pendingRemoves = new LongArrayList();
 
-    private static final class Snapshot
+    public static final class Snapshot
     {
         private final NavigableMap<RoutableKey, Timestamped<int[]>> data;
         private final List<ChangeAt> addedAts;
@@ -168,96 +162,37 @@ public class ListStore implements DataStore, ConfigurationService.Listener
         }
     }
 
-    private static final class PendingSnapshot
-    {
-        // we don't restart bootstraps after clearing journal state and replaying, so must finish snapshots
-        final boolean runBeforeRestart;
-        final long delay;
-        final Consumer<Boolean> onCompletion;
-
-        private PendingSnapshot(boolean runBeforeRestart, long delay, Consumer<Boolean> onCompletion)
-        {
-            this.runBeforeRestart = runBeforeRestart;
-            this.delay = delay;
-            this.onCompletion = onCompletion;
-        }
-    }
-
-    private Snapshot snapshot;
     private Scheduler.Scheduled scheduled;
-    private final Deque<PendingSnapshot> pendingSnapshots = new ArrayDeque<>();
-    private long pendingDelay = 0;
 
+    /**
+     * Logical fsync-like operation: anything written to the store prior to the invocation of this method
+     * must be durable once the AsyncResult completes successfully. That is, a restart of the node must
+     * restore the DataStore to a state on or after the point at which snapshot was invoked.
+     */
     @Override
-    public AsyncResult<Void> snapshot(Ranges ranges, TxnId before)
+    public void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore onSuccess)
     {
-        return snapshot(false, ranges, before);
+        snapshot(false).begin((success, fail) -> {
+            if (fail == null) commandStore.execute((PreLoadContext.Empty)()->"Report DataStore Durable", safeStore -> safeStore.upsertRedundantBefore(onSuccess));
+        });
     }
 
-    public AsyncResult<Void> snapshot(boolean runBeforeRestart, Ranges ranges, TxnId before)
+    public AsyncResult<Void> snapshot(boolean runBeforeRestart)
     {
         Snapshot snapshot = new Snapshot(data, addedAts, removedAts, purgedAts, fetchCompletes, pendingRemoves);
-        AsyncResult.Settable<Void> result = new AsyncResults.SettableResult<>();
-        long delay = Math.max(1, random.nextBiasedLong(100, 1000, 5000) - pendingDelay);
-        pendingDelay += delay;
-
-        if (scheduled != null && runBeforeRestart && !pendingSnapshots.stream().anyMatch(p -> p.runBeforeRestart))
-        {
-            scheduled.cancel();
-            scheduled = null;
-        }
-
-        pendingSnapshots.add(new PendingSnapshot(runBeforeRestart, delay, success -> {
-            if (success)
-            {
-                this.snapshot = snapshot;
-                result.setSuccess(null);
-            }
-            else
-            {
-                result.setFailure(new SnapshotAborted());
-            }
-        }));
-
-        if (scheduled == null)
-            scheduleRunSnapshot();
-        return result;
+        return super.snapshot(runBeforeRestart, snapshot);
     }
 
-    private void scheduleRunSnapshot()
+    public void restore()
     {
-        Invariants.require(!pendingSnapshots.isEmpty());
-        // schedule as recurring so that we don't run them
-        Runnable run = () -> {
-            scheduled = null;
-            if (pendingSnapshots.isEmpty())
-                return;
-
-            PendingSnapshot pendingSnapshot = pendingSnapshots.pollFirst();
-            pendingSnapshot.onCompletion.accept(true);
-            pendingDelay -= pendingSnapshot.delay;
-            if (!pendingSnapshots.isEmpty())
-                scheduleRunSnapshot();
-        };
-
-        if (pendingSnapshots.stream().anyMatch(p -> p.runBeforeRestart)) scheduled = scheduler.once(run, pendingSnapshots.peekFirst().delay, TimeUnit.MILLISECONDS);
-        else scheduled = scheduler.selfRecurring(run, pendingSnapshots.peekFirst().delay, TimeUnit.MILLISECONDS);
-    }
-
-    public void restoreFromSnapshot()
-    {
-        if (snapshot != null)
-        {
+        super.restore(snapshot -> {
             data.putAll(snapshot.data);
             addedAts.addAll(snapshot.addedAts);
             removedAts.addAll(snapshot.removedAts);
             purgedAts.addAll(snapshot.purgedAts);
             fetchCompletes.addAll(snapshot.fetchCompletes);
             pendingRemoves.addAll(snapshot.pendingRemoves);
-        }
-
-        while (!pendingSnapshots.isEmpty())
-            pendingSnapshots.pollFirst().onCompletion.accept(false);
+        });
     }
 
     public void clear()
@@ -275,8 +210,7 @@ public class ListStore implements DataStore, ConfigurationService.Listener
 
     public ListStore(Scheduler scheduler, RandomSource random, Node.Id node)
     {
-        this.random = random;
-        this.scheduler = scheduler;
+        super(scheduler, random);
         this.node = node;
     }
 

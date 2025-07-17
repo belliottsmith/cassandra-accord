@@ -63,10 +63,15 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     }
 
     public final FullRoute<?> route;
-    public final PartialTxn txn;
-    public final PartialDeps deps;
-    public final Writes writes;
-    public final Result result;
+    private PartialTxn txn;
+    private PartialDeps deps;
+    private Writes writes;
+    private Result result;
+
+    public PartialTxn   txn() { return txn; }
+    public PartialDeps deps() { return deps; }
+    public Writes    writes() { return writes; }
+    public Result    result() { return result; }
 
     public ApplyThenWaitUntilApplied(Node.Id to, Topologies topologies, Timestamp executeAt, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, Participants<?> readScope, Writes writes, Result result)
     {
@@ -135,6 +140,11 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
         }
         if (waiting && reply == null && failure == null)
             node.reply(replyTo, replyContext, CommitOrReadNack.Waiting, null);
+
+        txn = null;
+        deps = null;
+        writes = null;
+        result = null;
     }
 
     @Override

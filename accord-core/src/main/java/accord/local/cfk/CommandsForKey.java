@@ -2315,7 +2315,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
                         case APPLY:
                         {
                             int byExecuteAtIndex = SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanaged.waitingUntil, (f, i) -> f.compareTo(i.executeAt), FAST);
-                            Invariants.require(byExecuteAtIndex >= 0 && byExecuteAtIndex >= appliedBefore);
+                            if (byExecuteAtIndex >= 0 && byExecuteAtIndex < appliedBefore)
+                            {
+                                Invariants.require(!reportLinearizabilityViolations);
+                                int i = 0;
+                                for (; i < appliedBefore && committedByExecuteAt[i].compareTo(APPLIED) >= 0 ; ++i){}
+                                Invariants.require(i < appliedBefore || isLoadingPruned());
+                            }
                             break;
                         }
                     }

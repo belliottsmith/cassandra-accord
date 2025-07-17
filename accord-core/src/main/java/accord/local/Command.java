@@ -313,6 +313,18 @@ public abstract class Command implements ICommand
         return orElse;
     }
 
+    public final Timestamp applyAtIfKnown()
+    {
+        return applyAtIfKnown(null);
+    }
+
+    public final Timestamp applyAtIfKnown(Timestamp orElse)
+    {
+        if (known().is(ApplyAtKnown))
+            return executeAt();
+        return orElse;
+    }
+
     public final Timestamp executeAtOrTxnId()
     {
         Timestamp executeAt = executeAt();

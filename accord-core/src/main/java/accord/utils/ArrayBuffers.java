@@ -55,6 +55,7 @@ import static accord.utils.Invariants.illegalState;
 public class ArrayBuffers
 {
     private static final boolean FULLY_UNCACHED = true;
+    public static final int MIN_BUFFER_SIZE = 8;
 
     // TODO (low priority, efficiency): we should periodically clear the thread locals to ensure we aren't slowly accumulating unnecessarily large objects on every thread
     private static final ThreadLocal<ShortBufferCache> SHORTS = ThreadLocal.withInitial(() -> new ShortBufferCache(4, 1 << 10));
@@ -510,8 +511,6 @@ public class ArrayBuffers
             void clear(B array, int usedSize);
         }
 
-        static final int MIN_SIZE = 8;
-
         final IntFunction<B> allocator;
         final Clear<B> clear;
         final B empty;
@@ -521,7 +520,7 @@ public class ArrayBuffers
         AbstractBufferCache(IntFunction<B> allocator, Clear<B> clear, int maxCount, int maxSize)
         {
             this.allocator = allocator;
-            this.maxSize = Math.max(MIN_SIZE, maxSize);
+            this.maxSize = Math.max(MIN_BUFFER_SIZE, maxSize);
             this.cached = (B[])new Object[maxCount];
             this.empty = allocator.apply(0);
             this.clear = clear;
@@ -535,7 +534,7 @@ public class ArrayBuffers
             if (minSize > maxSize)
                 return allocator.apply(minSize);
 
-            minSize = Math.max(minSize, MIN_SIZE);
+            minSize = Math.max(minSize, MIN_BUFFER_SIZE);
             for (int i = 0 ; i < cached.length ; ++i)
             {
                 if (cached[i] != null && Array.getLength(cached[i]) >= minSize)
@@ -554,7 +553,7 @@ public class ArrayBuffers
             if (bufferSize == 0 || bufferSize > maxSize)
                 return true;
 
-            Invariants.require(bufferSize >= MIN_SIZE,
+            Invariants.require(bufferSize >= MIN_BUFFER_SIZE,
                                "Trying to return an array of size %d we cannot have allocated, suggesting a logic bug that could lead to overwriting an in-use array.",
                                bufferSize);
             if (bufferSize == usedSize && !force)

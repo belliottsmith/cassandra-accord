@@ -20,20 +20,20 @@ package accord.api;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.function.BiConsumer;
 
 import accord.utils.async.AsyncChain;
+import accord.utils.async.RunnableWithResult;
 
 public interface AsyncExecutor extends Executor
 {
-    default AsyncChain<?> build(Runnable task)
+    default AsyncChain<Void> build(Runnable task)
     {
-        return build(Executors.callable(task));
+        return build(new RunnableWithResult<>(task, null));
     }
     default <T> AsyncChain<T> build(Runnable task, T result)
     {
-        return build(Executors.callable(task, result));
+        return build(new RunnableWithResult<>(task, result));
     }
     <T> AsyncChain<T> build(Callable<T> task);
 

@@ -62,6 +62,8 @@ import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE_ONLY;
 import static accord.local.RedundantStatus.Property.GC_BEFORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
+import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_COMMAND_STORE;
+import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
@@ -133,6 +135,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
     public static class Bounds extends QuickBounds
     {
+        public static final Bounds NONE = new Bounds(null, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NO_TXNIDS, new short[0], null);
+
         // TODO (desired): we don't need to maintain this now, can migrate to ReducingRangeMap.foldWithBounds
         public final Range range;
 
@@ -402,7 +406,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             Invariants.require(a.mergeWithPreBootstrapOrStale);
             Invariants.require(b != GC_BEFORE);
             Invariants.require(b.mergeWithPreBootstrapOrStale);
-            return maxBound(a, b);
+            return maxBoundBoth(a, b);
         }
 
         boolean noBoundMatches(TxnId txnId)
@@ -436,7 +440,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return maxBound(bounds, statuses, property);
         }
 
-        public TxnId maxBound(Property a, Property b)
+        public TxnId maxBoundBoth(Property a, Property b)
         {
             return maxBound(bounds, statuses, mask(a, SOME) | mask(b, SOME));
         }
@@ -736,7 +740,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
         private boolean isRetired()
         {
-            return endEpoch <= maxBound(SHARD_APPLIED, LOCALLY_SYNCED).epoch();
+            return endEpoch <= maxBoundBoth(SHARD_APPLIED, LOCALLY_SYNCED).epoch();
         }
 
         private boolean isLocallyRetired()
@@ -890,7 +894,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     public static RedundantBefore create(AbstractRanges ranges, long startEpoch, long endEpoch, TxnId bound, SomeStatus status, @Nullable Timestamp staleUntilAtLeast)
     {
         if (ranges.isEmpty())
-            return new RedundantBefore();
+            return EMPTY;
 
         Bounds bounds = new Bounds(null, startEpoch, endEpoch, new TxnId[] { bound }, new short[] { (short) (status.encoded & ONLY_LE_MASK), status.encoded }, staleUntilAtLeast);
         Builder builder = new Builder(ranges.get(0).endInclusive(), ranges.size() * 2);
@@ -1253,17 +1257,25 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     @Override
     public String toString()
     {
-        return "gc:" + toString(GC_BEFORE) + "\nlocal:" + toString(LOCALLY_APPLIED) + "\nbootstrap:" + toString(PRE_BOOTSTRAP);
+        return "gc:" + toString(GC_BEFORE)
+               + "\nlocal:" + toString(LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE)
+               + "\nbootstrap:" + toString(PRE_BOOTSTRAP);
     }
 
-    private String toString(Property property)
+    private String toString(Property p1)
+    {
+        return toString(p1, null);
+    }
+
+    private String toString(Property p1, Property p2)
     {
         TreeMap<TxnId, List<Range>> map = new TreeMap<>();
-        foldl((e, m, p, o) -> {
-            m.computeIfAbsent(e.maxBound(p), ignore -> new ArrayList<>())
+        foldl((e, m, pp1, pp2) -> {
+            TxnId bound = pp2 == null ? e.maxBound(pp1) : e.maxBoundBoth(pp1, pp2);
+            m.computeIfAbsent(bound, ignore -> new ArrayList<>())
              .add(e.range);
             return m;
-        }, map, property, null, i -> false);
+        }, map, p1, p2, i -> false);
 
         return map.descendingMap().entrySet().stream()
                   .map(e -> (e.getKey().equals(TxnId.NONE) ? "none" : e.getKey().toString()) + ":" + Ranges.ofSorted(e.getValue().toArray(new Range[0])).mergeTouching())

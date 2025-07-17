@@ -99,7 +99,7 @@ public class Invariants
 
     public static IllegalArgumentException illegalArgument(String fmt, Object ... args)
     {
-        throw new IllegalArgumentException(String.format(fmt, args));
+        throw illegalArgument(String.format(fmt, args));
     }
 
     private static IllegalArgumentException illegalArgument()

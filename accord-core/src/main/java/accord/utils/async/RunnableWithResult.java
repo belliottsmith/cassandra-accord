@@ -16,24 +16,31 @@
  * limitations under the License.
  */
 
-package accord.impl.progresslog;
+package accord.utils.async;
 
-import accord.api.ProgressLog;
-import accord.local.CommandStore;
-import accord.local.Node;
+import java.util.concurrent.Callable;
 
-public class DefaultProgressLogs implements ProgressLog.Factory
+public class RunnableWithResult<V> implements Callable<V>
 {
-    protected final Node node;
+    final Runnable run;
+    final V result;
 
-    public DefaultProgressLogs(Node node)
+    public RunnableWithResult(Runnable run, V result)
     {
-        this.node = node;
+        this.run = run;
+        this.result = result;
     }
 
     @Override
-    public DefaultProgressLog create(CommandStore commandStore)
+    public V call() throws Exception
     {
-        return new DefaultProgressLog(node, commandStore);
+        run.run();
+        return result;
+    }
+
+    @Override
+    public String toString()
+    {
+        return "[Run " + run.toString() + "; return " + result + ']';
     }
 }

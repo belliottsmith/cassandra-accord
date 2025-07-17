@@ -55,6 +55,7 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.RangeDeps;
+import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.local.cfk.SafeCommandsForKey;
@@ -404,11 +405,12 @@ public class RemoteListenersTest
         }
 
         @Override
-        public Journal.Loader loader()
+        public Journal.Replayer replayer()
         {
             throw new UnsupportedOperationException();
         }
 
+        @Override protected void ensureDurable(Ranges ranges, RedundantBefore onCommandStoreDurable) {}
         @Override public boolean inStore() { return false; }
         @Override public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
         @Override public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
