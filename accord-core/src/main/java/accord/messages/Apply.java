@@ -18,6 +18,7 @@
 
 package accord.messages;
 
+import java.util.concurrent.CancellationException;
 import javax.annotation.Nullable;
 
 import accord.api.DataStore;
@@ -169,7 +170,6 @@ public class Apply extends TxnRequest<ApplyReply>
     // TODO (desired): always applyDirect reads, whether or not the replica is ready, as reads are no-ops (note: affects linearizability warnings)
     private AsyncChain<ApplyReply> applyDirect(CommandStore commandStore)
     {
-        DataStore dataStore = commandStore.unsafeGetDataStore();
         // TODO (required): RangesForEpoch may be stale, must protect against this
         CommandStores.RangesForEpoch storeRanges = commandStore.unsafeGetRangesForEpoch();
         Route<?> route = bestRoute();
@@ -197,11 +197,19 @@ public class Apply extends TxnRequest<ApplyReply>
 
     private ApplyReply apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, StoreParticipants participants)
     {
+        PartialTxn txn = this.txn;
+        PartialDeps deps = this.deps;
+        Writes writes = this.writes;
+        Result result = this.result;
+        if (isCancelled()) // check cancellation after reading nullable fields
+            throw new CancellationException();
+
         return apply(newSaveStatus, safeStore, participants, ballot, txn, txnId, executeAt, deps, bestRoute(), writes, result);
     }
 
     public static ApplyReply apply(SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
     {
+
         return apply(PreApplied, safeStore, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
     }
 

@@ -281,6 +281,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return mayExecute(txnId, status.isCommittedToExecute() ? command.executeAt() : null);
     }
 
+    public static boolean mayExecute(QuickBounds bounds, TxnInfo txn)
+    {
+        return executes(bounds, txn, txn.isCommittedToExecute() ? txn.executeAt : txn);
+    }
+
     public static boolean mayExecute(QuickBounds bounds, TxnId txnId)
     {
         return executes(bounds, txnId, txnId);

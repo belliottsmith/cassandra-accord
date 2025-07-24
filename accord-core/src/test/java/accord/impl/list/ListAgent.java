@@ -290,7 +290,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     public AsyncResult<Void> snapshot(InMemoryCommandStore commandStore)
     {
         Snapshotter<Snapshot> snapshotter = snapshotters.computeIfAbsent(commandStore.id(), ignore -> new Snapshotter<>(scheduler, rnd));
-        return snapshotter.snapshot(false, (AsyncResult<Snapshot>) Snapshot.snapshot(commandStore));
+        return snapshotter.snapshot(false, Snapshot.snapshot(commandStore));
     }
 
     public void restore(InMemoryCommandStore commandStore)

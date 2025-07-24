@@ -18,6 +18,8 @@
 
 package accord.messages;
 
+import java.util.concurrent.CancellationException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -108,6 +110,13 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     @Override
     public CommitOrReadNack apply(SafeCommandStore safeStore)
     {
+        PartialTxn txn = this.txn;
+        PartialDeps deps = this.deps;
+        Writes writes = this.writes;
+        Result result = this.result;
+        if (!isPending())
+            throw new CancellationException();
+
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch(), txnId, executeAtEpoch);
         ApplyReply applyReply = Apply.apply(safeStore, participants, Ballot.ZERO, txn, txnId, executeAt, deps, route, writes, result);
         switch (applyReply)

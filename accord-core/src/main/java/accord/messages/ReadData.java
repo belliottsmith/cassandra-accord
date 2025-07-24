@@ -141,7 +141,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     protected @Nullable PartialTxn partialTxn;
     protected @Nullable Timestamp executeAt;
 
-    private transient State state = State.PENDING; // TODO (low priority, semantics): respond with the Executed result we have stored?
+    private transient volatile State state = State.PENDING; // TODO (low priority, semantics): respond with the Executed result we have stored?
 
     private Data data;
     private long uniqueHlc;
@@ -647,6 +647,11 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
         cleanup(clear);
         return true;
+    }
+
+    public boolean isPending()
+    {
+        return this.state == State.PENDING;
     }
 
     @Nullable Cancellable clearUnsafe()
