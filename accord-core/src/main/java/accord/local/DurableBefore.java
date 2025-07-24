@@ -159,24 +159,6 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         }
     }
 
-    public boolean fullyContainedIn(DurableBefore other)
-    {
-        if (values == NO_OBJECTS)
-            return true;
-
-        for (int i = 0 ; i < values.length; i++)
-        {
-            if (values[i] != null &&
-                !other.foldlWithDefault(Ranges.of(starts[i].rangeFactory().newRange(starts[i], starts[i + 1])),
-                                        (v, a) -> a || v != null,
-                                        null,
-                                        false,
-                                        a -> a))
-                return false;
-        }
-        return true;
-    }
-
     public static DurableBefore create(AbstractRanges ranges, @Nonnull TxnId majority, @Nonnull TxnId universal)
     {
         if (ranges.isEmpty())

@@ -50,6 +50,7 @@ import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.SaveStatus.Vestigial;
+import static accord.primitives.Status.Durability.MajorityOrInvalidated;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.PreCommitted;
@@ -196,8 +197,8 @@ public enum Cleanup
 
         Invariants.paranoid(redundant.all(SHARD_APPLIED));
 
-        if (!redundant.all(LOCALLY_DURABLE_TO_DATA_STORE) && participants.doesStillExecute())
-            return truncateWithOutcome(txnId, min);
+        if (!redundant.all(LOCALLY_DURABLE_TO_DATA_STORE))
+            return truncateWithOutcome(txnId, participants, min);
 
         if (saveStatus.compareTo(Vestigial) >= 0)
         {
@@ -219,12 +220,12 @@ public enum Cleanup
             case ShardUniversal:
                 // TODO (required): consider how we guarantee not to break recovery of other shards if a majority on this shard are PRE_BOOTSTRAP
                 //   (if the condition is false and we fall through to removing Outcome)
-                if (input != FULL || participants.doesStillExecute())
-                    return min.atLeast(truncateWithOutcome(txnId, min));
+                if (input != FULL)
+                    return truncateWithOutcome(txnId, participants, min);
 
             case MajorityOrInvalidated:
             case Majority:
-                return min.atLeast(truncate(txnId, min));
+                return truncateWithOutcome(txnId, participants, min);
 
             case UniversalOrInvalidated:
             case Universal:
@@ -277,10 +278,10 @@ public enum Cleanup
 
     private static boolean expunge(TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        if (txnId.is(Any) && durableBefore.min(txnId) != UniversalOrInvalidated)
+        // since we cannot guarantee to witness participants for all records, we must use the global durableBefore bounds
+        if (txnId.is(Any) && durableBefore.min(txnId).compareTo(MajorityOrInvalidated) < 0)
             return false;
 
-        // since we cannot guarantee to witness participants for all records, we must use the global durableBefore bounds
         TxnId minGcBefore = redundantBefore.minGcBefore();
         if (minGcBefore.compareTo(txnId) <= 0)
             return false;
@@ -308,9 +309,10 @@ public enum Cleanup
         return INVALIDATE;
     }
 
-    private static Cleanup truncateWithOutcome(TxnId txnId, Cleanup atLeast)
+    private static Cleanup truncateWithOutcome(TxnId txnId, StoreParticipants participants, Cleanup atLeast)
     {
-        return atLeast.compareTo(TRUNCATE_WITH_OUTCOME) > 0 ? atLeast : TRUNCATE_WITH_OUTCOME;
+        return atLeast.compareTo(TRUNCATE_WITH_OUTCOME) > 0 ? atLeast : participants.executes() == null || !participants.stillExecutes().isEmpty()
+                                                                        ? TRUNCATE_WITH_OUTCOME : TRUNCATE;
     }
 
     private static Cleanup truncate(TxnId txnId, Cleanup atLeast)

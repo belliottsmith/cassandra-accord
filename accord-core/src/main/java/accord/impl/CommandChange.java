@@ -659,7 +659,7 @@ public class CommandChange
 
         public String toString()
         {
-            return toString("");
+            return toString(", ");
         }
 
         public String toString(String separator)

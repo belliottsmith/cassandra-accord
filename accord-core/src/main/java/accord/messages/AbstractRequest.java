@@ -93,6 +93,16 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
         }
     }
 
+    protected boolean isDone()
+    {
+        return cancellation instanceof Done;
+    }
+
+    protected boolean isCancelled()
+    {
+        return cancellation == CANCEL;
+    }
+
     protected abstract Cancellable submit();
 
     @Override

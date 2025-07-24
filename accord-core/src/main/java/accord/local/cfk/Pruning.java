@@ -44,6 +44,7 @@ import static accord.local.cfk.CommandsForKey.insertPos;
 import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.CommandsForKey.redundantBefore;
+import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.Updating.nextUndecided;
 import static accord.local.cfk.Updating.recomputeMaxAppliedPreBootstrapWriteById;
 import static accord.local.cfk.Utils.removeRedundantMissing;
@@ -544,7 +545,7 @@ public class Pruning
             {
                 int startPos = prevBootstrappedAt == null ? 0 : insertPos(byId, prevBootstrappedAt);
                 for (int i = startPos ; i < pos ; ++i)
-                    Invariants.require(byId[i].isNot(COMMITTED) || !byId[i].mayExecute(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
+                    Invariants.require(byId[i].isNot(COMMITTED) || !byId[i].mayExecute() || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
             }
 
             newById = Arrays.copyOfRange(byId, pos, byId.length);
@@ -567,7 +568,11 @@ public class Pruning
                 TxnInfo txn = newById[i];
                 txn = txn.withMayExecute(mayExecute(newBounds, txn));
                 if (txn != newById[i])
+                {
+                    if (newById == byId)
+                        newById = byId.clone();
                     newById[i] = txn;
+                }
             }
         }
         return newById;

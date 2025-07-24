@@ -66,27 +66,29 @@ public abstract class AbstractReplayer implements Journal.Replayer
     protected void initialiseState(SafeCommandStore safeStore, TxnId txnId)
     {
         SafeCommand safeCommand = safeStore.unsafeGet(txnId);
-        Command command = safeCommand.current();
-        if (command.saveStatus().compareTo(SaveStatus.Stable) >= 0 && command.saveStatus().compareTo(PreApplied) <= 0)
         {
-            Commands.maybeExecute(safeStore, safeCommand, command, false, true);
-        }
-        else if (command.saveStatus().compareTo(Applying) >= 0 && command.saveStatus().compareTo(TruncatedApplyWithOutcome) <= 0)
-        {
-            if (command.txnId().is(Write))
+            Command command = safeCommand.current();
+            if (command.saveStatus().compareTo(SaveStatus.Stable) >= 0 && command.saveStatus().compareTo(PreApplied) <= 0)
             {
-                CommandStore unsafeStore = safeStore.commandStore();
-                Participants<?> executes = command.participants().stillExecutes();
-                command.writes()
-                       .apply(safeStore, executes, command.partialTxn())
-                       .invoke(() -> unsafeStore.build(PreLoadContext.contextFor(txnId, "Replay"), ss -> {
-                           Commands.postApply(ss, txnId, -1, true);
-                       }))
-                       .begin(safeStore.agent());
+                Commands.maybeExecute(safeStore, safeCommand, command, false, true);
             }
-            else Invariants.expect(command.hasBeen(Applied));
+            else if (command.saveStatus().compareTo(Applying) >= 0 && command.saveStatus().compareTo(TruncatedApplyWithOutcome) <= 0)
+            {
+                if (command.txnId().is(Write))
+                {
+                    CommandStore unsafeStore = safeStore.commandStore();
+                    Participants<?> executes = command.participants().stillExecutes();
+                    command.writes()
+                           .apply(safeStore, executes, command.partialTxn())
+                           .invoke(() -> unsafeStore.build(PreLoadContext.contextFor(txnId, "Replay"), ss -> {
+                               Commands.postApply(ss, txnId, -1, true);
+                           }))
+                           .begin(safeStore.agent());
+                }
+                else Invariants.expect(command.hasBeen(Applied));
+            }
         }
-        safeCommand.update(safeStore, command, true);
+        safeCommand.update(safeStore, safeCommand.current(), true);
         safeStore.notifyListeners(safeCommand, null);
     }
 }

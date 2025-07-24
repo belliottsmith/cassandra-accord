@@ -325,9 +325,18 @@ public abstract class InMemoryCommandStore extends CommandStore
     @Override
     protected void ensureDurable(Ranges ranges, RedundantBefore onCommandStoreDurable)
     {
-        ((InMemoryAgent)agent).snapshot(this).begin((success, fail) -> execute((Empty)() -> "Report CommandStore Durable", safeStore -> {
-            safeStore.upsertRedundantBefore(onCommandStoreDurable);
-        }).begin(agent));
+        // TODO (required): we need a more general Replaying state
+        if (!CommandsForKey.reportLinearizabilityViolations())
+            return;
+
+        ((InMemoryAgent)agent).snapshot(this).begin((success, fail) -> {
+            if (fail == null)
+            {
+                execute((Empty)() -> "Report CommandStore Durable", safeStore -> {
+                    safeStore.upsertRedundantBefore(onCommandStoreDurable);
+                }).begin(agent);
+            }
+        });
     }
 
     @Override

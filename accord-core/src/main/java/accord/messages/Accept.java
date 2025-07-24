@@ -18,6 +18,7 @@
 
 package accord.messages;
 
+import java.util.concurrent.CancellationException;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -102,6 +103,10 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     @Override
     public AcceptReply apply(SafeCommandStore safeStore)
     {
+        PartialDeps partialDeps = this.partialDeps;
+        if (isCancelled()) // check cancellation after reading nullable fields
+            throw new CancellationException();
+
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, txnId.epoch(), executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         AcceptOutcome outcome = Commands.accept(safeStore, safeCommand, participants, txnId, kind, ballot, scope, executeAt, partialDeps);

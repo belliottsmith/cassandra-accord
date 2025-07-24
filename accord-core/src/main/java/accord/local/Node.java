@@ -221,9 +221,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         this.random = random;
         this.persistDurableBefore = new PersistentField<>(() -> durableBefore,
                                                           (input, prev) -> {
-                                                              if (input.fullyContainedIn(prev))
+                                                              DurableBefore next = DurableBefore.merge(input, prev);
+                                                              if (next.equals(prev))
                                                                   return prev;
-                                                              return DurableBefore.merge(input, prev);
+                                                              return next.equals(prev) ? prev : next;
                                                           },
                                                           safeDurableBeforePersister(durableBeforePersister),
                                                           this::setPersistedDurableBefore);
@@ -294,7 +295,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             DurableBefore newDurableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
             // TODO (required): it is possible for this invariant to be breached if topologies are received out of order.
             //  We should not update min past the max known epoch.
-            Invariants.require(newDurableBefore.min.majorityBefore.compareTo(durableBefore.min.majorityBefore) >= 0 || durableBefore.fullyContainedIn(newDurableBefore),
+            Invariants.require(newDurableBefore.min.majorityBefore.compareTo(durableBefore.min.majorityBefore) >= 0,
                     "Previous durable before: %s, new: %s", durableBefore, newDurableBefore);
 
             minDurableBefore = DurableBefore.merge(minDurableBefore, addDurableBefore);
