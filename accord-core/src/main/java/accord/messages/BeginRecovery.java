@@ -146,9 +146,9 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         boolean supersedingRejects;
         Deps earlierNoWait, earlierWait;
         Deps laterCoordRejects;
-        if (command.hasBeen(AcceptedMedium))
+        if (command.hasBeen(AcceptedMedium) || txnId.is(ExclusiveSyncPoint))
         {
-            supersedingRejects = false;
+            supersedingRejects = !command.hasBeen(AcceptedMedium);
             earlierNoWait = earlierWait = Deps.NONE;
             laterCoordRejects = Deps.NONE;
         }
@@ -230,6 +230,8 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     @Override
     public LoadKeysFor loadKeysFor()
     {
+        if (txnId.is(ExclusiveSyncPoint))
+            return LoadKeysFor.READ_WRITE;
         return LoadKeysFor.RECOVERY;
     }
 
