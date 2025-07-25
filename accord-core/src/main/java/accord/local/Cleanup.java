@@ -40,6 +40,7 @@ import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.NOT_OWNED;
+import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.Property.TRUNCATE_BEFORE;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
@@ -198,7 +199,7 @@ public enum Cleanup
         Invariants.paranoid(redundant.all(SHARD_APPLIED));
 
         if (!redundant.all(LOCALLY_DURABLE_TO_DATA_STORE))
-            return truncateWithOutcome(txnId, participants, min);
+            return truncateWithOutcome(txnId, redundant, participants, min);
 
         if (saveStatus.compareTo(Vestigial) >= 0)
         {
@@ -220,12 +221,9 @@ public enum Cleanup
             case ShardUniversal:
                 // TODO (required): consider how we guarantee not to break recovery of other shards if a majority on this shard are PRE_BOOTSTRAP
                 //   (if the condition is false and we fall through to removing Outcome)
-                if (input != FULL)
-                    return truncateWithOutcome(txnId, participants, min);
-
             case MajorityOrInvalidated:
             case Majority:
-                return truncateWithOutcome(txnId, participants, min);
+                return truncateWithOutcome(txnId, redundant, participants, min);
 
             case UniversalOrInvalidated:
             case Universal:
@@ -309,9 +307,9 @@ public enum Cleanup
         return INVALIDATE;
     }
 
-    private static Cleanup truncateWithOutcome(TxnId txnId, StoreParticipants participants, Cleanup atLeast)
+    private static Cleanup truncateWithOutcome(TxnId txnId, RedundantStatus status, StoreParticipants participants, Cleanup atLeast)
     {
-        return atLeast.compareTo(TRUNCATE_WITH_OUTCOME) > 0 ? atLeast : participants.executes() == null || !participants.stillExecutes().isEmpty()
+        return atLeast.compareTo(TRUNCATE_WITH_OUTCOME) > 0 ? atLeast : (participants.executes() == null || !participants.stillExecutes().isEmpty()) && !status.all(PRE_BOOTSTRAP_OR_STALE)
                                                                         ? TRUNCATE_WITH_OUTCOME : TRUNCATE;
     }
 

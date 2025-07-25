@@ -720,18 +720,22 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
             if (!RelationMultiMap.removeWithPartialMatches(txnIds, ranges, txnIdsToRanges,
                                                            remove.txnIds, remove.ranges, remove.txnIdsToRanges,
                                                            TxnId::compareTo, Range::compareIntersecting, builder, (b, id, kr, rr) -> {
-                Range remainder = null;
-                if (rr != null)
+                if (rr == null)
                 {
-                    int compareStarts = rr.start().compareTo(kr.start());
-                    if (rr.end().compareTo(kr.end()) < 0)
-                        remainder = rr.newRange(compareStarts >= 0 ? rr.start() : kr.start(), rr.end());
-                    if (compareStarts <= 0)
-                        return remainder;
-                    kr = kr.newRange(kr.start(), rr.start());
+                    b.add(id, kr);
+                    return null;
                 }
-                b.add(id, kr);
-                return remainder;
+                int compareStarts = rr.start().compareTo(kr.start());
+                int compareEnds = rr.end().compareTo(kr.end());
+                if (compareStarts <= 0 && compareEnds >= 0) return null;
+                else if (compareStarts <= 0) return rr.newRange(rr.end(), kr.end());
+                else
+                {
+                    b.add(rr.newRange(kr.start(), rr.start()), id);
+                    if (compareEnds >= 0)
+                        return null;
+                    return rr.newRange(rr.end(), kr.end());
+                }
             }))
             {
                 return this;
@@ -1160,10 +1164,25 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
                 if (range.compareIntersecting(last) == 0)
                 {
                     RoutingKey rstart = range.start(), lstart = last.start();
-                    Invariants.require(rstart.compareTo(lstart) >= 0);
+                    RoutingKey start = rstart.compareTo(lstart) < 0 ? rstart : lstart;
                     RoutingKey rend = range.end(), lend = last.end();
-                    if (rend.compareTo(lend) > 0)
-                        updateLast(last.newRange(lstart, rend));
+                    RoutingKey end = rend.compareTo(lend) > 0 ? rend : lend;
+                    if (start != lstart || end != lend)
+                    {
+                        Range newRange = last.newRange(start, end);
+                        if (start != lstart)
+                        {
+                            Range prev = penultimateKeyValue();
+                            while (prev != null && prev.compareIntersecting(newRange) == 0)
+                            {
+                                removeLastKeyValue();
+                                if (prev.start().compareTo(start) < 0)
+                                    newRange = newRange.newRange(prev.start(), end);
+                                prev = penultimateKeyValue();
+                            }
+                        }
+                        updateLast(newRange);
+                    }
                     return;
                 }
             }

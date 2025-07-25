@@ -212,6 +212,19 @@ public class RelationMultiMap
             keysToValues[totalCount - 1] = value;
         }
 
+        protected V penultimateKeyValue()
+        {
+            if (totalCount - keyOffset < 2)
+                return null;
+            return keysToValues[totalCount - 2];
+        }
+
+        protected void removeLastKeyValue()
+        {
+            Invariants.require(totalCount - keyOffset > 0);
+            keysToValues[--totalCount] = null;
+        }
+
         /**
          * Add this command as a dependency for each intersecting key
          */

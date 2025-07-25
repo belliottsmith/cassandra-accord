@@ -182,7 +182,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
                 Invariants.require(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
                 if (filterDuplicateDependenciesFromAcceptReply())
-                    deps = deps.without(this.partialDeps);
+                    deps = deps.without(partialDeps);
 
                 Participants<?> successful = isPartialAccept ? participants.touches() : null;
                 return new AcceptReply(successful, deps, flags);
