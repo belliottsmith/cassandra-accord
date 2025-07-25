@@ -141,15 +141,6 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     public void accept(CommitOrReadNack reply, Throwable failure)
     {
         super.accept(reply, failure);
-
-        boolean waiting;
-        synchronized (this)
-        {
-            waiting = waitingOnCount >= 0;
-        }
-        if (waiting && reply == null && failure == null)
-            node.reply(replyTo, replyContext, CommitOrReadNack.Waiting, null);
-
         txn = null;
         deps = null;
         writes = null;
