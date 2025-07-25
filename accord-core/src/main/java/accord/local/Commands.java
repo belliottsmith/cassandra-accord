@@ -885,7 +885,7 @@ public class Commands
         Update waitingOn = new Update(command);
         if (updateWaitingOn(safeStore, command, command.executeAt(), waitingOn, predecessor))
         {
-            safeCommand.updateWaitingOn(waitingOn);
+            safeCommand.updateWaitingOn(safeStore, waitingOn);
             // don't bother invoking maybeExecute if we weren't already blocked on the updated command
             if (waitingOn.hasUpdatedDirectDependency(command.waitingOn()))
                 maybeExecute(safeStore, safeCommand, false, notifyWaitingOn);
@@ -926,7 +926,7 @@ public class Commands
         waitingOn.removeWaitingOnKey(keyIndex);
         if (uniqueHlc > 0)
             waitingOn.updateUniqueHlc(committed.executeAt(), uniqueHlc);
-        safeCommand.updateWaitingOn(waitingOn);
+        safeCommand.updateWaitingOn(safeStore, waitingOn);
         if (!waitingOn.isWaiting())
             maybeExecute(safeStore, safeCommand, false, true);
     }
@@ -1355,7 +1355,7 @@ public class Commands
         // if we are a range transaction, being redundant for this transaction does not imply we are redundant for all transactions
         if (redundant != null)
             update.removeWaitingOn(redundant);
-        return safeCommand.updateWaitingOn(update);
+        return safeCommand.updateWaitingOn(safeStore, update);
     }
 
     static Command removeNoLongerOwnedDependency(SafeCommandStore safeStore, SafeCommand safeCommand, @Nonnull TxnId wasOwned)
@@ -1366,7 +1366,7 @@ public class Commands
 
         Update update = new Update(current.waitingOn);
         update.removeWaitingOn(wasOwned);
-        return safeCommand.updateWaitingOn(update);
+        return safeCommand.updateWaitingOn(safeStore, update);
     }
 
     public static Command supplementParticipants(Command command, StoreParticipants participants)

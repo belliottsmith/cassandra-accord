@@ -115,7 +115,7 @@ abstract class PostProcess
             StoreParticipants participants = command.participants();
             if (participants.owns().domain() == Routable.Domain.Key && !participants.hasTouched(safeCfk.key()))
                 command = safeCommand.updateParticipants(safeStore, participants.supplementHasTouched(RoutingKeys.of(safeCfk.key())));
-            safeCfk.callback(safeStore, command, notifySink);
+            safeCfk.callback(safeStore, command, notifySink, false);
         }
 
         static CommandsForKeyUpdate load(TxnId[] txnIds, CommandsForKeyUpdate result)
@@ -214,7 +214,7 @@ abstract class PostProcess
                 {
                     try
                     {
-                        CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, UPDATE, addUnmanageds);
+                        CommandsForKeyUpdate update = updateUnmanaged(cfk, safeStore, safeCommand, UPDATE, addUnmanageds);
                         if (update != cfk)
                         {
                             Invariants.require(update.cfk() == cfk);

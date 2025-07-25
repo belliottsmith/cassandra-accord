@@ -61,7 +61,7 @@ public class DefaultLocalListeners implements LocalListeners
         }
 
         @Override
-        public LocalListeners create(CommandStore store)
+        public LocalListeners create(CommandStore commandStore)
         {
             return new DefaultLocalListeners(remoteListeners, notifySink);
         }
@@ -520,6 +520,14 @@ public class DefaultLocalListeners implements LocalListeners
     public void clear()
     {
         txnListeners = BTree.empty();
-        complexListeners.clear();
+        complexListeners.forEach((key, value) -> {
+            // the listener registration needs to be invalidated so that a caller does not try to cancel it
+            RegisteredComplexListeners listeners = complexListeners.remove(key);
+            for (int i = 0 ; i < listeners.length ; i++)
+            {
+                if (listeners.listeners[i] != null)
+                    listeners.listeners[i].index = -1;
+            }
+        });
     }
 }

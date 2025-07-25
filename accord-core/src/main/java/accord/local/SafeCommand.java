@@ -86,9 +86,9 @@ public abstract class SafeCommand
         return update;
     }
 
-    public Command.Committed updateWaitingOn(Command.WaitingOn.Update waitingOn)
+    public Command.Committed updateWaitingOn(SafeCommandStore safeStore, Command.WaitingOn.Update waitingOn)
     {
-        return incidentalUpdate(Command.updateWaitingOn(current().asCommitted(), waitingOn));
+        return update(safeStore, Command.updateWaitingOn(current().asCommitted(), waitingOn));
     }
 
     public Command updateParticipants(SafeCommandStore safeStore, StoreParticipants participants)

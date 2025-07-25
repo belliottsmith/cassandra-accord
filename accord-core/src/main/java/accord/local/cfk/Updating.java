@@ -35,6 +35,7 @@ import accord.local.CommandStore;
 import accord.local.PreLoadContext;
 import accord.local.RedundantBefore.QuickBounds;
 import accord.local.SafeCommand;
+import accord.local.SafeCommandStore;
 import accord.local.cfk.CommandsForKey.InternalStatus;
 import accord.local.cfk.CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess;
 import accord.local.cfk.PostProcess.LoadPruned;
@@ -850,7 +851,7 @@ class Updating
         commandStore.execute(context, safeStore -> {
             SafeCommandsForKey safeCommandsForKey = safeStore.get(key);
             CommandsForKey cur = safeCommandsForKey.current();
-            CommandsForKeyUpdate next = Updating.updateUnmanaged(cur, safeStore.unsafeGet(txnId));
+            CommandsForKeyUpdate next = Updating.updateUnmanaged(cur, safeStore, safeStore.unsafeGet(txnId));
             if (cur != next)
             {
                 if (cur != next.cfk())
@@ -863,14 +864,14 @@ class Updating
         }, commandStore.agent());
     }
 
-    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand)
+    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        return Updating.updateUnmanaged(cfk, safeCommand, UPDATE, null);
+        return Updating.updateUnmanaged(cfk, safeStore, safeCommand, UPDATE, null);
     }
 
-    static CommandsForKeyUpdate registerDependencies(CommandsForKey cfk, SafeCommand safeCommand)
+    static CommandsForKeyUpdate registerDependencies(CommandsForKey cfk, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        return Updating.updateUnmanaged(cfk, safeCommand, REGISTER_DEPS_ONLY, null);
+        return Updating.updateUnmanaged(cfk, safeStore, safeCommand, REGISTER_DEPS_ONLY, null);
     }
 
     /**
@@ -880,7 +881,7 @@ class Updating
      *  - {@code UPDATE, update == null}: fails if any dependencies are missing; always returns a CommandsForKey
      *  - {@code UPDATE && update != null}: fails if any dependencies are missing; always returns the original CommandsForKey, and maybe adds a new Unmanaged to {@code update}
      */
-    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand, UpdateUnmanagedMode mode, @Nullable List<CommandsForKey.Unmanaged> update)
+    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommandStore safeStore, SafeCommand safeCommand, UpdateUnmanagedMode mode, @Nullable List<CommandsForKey.Unmanaged> update)
     {
         boolean register = mode != UPDATE;
         Invariants.requireArgument(mode == UPDATE || update == null);
@@ -1017,7 +1018,8 @@ class Updating
                 }
                 else
                 {
-                    Invariants.require(txnIds.get(i++).compareTo(cfk.prunedBefore()) < 0);
+                    Invariants.require(txnIds.get(i).compareTo(TxnId.max(cfk.bounds.locallyAppliedBefore, cfk.prunedBefore())) < 0);
+                    ++i;
                 }
             }
 
@@ -1052,7 +1054,7 @@ class Updating
                 }
             }
 
-            waitingToExecuteAt = updateExecuteAtLeast(waitingToExecuteAt, effectiveExecutesAt, safeCommand);
+            waitingToExecuteAt = updateExecuteAtLeast(waitingToExecuteAt, effectiveExecutesAt, safeStore, safeCommand);
             if (!readyToApply || missingCount > 0 || newById != null)
             {
                 if (newById == null) newById = byId;
@@ -1137,7 +1139,7 @@ class Updating
         return new CommandsForKeyUpdateWithPostProcess(cfk, new NotifyNotWaiting(null, new TxnId[] { safeCommand.txnId() }));
     }
 
-    private static Timestamp updateExecuteAtLeast(Timestamp waitingToExecuteAt, Timestamp effectiveExecutesAt, SafeCommand safeCommand)
+    private static Timestamp updateExecuteAtLeast(Timestamp waitingToExecuteAt, Timestamp effectiveExecutesAt, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
         if (waitingToExecuteAt instanceof TxnInfo)
             waitingToExecuteAt = ((TxnInfo) waitingToExecuteAt).plainExecuteAt();
@@ -1152,7 +1154,7 @@ class Updating
                 if (effectiveExecutesAt instanceof TxnInfo)
                     effectiveExecutesAt = ((TxnInfo) effectiveExecutesAt).plainExecuteAt();
                 waitingOn.updateExecuteAtLeast(txnId, effectiveExecutesAt);
-                safeCommand.updateWaitingOn(waitingOn);
+                safeCommand.updateWaitingOn(safeStore, waitingOn);
             }
         }
 

@@ -25,6 +25,8 @@ import accord.api.Result;
 import accord.api.Timeouts;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
+import accord.coordinate.tracking.QuorumIdTracker;
+import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
 import accord.local.Node;
@@ -35,6 +37,7 @@ import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.messages.Accept;
 import accord.messages.Commit;
+import accord.messages.InformDecided;
 import accord.messages.MessageType;
 import accord.messages.ReadData;
 import accord.messages.ReadData.CommitOrReadNack;
@@ -90,10 +93,14 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     final Topologies allTopologies;
     final CoordinationFlags flags;
     final BiConsumer<? super Result, Throwable> callback;
+    private final QuorumIdTracker stable;
 
     private final Participants<?> readScope;
+    private final boolean sendInitialStable;
     private Data data;
     private long uniqueHlc;
+    private boolean isPrivilegedVoteCommitting;
+    private boolean hasInformedDecidedOrSucceeded;
 
     ExecuteTxn(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
@@ -108,7 +115,9 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         this.sendDeps = sendDeps;
         this.flags = flags;
         this.callback = callback;
+        this.stable = new QuorumIdTracker(topologies);
         this.readScope = txn == null ? route : route.intersecting(txn.keys());
+        this.sendInitialStable = sendOnlyReadStableMessages() && path != RECOVER;
         Invariants.require(!txnId.awaitsOnlyDeps());
         Invariants.require(!txnId.awaitsPreviouslyOwned());
     }
@@ -120,6 +129,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         Node.Id self = node.id();
         if (permitLocalExecution() && tryIfUniversal(self))
         {
+            isPrivilegedVoteCommitting = true;
             new LocalExecute(txnId, flags.get(self)).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
@@ -142,7 +152,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         IntHashSet readSet = new IntHashSet();
         to.forEach(i -> readSet.add(i.id));
         // TODO (desired): if READY_TO_EXECUTE send a simple read (skip setting Stable)
-        Commit.stableAndRead(node, executor, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, sendDeps, readSet, flags, sendOnlyReadStableMessages() && path != RECOVER, this);
+        Commit.stableAndRead(node, executor, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, sendDeps, readSet, flags, sendInitialStable, this);
     }
 
     private Commit.Kind commitKind()
@@ -161,8 +171,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     public void contact(Id to)
     {
         ExecuteFlags flags = this.flags.get(to);
-        boolean alreadySentStable = !(sendOnlyReadStableMessages() && path != RECOVER);
-        Request request = Commit.requestTo(to, true, allTopologies, commitKind(), Ballot.ZERO, txnId, txn, route, readScope, executeAt, sendDeps, flags, alreadySentStable, false);
+        Request request = Commit.requestTo(to, true, allTopologies, commitKind(), Ballot.ZERO, txnId, txn, route, readScope, executeAt, sendDeps, flags, sendInitialStable, false);
         // we are always sending to a replica in the latest epoch and requesting a read, so onlyContactOldAndReadSet is a redundant parameter
         node.send(to, request, executor, this);
     }
@@ -174,10 +183,21 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     }
 
     @Override
+    protected void onSuccessAfterDone(Id from, ReadReply reply)
+    {
+        if (!hasInformedDecidedOrSucceeded && (reply.isOk() || reply == Waiting))
+        {
+            if (RequestStatus.Success == stable.recordSuccess(from))
+                informDecided();
+        }
+    }
+
+    @Override
     protected Action process(Id from, ReadReply reply)
     {
         if (reply.isOk())
         {
+            stable.recordSuccess(from);
             ReadOk ok = ((ReadOk) reply);
             Data next = ok.data;
             if (next != null)
@@ -196,6 +216,9 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         {
             default: throw new UnhandledEnum(nack);
             case Waiting:
+                if (from.id == node.id().id)
+                    isPrivilegedVoteCommitting = false;
+                stable.recordSuccess(from);
                 return Action.None;
 
             case Redundant:
@@ -217,6 +240,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         // TODO (expected): if we fail on the fast path and we haven't sent any Stable messages, we should send them now to make recovery easier
         if (failure == null)
         {
+            hasInformedDecidedOrSucceeded = true;
             Timestamp executeAt = this.executeAt;
             if (txnId.is(Txn.Kind.Write) && uniqueHlc != 0)
             {
@@ -233,9 +257,36 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         }
         else
         {
+            if (!hasInformedDecidedOrSucceeded && stable.hasReachedQuorum())
+                informDecided();
             callback.accept(null, failure);
         }
     }
+
+    @Override
+    public void onSlowResponse(Id from)
+    {
+        // send stable messages to everyone not yet contacted, and then inform decided, to avoid unnecessary recoveries
+        if (!hasInformedDecidedOrSucceeded && stable.hasReachedQuorum())
+            informDecided();
+        super.onSlowResponse(from);
+    }
+
+    @Override
+    public void onFailure(Id from, Throwable failure)
+    {
+        super.onFailure(from, failure);
+        if (isPrivilegedVoteCommitting && from.id == node.id().id)
+            tryFinishOnFailure();
+    }
+
+    private void informDecided()
+    {
+        Invariants.require(stable.hasReachedQuorum());
+        hasInformedDecidedOrSucceeded = true;
+        InformDecided.informHome(node, topologies, txnId, route);
+    }
+
 
     protected CoordinationAdapter<Result> adapter()
     {
@@ -323,14 +374,17 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         }
 
         @Override
-        protected boolean cancel()
+        public void timeout()
         {
             if (!super.cancel())
-                return false;
+                return;
 
-            // TODO (desired): if we fail to commit locally we can submit a slow/medium path request
-            callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly " + (committed ? "commit to" : "read from") + " local coordinator"));
-            return true;
+            if (committed) reply(null, new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
+            else
+            {
+                // TODO (desired): if we fail to commit locally we can submit a slow/medium path request
+                callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly commit to local coordinator"));
+            }
         }
 
         @Override

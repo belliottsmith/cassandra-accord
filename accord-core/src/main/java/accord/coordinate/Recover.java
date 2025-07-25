@@ -399,6 +399,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                                            .intersecting(route, id -> !recoverOks.containsKey(id.node));
         InferredFastPath fastPath;
         if (txnId.hasPrivilegedCoordinator() && coordinatorInRecoveryQuorum) fastPath = Reject;
+        else if (txnId.is(Txn.Kind.ExclusiveSyncPoint)) fastPath = Reject;
         else fastPath = merge(
             supersedingRejects(recoverOkList) ? Reject : Unknown,
             tracker.inferFastPathDecision(txnId, extraCoordVotes, extraRejects)
