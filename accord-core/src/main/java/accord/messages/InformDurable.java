@@ -19,6 +19,7 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
+import accord.api.RoutingKey;
 import accord.local.Commands;
 import accord.local.LoadKeys;
 import accord.local.Node;
@@ -89,23 +90,33 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
 
     public static void informHome(Node node, Topologies any, TxnId txnId, Route<?> route, Timestamp executeAt, Durability durability)
     {
-        long homeEpoch = txnId.epoch();
-        Topology homeEpochTopology = any.getEpoch(homeEpoch);
-        int homeShardIndex = homeEpochTopology.indexForKey(route.homeKey());
-        if (homeShardIndex < 0)
-        {
-            homeEpochTopology = node.topology().globalForEpoch(homeEpoch);
-            homeShardIndex = homeEpochTopology.indexForKey(route.homeKey());
-        }
-
-        Shard homeShard = homeEpochTopology.get(homeShardIndex);
-        Topologies homeTopology = new Topologies.Single(any, new Topology(homeEpoch, homeShard));
+        Shard homeShard = homeShard(node, any, txnId, route.homeKey());
+        Topologies homeTopology = new Topologies.Single(any, new Topology(txnId.epoch(), homeShard));
         node.send(homeShard.nodes, to -> new InformDurable(to, homeTopology, route.homeKeyOnlyRoute(), txnId, executeAt, txnId.epoch(), txnId.epoch(), durability));
     }
 
     public static void informAll(Node node, Topologies inform, TxnId txnId, Route<?> route, Timestamp executeAt, Durability durability)
     {
         node.send(inform.nodes(), to -> new InformDurable(to, inform, route, txnId, executeAt, inform.oldestEpoch(), inform.currentEpoch(), durability));
+    }
+
+    static Shard homeShard(Node node, Topologies any, TxnId txnId, RoutingKey homeKey)
+    {
+        long homeEpoch = txnId.epoch();
+        int homeShardIndex = -1;
+        Topology homeEpochTopology = null;
+        if (any.containsEpoch(homeEpoch))
+        {
+            homeEpochTopology = any.getEpoch(homeEpoch);
+            homeShardIndex = homeEpochTopology.indexForKey(homeKey);
+        }
+        if (homeShardIndex < 0)
+        {
+            homeEpochTopology = node.topology().globalForEpoch(homeEpoch);
+            homeShardIndex = homeEpochTopology.indexForKey(homeKey);
+        }
+
+        return homeEpochTopology.get(homeShardIndex);
     }
 
     @Override
@@ -142,7 +153,7 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     @Override
     public String toString()
     {
-        return "InformOfPersistence{" +
+        return "InformDurable{" +
                "txnId:" + txnId +
                '}';
     }

@@ -684,7 +684,7 @@ public class CommandsForKeyTest
                 if (!CommandsForKey.managesExecution(update.next.txnId()) && update.next.hasBeen(Status.Stable) && !update.next.hasBeen(Status.Truncated))
                 {
                     CommandsForKey prev = safeCfk.current();
-                    result = prev.registerUnmanaged(safeCommand, REGISTER);
+                    result = prev.registerUnmanaged(safeStore, safeCommand, REGISTER);
                     safeCfk.set(result.cfk());
                     result.postProcess(safeStore, prev, null, canon);
                 }

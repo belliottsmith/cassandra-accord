@@ -98,7 +98,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     public void registerUnmanaged(SafeCommandStore safeStore, SafeCommand unmanaged, UpdateUnmanagedMode mode)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, null, prevCfk, prevCfk.registerUnmanaged(unmanaged, mode));
+        update(safeStore, null, prevCfk, prevCfk.registerUnmanaged(safeStore, unmanaged, mode));
     }
 
     public void updateRedundantBefore(SafeCommandStore safeStore, RedundantBefore.Bounds redundantBefore)

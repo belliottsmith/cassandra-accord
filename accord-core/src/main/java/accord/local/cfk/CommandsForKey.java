@@ -1833,10 +1833,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, newLoadingPruned, prunedBeforeById, unmanageds);
     }
 
-    CommandsForKeyUpdate registerUnmanaged(SafeCommand safeCommand, UpdateUnmanagedMode mode)
+    CommandsForKeyUpdate registerUnmanaged(SafeCommandStore safeStore, SafeCommand safeCommand, UpdateUnmanagedMode mode)
     {
         Invariants.require(mode != UPDATE);
-        return Updating.updateUnmanaged(this, safeCommand, mode, null);
+        return Updating.updateUnmanaged(this, safeStore, safeCommand, mode, null);
     }
 
     void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink)

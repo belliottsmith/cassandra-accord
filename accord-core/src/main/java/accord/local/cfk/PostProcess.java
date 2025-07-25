@@ -214,7 +214,7 @@ abstract class PostProcess
                 {
                     try
                     {
-                        CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, UPDATE, addUnmanageds);
+                        CommandsForKeyUpdate update = updateUnmanaged(cfk, safeStore, safeCommand, UPDATE, addUnmanageds);
                         if (update != cfk)
                         {
                             Invariants.require(update.cfk() == cfk);

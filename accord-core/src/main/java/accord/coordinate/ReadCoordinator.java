@@ -182,8 +182,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         if (this.failure == null) this.failure = failure;
         else this.failure.addSuppressed(failure);
 
-        if (txnId.hasPrivilegedCoordinator() && from.id == node.id().id) finishOnFailure();
-        else handle(recordFailure(from));
+        handle(recordFailure(from));
     }
 
     @Override
@@ -213,6 +212,12 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
             else this.failure = failure;
         }
         finishOnFailure();
+    }
+
+    protected void tryFinishOnFailure()
+    {
+        if (!isDone)
+            finishOnFailure();
     }
 
     protected void finishOnFailure()
