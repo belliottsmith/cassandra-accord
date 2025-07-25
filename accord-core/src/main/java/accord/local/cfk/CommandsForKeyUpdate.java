@@ -36,7 +36,7 @@ public abstract class CommandsForKeyUpdate
     @VisibleForTesting
     public abstract CommandsForKey cfk();
     abstract PostProcess postProcess();
-    abstract void postProcess(SafeCommandStore safeStore, @Nullable CommandsForKey prevCfk, @Nullable Command command, NotifySink notifySink);
+    abstract void postProcess(SafeCommandStore safeStore, @Nullable CommandsForKey prevCfk, @Nullable Command command, NotifySink notifySink, boolean forceNotify);
 
     static class CommandsForKeyUpdateWithPostProcess extends CommandsForKeyUpdate
     {
@@ -62,9 +62,9 @@ public abstract class CommandsForKeyUpdate
         }
 
         @Override
-        void postProcess(SafeCommandStore safeStore, @Nullable CommandsForKey prevCfk, @Nullable Command command, NotifySink notifySink)
+        void postProcess(SafeCommandStore safeStore, @Nullable CommandsForKey prevCfk, @Nullable Command command, NotifySink notifySink, boolean forceNotify)
         {
-            cfk.postProcess(safeStore, prevCfk, command, notifySink);
+            cfk.postProcess(safeStore, prevCfk, command, notifySink, forceNotify);
             postProcess.postProcess(safeStore, cfk.key(), notifySink);
         }
     }

@@ -350,16 +350,45 @@ class Utils
         return newMissing;
     }
 
-    static TxnId[] removeRedundantMissing(TxnId[] missing, TxnId removeBefore)
+    static TxnId[] removeRedundantMissing(TxnId[] missing, TxnId removeBefore, TxnInfo[] newById, int appliedBeforeIndex)
     {
         if (missing == NO_TXNIDS)
             return NO_TXNIDS;
 
         int j = Arrays.binarySearch(missing, removeBefore);
         if (j < 0) j = -1 - j;
-        if (j <= 0) return missing;
-        if (j == missing.length) return NO_TXNIDS;
-        return Arrays.copyOfRange(missing, j, missing.length);
+        if (j > 0)
+        {
+            if (j == missing.length) return NO_TXNIDS;
+            missing = Arrays.copyOfRange(missing, j, missing.length);
+        }
+        if (appliedBeforeIndex < 0)
+            return missing;
+
+        int removed = 0;
+        j = SortedArrays.binarySearch(newById, 0, appliedBeforeIndex, missing[0], TxnId::compareTo, FAST);
+        if (j >= 0) ++j;
+        else
+        {
+            ++removed;
+            j = -1 - j;
+        }
+        for (int i = 1 ; i < missing.length ; ++i)
+        {
+            j = SortedArrays.exponentialSearch(newById, j, appliedBeforeIndex, missing[i], TxnId::compareTo, FAST);
+            if (j < 0)
+            {
+                ++removed;
+                j = -1 - j;
+            }
+            else if (removed > 0)
+            {
+                missing[i - removed] = missing[i];
+            }
+        }
+        if (removed == 0) return missing;
+        else if (removed == missing.length) return NO_TXNIDS;
+        else return Arrays.copyOf(missing, missing.length - removed);
     }
 
     static TxnId[] ensureOneMissing(TxnId txnId, TxnId[] oneMissing)

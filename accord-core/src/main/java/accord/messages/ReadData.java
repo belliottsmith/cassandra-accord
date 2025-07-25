@@ -68,6 +68,7 @@ import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.messages.MessageType.StandardMessage.READ_RSP;
 import static accord.messages.ReadData.CommitOrReadNack.Insufficient;
 import static accord.messages.ReadData.CommitOrReadNack.Redundant;
+import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.EphemeralRead;
@@ -313,7 +314,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, null, participants);
                     else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, scope, null);
                     node.agent().localEvents().onReadWaiting(safeStore, command);
-                    return status.compareTo(SaveStatus.Stable) >= 0 ? null : Insufficient;
+                    return status.compareTo(SaveStatus.Stable) >= 0 ? Waiting : Insufficient;
 
                 case OBSOLETE:
                     state = State.PENDING_OBSOLETE;

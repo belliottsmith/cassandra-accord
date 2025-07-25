@@ -36,6 +36,7 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.Ballot;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.primitives.Participants;
@@ -55,7 +56,7 @@ import org.agrona.collections.ObjectHashSet;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.NotBlocked;
-import static accord.impl.progresslog.CoordinatePhase.AwaitReadyToExecute;
+import static accord.impl.progresslog.CoordinatePhase.Decided;
 import static accord.impl.progresslog.CoordinatePhase.ReadyToExecute;
 import static accord.impl.progresslog.CoordinatePhase.Undecided;
 import static accord.impl.progresslog.Progress.Awaiting;
@@ -196,7 +197,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         Route<?> beforeRoute = before.route();
         Route<?> afterRoute = after.route();
         if (force || (afterRoute != null && beforeRoute == null) || (after.durability().isDurableOrInvalidated() && !before.durability().isDurableOrInvalidated()))
-            state = updateHomeState(safeStore, after, get(txnId));
+            state = updateOrInitialiseHomeState(safeStore, after, get(txnId));
 
         SaveStatus beforeSaveStatus = before.saveStatus();
         SaveStatus afterSaveStatus = after.saveStatus();
@@ -211,23 +212,40 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
         state.waiting().record(this, afterSaveStatus);
         if (state.isHomeInitialised())
+            updateHomeState(safeStore, state, before, after);
+    }
+
+    @Override
+    public void decided(SafeCommandStore safeStore, TxnId txnId)
+    {
+        TxnState state = get(txnId);
+        if (state != null && state.isHomeInitialised())
+            state.home().atLeast(safeStore, this, Decided, NoneExpected);
+    }
+
+    private void updateHomeState(SafeCommandStore safeStore, TxnState state, Command before, Command after)
+    {
+        switch (after.saveStatus())
         {
-            switch (afterSaveStatus)
-            {
-                case Stable:
-                    state.home().atLeast(safeStore, this, Undecided, NoneExpected);
-                    break;
-                case ReadyToExecute:
-                    state.home().atLeast(safeStore, this, AwaitReadyToExecute, Queued);
-                    break;
-                case PreApplied:
-                    state.home().atLeast(safeStore, this, ReadyToExecute, Queued);
-                    break;
-            }
+            case Stable:
+                if (!after.acceptedOrCommitted().equals(Ballot.ZERO) || (before != null && before.saveStatus() == SaveStatus.Committed))
+                    state.home().atLeast(safeStore, this, Decided, NoneExpected);
+            default:
+                // fall-through to default handler, which simply postpones any scheduled coordination attempt if we witness another coordination attempt in the meantime
+                if (state.homeProgress() == Queued && (before == null ? after.promised().compareTo(Ballot.ZERO) > 0 : (after.promised().compareTo(before.promised()) > 0) || after.acceptedOrCommitted().compareTo(before.acceptedOrCommitted()) > 0))
+                {
+                    clearPending(Home, state.txnId);
+                    state.home().set(safeStore, this, state.phase(), Queued);
+                }
+                break;
+            case ReadyToExecute:
+            case PreApplied:
+                state.home().atLeast(safeStore, this, ReadyToExecute, Queued);
+                break;
         }
     }
 
-    private TxnState updateHomeState(SafeCommandStore safeStore, Command after, @Nullable TxnState state)
+    private TxnState updateOrInitialiseHomeState(SafeCommandStore safeStore, Command after, @Nullable TxnState state)
     {
         Route<?> route = after.route();
         if (after.durability().isDurableOrInvalidated())
@@ -465,7 +483,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
         // in case progress log hasn't been updated (e.g. bug on replay), force an update to the command's state since we're about to wait on it
         if (!state.isHomeInitialised() && command.route() != null)
-            updateHomeState(safeStore, command, state);
+            updateOrInitialiseHomeState(safeStore, command, state);
     }
 
     @Override
@@ -676,13 +694,13 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         @Override
         public void accept(SafeCommandStore safeStore)
         {
-            if (!complete(safeStore, runKind, id, this))
-                return; // we've been cancelled
-
             // we have to read safeCommand first as it may become truncated on load, which may clear the progress log and invalidate us
             SafeCommand safeCommand = safeStore.ifInitialised(run.txnId);
             if (safeCommand == null)
                 return;
+
+            if (!complete(safeStore, runKind, id, this))
+                return; // we've been cancelled
 
             // check this after fetching SafeCommand, as doing so can erase the command (and invalidate our state)
             if (run.isDone(runKind))

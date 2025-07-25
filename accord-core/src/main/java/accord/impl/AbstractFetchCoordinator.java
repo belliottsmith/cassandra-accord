@@ -60,6 +60,7 @@ import javax.annotation.Nullable;
 import static accord.messages.MessageType.StandardMessage.FETCH_DATA_REQ;
 import static accord.messages.MessageType.StandardMessage.FETCH_DATA_RSP;
 import static accord.messages.ReadData.CommitOrReadNack.Redundant;
+import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.messages.ReadEphemeralTxnData.retryInLaterEpoch;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.TruncatedApply;
@@ -154,14 +155,16 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                     {
                         CoordinateSyncPoint.sendApply(node, from, syncPoint);
                     }
-                    else
+                    else if (reply == Redundant)
                     {
                         fail(to, new RuntimeException(reply.toString()));
                         inflight.remove(key).cancel();
-                        if (reply != Redundant)
-                            throw new UnhandledEnum((CommitOrReadNack)reply);
                         // too late, sync point has been erased
                         // TODO (desired): stop fetch sync points from garbage collecting too quickly
+                    }
+                    else if (reply != Waiting)
+                    {
+                        throw new UnhandledEnum((CommitOrReadNack)reply);
                     }
                     return;
                 }

@@ -155,7 +155,7 @@ abstract class HomeState extends WaitingState
             tracing.trace(safeStore.commandStore(), "Invoking MaybeRecover with progress token %s", maxProgressToken);
 
         instance.start(invoker, MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, reportTo, invoker));
-        set(safeStore, instance, ReadyToExecute, Querying);
+        set(safeStore, instance, phase(), Querying);
     }
 
     static void recoverCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog instance, TxnId txnId, @Nullable ProgressToken prevProgressToken, Outcome success, Throwable fail)

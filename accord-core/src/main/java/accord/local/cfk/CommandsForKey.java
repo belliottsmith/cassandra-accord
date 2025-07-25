@@ -235,7 +235,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     private static boolean reportLinearizabilityViolations = true;
 
-    public static final QuickBounds NO_BOUNDS_INFO = new QuickBounds(0, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE);
+    public static final QuickBounds NO_BOUNDS_INFO = new QuickBounds(0, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE);
     public static final TxnInfo NO_INFO = TxnInfo.create(TxnId.NONE, TRANSITIVE, false, TxnId.NONE, Ballot.ZERO);
     public static final TxnInfo[] NO_INFOS = new TxnInfo[0];
     static final TxnId[] NOT_LOADING_PRUNED = new TxnId[0];
@@ -1202,6 +1202,17 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return bounds.gcBefore;
     }
 
+    public TxnId appliedBefore()
+    {
+        return appliedBefore(bounds);
+    }
+
+    static TxnId appliedBefore(QuickBounds bounds)
+    {
+        // TODO (expected): this can be weakened to shardAppliedOrInvalidatedBefore
+        return bounds.locallyAppliedBefore;
+    }
+
     public boolean isPostBootstrapAndOwned(TxnId txnId)
     {
         return isPostBootstrapAndOwned(txnId, bounds);
@@ -1833,19 +1844,19 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, newLoadingPruned, prunedBeforeById, unmanageds);
     }
 
-    CommandsForKeyUpdate registerUnmanaged(SafeCommand safeCommand, UpdateUnmanagedMode mode)
+    CommandsForKeyUpdate registerUnmanaged(SafeCommandStore safeStore, SafeCommand safeCommand, UpdateUnmanagedMode mode)
     {
         Invariants.require(mode != UPDATE);
-        return Updating.updateUnmanaged(this, safeCommand, mode, null);
+        return Updating.updateUnmanaged(this, safeStore, safeCommand, mode, null);
     }
 
-    void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink)
+    void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink, boolean forceNotify)
     {
         TxnInfo minUndecided = minUndecided();
-        if (minUndecided != null && !minUndecided.equals(prevCfk.minUndecided()))
+        if (minUndecided != null && (forceNotify || !minUndecided.equals(prevCfk.minUndecided())))
             notifySink.waitingOn(safeStore, minUndecided, key, SaveStatus.Stable, HasStableDeps, true);
 
-        if (updated == null)
+        if (updated == null || forceNotify)
         {
             notifyManaged(safeStore, AnyGloballyVisible, 0, committedByExecuteAt.length, -1, notifySink);
             return;
@@ -2031,10 +2042,11 @@ public class CommandsForKey extends CommandsForKeyUpdate
         // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
         if (newBounds.gcBefore.hlc() < bounds.gcBefore.hlc())
         {
-            if (newBounds.endEpoch != bounds.endEpoch || !newBounds.bootstrappedAt.equals(bounds.bootstrappedAt))
+            if (newBounds.endEpoch != bounds.endEpoch || !newBounds.bootstrappedAt.equals(bounds.bootstrappedAt) || !newBounds.locallyAppliedBefore.equals(bounds.locallyAppliedBefore))
             {
                 newBounds = bounds.withEpochs(bounds.startEpoch, newBounds.endEpoch)
-                                  .withBootstrappedAtLeast(newBounds.bootstrappedAt);
+                                  .withBootstrappedAtLeast(newBounds.bootstrappedAt)
+                                  .withLocallyAppliedAtLeast(bounds.locallyAppliedBefore);
             }
             else
             {
@@ -2043,6 +2055,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
         else if (newBounds.gcBefore.equals(bounds.gcBefore)
                  && newBounds.bootstrappedAt.equals(bounds.bootstrappedAt)
+                 && newBounds.locallyAppliedBefore.equals(bounds.locallyAppliedBefore)
                  && newBounds.endEpoch == bounds.endEpoch)
         {
             return this;

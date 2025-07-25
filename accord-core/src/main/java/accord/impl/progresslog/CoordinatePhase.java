@@ -33,6 +33,11 @@ public enum CoordinatePhase
     Undecided,
 
     /**
+     * durably decided but not ready to execute locally; no progress expected
+     */
+    Decided,
+
+    /**
      * durably decided, but replicas may not be ready to execute; should wait until we can expect to successfully
      * execute the transaction before attempting recovery
      * TODO (expected): this state is not effectively used today, we only wait for the home shard to be ready to execute,

@@ -122,6 +122,8 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
     // TODO (desired): this isn't very clean way of integrating these responses
     protected Ranges unavailable(Reply reply) { throw new UnsupportedOperationException(); }
 
+    protected void onSuccessAfterDone(Id from, Reply reply) {}
+
     @Override
     public void onSuccess(Id from, Reply reply)
     {
@@ -129,7 +131,10 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
             debug.merge(from, reply, (a, b) -> a instanceof List<?> ? ((List<Object>) a).add(b) : Lists.newArrayList(a, b));
 
         if (isDone)
+        {
+            onSuccessAfterDone(from, reply);
             return;
+        }
 
         Action action = process(from, reply);
         switch (action)
@@ -182,8 +187,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         if (this.failure == null) this.failure = failure;
         else this.failure.addSuppressed(failure);
 
-        if (txnId.hasPrivilegedCoordinator() && from.id == node.id().id) finishOnFailure();
-        else handle(recordFailure(from));
+        handle(recordFailure(from));
     }
 
     @Override
@@ -213,6 +217,12 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
             else this.failure = failure;
         }
         finishOnFailure();
+    }
+
+    protected void tryFinishOnFailure()
+    {
+        if (!isDone)
+            finishOnFailure();
     }
 
     protected void finishOnFailure()
