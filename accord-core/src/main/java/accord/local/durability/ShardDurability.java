@@ -423,8 +423,8 @@ public class ShardDurability
     /*
      * In each cycle, attempt to split the range into this many pieces; if we fail, we increase the number of pieces
      */
-    private int targetShardSplits = 64;
-    private int maxShardSplits = 1 << 10;
+    private int targetShardSplits = 8;
+    private int maxShardSplits = 64;
 
     /*
      * Target for how often the entire ring should be processed in microseconds. Every node will start at an offset in the current round that is based

@@ -700,11 +700,7 @@ public class Cluster
                                      TestProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
                                      journal.durableBeforePersister(), journal);
                 journal.start(node);
-                DurabilityService durability = node.durability();
-                // TODO (desired): randomise
-                durability.shards().setShardCycleTime(30, SECONDS);
-                durability.global().setGlobalCycleTime(180, SECONDS);
-                durabilityServices.add(durability);
+                durabilityServices.add(node.durability());
                 nodeMap.put(id, node);
                 durabilityServices.add(new DurabilityService(node));
             }
@@ -730,7 +726,7 @@ public class Cluster
             Runnable updateProgressLogConcurrency;
             {
                 updateProgressLogConcurrency = () -> {
-                    nodeMap.values().forEach(node -> node.commandStores().forEachCommandStore(cs -> ((TestProgressLog)cs.unsafeProgressLog()).setMaxConcurrency(random.nextInt(1, 16))));
+                    nodeMap.values().forEach(node -> node.commandStores().forEachCommandStore(cs -> ((TestProgressLog)cs.unsafeProgressLog()).setMaxConcurrency(random.nextInt(8, 32))));
                 };
             }
             updateProgressLogConcurrency.run();

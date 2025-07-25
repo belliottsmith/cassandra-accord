@@ -806,6 +806,15 @@ public class CommandChange
         }
 
         // make sure we have enough information to decide whether to expunge timestamps (for unique ApplyAt HLC guarantees)
+        if (isChanged(SAVE_STATUS, flags) || isChanged(EXECUTE_AT, flags))
+        {
+            // to ensure we don't allow a later SaveStatus to be combined with a stale executeAt
+            // (which can be caused by expunging, and can briefly prevent further expunging if it was a higher timestamp),
+            // for now we ensure we always save the two together if either changes
+            flags = setChanged(SAVE_STATUS, flags);
+            if (after.executeAt() != null) flags = setChanged(EXECUTE_AT, flags);
+            else flags = setIsNullAndChanged(EXECUTE_AT, flags);
+        }
         if (saveStatus.known.is(ApplyAtKnown) && (before == null || !before.saveStatus().known.is(ApplyAtKnown)))
         {
             flags = setChanged(EXECUTE_AT, flags);

@@ -364,7 +364,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             return;
 
         TxnId txnId = next.txnId();
-        if (CommandsForKey.manages(txnId)) updateManagedCommandsForKey(this, prev, next);
+        if (CommandsForKey.manages(txnId)) updateManagedCommandsForKey(this, prev, next, force);
         if (!CommandsForKey.managesExecution(txnId) && next.hasBeen(Status.Stable) && !next.hasBeen(Status.Truncated) && (force || !prev.hasBeen(Status.Stable)))
             updateUnmanagedCommandsForKey(this, next, REGISTER);
         // TODO (expected): register deps during Accept phase to more quickly sync epochs
@@ -374,7 +374,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     abstract protected void persistFieldUpdates();
 
-    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command prev, Command next)
+    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command prev, Command next, boolean forceNotify)
     {
         StoreParticipants participants = next.participants().supplement(prev.participants());
         Participants<?> update = next.hasBeen(Status.Committed) ? participants.hasTouched() : participants.stillTouches();
@@ -386,7 +386,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         PreLoadContext execute = safeStore.canExecute(context);
         if (execute != null)
         {
-            updateManagedCommandsForKey(safeStore, execute.keys(), next.txnId());
+            updateManagedCommandsForKey(safeStore, execute.keys(), next.txnId(), forceNotify);
         }
         if (execute != context)
         {
@@ -399,12 +399,12 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 PreLoadContext ctx = safeStore0.context();
                 TxnId txnId = ctx.primaryTxnId();
                 Unseekables<?> keys = ctx.keys();
-                updateManagedCommandsForKey(safeStore0, keys, txnId);
+                updateManagedCommandsForKey(safeStore0, keys, txnId, forceNotify);
             }, safeStore.commandStore().agent);
         }
     }
 
-    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, TxnId txnId)
+    private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, TxnId txnId, boolean forceNotify)
     {
         // TODO (expected): avoid reentrancy / recursion
         SafeCommand safeCommand = safeStore.get(txnId);
@@ -412,7 +412,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         {
             // we use callback and re-fetch current to guard against reentrancy causing
             // us to interact with "future" or stale information (respectively)
-            safeStore.get(key).callback(safeStore, safeCommand.current());
+            safeStore.get(key).callback(safeStore, safeCommand.current(), forceNotify);
         }
     }
 

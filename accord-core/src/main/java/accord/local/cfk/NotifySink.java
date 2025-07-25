@@ -125,7 +125,7 @@ interface NotifySink
             SafeCommandsForKey update = safeStore.ifLoadedAndInitialised(key);
             if (update != null && safeStore.tryRecurse())
             {
-                try { update.callback(safeStore, safeStore.unsafeGet(txnId).current()); }
+                try { update.callback(safeStore, safeStore.unsafeGet(txnId).current(), false); }
                 finally { safeStore.unrecurse(); }
             }
             else

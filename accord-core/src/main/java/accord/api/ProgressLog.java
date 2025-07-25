@@ -182,6 +182,11 @@ public interface ProgressLog
     void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force);
 
     /**
+     * Record a remote notification that the command has been decided, so does not need to be recovered until ready to execute.
+     */
+    void decided(SafeCommandStore safeStore, TxnId txnId);
+
+    /**
      * Process a remote asynchronous callback.
      */
     void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from);
@@ -237,6 +242,7 @@ public interface ProgressLog
     class NoOpProgressLog implements ProgressLog
     {
         @Override public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force) {}
+        @Override public void decided(SafeCommandStore safeStore, TxnId txnId) {}
         @Override public void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from) {}
         @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants participants) {}
         @Override public void invalidIfUncommitted(TxnId txnId) {}

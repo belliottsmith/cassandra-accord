@@ -108,28 +108,43 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         public final long startEpoch, endEpoch;
         public final TxnId bootstrappedAt;
         public final TxnId gcBefore;
+        public final TxnId locallyAppliedBefore;
 
-        public QuickBounds(long startEpoch, long endEpoch, TxnId bootstrappedAt, TxnId gcBefore)
+        public QuickBounds(long startEpoch, long endEpoch, TxnId bootstrappedAt, TxnId gcBefore, TxnId locallyAppliedBefore)
         {
             this.startEpoch = startEpoch;
             this.endEpoch = endEpoch;
             this.bootstrappedAt = bootstrappedAt;
             this.gcBefore = gcBefore;
+            this.locallyAppliedBefore = locallyAppliedBefore;
         }
 
         public QuickBounds withEpochs(long startEpoch, long endEpoch)
         {
-            return new QuickBounds(startEpoch, endEpoch, bootstrappedAt, gcBefore);
+            if (startEpoch == this.startEpoch && endEpoch == this.endEpoch)
+                return this;
+            return new QuickBounds(startEpoch, endEpoch, bootstrappedAt, gcBefore, locallyAppliedBefore);
         }
 
         public QuickBounds withGcBeforeBeforeAtLeast(TxnId newGcBefore)
         {
-            return new QuickBounds(startEpoch, endEpoch, bootstrappedAt, newGcBefore);
+            if (newGcBefore.equals(this.gcBefore))
+                return this;
+            return new QuickBounds(startEpoch, endEpoch, bootstrappedAt, newGcBefore, locallyAppliedBefore);
         }
 
         public QuickBounds withBootstrappedAtLeast(TxnId newBootstrappedAt)
         {
-            return new QuickBounds(startEpoch, endEpoch, newBootstrappedAt, gcBefore);
+            if (newBootstrappedAt.equals(bootstrappedAt))
+                return this;
+            return new QuickBounds(startEpoch, endEpoch, newBootstrappedAt, gcBefore, locallyAppliedBefore);
+        }
+
+        public QuickBounds withLocallyAppliedAtLeast(TxnId newLocallyAppliedBefore)
+        {
+            if (newLocallyAppliedBefore.equals(locallyAppliedBefore))
+                return this;
+            return new QuickBounds(startEpoch, endEpoch, bootstrappedAt, gcBefore, newLocallyAppliedBefore);
         }
     }
 
@@ -162,7 +177,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
         public Bounds(Range range, long startEpoch, long endEpoch, TxnId[] bounds, short[] statuses, @Nullable Timestamp staleUntilAtLeast)
         {
-            super(startEpoch, endEpoch, maxBound(bounds, statuses, PRE_BOOTSTRAP), maxBound(bounds, statuses, GC_BEFORE));
+            super(startEpoch, endEpoch, maxBound(bounds, statuses, PRE_BOOTSTRAP), maxBound(bounds, statuses, GC_BEFORE),
+                  maxBound(bounds, statuses, LOCALLY_APPLIED));
             this.range = range;
             this.bounds = bounds;
             this.statuses = statuses;

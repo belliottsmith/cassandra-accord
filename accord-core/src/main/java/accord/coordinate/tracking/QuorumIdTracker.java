@@ -18,12 +18,10 @@
 
 package accord.coordinate.tracking;
 
-import java.util.Set;
-
 import accord.local.Node;
 import accord.topology.Shard;
 import accord.topology.Topologies;
-import org.agrona.collections.ObjectHashSet;
+import accord.utils.SortedListSet;
 
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.Fail;
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.NoChange;
@@ -33,12 +31,13 @@ public class QuorumIdTracker extends SimpleTracker<QuorumIdTracker.QuorumIdShard
 {
     public static class QuorumIdShardTracker extends ShardTracker
     {
-        protected final Set<Node.Id> successes = new ObjectHashSet<>();
-        protected Set<Node.Id> failures;
+        protected final SortedListSet<Node.Id> successes;
+        protected SortedListSet<Node.Id> failures;
 
         public QuorumIdShardTracker(Shard shard)
         {
             super(shard);
+            successes = SortedListSet.noneOf(shard.nodes);
         }
 
         public ShardOutcomes onSuccess(Node.Id from)
@@ -50,7 +49,7 @@ public class QuorumIdTracker extends SimpleTracker<QuorumIdTracker.QuorumIdShard
         public ShardOutcomes onFailure(Node.Id from)
         {
             if (failures == null)
-                failures = new ObjectHashSet<>();
+                failures = SortedListSet.noneOf(shard.nodes);
             return failures.add(from) && failures.size() == 1 + shard.maxFailures ? Fail : NoChange;
         }
 
