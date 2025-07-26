@@ -1018,7 +1018,8 @@ class Updating
                 }
                 else
                 {
-                    Invariants.require(txnIds.get(i++).compareTo(cfk.prunedBefore()) < 0);
+                    Invariants.require(txnIds.get(i).compareTo(TxnId.max(cfk.bounds.locallyAppliedBefore, cfk.prunedBefore())) < 0);
+                    ++i;
                 }
             }
 

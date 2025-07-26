@@ -39,6 +39,8 @@ import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
+import static accord.local.cfk.CommandsForKey.appliedBefore;
 import static accord.local.cfk.CommandsForKey.bootstrappedAt;
 import static accord.local.cfk.CommandsForKey.insertPos;
 import static accord.local.cfk.CommandsForKey.managesExecution;
@@ -530,6 +532,7 @@ public class Pruning
 
     static TxnInfo[] removeRedundantById(TxnInfo[] byId, boolean hasRedundantLoadingPruned, QuickBounds prevBounds, QuickBounds newBounds)
     {
+        TxnId newAppliedBefore = appliedBefore(newBounds);
         TxnId newRedundantBefore = redundantBefore(newBounds);
         TxnId newBootstrappedAt = bootstrappedAt(newBounds);
         TxnId prevRedundantBefore = redundantBefore(prevBounds);
@@ -539,22 +542,70 @@ public class Pruning
 
         TxnInfo[] newById = byId;
         int pos = insertPos(byId, newRedundantBefore);
-        if (pos != 0 || hasRedundantLoadingPruned)
+        int appliedPos = Arrays.binarySearch(byId, pos, byId.length, newAppliedBefore);
+        if (appliedPos < 0) appliedPos = -1 - appliedPos;
+        if (pos != 0 || appliedPos != 0 || hasRedundantLoadingPruned)
         {
             if (Invariants.isParanoid() && testParanoia(LINEAR, NONE, LOW))
             {
                 int startPos = prevBootstrappedAt == null ? 0 : insertPos(byId, prevBootstrappedAt);
                 for (int i = startPos ; i < pos ; ++i)
-                    Invariants.require(byId[i].isNot(COMMITTED) || !byId[i].mayExecute() || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
+                    Invariants.require((byId[i].isNot(COMMITTED) && byId[i].isNot(STABLE)) || !byId[i].mayExecute() || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
             }
 
-            newById = Arrays.copyOfRange(byId, pos, byId.length);
+            int removeUnappliedCount = 0;
+            if (appliedPos > pos)
+            {
+                // we apply additional filtering to remove any transactions we know would apply locally, but haven't executed
+                // so we know they will not execute. note: we cannot do this safely for any transactions we don't execute locally!
+                // this is used to handle consistent restore on replay, where we may have some transaction that is logically
+                // invalidated, but we may only record the invalidation after the snapshot is created because the RX doesn't
+                // record it as a dependency (and so it doesn't have to be decided for the RX to execute).
+                // We may then later invalidate and update the CFK, but since this is not reflected in the snapshot,
+                // after restoring from snapshot we may have an inconsistency between the command state and the CFK state,
+                // and won't know that we should update the CFK because the command is already invalidated.
+                // So, to avoid having to read all CFK on startup and process any potentially invalidated transactions,
+                // we instead apply this filtering aggressively whenever we know the transaction cannot apply,
+                // and rely on the applied RX to correctly reject recovery of the transaction.
+                for (int i = pos ; i < appliedPos ; ++i)
+                {
+                    if (byId[i].compareTo(APPLIED) < 0)
+                    {
+                        if (byId[i].mayExecute())
+                        {
+                            Invariants.require((byId[i].isNot(COMMITTED) && byId[i].isNot(STABLE)) || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
+                            // we only filter those that would apply locally
+                            removeUnappliedCount++;
+                        }
+                    }
+                }
+            }
+
+            int newAppliedBeforeIndex;
+            if (removeUnappliedCount > 0)
+            {
+                newAppliedBeforeIndex = (appliedPos - pos) - removeUnappliedCount;
+                newById = new TxnInfo[(byId.length - appliedPos) + newAppliedBeforeIndex];
+                removeUnappliedCount = 0;
+                for (int i = pos ; i < appliedPos ; ++i)
+                {
+                    if (byId[i].compareTo(APPLIED) < 0 && byId[i].mayExecute()) ++removeUnappliedCount;
+                    else newById[i - (pos + removeUnappliedCount)] = byId[i];
+                }
+                System.arraycopy(byId, appliedPos, newById, newAppliedBeforeIndex, newById.length - newAppliedBeforeIndex);
+            }
+            else
+            {
+                newAppliedBeforeIndex = -1;
+                newById = Arrays.copyOfRange(byId, pos, byId.length);
+            }
+
             for (int i = 0 ; i < newById.length ; ++i)
             {
                 TxnInfo txn = newById[i];
                 TxnId[] missing = txn.missing();
                 if (missing == NO_TXNIDS) continue;
-                missing = removeRedundantMissing(missing, newRedundantBefore);
+                missing = removeRedundantMissing(missing, newRedundantBefore, newById, newAppliedBeforeIndex);
                 newById[i] = txn.withMissing(missing);
             }
         }
