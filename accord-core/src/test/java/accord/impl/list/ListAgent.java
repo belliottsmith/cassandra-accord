@@ -25,6 +25,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 
@@ -47,6 +48,7 @@ import accord.impl.basic.SimulatedFault;
 import accord.impl.mock.Network;
 import accord.local.Command;
 import accord.local.Node;
+import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
 import accord.messages.ReplyContext;
@@ -290,7 +292,9 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     public AsyncResult<Void> snapshot(InMemoryCommandStore commandStore)
     {
         Snapshotter<Snapshot> snapshotter = snapshotters.computeIfAbsent(commandStore.id(), ignore -> new Snapshotter<>(scheduler, rnd));
-        return snapshotter.snapshot(false, Snapshot.snapshot(commandStore));
+        return commandStore.submit((PreLoadContext.Empty)() -> "Snapshot", safeStore -> snapshotter.snapshot(false, Snapshot.snapshot(commandStore)))
+                           .flatMap(Function.identity())
+                           .beginAsResult();
     }
 
     public void restore(InMemoryCommandStore commandStore)
