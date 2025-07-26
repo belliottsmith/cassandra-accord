@@ -25,6 +25,7 @@ import accord.api.Result;
 import accord.api.Timeouts;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
+import accord.coordinate.tracking.QuorumIdTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
@@ -92,7 +93,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     final Topologies allTopologies;
     final CoordinationFlags flags;
     final BiConsumer<? super Result, Throwable> callback;
-    private final QuorumTracker stable;
+    private final QuorumIdTracker stable;
 
     private final Participants<?> readScope;
     private final boolean sendInitialStable;
@@ -114,7 +115,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         this.sendDeps = sendDeps;
         this.flags = flags;
         this.callback = callback;
-        this.stable = new QuorumTracker(topologies);
+        this.stable = new QuorumIdTracker(topologies);
         this.readScope = txn == null ? route : route.intersecting(txn.keys());
         this.sendInitialStable = sendOnlyReadStableMessages() && path != RECOVER;
         Invariants.require(!txnId.awaitsOnlyDeps());
