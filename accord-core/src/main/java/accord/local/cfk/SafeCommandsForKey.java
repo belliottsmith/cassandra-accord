@@ -47,38 +47,32 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         return key;
     }
 
-    public void update(SafeCommandStore safeStore, Command nextCommand)
-    {
-        CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.update(safeStore, nextCommand));
-    }
-
     public void updateUniqueHlc(SafeCommandStore safeStore, long uniqueHlc)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, null, prevCfk, prevCfk.updateUniqueHlc(uniqueHlc));
+        update(safeStore, null, prevCfk, prevCfk.updateUniqueHlc(uniqueHlc), false);
     }
 
     // equivalent to update, but for async callbacks with additional validation around pruning
-    public void callback(SafeCommandStore safeStore, Command nextCommand)
+    public void callback(SafeCommandStore safeStore, Command nextCommand, boolean forceNotify)
     {
-        callback(safeStore, nextCommand, DefaultNotifySink.INSTANCE);
+        callback(safeStore, nextCommand, DefaultNotifySink.INSTANCE, forceNotify);
     }
 
-    public void callback(SafeCommandStore safeStore, Command nextCommand, NotifySink notifySink)
+    public void callback(SafeCommandStore safeStore, Command nextCommand, NotifySink notifySink, boolean forceNotify)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, nextCommand, prevCfk, prevCfk.callback(safeStore, nextCommand), notifySink);
+        update(safeStore, nextCommand, prevCfk, prevCfk.callback(safeStore, nextCommand), notifySink, forceNotify);
     }
 
-    private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk)
+    private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk, boolean forceNotify)
     {
-        update(safeStore, command, prevCfk, updateCfk, DefaultNotifySink.INSTANCE);
+        update(safeStore, command, prevCfk, updateCfk, DefaultNotifySink.INSTANCE, forceNotify);
     }
 
-    private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk, NotifySink notifySink)
+    private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk, NotifySink notifySink, boolean forceNotify)
     {
-        if (updateCfk == prevCfk)
+        if (updateCfk == prevCfk && !forceNotify)
             return;
 
         CommandsForKey nextCfk = updateCfk.cfk();
@@ -92,19 +86,19 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
             set(nextCfk);
         }
 
-        updateCfk.postProcess(safeStore, prevCfk, command, notifySink);
+        updateCfk.postProcess(safeStore, prevCfk, command, notifySink, forceNotify);
     }
 
     public void registerUnmanaged(SafeCommandStore safeStore, SafeCommand unmanaged, UpdateUnmanagedMode mode)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, null, prevCfk, prevCfk.registerUnmanaged(safeStore, unmanaged, mode));
+        update(safeStore, null, prevCfk, prevCfk.registerUnmanaged(safeStore, unmanaged, mode), false);
     }
 
     public void updateRedundantBefore(SafeCommandStore safeStore, RedundantBefore.Bounds redundantBefore)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, null, prevCfk, prevCfk.withRedundantBeforeAtLeast(redundantBefore));
+        update(safeStore, null, prevCfk, prevCfk.withRedundantBeforeAtLeast(redundantBefore), false);
     }
 
     public void initialize()

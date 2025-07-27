@@ -1850,13 +1850,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return Updating.updateUnmanaged(this, safeStore, safeCommand, mode, null);
     }
 
-    void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink)
+    void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink, boolean forceNotify)
     {
         TxnInfo minUndecided = minUndecided();
-        if (minUndecided != null && !minUndecided.equals(prevCfk.minUndecided()))
+        if (minUndecided != null && (forceNotify || !minUndecided.equals(prevCfk.minUndecided())))
             notifySink.waitingOn(safeStore, minUndecided, key, SaveStatus.Stable, HasStableDeps, true);
 
-        if (updated == null)
+        if (updated == null || forceNotify)
         {
             notifyManaged(safeStore, AnyGloballyVisible, 0, committedByExecuteAt.length, -1, notifySink);
             return;

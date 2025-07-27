@@ -678,7 +678,7 @@ public class CommandsForKeyTest
                     safeCfk.set(result.cfk());
                     if (rnd.decide(pruneChance))
                         safeCfk.set(safeCfk.current.maybePrune(pruneInterval, pruneHlcDelta));
-                    result.postProcess(safeStore, prev, update.next, canon);
+                    result.postProcess(safeStore, prev, update.next, canon, false);
                 }
 
                 if (!CommandsForKey.managesExecution(update.next.txnId()) && update.next.hasBeen(Status.Stable) && !update.next.hasBeen(Status.Truncated))
@@ -686,7 +686,7 @@ public class CommandsForKeyTest
                     CommandsForKey prev = safeCfk.current();
                     result = prev.registerUnmanaged(safeStore, safeCommand, REGISTER);
                     safeCfk.set(result.cfk());
-                    result.postProcess(safeStore, prev, null, canon);
+                    result.postProcess(safeStore, prev, null, canon, false);
                 }
             }
         }
