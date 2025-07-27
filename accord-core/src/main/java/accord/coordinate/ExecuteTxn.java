@@ -26,7 +26,7 @@ import accord.api.Timeouts;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.coordinate.tracking.QuorumIdTracker;
-import accord.coordinate.tracking.QuorumTracker;
+import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
 import accord.local.Node;
@@ -100,7 +100,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     private Data data;
     private long uniqueHlc;
     private boolean isPrivilegedVoteCommitting;
-    private boolean hasInformedDecided;
+    private boolean hasInformedDecidedOrSucceeded;
 
     ExecuteTxn(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
@@ -183,6 +183,16 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     }
 
     @Override
+    protected void onSuccessAfterDone(Id from, ReadReply reply)
+    {
+        if (!hasInformedDecidedOrSucceeded && (reply.isOk() || reply == Waiting))
+        {
+            if (RequestStatus.Success == stable.recordSuccess(from))
+                informDecided();
+        }
+    }
+
+    @Override
     protected Action process(Id from, ReadReply reply)
     {
         if (reply.isOk())
@@ -230,6 +240,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         // TODO (expected): if we fail on the fast path and we haven't sent any Stable messages, we should send them now to make recovery easier
         if (failure == null)
         {
+            hasInformedDecidedOrSucceeded = true;
             Timestamp executeAt = this.executeAt;
             if (txnId.is(Txn.Kind.Write) && uniqueHlc != 0)
             {
@@ -246,8 +257,8 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         }
         else
         {
-            if (!hasInformedDecided && stable.hasReachedQuorum())
-                InformDecided.informHome(node, topologies, txnId, route);
+            if (!hasInformedDecidedOrSucceeded && stable.hasReachedQuorum())
+                informDecided();
             callback.accept(null, failure);
         }
     }
@@ -256,11 +267,8 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     public void onSlowResponse(Id from)
     {
         // send stable messages to everyone not yet contacted, and then inform decided, to avoid unnecessary recoveries
-        if (!hasInformedDecided && stable.hasReachedQuorum())
-        {
-            InformDecided.informHome(node, topologies, txnId, route);
-            hasInformedDecided = true;
-        }
+        if (!hasInformedDecidedOrSucceeded && stable.hasReachedQuorum())
+            informDecided();
         super.onSlowResponse(from);
     }
 
@@ -271,6 +279,14 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         if (isPrivilegedVoteCommitting && from.id == node.id().id)
             tryFinishOnFailure();
     }
+
+    private void informDecided()
+    {
+        Invariants.require(stable.hasReachedQuorum());
+        hasInformedDecidedOrSucceeded = true;
+        InformDecided.informHome(node, topologies, txnId, route);
+    }
+
 
     protected CoordinationAdapter<Result> adapter()
     {
