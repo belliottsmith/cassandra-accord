@@ -18,18 +18,23 @@
 
 package accord.impl.basic;
 
+import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 
 import accord.api.ProgressLog;
 import accord.impl.progresslog.DefaultProgressLog;
+import accord.impl.progresslog.TxnState;
+import accord.impl.progresslog.TxnStateKind;
 import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 
 public class TestProgressLogs implements ProgressLog.Factory
 {
     static class TestProgressLog extends DefaultProgressLog
     {
+        private static final RecurringPendingRunnable RECURRING = new RecurringPendingRunnable(-1, null, null, null, null, true){};
         protected TestProgressLog(Node node, CommandStore commandStore)
         {
             super(node, commandStore);
@@ -46,11 +51,29 @@ public class TestProgressLogs implements ProgressLog.Factory
             }
             finally
             {
-                if (prev != Pending.Global.NONE)
+                Pending.Global.unsafeSetActiveOrigin(prev);
+            }
+        }
+
+        @Override
+        protected void run(TxnStateKind runKind, TxnState run, SafeCommandStore safeStore, SafeCommand safeCommand)
+        {
+            if (run.txnId.isSystemTxn())
+            {
+                Pending prev = Pending.Global.activeOrigin();
+                Pending.Global.unsafeSetActiveOrigin(RECURRING);
+                try
                 {
-                    Pending.Global.clearActiveOrigin();
-                    Pending.Global.setActiveOrigin(prev);
+                    super.run(runKind, run, safeStore, safeCommand);
                 }
+                finally
+                {
+                    Pending.Global.unsafeSetActiveOrigin(prev);
+                }
+            }
+            else
+            {
+                super.run(runKind, run, safeStore, safeCommand);
             }
         }
     }

@@ -73,11 +73,11 @@ public class FetchData extends CheckShards<Route<?>>
         final long srcEpoch;
         // known participants, a subset of which we may fetch from
         final Participants<?> contactable;
-        final StoreSelector reportTo;
+        final LatentStoreSelector reportTo;
         final BiConsumer<? super FetchResult, Throwable> callback;
         final @Nullable Tracing tracing;
 
-        public FetchRequest(SequentialAsyncExecutor executor, Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> contactable, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing tracing)
+        public FetchRequest(SequentialAsyncExecutor executor, Known fetch, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing tracing)
         {
             this.executor = executor;
             this.fetch = fetch;
@@ -95,29 +95,26 @@ public class FetchData extends CheckShards<Route<?>>
     /**
      * Do not make an attempt to discern what keys need to be contacted; fetch from only the specific remote keys that were requested.
      */
-    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    public static Object fetchSpecific(Known fetch, Node node, TxnId txnId, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        fetchSpecific(fetch, node, txnId, NotKnownToBeInvalid, executeAt, query, maxRoute, reportTo, callback);
+        return fetchSpecific(fetch, node, txnId, NotKnownToBeInvalid, executeAt, query, maxRoute, reportTo, callback);
     }
 
     /**
      * Do not make an attempt to discern what keys need to be contacted; fetch from only the specific remote keys that were requested.
      */
-    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    public static Object fetchSpecific(Known fetch, Node node, TxnId txnId, InvalidIf invalidIf, @Nullable Timestamp executeAt, Route<?> query, Route<?> maxRoute, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        fetchSpecific(node, query, maxRoute, new FetchRequest(node.someSequentialExecutor(), fetch, txnId, invalidIf, executeAt, maxRoute, reportTo, callback, node.agent().trace(txnId, FETCH)));
+        return fetchSpecific(node, query, maxRoute, new FetchRequest(node.someSequentialExecutor(), fetch, txnId, invalidIf, executeAt, maxRoute, reportTo, callback, node.agent().trace(txnId, FETCH)));
     }
 
-    public static void fetchSpecific(Node node, Route<?> query, Route<?> maxRoute, FetchRequest request)
+    public static Object fetchSpecific(Node node, Route<?> query, Route<?> maxRoute, FetchRequest request)
     {
         long srcEpoch = request.srcEpoch;
         if (!node.topology().hasAtLeastEpoch(srcEpoch))
-        {
-            node.withEpochAtLeast(srcEpoch, request.executor, request.callback, () -> fetchSpecific(node, query, maxRoute, request));
-            return;
-        }
+            return node.withEpochAtLeast(srcEpoch, request.executor, request.callback, () -> fetchSpecific(node, query, maxRoute, request));
 
-        fetchData(node, query, maxRoute, request);
+        return fetchData(node, query, maxRoute, request);
     }
 
     final BiConsumer<? super FetchResult, Throwable> callback;
@@ -131,12 +128,12 @@ public class FetchData extends CheckShards<Route<?>>
     // (i.e. if preaccept/accept contact a later epoch than execution is decided for)
     final LatentStoreSelector reportTo;
 
-    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
         this(node, target, txnId, invalidIf, route, route.withHomeKey(), maxRoute, sourceEpoch, reportTo, callback);
     }
 
-    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
         // TODO (desired, efficiency): restore behaviour of only collecting info if e.g. Committed or Executed
         super(node, node.someSequentialExecutor(), txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf);

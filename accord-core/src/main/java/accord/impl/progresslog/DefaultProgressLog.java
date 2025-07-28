@@ -18,6 +18,7 @@
 
 package accord.impl.progresslog;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -27,6 +28,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
@@ -52,14 +56,12 @@ import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
 import org.agrona.collections.Long2ObjectHashMap;
 import org.agrona.collections.Object2ObjectHashMap;
-import org.agrona.collections.ObjectHashSet;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.NotBlocked;
 import static accord.impl.progresslog.CoordinatePhase.Decided;
 import static accord.impl.progresslog.CoordinatePhase.ReadyToExecute;
 import static accord.impl.progresslog.CoordinatePhase.Undecided;
-import static accord.impl.progresslog.Progress.Awaiting;
 import static accord.impl.progresslog.Progress.NoneExpected;
 import static accord.impl.progresslog.Progress.Querying;
 import static accord.impl.progresslog.Progress.Queued;
@@ -79,6 +81,29 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 // TODO (desired): evict to disk
 public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStore>
 {
+    static abstract class PendingTask
+    {
+        final DefaultProgressLog owner;
+
+        PendingTask(DefaultProgressLog owner)
+        {
+            this.owner = owner;
+        }
+
+        void postRun(SafeCommandStore safeStore)
+        {
+            owner.acceptIfNonEmptyRunBuffer(safeStore);
+        }
+    }
+
+    public static class Config
+    {
+        public int concurrency = 8;
+        public Duration maxActiveRunTime = Duration.ofMinutes(1);
+    }
+
+    private static final Logger logger = LoggerFactory.getLogger(DefaultProgressLog.class);
+
     final Node node;
     final CommandStore commandStore;
 
@@ -94,8 +119,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
      * These callbacks are required to have hashCode() == txnId.hashCode() and equals(txnId) == true,
      * so that we can manage overriding callbacks on the relevant TxnState.
      */
-    private final ObjectHashSet<Object> pendingWaiting = new ObjectHashSet<>();
-    private final ObjectHashSet<Object> pendingHome = new ObjectHashSet<>();
+    // TODO (desired): replace this with a set that can lookup the matching item
+    private final Object2ObjectHashMap<TxnId, PendingTask> pendingWaiting = new Object2ObjectHashMap<>();
+    private final Object2ObjectHashMap<TxnId, PendingTask> pendingHome = new Object2ObjectHashMap<>();
 
     private final Long2ObjectHashMap<Object> active = new Long2ObjectHashMap<>();
     private final Map<TxnId, StackTraceElement[]> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
@@ -113,9 +139,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private boolean processing;
 
     private volatile boolean stopped;
-    private int maxConcurrency = 128;
+    private Config config = new Config();
 
-    private long nextInvokerId;
+    private long nextCallbackId;
 
     protected DefaultProgressLog(Node node, CommandStore commandStore)
     {
@@ -234,7 +260,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
                 // fall-through to default handler, which simply postpones any scheduled coordination attempt if we witness another coordination attempt in the meantime
                 if (state.homeProgress() == Queued && (before == null ? after.promised().compareTo(Ballot.ZERO) > 0 : (after.promised().compareTo(before.promised()) > 0) || after.acceptedOrCommitted().compareTo(before.acceptedOrCommitted()) > 0))
                 {
-                    clearPending(Home, state.txnId);
+                    clearPendingAndActive(Home, state.txnId);
                     state.home().set(safeStore, this, state.phase(), Queued);
                 }
                 break;
@@ -494,6 +520,12 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             state.setInvalidIfUncommitted();
     }
 
+    void acceptIfNonEmptyRunBuffer(SafeCommandStore safeStore)
+    {
+        if (runBufferIndex < runBufferCount)
+            accept(safeStore);
+    }
+
     @Override
     public void accept(@Nullable SafeCommandStore safeStore)
     {
@@ -592,6 +624,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
                 run.clearPendingTimerDelay();
                 if (pendingTimerDeadline <= nowMicros)
                 {
+                    validatePreRunState(run, runKind.other());
                     invokeBoth = true;
                 }
                 else
@@ -640,7 +673,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     {
         while (runBufferIndex < runBufferCount)
         {
-            if (active.size() >= maxConcurrency)
+            if (active.size() >= config.concurrency)
             {
                 maybeShrinkRunBuffer();
                 return;
@@ -668,77 +701,60 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private void validatePreRunState(TxnState run, TxnStateKind kind)
     {
         Progress progress = kind == Waiting ? run.waiting().waitingProgress() : run.home().homeProgress();
-        Invariants.require(progress != NoneExpected && progress != Querying);
+        Invariants.require(progress != NoneExpected);
+        if (progress == Querying)
+        {
+            // TODO (expected): add debug information about the active task
+            logger.warn("Interrupting query for {} ({}) as fallback timeout exceeded", run.txnId, kind);
+            clearPendingAndActive(kind, run.txnId);
+        }
     }
 
     RunInvoker invoker(TxnState run, TxnStateKind runKind)
     {
-        RunInvoker invoker = new RunInvoker(nextInvokerId(), run, runKind);
+        RunInvoker invoker = new RunInvoker(this, run, runKind);
         registerPending(runKind, run.txnId, invoker);
         return invoker;
     }
 
-    class RunInvoker implements Consumer<SafeCommandStore>, PreLoadContext
+    static final class RunInvoker extends PendingTask implements PreLoadContext, Consumer<SafeCommandStore>
     {
-        final long id;
+        final DefaultProgressLog owner;
         final TxnState run;
         final TxnStateKind runKind;
 
-        RunInvoker(long id, TxnState run, TxnStateKind runKind)
+        RunInvoker(DefaultProgressLog owner, TxnState run, TxnStateKind runKind)
         {
-            this.id = id;
+            super(owner);
+            this.owner = owner;
             this.run = run;
             this.runKind = runKind;
+        }
+
+        private boolean complete()
+        {
+            return owner.complete(runKind, run.txnId, this);
+        }
+
+        private void acceptInternal(SafeCommandStore safeStore, SafeCommand safeCommand)
+        {
+            owner.run(runKind, run, safeStore, safeCommand);
         }
 
         @Override
         public void accept(SafeCommandStore safeStore)
         {
-            // we have to read safeCommand first as it may become truncated on load, which may clear the progress log and invalidate us
-            SafeCommand safeCommand = safeStore.ifInitialised(run.txnId);
-            if (safeCommand == null)
-                return;
-
-            if (!complete(safeStore, runKind, id, this))
-                return; // we've been cancelled
-
-            // check this after fetching SafeCommand, as doing so can erase the command (and invalidate our state)
-            if (run.isDone(runKind))
-                return;
-
-            Invariants.require(get(run.txnId) == run, "Transaction state for %s does not match expected one %s", run.txnId, run);
-            Invariants.require(run.scheduledTimer() != runKind, "We are actively executing %s, but we are also scheduled to run this same TxnState later. This should not happen.", runKind);
-            Invariants.require(run.pendingTimer() != runKind, "We are actively executing %s, but we also have a pending scheduled task to run this same TxnState later. This should not happen.", runKind);
-
-            validatePreRunState(run, runKind);
-            if (runKind == Home)
+            try
             {
-                boolean isRetry = run.homeProgress() == Awaiting;
-                if (isRetry) run.incrementHomeRetryCounter();
-                run.home().runHome(DefaultProgressLog.this, safeStore, safeCommand);
+                // we load safeCommand first so that if it clears the progress log we abandon the callback
+                SafeCommand safeCommand = safeStore.ifInitialised(run.txnId);
+                if (complete() && safeCommand != null)
+                    acceptInternal(safeStore, safeCommand);
             }
-            else
+            finally
             {
-                boolean isRetry = run.waitingProgress() == Awaiting;
-                if (isRetry) run.incrementWaitingRetryCounter();
-                run.runWaiting(safeStore, safeCommand, DefaultProgressLog.this);
+                postRun(safeStore);
             }
-        }
-
-        @Override
-        public boolean equals(Object obj)
-        {
-            if (obj == null) return false;
-            if (obj.getClass() == TxnId.class) return run.txnId.equals(obj);
-            if (obj.getClass() != getClass()) return false;
-            RunInvoker that = (RunInvoker) obj;
-            return id == that.id && run.txnId.equals(that.run.txnId) && runKind.equals(that.runKind);
-        }
-
-        @Override
-        public int hashCode()
-        {
-            return run.txnId.hashCode();
         }
 
         @Override
@@ -754,45 +770,86 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
     }
 
-    long nextInvokerId()
+    protected void run(TxnStateKind runKind, TxnState run, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        return nextInvokerId++;
+        // check this after fetching SafeCommand, as doing so can erase the command (and invalidate our state)
+        if (run.isDone(runKind))
+            return;
+
+        Invariants.require(get(run.txnId) == run, "Transaction state for %s does not match expected one %s", run.txnId, run);
+        Invariants.require(run.scheduledTimer() != runKind, "We are actively executing %s, but we are also scheduled to run this same TxnState later. This should not happen.", runKind);
+        Invariants.require(run.pendingTimer() != runKind, "We are actively executing %s, but we also have a pending scheduled task to run this same TxnState later. This should not happen.", runKind);
+
+        validatePreRunState(run, runKind);
+        if (runKind == Home)
+        {
+            boolean isRetry = run.homeProgress() != Queued;
+            if (isRetry) run.incrementHomeRetryCounter();
+            run.runHome(DefaultProgressLog.this, safeStore, safeCommand);
+        }
+        else
+        {
+            boolean isRetry = run.waitingProgress() != Queued;
+            if (isRetry) run.incrementWaitingRetryCounter();
+            run.runWaiting(DefaultProgressLog.this, safeStore, safeCommand);
+        }
     }
 
-    ObjectHashSet<Object> pending(TxnStateKind kind)
+    long nextCallbackId()
+    {
+        return ++nextCallbackId;
+    }
+
+    Object2ObjectHashMap<TxnId, PendingTask> pending(TxnStateKind kind)
     {
         return kind == Waiting ? pendingWaiting : pendingHome;
     }
 
-    void registerPending(TxnStateKind kind, TxnId txnId, Object object)
+    void registerPending(TxnStateKind kind, TxnId txnId, PendingTask register)
     {
-        ObjectHashSet<Object> pending = pending(kind);
-        Invariants.require(!pending.contains(txnId));
-        pending.add(object);
+        Object2ObjectHashMap<TxnId, PendingTask> collection = pending(kind);
+        PendingTask existing = collection.putIfAbsent(txnId, register);
+        Invariants.require(existing == null);
     }
 
     boolean hasPending(TxnStateKind kind, TxnId txnId)
     {
-        return pending(kind).contains(txnId);
+        return pending(kind).containsKey(txnId);
     }
 
-    void start(CallbackInvoker<?, ?> invoker, Object task)
+    void start(CallbackInvoker<?, ?> invoker, Object debug)
     {
-        active.put(invoker.id, task);
+        // task is an arbitrary object to help debug, but must be non-null
+        // TODO (expected): make active debuggable via virtual table or other mechanism
+        if (debug == null)
+            debug = invoker;
+        active.put(invoker.id, debug);
     }
 
-    boolean complete(SafeCommandStore safeStore, TxnStateKind kind, long id, Object active)
+    boolean complete(TxnStateKind kind, long id, TxnId txnId, PendingTask completing)
     {
-        this.active.remove(id);
-        boolean result = pending(kind).remove(active);
-        if (runBufferIndex < runBufferCount)
-            accept(safeStore);
-        return result;
+        boolean stillActive = active.remove(id) != null;
+        return complete(kind, txnId, completing) && stillActive;
     }
 
-    void clearPending(TxnStateKind kind, TxnId txnId)
+    boolean complete(TxnStateKind kind, TxnId txnId, PendingTask completing)
     {
-        pending(kind).remove(txnId);
+        return pending(kind).remove(txnId, completing);
+    }
+
+    void clearPendingAndActive(TxnStateKind kind, TxnId txnId)
+    {
+        PendingTask pending = pending(kind).remove(txnId);
+        if (pending instanceof CallbackInvoker<?,?>)
+            active.remove(((CallbackInvoker<?, ?>) pending).id);
+    }
+
+    public void requeue(SafeCommandStore safeStore, TxnStateKind kind, TxnId txnId)
+    {
+        clearPendingAndActive(kind, txnId);
+        TxnState state = get(txnId);
+        if (state != null && (kind == Home ? state.isHomeInitialised() : !state.isWaitingDone()))
+            state.updateScheduling(safeStore, this, kind, null, Queued);
     }
 
     void unschedule(TxnState state)
@@ -826,15 +883,20 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
     }
 
-    public void setMaxConcurrency(int maxConcurrency)
+    public Config config()
     {
-        Invariants.requireArgument(maxConcurrency >= 1);
-        this.maxConcurrency = maxConcurrency;
+        return config;
     }
 
-    public int maxConcurrency()
+    public void setConfig(SafeCommandStore safeStore, Config config)
     {
-        return maxConcurrency;
+        Invariants.require(commandStore.inStore());
+        this.config = config;
+    }
+
+    public void unsafeSetConfig(Config config)
+    {
+        this.config = config;
     }
 
     public int size()

@@ -19,7 +19,6 @@
 package accord.impl.progresslog;
 
 import java.util.concurrent.Executor;
-import java.util.function.BiConsumer;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -349,7 +348,7 @@ abstract class WaitingState extends BaseTxnState
     void setWaitingDone(DefaultProgressLog owner)
     {
         set(null, owner, CanApply, NoneExpected);
-        owner.clearPending(Waiting, txnId);
+        owner.clearPendingAndActive(Waiting, txnId);
         clearWaitingRetryCounter();
     }
 
@@ -360,7 +359,7 @@ abstract class WaitingState extends BaseTxnState
         {
             clearAwaitState();
             clearWaitingRetryCounter();
-            owner.clearPending(Waiting, txnId);
+            owner.clearPendingAndActive(Waiting, txnId);
             set(safeStore, owner, blockedUntil, Queued);
         }
     }
@@ -374,11 +373,11 @@ abstract class WaitingState extends BaseTxnState
             set(null, owner, isDone ? CanApply : currentlyBlockedUntil, NoneExpected);
             if (isDone)
                 maybeRemove(owner);
-            owner.clearPending(Waiting, txnId);
+            owner.clearPendingAndActive(Waiting, txnId);
         }
     }
 
-    final void runWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
+    final void runWaiting(DefaultProgressLog owner, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
         runInternal(safeStore, safeCommand, owner, owner.node.agent().trace(txnId, WAIT_PROGRESS));
     }
@@ -774,16 +773,16 @@ abstract class WaitingState extends BaseTxnState
     {
         // TODO (desired): fetch only the route
         // we MUSt allocate before calling withEpoch to register cancellation, as async
-        BiConsumer<Route<?>, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchRouteCallback);
-        FetchRoute.fetchRoute(owner.node(), txnId, contactable, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker);
+        CallbackInvoker<BlockedUntil, Route<?>> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchRouteCallback);
+        owner.start(invoker, FetchRoute.fetchRoute(owner.node(), txnId, contactable, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker));
     }
 
     static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
     {
         Invariants.require(!slicedRoute.isEmpty());
         // we MUSt allocate before calling withEpoch to register cancellation, as async
-        BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
-        FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchRoute, maxRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker);
+        CallbackInvoker<BlockedUntil, FetchData.FetchResult> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
+        owner.start(invoker, FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchRoute, maxRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker));
     }
 
     void awaitHomeKey(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route)
@@ -803,10 +802,10 @@ abstract class WaitingState extends BaseTxnState
     {
         long epoch = blockedUntil.fetchEpoch(txnId, executeAt);
         // we MUST allocate the invoker before invoking withEpoch as this may be asynchronous and we must first register our callback for cancellation
-        BiConsumer<AsynchronousAwait.SynchronousResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, callback);
-        owner.node().withEpochAtLeast(epoch, (Executor)null, invoker, () -> {
+        CallbackInvoker<BlockedUntil, AsynchronousAwait.SynchronousResult> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, callback);
+        owner.start(invoker, owner.node().withEpochAtLeast(epoch, (Executor)null, invoker, () -> {
             AsynchronousAwait.awaitAny(owner.node(), contact(owner, route, epoch), txnId, route, blockedUntil, callbackId, invoker);
-        });
+        }));
     }
 
     String toStateString()
