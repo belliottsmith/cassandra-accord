@@ -21,6 +21,8 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.api.Tracing;
+import accord.local.CommandStores;
+import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.CommandStores.StoreSelector;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.InformDurable;
@@ -45,9 +47,9 @@ public class MaybeRecover extends CheckShards<Route<?>>
 {
     final ProgressToken prevProgress;
     final BiConsumer<Outcome, Throwable> callback;
-    final StoreSelector reportTo;
+    final LatentStoreSelector reportTo;
 
-    MaybeRecover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, StoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    MaybeRecover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         // we only want to enquire with the home shard, but we prefer maximal route information for running Invalidation against, if necessary
         super(node, executor, txnId, someRoute.withHomeKey(), IncludeInfo.Route, null, invalidIf, node.agent().trace(txnId, RECOVER));
@@ -56,7 +58,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
         this.reportTo = reportTo;
     }
 
-    public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, StoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
     {
         MaybeRecover maybeRecover = new MaybeRecover(node, node.someSequentialExecutor(), txnId, invalidIf, someRoute, prevProgress, reportTo, callback);
         maybeRecover.start();

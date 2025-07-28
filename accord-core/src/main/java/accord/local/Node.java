@@ -64,6 +64,7 @@ import accord.coordinate.CoordinationAdapter.Factory.Kind;
 import accord.coordinate.Infer.InvalidIf;
 import accord.coordinate.Outcome;
 import accord.coordinate.RecoverWithRoute;
+import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.CommandStores.StoreSelector;
 import accord.local.durability.DurabilityService;
 import accord.messages.Callback;
@@ -428,19 +429,20 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public void withEpochAtLeast(long epoch, @Nullable Executor ifAsync, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
+    public Object withEpochAtLeast(long epoch, @Nullable Executor ifAsync, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
     {
         if (topology.hasAtLeastEpoch(epoch))
         {
             ifSuccess.run();
+            return ifSuccess;
         }
         else
         {
-            topology.awaitEpoch(epoch, ifAsync).begin((success, fail) -> {
+            configService.fetchTopologyForEpoch(epoch);
+            return topology.awaitEpoch(epoch, ifAsync).begin((success, fail) -> {
                 if (fail != null) ifFailure.accept(null, fail);
                 else ifSuccess.run();
             });
-            configService.fetchTopologyForEpoch(epoch);
         }
     }
 
@@ -891,7 +893,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, StoreSelector reportTo, @Nullable Tracing tracing)
+    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, LatentStoreSelector reportTo, @Nullable Tracing tracing)
     {
         {
             AsyncResult<? extends Outcome> result = coordinating.get(txnId);

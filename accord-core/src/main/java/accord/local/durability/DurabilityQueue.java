@@ -119,7 +119,7 @@ public class DurabilityQueue
         {
             ++pendingCounter;
             pending.add(new Pending(syncPoint, request, attempt));
-            if (pending.size() >= PRUNE_SIZE_THRESHOLD && pendingCounter > prunedAt + pending.size())
+            if (pending.size() >= PRUNE_SIZE_THRESHOLD && pendingCounter > prunedAt)
                 prune();
         }
     }
@@ -191,7 +191,8 @@ public class DurabilityQueue
 
     private synchronized void prune()
     {
-        prunedAt = pendingCounter;
+        prunedAt = pending.size();
+        pendingCounter = 0;
         List<SortForPruning> sorted = new ArrayList<>();
         for (Pending p : pending)
         {

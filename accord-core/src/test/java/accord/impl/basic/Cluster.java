@@ -726,7 +726,9 @@ public class Cluster
             Runnable updateProgressLogConcurrency;
             {
                 updateProgressLogConcurrency = () -> {
-                    nodeMap.values().forEach(node -> node.commandStores().forEachCommandStore(cs -> ((TestProgressLog)cs.unsafeProgressLog()).setMaxConcurrency(random.nextInt(8, 32))));
+                    nodeMap.values().forEach(node -> node.commandStores().forEachCommandStore(cs -> cs.execute(() -> {
+                        ((TestProgressLog)cs.unsafeProgressLog()).config().concurrency = random.nextInt(8, 32);
+                    })));
                 };
             }
             updateProgressLogConcurrency.run();
