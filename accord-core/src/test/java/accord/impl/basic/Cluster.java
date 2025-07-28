@@ -700,11 +700,7 @@ public class Cluster
                                      TestProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
                                      journal.durableBeforePersister(), journal);
                 journal.start(node);
-                DurabilityService durability = node.durability();
-                // TODO (desired): randomise
-                durability.shards().setShardCycleTime(30, SECONDS);
-                durability.global().setGlobalCycleTime(180, SECONDS);
-                durabilityServices.add(durability);
+                durabilityServices.add(node.durability());
                 nodeMap.put(id, node);
                 durabilityServices.add(new DurabilityService(node));
             }
