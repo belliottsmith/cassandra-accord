@@ -21,7 +21,7 @@ package accord.coordinate.tracking;
 import accord.local.Node;
 import accord.topology.Shard;
 import accord.topology.Topologies;
-import org.agrona.collections.IntHashSet;
+import accord.utils.SortedListSet;
 
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.Fail;
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.NoChange;
@@ -31,26 +31,26 @@ public class QuorumIdTracker extends SimpleTracker<QuorumIdTracker.QuorumIdShard
 {
     public static class QuorumIdShardTracker extends ShardTracker
     {
-        // TODO (expected): use a bit set over the universe of nodes
-        protected final IntHashSet successes = new IntHashSet();
-        protected IntHashSet failures;
+        protected final SortedListSet<Node.Id> successes;
+        protected SortedListSet<Node.Id> failures;
 
         public QuorumIdShardTracker(Shard shard)
         {
             super(shard);
+            successes = SortedListSet.noneOf(shard.nodes);
         }
 
         public ShardOutcomes onSuccess(Node.Id from)
         {
-            return successes.add(from.id) && successes.size() == shard.slowQuorumSize ? Success : NoChange;
+            return successes.add(from) && successes.size() == shard.slowQuorumSize ? Success : NoChange;
         }
 
         // return true iff hasFailed()
         public ShardOutcomes onFailure(Node.Id from)
         {
             if (failures == null)
-                failures = new IntHashSet();
-            return failures.add(from.id) && failures.size() == 1 + shard.maxFailures ? Fail : NoChange;
+                failures = SortedListSet.noneOf(shard.nodes);
+            return failures.add(from) && failures.size() == 1 + shard.maxFailures ? Fail : NoChange;
         }
 
         public boolean hasReachedQuorum()
