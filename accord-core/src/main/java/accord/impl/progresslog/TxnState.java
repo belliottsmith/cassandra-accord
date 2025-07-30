@@ -18,6 +18,7 @@
 
 package accord.impl.progresslog;
 
+import java.time.temporal.TemporalUnit;
 import javax.annotation.Nullable;
 
 import com.google.common.primitives.Ints;
@@ -30,8 +31,9 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
-final class TxnState extends HomeState implements PreLoadContext
+public final class TxnState extends HomeState implements PreLoadContext
 {
     TxnState(TxnId txnId)
     {
@@ -46,8 +48,11 @@ final class TxnState extends HomeState implements PreLoadContext
             default:
                 throw new UnhandledEnum(newProgress);
             case NoneExpected:
-            case Querying:
                 newDelay = 0;
+                break;
+            case Querying:
+                newDelay = NANOSECONDS.toMicros(instance.config().maxActiveRunTime.toNanos());
+                Invariants.require(newDelay >= 0);
                 break;
             case Queued:
                 switch (updated)
@@ -69,10 +74,7 @@ final class TxnState extends HomeState implements PreLoadContext
         }
 
         TxnStateKind scheduled = scheduledTimer();
-        if (scheduled == null)
-        {
-            Invariants.require(pendingTimer() == null);
-        }
+        Invariants.require(scheduled != null || pendingTimer() == null);
 
         // previousDeadline is the previous deadline of <updated>;
         // otherDeadline is the active deadline (if any) of <updated.other()>

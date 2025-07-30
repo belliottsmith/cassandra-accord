@@ -37,6 +37,11 @@ public interface Pending
             Invariants.require(activeOrigin != null);
         }
 
+        public static void unsafeSetActiveOrigin(Pending newActiveOrigin)
+        {
+            activeOrigin = newActiveOrigin;
+        }
+
         public static void clearActiveOrigin()
         {
             activeOrigin = null;
