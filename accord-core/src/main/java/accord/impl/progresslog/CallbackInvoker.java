@@ -24,12 +24,13 @@ import javax.annotation.Nullable;
 
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
+import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
 
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 
-class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>, PreLoadContext
+final class CallbackInvoker<P, V> extends DefaultProgressLog.PendingTask implements BiConsumer<V, Throwable>, PreLoadContext
 {
     static <P, V> CallbackInvoker<P, V> invokeWaitingCallback(DefaultProgressLog instance, TxnId txnId, P param, Callback<P, V> callback)
     {
@@ -43,12 +44,11 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>, PreLoadContext
 
     static <P, V> CallbackInvoker<P, V> invokeCallback(TxnStateKind kind, DefaultProgressLog owner, TxnId txnId, P param, Callback<P, V> callback)
     {
-        CallbackInvoker<P, V> invoker = new CallbackInvoker<>(owner, kind, owner.nextInvokerId(), txnId, param, callback);
+        CallbackInvoker<P, V> invoker = new CallbackInvoker<>(owner, kind, owner.nextCallbackId(), txnId, param, callback);
         owner.registerPending(kind, txnId, invoker);
         return invoker;
     }
 
-    final DefaultProgressLog owner;
     final boolean isHome;
     final long id;
     final TxnId txnId;
@@ -57,7 +57,7 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>, PreLoadContext
 
     CallbackInvoker(DefaultProgressLog owner, TxnStateKind kind, long id, TxnId txnId, P param, Callback<P, V> callback)
     {
-        this.owner = owner;
+        super(owner);
         this.isHome = kind == Home;
         this.id = id;
         this.txnId = txnId;
@@ -70,37 +70,32 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>, PreLoadContext
         return isHome ? Home : Waiting;
     }
 
+    private boolean complete()
+    {
+        return owner.complete(kind(), id, txnId, this);
+    }
+
     @Override
     public void accept(V success, Throwable fail)
     {
         owner.commandStore.execute(this, safeStore -> {
-
-            // we load safeCommand first so that if it clears the progress log we abandon the callback
-            SafeCommand safeCommand = safeStore.ifInitialised(txnId);
-            if (!owner.complete(safeStore, kind(), id, this))
-                return;
-
-            if (safeCommand == null)
-                return;
-
-            callback.callback(safeStore, safeCommand, owner, txnId, param, success, fail);
+            try
+            {
+                // we load safeCommand first so that if it clears the progress log we abandon the callback
+                SafeCommand safeCommand = safeStore.ifInitialised(txnId);
+                if (complete() && safeCommand != null)
+                    acceptInternal(safeStore, safeCommand, success, fail);
+            }
+            finally
+            {
+                postRun(safeStore);
+            }
         }, owner.commandStore.agent());
     }
 
-    @Override
-    public boolean equals(Object obj)
+    private void acceptInternal(SafeCommandStore safeStore, SafeCommand safeCommand, V success, Throwable fail)
     {
-        if (obj == null) return false;
-        if (obj.getClass() == TxnId.class) return txnId.equals(obj);
-        if (obj.getClass() != getClass()) return false;
-        CallbackInvoker<?, ?> that = (CallbackInvoker<?, ?>) obj;
-        return id == that.id && callback == that.callback;
-    }
-
-    @Override
-    public int hashCode()
-    {
-        return txnId.hashCode();
+        callback.callback(safeStore, safeCommand, owner, txnId, param, success, fail);
     }
 
     @Override
