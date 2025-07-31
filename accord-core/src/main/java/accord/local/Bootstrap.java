@@ -142,6 +142,9 @@ class Bootstrap
             node.durability()
                 // we first make sure the sync point is durable to a majority, since any later durability conditions
                 // this node participates in will not guarantee a quorum for preceding transactions
+                // we must do this before we mark ourselves bootstrapping, else we may participate in a durability quorum
+                // without actually waiting for the durability condition to be reached locally
+                // TODO (required): introduce a more robust mechanism when evaluating Durability quorums, esp. since this does not handle markStale
                 .sync("Bootstrap " + commitRanges + " for " + safeStore.commandStore(), globalSyncId, commitRanges, NoLocal, Quorum, 1L, TimeUnit.HOURS)
                 .flatMap(success -> commandStore.build((PreLoadContext.Empty) () -> "Start Bootstrap RX", safeStore0 -> {
                     // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
