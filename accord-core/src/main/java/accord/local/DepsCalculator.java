@@ -18,6 +18,8 @@
 
 package accord.local;
 
+import javax.annotation.Nullable;
+
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.CommandSummaries.SummaryStatus;
 import accord.primitives.Deps;
@@ -27,16 +29,53 @@ import accord.primitives.RangeDeps;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
+import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
+import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
-public class DepsCalculator extends Deps.Builder implements CommandSummaries.ActiveCommandVisitor<TxnId, Object>
+public class DepsCalculator extends Deps.Builder implements CommandSummaries.ActiveCommandVisitor<TxnId, DepsCalculator.MinDependencyCalculator>
 {
+    public static class MinDependencyCalculator
+    {
+        final MaxDecidedRX maxDecidedRX;
+        final TxnId absoluteMinDecidedId;
+        final TxnId txnId;
+        Unseekable prevKeyOrRange;
+        TxnId prevMinDecidedId;
+
+        MinDependencyCalculator(MaxDecidedRX maxDecidedRX, Unseekables<?> keysOrRanges, TxnId txnId)
+        {
+            this.maxDecidedRX = maxDecidedRX;
+            this.absoluteMinDecidedId = maxDecidedRX.minDecidedDependencyId(keysOrRanges, txnId);
+            this.txnId = txnId;
+        }
+
+        boolean include(SummaryStatus status, Unseekable keyOrRange, TxnId depId)
+        {
+            if (status.compareTo(COMMITTED) >= 0 || depId.is(ExclusiveSyncPoint))
+            {
+                if (absoluteMinDecidedId != null && depId.compareTo(absoluteMinDecidedId) < 0)
+                    return false;
+
+                if (!keyOrRange.equals(prevKeyOrRange))
+                {
+                    prevKeyOrRange = keyOrRange;
+                    prevMinDecidedId = maxDecidedRX.minDecidedDependencyId(keyOrRange, txnId);
+                }
+
+                if (prevMinDecidedId != null && depId.compareTo(prevMinDecidedId) < 0)
+                    return false;
+            }
+            return true;
+        }
+    }
+
     private boolean hasUnappliedDependency;
     private long maxAppliedHlc;
 
@@ -46,10 +85,13 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
     }
 
     @Override
-    public void visit(TxnId self, Object o, SummaryStatus status, Unseekable keyOrRange, TxnId txnId)
+    public void visit(TxnId self, @Nullable MinDependencyCalculator minDepCalc, SummaryStatus status, Unseekable keyOrRange, TxnId depId)
     {
-        if (self == null || !self.equals(txnId))
-            add(keyOrRange, txnId);
+        if (minDepCalc != null && !minDepCalc.include(status, keyOrRange, depId))
+            return;
+
+        if (self == null || !self.equals(depId))
+            add(keyOrRange, depId);
         if (status.compareTo(APPLIED) < 0)
             hasUnappliedDependency = true;
     }
@@ -99,7 +141,9 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
         }
 
         // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
-        safeStore.visit(touches, executeAt, txnId.witnesses(), this, executeAt.equals(txnId) ? null : txnId, null);
+        MinDependencyCalculator minDepCalc = null;
+        if (txnId.is(ExclusiveSyncPoint)) minDepCalc = new MinDependencyCalculator(safeStore.maxDecidedRX(), touches, txnId);
+        safeStore.visit(touches, executeAt, txnId.witnesses(), this, executeAt.equals(txnId) ? null : txnId, minDepCalc);
         Deps result = super.build();
         result = new Deps(result.keyDeps, result.rangeDeps.with(redundant));
         Invariants.require(!txnId.isVisible() || !result.contains(txnId));

@@ -223,8 +223,7 @@ public class BTreeReducingRangeMapTest
         }
         catch (Throwable t)
         {
-            if (!(t instanceof AssertionFailedError))
-                throw new RuntimeException(id, t);
+            throw new AssertionFailedError(id, t);
         }
     }
 

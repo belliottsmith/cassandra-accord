@@ -229,8 +229,7 @@ public class ReducingRangeMapTest
         }
         catch (Throwable t)
         {
-            if (!(t instanceof AssertionFailedError))
-                throw new RuntimeException(id, t);
+            throw new AssertionFailedError(id, t);
         }
     }
 
@@ -278,7 +277,6 @@ public class ReducingRangeMapTest
             while (count-- > 0)
                 addOneRandom(random, maxNumberOfRangesPerAddition, maxCoveragePerAddition, minRoutingKeyChance);
         }
-
 
         static ReducingRangeMap<Timestamp> build(Random random, int count, int maxNumberOfRangesPerAddition, float maxCoveragePerRange, float chanceOfMinRoutingKey)
         {

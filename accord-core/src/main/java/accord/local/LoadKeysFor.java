@@ -34,9 +34,8 @@ public enum LoadKeysFor
     WRITE,
 
     /**
-     * READ covers all intersecting summaries of relevant key or range transactions that might be
-     * witnessed by the primaryTxnId, for any commands that should be witnessed by primaryTxnId.
-     *
+     * READ covers all intersecting summaries of relevant key or range transactions,
+     * including any commands that should be witnessed by primaryTxnId.
      * This means range transactions MUST be able to consult all intersecting key summaries.
      */
     READ_WRITE,

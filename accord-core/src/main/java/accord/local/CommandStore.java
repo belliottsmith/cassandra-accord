@@ -666,11 +666,33 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         listeners.clearBefore(this, clearWaitingBefore);
     }
 
-    protected void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
+    protected final boolean isWaitingOnSync(TxnId syncId, Ranges ranges)
+    {
+        if (waitingOnSync.isEmpty())
+            return false;
+
+        for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+        {
+            if (e.getKey() > syncId.epoch())
+                break;
+
+            Ranges remaining = e.getValue().ranges;
+            boolean intersects = remaining.intersects(ranges);
+            if (intersects)
+                return true;
+        }
+
+        return true;
+    }
+
+    protected final void markWitnessed(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
+    }
 
+    protected final void markSynced(TxnId syncId, Ranges ranges)
+    {
         if (waitingOnSync.isEmpty())
             return;
 

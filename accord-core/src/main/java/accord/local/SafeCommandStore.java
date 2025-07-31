@@ -505,11 +505,17 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     private static void registerTransitive(SafeCommandStore safeStore, TxnId txnId, Command next)
     {
+        if (!txnId.is(Kind.ExclusiveSyncPoint))
+            return;
+
         CommandStore commandStore = safeStore.commandStore();
         Ranges ranges = next.participants().touches().toRanges();
-        commandStore.registerTransitive(safeStore, next.partialDeps().rangeDeps);
-        if (txnId.is(Kind.ExclusiveSyncPoint))
-            commandStore.markSynced(safeStore, txnId, ranges);
+        commandStore.markWitnessed(safeStore, txnId, ranges);
+        if (!commandStore.isWaitingOnSync(txnId, ranges))
+        {
+            commandStore.registerTransitive(safeStore, next.partialDeps().rangeDeps);
+            commandStore.markSynced(txnId, ranges);
+        }
     }
 
     public abstract CommandStore commandStore();
@@ -532,6 +538,11 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     public RedundantBefore redundantBefore()
     {
         return commandStore().unsafeGetRedundantBefore();
+    }
+
+    public MaxDecidedRX maxDecidedRX()
+    {
+        return commandStore().unsafeGetMaxDecidedRX();
     }
 
     public DurableBefore durableBefore()

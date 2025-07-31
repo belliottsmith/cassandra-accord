@@ -346,6 +346,9 @@ public class ShardDurability
 
         synchronized void start()
         {
+            if (!isStarted())
+                return;
+
             Invariants.require(scheduled == null);
             Invariants.require(active != null);
             ShardDistributor distributor = node.commandStores().shardDistributor();
@@ -451,6 +454,7 @@ public class ShardDurability
     private final ConcurrencyControl syncPointControl = new ConcurrencyControl(8);
     private final DurabilityQueue durabilityQueue;
     private long latestEpoch;
+    private List<DurabilityRequest> waitingOnStartup;
 
     volatile boolean stop;
     volatile Scheduled scheduled;
@@ -469,17 +473,13 @@ public class ShardDurability
     public synchronized void setTargetShardSplits(int targetShardSplits)
     {
         this.targetShardSplits = BitUtil.findNextPositivePowerOfTwo(targetShardSplits);
-        if (scheduled != null)
-            scheduled.cancel();
-        scheduled = node.scheduler().recurring(this::tick, shardCycleTimeMicros / targetShardSplits, MICROSECONDS);
+        reschedule();
     }
 
     public synchronized void setShardCycleTime(long newShardCycleTime, TimeUnit units)
     {
         shardCycleTimeMicros = units.toMicros(newShardCycleTime);
-        if (scheduled != null)
-            scheduled.cancel();
-        scheduled = node.scheduler().recurring(this::tick, shardCycleTimeMicros / targetShardSplits, MICROSECONDS);
+        reschedule();
     }
 
     public synchronized void reconfigure(int targetShardSplits, int maxShardSplits, long newShardCycleTime, TimeUnit units)
@@ -487,7 +487,16 @@ public class ShardDurability
         this.maxShardSplits = maxShardSplits;
         this.targetShardSplits = BitUtil.findNextPositivePowerOfTwo(targetShardSplits);
         this.shardCycleTimeMicros = units.toMicros(newShardCycleTime);
-        Invariants.require(scheduled == null);
+        reschedule();
+    }
+
+    private void reschedule()
+    {
+        if (scheduled != null)
+        {
+            scheduled.cancel();
+            scheduled = node.scheduler().recurring(this::tick, shardCycleTimeMicros / targetShardSplits, MICROSECONDS);
+        }
     }
 
     /**
@@ -497,6 +506,17 @@ public class ShardDurability
     {
         Invariants.require(!stop); // cannot currently restart safely
         scheduled = node.scheduler().recurring(this::tick, shardCycleTimeMicros / targetShardSplits, MICROSECONDS);
+        if (waitingOnStartup != null)
+        {
+            List<DurabilityRequest> submit = waitingOnStartup;
+            waitingOnStartup = null;
+            submit.forEach(this::request);
+        }
+    }
+
+    private boolean isStarted()
+    {
+        return scheduled != null;
     }
 
     private synchronized void tick()
@@ -520,6 +540,14 @@ public class ShardDurability
 
     public synchronized void request(DurabilityRequest request)
     {
+        if (!isStarted())
+        {
+            if (waitingOnStartup == null)
+                waitingOnStartup = new ArrayList<>();
+            waitingOnStartup.add(request);
+            return;
+        }
+
         request(request, request.ranges);
     }
 
@@ -531,6 +559,7 @@ public class ShardDurability
 
     private void request(DurabilityRequest request, Range range)
     {
+        Invariants.require(isStarted());
         {
             Map.Entry<Range, ShardScheduler> e = shardSchedulers.floorEntry(range);
             // we look up ceiling entry as well, because our comparison on both start and end
