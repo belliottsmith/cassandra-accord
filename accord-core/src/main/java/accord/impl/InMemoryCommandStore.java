@@ -74,7 +74,6 @@ import accord.primitives.AbstractRanges;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
-import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.RoutableKey;
@@ -98,7 +97,6 @@ import static accord.local.LoadKeys.NONE;
 import static accord.local.LoadKeysFor.WRITE;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.StoreParticipants.Filter.LOAD;
-import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -1274,30 +1272,5 @@ public abstract class InMemoryCommandStore extends CommandStore
 
             return apply(command);
         }
-    }
-
-    @Override
-    protected void registerTransitive(SafeCommandStore safeStore, RangeDeps rangeDeps)
-    {
-        RangesForEpoch rangesForEpoch = this.rangesForEpoch;
-        Ranges allRanges = rangesForEpoch.all();
-
-        TreeMap<TxnId, RangeCommand> rangeCommands = this.rangeCommands;
-        rangeDeps.forEachUniqueTxnId(allRanges, null, (ignore, txnId) -> {
-            GlobalCommand global = commands.get(txnId);
-            if (global != null && global.value().known().has(MaybeRoute))
-                return;
-
-            Ranges ranges = rangeDeps.ranges(txnId);
-            ranges = ranges.without(rangesForEpoch.coordinates(txnId));  // already coordinates, no need to replicate
-            if (ranges.isEmpty())
-                return;
-
-            ranges = ranges.slice(rangesForEpoch.allSince(txnId.epoch()), Minimal); // never coordinated, no need to replicate for dependency or recovery calculations
-            if (ranges.isEmpty())
-                return;
-
-            rangeCommands.computeIfAbsent(txnId, RangeCommand::new).add(ranges);
-        });
     }
 }
