@@ -60,7 +60,6 @@ public interface Unseekables<K extends Unseekable> extends Iterable<K>, Routable
         }
     }
 
-
     @Override
     Unseekables<K> slice(int from, int to);
     @Override
@@ -137,4 +136,6 @@ public interface Unseekables<K extends Unseekable> extends Iterable<K>, Routable
 
         return left.with(right);
     }
+
+    Ranges toRanges();
 }

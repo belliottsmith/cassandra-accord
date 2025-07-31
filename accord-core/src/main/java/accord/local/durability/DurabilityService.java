@@ -33,7 +33,9 @@ import org.slf4j.LoggerFactory;
 import accord.api.ConfigurationService;
 import accord.api.Timeouts.Timeout;
 import accord.local.Node;
+import accord.primitives.Range;
 import accord.primitives.Ranges;
+import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
@@ -48,7 +50,7 @@ public class DurabilityService implements ConfigurationService.Listener
     private static final Logger logger = LoggerFactory.getLogger(DurabilityService.class);
 
     public enum SyncLocal  { NoLocal, Self }
-    public enum SyncRemote { NoRemote, Quorum, All }
+    public enum SyncRemote { NoRemote, MinorityQuorum, Quorum, All }
 
     private boolean started;
     private final Node node;
@@ -128,6 +130,17 @@ public class DurabilityService implements ConfigurationService.Listener
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
         return submit(new DurabilityRequest(requestedBy, minBound, ranges, local, remote, include, startedAt, timeoutAt)).result;
+    }
+
+    public AsyncResult<Void> sync(Object requestedBy, SyncPoint<Range> syncPoint, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    {
+        long startedAt = node.elapsed(MICROSECONDS);
+        long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
+        DurabilityRequest request = new DurabilityRequest(requestedBy, syncPoint.syncId, syncPoint.route.toRanges(), local, remote, null, startedAt, timeoutAt);
+        logger.info("Requesting durability {}", request);
+        register(request);
+        shards.queue().submit(syncPoint, request);
+        return request.result;
     }
 
     private DurabilityRequest submit(DurabilityRequest request)

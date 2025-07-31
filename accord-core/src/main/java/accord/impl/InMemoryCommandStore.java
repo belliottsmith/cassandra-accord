@@ -58,6 +58,7 @@ import accord.local.CommandStore;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.CommandSummaries;
 import accord.local.Commands;
+import accord.local.MaxDecidedRX;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
 import accord.local.PreLoadContext.Empty;
@@ -73,7 +74,6 @@ import accord.primitives.AbstractRanges;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
-import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.RoutableKey;
@@ -83,7 +83,6 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
@@ -98,7 +97,6 @@ import static accord.local.LoadKeys.NONE;
 import static accord.local.LoadKeysFor.WRITE;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.StoreParticipants.Filter.LOAD;
-import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -109,12 +107,12 @@ import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
+import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.primitives.Txn.Kind.Read;
 import static accord.utils.Invariants.illegalState;
 import static java.lang.String.format;
 
@@ -146,11 +144,23 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
         }
 
-        void save(CommandsForKey cfk)
+        void saveCallback(CommandsForKey cfk)
         {
-            commandsForKey.put(cfk.key(), Serialize.toBytesWithoutKey(cfk.maximalPrune()));
+            save(cfk);
             if (--waitingForCfk == 0)
                 trySuccess(this);
+        }
+
+        private void save(CommandsForKey cfk)
+        {
+            cfk = cfk.maximalPrune();
+            ByteBuffer serialized = Serialize.toBytesWithoutKey(cfk);
+            CommandsForKey roundTrip = Serialize.fromBytes(cfk.key(), serialized);
+            if (roundTrip != null)
+            {
+                Invariants.require(cfk.equalContents(roundTrip));
+                commandsForKey.put(cfk.key(), serialized);
+            }
         }
 
         public static AsyncResult<Snapshot> snapshot(InMemoryCommandStore commandStore)
@@ -170,7 +180,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 }
                 else
                 {
-                    snapshot.commandsForKey.put(cfk.key(), Serialize.toBytesWithoutKey(cfk.maximalPrune()));
+                    snapshot.save(cfk);
                 }
             }
             if (snapshot.waitingForCfk == 0)
@@ -420,30 +430,32 @@ public abstract class InMemoryCommandStore extends CommandStore
         Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey = new HashMap<>();
 
         context.forEachId(txnId -> commands.put(txnId, lazyReference(txnId)));
-
-        for (Unseekable unseekable : context.keys())
+        if (context.loadKeys() != NONE)
         {
-            switch (unseekable.domain())
+            Unseekables unseekables = context.keys();
+            if (unseekables.domain() == Key)
             {
-                case Key:
-                    RoutableKey key = (RoutableKey) unseekable;
-                    switch (context.loadKeys())
-                    {
-                        case NONE:
-                            continue;
-                        case INCR:
-                        case SYNC:
-                        case ASYNC:
-                            commandsForKey.put(key, commandsForKey((RoutingKey) key).createSafeReference());
-                            break;
-                        default: throw new UnsupportedOperationException("Unknown key history: " + context.loadKeys());
-                    }
-                    break;
-                case Range:
-                    // load range cfks here
-                    break;
+                for (RoutingKey key : (AbstractUnseekableKeys)unseekables)
+                    commandsForKey.put(key, commandsForKey(key).createSafeReference());
+            }
+            else
+            {
+                CommandSummaries.SummaryLoader loader = CommandSummaries.SummaryLoader.loader(unsafeGetRedundantBefore(), unsafeGetMaxDecidedRX(), context);
+                for (GlobalCommandsForKey global : this.commandsForKey.values())
+                {
+                    if (!unseekables.contains(global.key))
+                        continue;
+
+                    if (global.value() == null || !loader.isRelevant(global.value()))
+                        continue;
+
+                    InMemorySafeCommandsForKey safeCfk = commandsForKey.get(global.key);
+                    if (safeCfk == null)
+                        commandsForKey.put(global.key, global.createSafeReference());
+                }
             }
         }
+
         return createSafeStore(context, ranges, commands, commandsForKey);
     }
 
@@ -593,7 +605,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         public GlobalState<CommandsForKey> value(CommandsForKey value)
         {
             if (!pendingSnapshots.isEmpty() && !value.isLoadingPruned())
-                pendingSnapshots.forEach(snapshot -> snapshot.save(value));
+                pendingSnapshots.forEach(snapshot -> snapshot.saveCallback(value));
             return super.value(value);
         }
 
@@ -814,42 +826,35 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return commandsForRanges;
 
             Invariants.require(context.loadKeysFor() != WRITE);
-            Summary.Loader loader = Summary.Loader.loader(redundantBefore(), context.primaryTxnId(), context.loadKeysFor(), context.keys());
+            MaxDecidedRX maxDecidedRX = commandStore().unsafeGetMaxDecidedRX();
+            SummaryLoader loader = SummaryLoader.loader(redundantBefore(), maxDecidedRX, context);
             TreeMap<Timestamp, Summary> summaries = new TreeMap<>();
             for (RangeCommand rangeCommand : commandStore().rangeCommands.values())
             {
                 GlobalCommand global = commandStore().commands.get(rangeCommand.txnId);
                 Command command = global == null ? null : global.value();
+                if (!loader.isMaybeRelevant(rangeCommand.txnId))
+                    continue;
+
                 Summary summary;
-                if (command == null)
-                {
-                    summary = loader.ifRelevant(rangeCommand.txnId, rangeCommand.txnId, NotDefined, rangeCommand.ranges, null);
-                }
-                else
-                {
-                    summary = loader.ifRelevant(command);
-                }
+                if (command == null) summary = loader.ifRelevant(rangeCommand.txnId, rangeCommand.txnId, NotDefined, NotDurable, rangeCommand.ranges, null);
+                else summary = loader.ifRelevant(command);
                 if (summary != null)
-                    summaries.put(summary.txnId, summary);
+                {
+                    summaries.put(summary.plainTxnId(), summary);
+                    loader.maybeRecordFutureRx(summary);
+                }
             }
 
-            final Kinds kinds = new Kinds(Read, ExclusiveSyncPoint);
-            return commandsForRanges = new ByTxnIdSnapshot()
-            {
-                @Override public NavigableMap<Timestamp, Summary> byTxnId() { return summaries; }
-            };
+            return commandsForRanges = () -> summaries;
         }
 
         private boolean visitForKey(Unseekables<?> keysOrRanges, Predicate<CommandsForKey> forEach)
         {
-            for (GlobalCommandsForKey global : commandStore().commandsForKey.values())
+            for (SafeCommandsForKey safeCfk : commandsForKey.values())
             {
-                if (!keysOrRanges.contains(global.key))
+                if (!keysOrRanges.contains(safeCfk.key()))
                     continue;
-
-                InMemorySafeCommandsForKey safeCfk = commandsForKey.get(global.key);
-                if (safeCfk == null)
-                    commandsForKey.put(global.key, safeCfk = global.createSafeReference());
 
                 if (!forEach.test(safeCfk.current()))
                     return false;
@@ -857,17 +862,27 @@ public abstract class InMemoryCommandStore extends CommandStore
             return true;
         }
 
+        private <P1, P2> void visitForKey(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
+        {
+            visitForKey(keysOrRanges, cfk -> { cfk.visit(startedBefore, testKind, visitor, p1, p2); return true; });
+        }
+
+        public boolean visitForKey(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, TestStartedAt testStartedAt, Timestamp testStartedAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit)
+        {
+            return visitForKey(keysOrRanges, cfk -> cfk.visit(testTxnId, testKind, testStartedAt, testStartedAtTimestamp, computeIsDep, null, visit));
+        }
+
         @Override
         public <P1, P2> void visit(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
         {
-            visitForKey(keysOrRanges, cfk -> { cfk.visit(startedBefore, testKind, visitor, p1, p2); return true; });
+            visitForKey(keysOrRanges, startedBefore, testKind, visitor, p1, p2);
             commandsForRanges().visit(keysOrRanges, startedBefore, testKind, visitor, p1, p2);
         }
 
         @Override
         public boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, TestStartedAt testStartedAt, Timestamp testStartedAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit)
         {
-            return visitForKey(keysOrRanges, cfk -> cfk.visit(testTxnId, testKind, testStartedAt, testStartedAtTimestamp, computeIsDep, null, visit))
+            return visitForKey(keysOrRanges, testTxnId, testKind, testStartedAt, testStartedAtTimestamp, computeIsDep, visit)
                    && commandsForRanges().visit(keysOrRanges, testTxnId, testKind, testStartedAt, testStartedAtTimestamp, computeIsDep, visit);
         }
 
@@ -1276,30 +1291,5 @@ public abstract class InMemoryCommandStore extends CommandStore
 
             return apply(command);
         }
-    }
-
-    @Override
-    protected void registerTransitive(SafeCommandStore safeStore, RangeDeps rangeDeps)
-    {
-        RangesForEpoch rangesForEpoch = this.rangesForEpoch;
-        Ranges allRanges = rangesForEpoch.all();
-
-        TreeMap<TxnId, RangeCommand> rangeCommands = this.rangeCommands;
-        rangeDeps.forEachUniqueTxnId(allRanges, null, (ignore, txnId) -> {
-            GlobalCommand global = commands.get(txnId);
-            if (global != null && global.value().known().has(MaybeRoute))
-                return;
-
-            Ranges ranges = rangeDeps.ranges(txnId);
-            ranges = ranges.without(rangesForEpoch.coordinates(txnId));  // already coordinates, no need to replicate
-            if (ranges.isEmpty())
-                return;
-
-            ranges = ranges.slice(rangesForEpoch.allSince(txnId.epoch()), Minimal); // never coordinated, no need to replicate for dependency or recovery calculations
-            if (ranges.isEmpty())
-                return;
-
-            rangeCommands.computeIfAbsent(txnId, RangeCommand::new).add(ranges);
-        });
     }
 }

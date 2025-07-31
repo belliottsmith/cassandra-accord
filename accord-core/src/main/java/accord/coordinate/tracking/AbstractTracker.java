@@ -53,11 +53,6 @@ public abstract class AbstractTracker<ST extends ShardTracker>
             this.result = result;
         }
 
-        private boolean isTerminalState()
-        {
-            return compareTo(Success) <= 0;
-        }
-
         private static ShardOutcomes min(ShardOutcomes a, ShardOutcomes b)
         {
             return a.compareTo(b) <= 0 ? a : b;
@@ -147,7 +142,7 @@ public abstract class AbstractTracker<ST extends ShardTracker>
         Invariants.require(self == this); // we just accept self as parameter for type safety
         ShardOutcomes status = NoChange;
         int maxShards = maxShardsPerEpoch();
-        for (int i = 0; i < topologyLimit && !status.isTerminalState() ; ++i)
+        for (int i = 0; i < topologyLimit ; ++i)
         {
             status = topologies.get(i).mapReduceOn(node, i * maxShards, AbstractTracker::apply, self, function, param, ShardOutcomes::min, status);
         }

@@ -1111,7 +1111,8 @@ public class Commands
             TxnId txnId = command.txnId();
             if (dependencyElision() == IF_DURABLE && CommandsForKey.manages(txnId))
             {
-                PreLoadContext context = PreLoadContext.contextFor(updated.participants().touches(), INCR, WRITE, "Set Durable");
+                AbstractUnseekableKeys keys = (AbstractUnseekableKeys)updated.participants().touches();
+                PreLoadContext context = PreLoadContext.contextFor(keys, INCR, WRITE, "Set Durable");
                 PreLoadContext execute = safeStore.canExecute(context);
                 if (execute != null)
                 {
@@ -1120,7 +1121,7 @@ public class Commands
                 if (execute != context)
                 {
                     if (execute != null)
-                        context = contextFor(context.keys().without(execute.keys()), INCR, WRITE, "Set Durable");
+                        context = contextFor(keys.without(execute.keys()), INCR, WRITE, "Set Durable");
 
                     Invariants.require(!context.keys().isEmpty());
                     safeStore = safeStore; // prevent accidental usage inside lambda

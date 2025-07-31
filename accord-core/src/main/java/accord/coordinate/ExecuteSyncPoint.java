@@ -76,7 +76,7 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
     final SettableResult<DurabilityResult> onQuorum = new SettableResult<>();
     final int attempt;
     private Throwable failures;
-    boolean reportedQuorum;
+    boolean reportedQuorum, reportedMinorityQuorum;
     long retryInFutureEpoch;
 
     protected ExecuteSyncPoint(Node node, SyncPoint<Range> syncPoint, Set<Node.Id> excludeSuccess, AsyncExecutor executor, int attempt)
@@ -185,16 +185,31 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         update(tracker.recordFailure(from));
     }
 
-    private void update(RequestStatus status)
+    private void maybeReportQuorums()
     {
-        if (status == RequestStatus.NoChange)
+        if (!reportedQuorum)
         {
-            if (tracker.hasQuorumSuccess() && !reportedQuorum)
+            if (tracker.hasQuorumSuccess())
             {
                 DurabilityResult current = current();
                 onQuorum.trySuccess(current);
                 node.durability().report(current);
+                reportedQuorum = true;
             }
+            else if (!reportedMinorityQuorum && tracker.hasMinorityQuorumSuccess())
+            {
+                DurabilityResult current = current();
+                node.durability().report(current);
+                reportedMinorityQuorum = true;
+            }
+        }
+    }
+
+    private void update(RequestStatus status)
+    {
+        if (status == RequestStatus.NoChange)
+        {
+            maybeReportQuorums();
             return;
         }
 
@@ -224,6 +239,10 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
             else if (result.achievedRemote == SyncRemote.Quorum)
             {
                 node.send(tracker.nodes(), new SetShardDurable(syncPoint, Majority));
+            }
+            else
+            {
+                maybeReportQuorums();
             }
             node.durability().report(result);
             trySuccess(result);

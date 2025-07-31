@@ -871,6 +871,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     public void maybeNotify()
     {
+        if (stopped)
+            return;
+
         if (commandStore.inStore())
         {
             accept(null);

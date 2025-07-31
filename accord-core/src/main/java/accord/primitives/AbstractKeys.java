@@ -174,12 +174,12 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     @Override
     public String toString()
     {
-        return toString("", null);
+        return toString(null);
     }
 
-    protected String toString(String suffix, @Nullable Function<? super K, String> keySuffixes)
+    protected String toString(@Nullable RoutingKey printHomeKey)
     {
-        if (isEmpty() && suffix.isEmpty())
+        if (isEmpty() && printHomeKey == null)
             return "[]";
 
         StringBuilder sb = new StringBuilder();
@@ -189,6 +189,12 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
         {
             if (i > 0) sb.append(", ");
             Object prefix = keys[i].prefix();
+            RoutingKey homeKey = null;
+            if (printHomeKey != null && Objects.equals(prefix, printHomeKey.prefix()))
+            {
+                homeKey = printHomeKey;
+                printHomeKey = null;
+            }
             int j = i + 1;
             while (j < keys.length && Objects.equals(prefix, keys[j].prefix()))
                 ++j;
@@ -202,15 +208,42 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
             {
                 K key = keys[i++];
                 sb.append(key.printableSuffix());
-                if (keySuffixes != null)
-                    sb.append(keySuffixes.apply(key));
+                if (homeKey != null && Objects.equals(homeKey.suffix(), key.suffix()))
+                {
+                    sb.append('*');
+                    homeKey = null;
+                }
                 if (i < j) sb.append(',');
             }
             if (prefix != null)
+            {
+                sb.append(']');
+            }
+            if (homeKey != null)
+            {
+                sb.append('{');
+                sb.append(homeKey.printableSuffix());
+                sb.append("*}");
+            }
+        }
+        if (printHomeKey == null) sb.append(']');
+        else
+        {
+            if (keys.length > 0)
+                sb.append(", ");
+
+            Object prefix = printHomeKey.prefix();
+            if (prefix != null)
+            {
+                sb.append(printHomeKey.prefix());
+                sb.append(":[");
+            }
+            sb.append("]{");
+            sb.append(printHomeKey.printableSuffix());
+            sb.append("*}");
+            if (prefix != null)
                 sb.append(']');
         }
-        sb.append(suffix);
-        sb.append(']');
         return sb.toString();
     }
 

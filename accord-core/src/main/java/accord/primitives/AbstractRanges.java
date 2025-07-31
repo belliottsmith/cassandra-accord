@@ -28,6 +28,8 @@ import com.google.common.collect.Iterators;
 
 import accord.api.Key;
 import accord.api.RoutingKey;
+import accord.utils.ArrayBuffers;
+import accord.utils.ArrayBuffers.ObjectBufferCache;
 import accord.utils.ArrayBuffers.ObjectBuffers;
 import accord.utils.IndexedFoldToLong;
 import accord.utils.IndexedTriFold;
@@ -205,6 +207,36 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return SortedArrays.findNextIntersectionWithMultipleMatches(ranges, thisi, that.ranges, thati, Range::compareIntersecting, Range::compareIntersecting);
     }
 
+    @Override
+    public final long findFirstIntersection(AbstractRanges that)
+    {
+        if (this.ranges.length == 0 || that.ranges.length == 0)
+            return -1;
+
+        boolean found = true;
+        int thisi = SortedArrays.binarySearch(ranges, 0, ranges.length, that.ranges[0], Range::compareIntersecting, CEIL);
+        if (thisi < 0)
+        {
+            found = false;
+            thisi = -1 - thisi;
+        }
+        if (thisi == ranges.length)
+            return -1;
+        int thati = SortedArrays.binarySearch(that.ranges, 0, that.ranges.length, ranges[thisi], Range::compareIntersecting, CEIL);
+        if (thati < 0)
+        {
+            thati = -1 - thati;
+            found = false;
+        }
+        if (thati == that.ranges.length)
+            return -1;
+
+        if (found)
+            return thisi | ((long)thati << 32);
+
+        return findNextIntersection(thisi, that, thati);
+    }
+
     // returns ki in bottom 32 bits, ri in top, or -1 if no match found
     public final long findNextExactIntersection(int thisi, AbstractRanges that, int thati)
     {
@@ -376,48 +408,74 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     static <C extends AbstractRanges, P, O> O sliceMinimal(C covering, AbstractRanges input, P param, SliceConstructor<C, P, O> constructor)
     {
         ObjectBuffers<Range> cachedRanges = cachedRanges();
-
-        Range[] buffer = cachedRanges.get(covering.ranges.length + input.ranges.length);
+        Range[] buffer = null;
         int bufferCount = 0;
         try
         {
-            int li = 0, ri = 0;
-            while (true)
+            long lri = covering.findFirstIntersection(input);
+            while (lri >= 0)
             {
-                long lri = covering.findNextIntersection(li, input, ri);
-                if (lri < 0)
-                    break;
-
-                if (bufferCount == buffer.length)
-                    buffer = cachedRanges.resize(buffer, bufferCount, bufferCount + 1 + (bufferCount/2));
-
-                li = (int) (lri);
-                ri = (int) (lri >>> 32);
+                int li = (int) (lri);
+                int ri = (int) (lri >>> 32);
 
                 Range l = covering.ranges[li], r = input.ranges[ri];
                 RoutingKey ls = l.start(), rs = r.start(), le = l.end(), re = r.end();
                 int cs = rs.compareTo(ls), ce = re.compareTo(le);
                 if (cs >= 0 && ce <= 0)
                 {
-                    buffer[bufferCount++] = r;
+                    if (buffer != null || ri != bufferCount)
+                    {
+                        buffer = initOrResize(buffer, bufferCount, input.ranges, cachedRanges);
+                        buffer[bufferCount] = r;
+                    }
+                    ++bufferCount;
                     ++ri;
                 }
                 else
                 {
+                    buffer = initOrResize(buffer, bufferCount, input.ranges, cachedRanges);
                     buffer[bufferCount++] = r.newRange(cs >= 0 ? rs : ls, ce <= 0 ? re : le);
                     if (ce <= 0) ++ri;
                 }
                 if (ce >= 0) li++; // le <= re
+
+                lri = covering.findNextIntersection(li, input, ri);
             }
-            Range[] result = cachedRanges.complete(buffer, bufferCount);
-            cachedRanges.discard(buffer, bufferCount);
-            return constructor.construct(covering, param, result);
+
+            if (buffer == null)
+            {
+                Range[] ranges = input.ranges;
+                if (bufferCount != input.ranges.length)
+                    ranges = Arrays.copyOf(ranges, bufferCount);
+                return constructor.construct(covering, param, ranges);
+            }
+            else
+            {
+                Range[] result = cachedRanges.complete(buffer, bufferCount);
+                cachedRanges.discard(buffer, bufferCount);
+                return constructor.construct(covering, param, result);
+            }
         }
         catch (Throwable t)
         {
             cachedRanges.forceDiscard(buffer, bufferCount);
             throw t;
         }
+    }
+
+    private static Range[] initOrResize(Range[] buffer, int bufferCount, Range[] input, ObjectBuffers<Range> cachedRanges)
+    {
+        if (buffer == null)
+        {
+            buffer = cachedRanges.get(input.length);
+            if (bufferCount > 0)
+                System.arraycopy(input, 0, buffer, 0, bufferCount);
+        }
+        else if (bufferCount == buffer.length)
+        {
+            buffer = cachedRanges.resize(buffer, bufferCount, bufferCount + 1 + (bufferCount/2));
+        }
+        return buffer;
     }
 
     static <C extends AbstractRanges, P, O> O sliceMaximal(C covering, AbstractRanges input, P param, SliceConstructor<C, P, O> constructor)

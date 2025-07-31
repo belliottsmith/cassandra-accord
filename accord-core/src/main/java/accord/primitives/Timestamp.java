@@ -97,6 +97,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     static final int MERGE_FLAGS = REJECTED.bit | UNSTABLE.bit | HLC_BOUND.bit | SHARD_BOUND.bit;
     public static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF00FFL;
     public static final int IDENTITY_FLAGS = 0x00000000_000000FF;
+    public static final int NON_IDENTITY_FLAGS_SHIFT = Integer.bitCount(IDENTITY_FLAGS);
     public static final int KIND_AND_DOMAIN_FLAGS = 0x00000000_0000000F;
     public static final long MAX_EPOCH = (1L << 48) - 1;
     private static final long HLC_INCR = 1L << 16;

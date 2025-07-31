@@ -20,6 +20,8 @@ package accord.local;
 
 import accord.api.RoutingKey;
 import accord.local.cfk.CommandsForKey;
+import accord.primitives.AbstractUnseekableKeys;
+import accord.primitives.Routable;
 import accord.primitives.RoutingKeys;
 import accord.primitives.TxnId;
 
@@ -211,8 +213,10 @@ public interface PreLoadContext
         return contextFor(RoutingKeys.of(key), loadKeys, loadKeysFor, describe);
     }
 
-    static PreLoadContext contextFor(Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
+    // we don't currently permit range queries without an associated TxnId
+    static PreLoadContext contextFor(AbstractUnseekableKeys keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
     {
+        Invariants.require(keys.domain() == Routable.Domain.Key);
         return new PreLoadContext()
         {
             @Override public @Nullable TxnId primaryTxnId() { return null; }

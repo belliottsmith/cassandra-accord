@@ -113,6 +113,11 @@ public class Shard
                          flags);
     }
 
+    public final int minorityQuorumSize()
+    {
+        return (rf + 1) / 2;
+    }
+
     public boolean electorateIsSubset()
     {
         return !notInFastPath.isEmpty();
