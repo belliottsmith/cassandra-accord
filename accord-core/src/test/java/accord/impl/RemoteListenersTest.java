@@ -68,6 +68,7 @@ import accord.utils.AccordGens;
 import accord.utils.RandomSource;
 import accord.utils.RandomTestRunner;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import org.agrona.collections.IntHashSet;
 import org.agrona.collections.ObjectHashSet;
 
@@ -415,7 +416,6 @@ public class RemoteListenersTest
         @Override public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
         @Override public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
         @Override public void shutdown() {}
-        @Override protected void registerTransitive(SafeCommandStore safeStore, RangeDeps deps) { }
         @Override public <T> AsyncChain<T> build(Callable<T> task) { return null; }
     }
 

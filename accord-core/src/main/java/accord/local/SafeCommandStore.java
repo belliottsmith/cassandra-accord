@@ -18,6 +18,8 @@
 
 package accord.local;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.NavigableMap;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -27,6 +29,7 @@ import accord.api.DataStore;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
+import accord.impl.InMemoryCommandStore;
 import accord.local.CommandStores.RangesForEpochSupplier;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;
@@ -45,9 +48,11 @@ import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
+import accord.utils.Reduce;
 import accord.utils.SimpleBitSet;
 import accord.utils.SortedList;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 
 import static accord.local.LoadKeys.INCR;
 import static accord.local.LoadKeys.NONE;
@@ -56,6 +61,7 @@ import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
+import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applied;
@@ -469,7 +475,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (execute == context)
         {
             if (next.txnId().is(Range))
-                registerTransitive(safeStore, txnId, next);
+                registerTransitiveRangeDeps(safeStore, txnId, next);
         }
         else
         {
@@ -480,7 +486,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             CommandStore unsafeStore = safeStore.commandStore();
             AsyncChain<Void> submit = unsafeStore.build(context, safeStore0 -> { updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys() , txnId, mode); });
             if (next.txnId().is(Range))
-                submit = submit.flatMap(success -> unsafeStore.build((PreLoadContext.Empty) () -> "Register Transitive Dependencies", safeStore0 -> { registerTransitive(safeStore0, txnId, next); }));
+                submit = submit.flatMap(success -> unsafeStore.build((PreLoadContext.Empty) () -> "Register Transitive Dependencies", safeStore0 -> { registerTransitiveRangeDeps(safeStore0, txnId, next); }));
             submit.begin(safeStore.commandStore().agent);
         }
     }
@@ -503,19 +509,54 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
     }
 
-    private static void registerTransitive(SafeCommandStore safeStore, TxnId txnId, Command next)
+    private static void registerTransitiveRangeDeps(SafeCommandStore safeStore, TxnId syncId, Command syncCommand)
     {
-        if (!txnId.is(Kind.ExclusiveSyncPoint))
+        if (!syncId.is(Kind.ExclusiveSyncPoint))
             return;
 
         CommandStore commandStore = safeStore.commandStore();
-        Ranges ranges = next.participants().touches().toRanges();
-        commandStore.markWitnessed(safeStore, txnId, ranges);
-        if (!commandStore.isWaitingOnSync(txnId, ranges))
-        {
-            commandStore.registerTransitive(safeStore, next.partialDeps().rangeDeps);
-            commandStore.markSynced(txnId, ranges);
-        }
+        Ranges touches = syncCommand.participants().touches().toRanges();
+        Ranges waitingOn = commandStore.isWaitingOnSync(syncId, touches);
+        if (waitingOn.isEmpty())
+            return;
+
+        List<AsyncChain<Void>> async = new ArrayList<>();
+        RangeDeps rangeDeps = syncCommand.partialDeps().rangeDeps;
+        rangeDeps.forEachUniqueTxnId(waitingOn, null, (ignore, txnIdWithFlags) -> {
+            TxnId txnId = txnIdWithFlags.withoutNonIdentityFlags();
+            PreLoadContext context = PreLoadContext.contextFor(txnId, "Register Transitive Range Deps");
+            Ranges ranges = rangeDeps.ranges(txnId);
+            if (safeStore.canExecuteWith(context)) registerTransitive(safeStore, txnId, ranges);
+            else async.add(safeStore.commandStore().build(context, safeStore0 -> {
+                registerTransitive(safeStore0, txnId, ranges);
+            }));
+        });
+
+        AsyncChains.ofRunnable(Runnable::run, () -> commandStore.markSyncing(syncId, waitingOn))
+                   .flatMap(ignore -> AsyncChains.reduce(async, Reduce.toNull(), null))
+                   .begin((success, fail) -> {
+                       if (fail == null) commandStore.execute((PreLoadContext.Empty)() -> "Mark Synced", safeStore0 -> commandStore.markSynced(safeStore0, syncId, waitingOn));
+                       else commandStore.execute((PreLoadContext.Empty)() -> "Unmark Syncing", safeStore0 -> commandStore.unmarkSyncing(syncId, waitingOn));
+                   });
+    }
+
+    private static void registerTransitive(SafeCommandStore safeStore, TxnId txnId, Ranges witnessedBy)
+    {
+        SafeCommand safeCommand = safeStore.unsafeGet(txnId);
+        if (safeCommand != null && safeCommand.current().known().has(MaybeRoute))
+            return;
+
+        CommandStores.RangesForEpoch rangesForEpoch = safeStore.ranges();
+        // TODO (required): this is incompatible with rebootstrap - we need to use some additional condition
+        witnessedBy = witnessedBy.without(rangesForEpoch.coordinates(txnId));  // already coordinates, no need to replicate
+        if (witnessedBy.isEmpty())
+            return;
+
+        witnessedBy = witnessedBy.slice(rangesForEpoch.allSince(txnId.epoch()), Minimal); // never coordinated, no need to replicate for dependency or recovery calculations
+        if (witnessedBy.isEmpty())
+            return;
+
+        safeCommand.updateParticipants(safeStore, safeCommand.current().participants().supplement(null, witnessedBy));
     }
 
     public abstract CommandStore commandStore();
