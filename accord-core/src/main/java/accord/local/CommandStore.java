@@ -313,7 +313,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     public abstract void shutdown();
 
-    protected abstract void registerTransitive(SafeCommandStore safeStore, RangeDeps deps);
+    protected abstract AsyncChain<Void> registerTransitive(SafeCommandStore safeStore, RangeDeps deps);
 
     protected void unsafeSetMaxDecidedRX(MaxDecidedRX newMaxDecidedRX)
     {
@@ -687,12 +687,13 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     protected final void markWitnessed(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
-        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
-        safeStore.upsertRedundantBefore(addRedundantBefore);
     }
 
-    protected final void markSynced(TxnId syncId, Ranges ranges)
+    protected final void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
+        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
+        safeStore.upsertRedundantBefore(addRedundantBefore);
+
         if (waitingOnSync.isEmpty())
             return;
 
