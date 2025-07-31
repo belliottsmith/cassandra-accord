@@ -89,6 +89,7 @@ import accord.utils.DefaultRandom;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
 
 import static accord.local.Command.Executed.executed;
@@ -1016,9 +1017,6 @@ public class CommandsForKeyTest
         {
             Invariants.require(queue.isEmpty());
         }
-
-        @Override
-        protected void registerTransitive(SafeCommandStore safeStore, RangeDeps deps){ }
 
         @Override
         public <T> AsyncChain<T> build(Callable<T> task)
