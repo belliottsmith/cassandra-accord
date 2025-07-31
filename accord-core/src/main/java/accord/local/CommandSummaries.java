@@ -109,8 +109,9 @@ public interface CommandSummaries
 
         public IsDep isDep()
         {
-            int ordinal = encoded >> IS_DEP_SHIFT;
-            return ordinal < 0 ? null : IsDep.IS_DEPS[ordinal];
+            if (encoded < 0)
+                return null;
+            return IsDep.IS_DEPS[encoded >> IS_DEP_SHIFT];
         }
 
         public boolean is(SummaryStatus summaryStatus)

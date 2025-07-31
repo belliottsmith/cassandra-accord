@@ -30,7 +30,6 @@ import accord.api.DataStore.FetchRanges;
 import accord.api.DataStore.FetchResult;
 import accord.api.DataStore.StartingRangeFetch;
 import accord.coordinate.CoordinateSyncPoint;
-import accord.local.durability.DurabilityService;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
 import accord.primitives.Timestamp;
