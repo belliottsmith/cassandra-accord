@@ -46,7 +46,6 @@ import accord.api.ProgressLog;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantStatus.SomeStatus;
-import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
 import accord.primitives.Status.Durability;
@@ -170,12 +169,12 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     {
         final AsyncResults.SettableResult<Void> whenDone;
         final Ranges allRanges;
-        Ranges ranges;
+        Ranges waitingOn, waitingOnDurable;
 
         WaitingOnSync(AsyncResults.SettableResult<Void> whenDone, Ranges ranges)
         {
             this.whenDone = whenDone;
-            this.allRanges = this.ranges = ranges;
+            this.allRanges = this.waitingOn = this.waitingOnDurable = ranges;
         }
     }
     private final TreeMap<Long, WaitingOnSync> waitingOnSync = new TreeMap<>();
@@ -312,8 +311,6 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     }
 
     public abstract void shutdown();
-
-    protected abstract void registerTransitive(SafeCommandStore safeStore, RangeDeps deps);
 
     protected void unsafeSetMaxDecidedRX(MaxDecidedRX newMaxDecidedRX)
     {
@@ -666,7 +663,62 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         listeners.clearBefore(this, clearWaitingBefore);
     }
 
-    protected void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
+    protected final Ranges isWaitingOnSync(TxnId syncId, Ranges ranges)
+    {
+        if (waitingOnSync.isEmpty())
+            return Ranges.EMPTY;
+
+        Ranges waitingOn = Ranges.EMPTY;
+        for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+        {
+            if (e.getKey() > syncId.epoch())
+                break;
+
+            Ranges remaining = e.getValue().waitingOn;
+            Ranges intersecting = remaining.slice(ranges, Minimal);
+            if (!intersecting.isEmpty())
+            {
+                ranges = ranges.without(intersecting);
+                waitingOn = waitingOn.with(intersecting);
+            }
+        }
+
+        return waitingOn;
+    }
+
+    protected final void markSyncing(TxnId syncId, Ranges ranges)
+    {
+        if (waitingOnSync.isEmpty())
+            return;
+
+        for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+        {
+            if (e.getKey() > syncId.epoch())
+                break;
+
+            Ranges remaining = e.getValue().waitingOn.without(ranges);
+            if (e.getValue().waitingOn != remaining)
+                e.getValue().waitingOn = remaining;
+        }
+    }
+
+    protected final void unmarkSyncing(TxnId syncId, Ranges ranges)
+    {
+        if (waitingOnSync.isEmpty())
+            return;
+
+        for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+        {
+            if (e.getKey() > syncId.epoch())
+                break;
+
+            Ranges unmark = e.getValue().waitingOnDurable.slice(ranges, Minimal);
+            if (!unmark.isEmpty())
+                e.getValue().waitingOn = e.getValue().waitingOn.with(unmark);
+        }
+    }
+
+    protected final void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
@@ -680,13 +732,15 @@ public abstract class CommandStore implements SequentialAsyncExecutor
             if (e.getKey() > syncId.epoch())
                 break;
 
-            Ranges remaining = e.getValue().ranges;
-            Ranges synced = remaining.slice(ranges, Minimal);
-            boolean intersects = remaining.intersects(ranges);
+            Ranges waitingOn = e.getValue().waitingOn;
+            Ranges waitingOnDurable = e.getValue().waitingOnDurable;
+            Ranges synced = waitingOnDurable.slice(ranges, Minimal);
+            boolean intersects = waitingOnDurable.intersects(ranges);
             if (intersects)
             {
-                e.getValue().ranges = remaining = remaining.without(ranges);
-                if (e.getValue().ranges.isEmpty())
+                e.getValue().waitingOn = waitingOn = waitingOn.without(ranges);
+                e.getValue().waitingOnDurable = waitingOnDurable = waitingOnDurable.without(ranges);
+                if (waitingOnDurable.isEmpty())
                 {
                     logger.debug("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), syncId);
                     e.getValue().whenDone.trySuccess(null);
@@ -696,7 +750,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
                 }
                 else
                 {
-                    logger.debug("Completed partial sync for {} on epoch {} using {}; {} still to sync", synced, e.getKey(), syncId, remaining);
+                    logger.debug("Completed partial sync for {} on epoch {} using {}; {} still to sync and {} to sync durably", synced, e.getKey(), syncId, waitingOn, waitingOnDurable);
                 }
             }
         }
@@ -816,11 +870,16 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     public static ImmutableSortedMap<TxnId, Ranges> bootstrap(TxnId at, Ranges ranges, NavigableMap<TxnId, Ranges> bootstrappedAt)
     {
-        Invariants.requireArgument(bootstrappedAt.lastKey().compareTo(at) < 0 || at == TxnId.NONE);
+        Invariants.requireArgument(!ranges.isEmpty());
         if (at == TxnId.NONE)
+        {
             for (Ranges rs : bootstrappedAt.values())
                 Invariants.require(!ranges.intersects(rs));
-        Invariants.requireArgument(!ranges.isEmpty());
+        }
+        else
+        {
+            bootstrappedAt.floorEntry(at).getValue().containsAll(ranges);
+        }
         // if we're bootstrapping these ranges, then any period we previously owned the ranges for is effectively invalidated
         return purgeAndInsert(bootstrappedAt, at, ranges);
     }

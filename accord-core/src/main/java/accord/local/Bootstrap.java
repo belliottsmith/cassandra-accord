@@ -40,6 +40,9 @@ import accord.utils.ReducingRangeMap;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
+import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
+import static accord.local.durability.DurabilityService.SyncRemote.MinorityQuorum;
+import static accord.local.durability.DurabilityService.SyncRemote.Quorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
@@ -135,20 +138,31 @@ class Bootstrap
             // of these ranges as part of this attempt
             Ranges commitRanges = valid;
             safeStore = safeStore;
-            // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
-            safeStore.commandStore()
-                     .build((PreLoadContext.Empty) () -> "Start Bootstrap RX", safeStore0 -> {
-                         store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
-                         return CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges);
-                     })
-                     .flatMap(i -> i)
-                     .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> store.build((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
-                         if (valid.isEmpty()) // we've lost ownership of the range
-                             return AsyncResults.success(Ranges.EMPTY);
-                         return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
-                     })))
-                     .flatMap(i -> i)
-                     .begin(this);
+            CommandStore commandStore = safeStore.commandStore();
+            CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges)
+                               .flatMap(syncPoint -> {
+                                   // before using the sync point we first make sure it is durable to a majority, since any later durability conditions
+                                   // this node participates in will not guarantee a quorum for preceding transactions
+                                   // we must do this before we mark ourselves bootstrapping, else we may participate in a durability quorum
+                                   // without actually waiting for the durability condition to be reached locally
+                                   // TODO (required): introduce a more robust mechanism when evaluating Durability quorums, esp. since this does not handle markStale
+                                   // TODO (required): configurable timeout?
+                                   // TODO (required): can we do better than minority quorum? still not sufficient for bootstrap replace at rf=2
+                                   return node.durability().sync("Bootstrap " + commitRanges + " for " + commandStore, syncPoint, NoLocal, MinorityQuorum, 1L, TimeUnit.HOURS)
+                                              .map(i -> syncPoint);
+                               })
+                               .flatMap(success -> commandStore.build((PreLoadContext.Empty) () -> "Mark Bootstrapping", safeStore0 -> {
+                                   // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
+                                   store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
+                                   return success;
+                               }))
+                               .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> store.build((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
+                                   if (valid.isEmpty()) // we've lost ownership of the range
+                                       return AsyncResults.success(Ranges.EMPTY);
+                                   return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
+                               })))
+                               .flatMap(i -> i)
+                               .begin(this);
         }
 
         // we no longer want to fetch these ranges (perhaps we no longer own them)
@@ -273,7 +287,7 @@ class Bootstrap
 
             store.agent().onFailedBootstrap(attempt, "PartialFetch", newFailures, () -> {
                 node.scheduler().selfRecurring(() -> {
-                    store.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> restart(safeStore, newFailures.slice(allValid), attempt + 1), store.agent());
+                    store.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> restart(safeStore, newFailures.slice(allValid, Minimal), attempt + 1), store.agent());
                 }, 0L, TimeUnit.NANOSECONDS);
             }, failure);
             Invariants.require(!newFailures.intersects(fetchedAndSafeToRead));

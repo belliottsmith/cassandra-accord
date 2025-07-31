@@ -298,6 +298,11 @@ public class TxnId extends Timestamp
         return (flags() & ~IDENTITY_FLAGS) == 0 ? this : new TxnId(msb, lsb & IDENTITY_LSB, node);
     }
 
+    public final int nonIdentityFlags()
+    {
+        return flags() >>> NON_IDENTITY_FLAGS_SHIFT;
+    }
+
     public final boolean hasPrivilegedCoordinator()
     {
         return FastPath.hasPrivilegedCoordinator(flagsUnmasked());
@@ -519,5 +524,18 @@ public class TxnId extends Timestamp
         if (!m.matches())
             return null;
         return fromValues(Long.parseLong(m.group("epoch")), Long.parseLong(m.group("hlc")), Integer.parseInt(m.group("flags")), new Id(Integer.parseInt(m.group("node"))));
+    }
+
+    public static boolean equalsStrict(TxnId[] a, TxnId[] b)
+    {
+        if (a.length != b.length)
+            return false;
+
+        for (int i = 0 ; i < a.length ; ++i)
+        {
+            if (!a[i].equalsStrict(b[i]))
+                return false;
+        }
+        return true;
     }
 }

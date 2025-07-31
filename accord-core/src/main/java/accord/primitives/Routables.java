@@ -112,6 +112,13 @@ public interface Routables<K extends Routable> extends Iterable<K>
     FullRoute<?> toRoute(RoutingKey homeKey);
 
     /**
+     * Search forwards from the beginning of both collections to find the first entries in each collection
+     * that intersect with each other. Return their position packed in a long, with low bits representing
+     * the resultant {@code thisIndex} and high bits {@code withIndex}.
+     */
+    default long findFirstIntersection(AbstractRanges with) { return findNextIntersection(0, with, 0); }
+
+    /**
      * Search forwards from {code thisIndex} and {@code withIndex} to find the first entries in each collection
      * that intersect with each other. Return their position packed in a long, with low bits representing
      * the resultant {@code thisIndex} and high bits {@code withIndex}.

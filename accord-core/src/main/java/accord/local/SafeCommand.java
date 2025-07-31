@@ -98,9 +98,7 @@ public abstract class SafeCommand
             return prev;
 
         participants = participants.filter(LOAD, safeStore, prev.txnId(), prev.executeAtIfKnown());
-        Command update = incidentalUpdate(prev.updateParticipants(participants));
-        safeStore.progressLog().update(safeStore, txnId, prev, update, false);
-        return update;
+        return update(safeStore, prev.updateParticipants(participants));
     }
 
     public Command.PreAccepted preaccept(SafeCommandStore safeStore, SaveStatus saveStatus, StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)

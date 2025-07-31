@@ -113,6 +113,11 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
             return successes.size() >= shard.slowQuorumSize;
         }
 
+        public boolean hasMinorityQuorumSuccess()
+        {
+            return successes.size() >= shard.minorityQuorumSize();
+        }
+
         boolean hasInFlight()
         {
             return waitingOn > 0;
@@ -173,6 +178,8 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
             return SyncRemote.All;
         if (hasQuorumSuccess())
             return SyncRemote.Quorum;
+        if (hasMinorityQuorumSuccess())
+            return SyncRemote.MinorityQuorum;
         return SyncRemote.NoRemote;
     }
 
@@ -190,5 +197,10 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
     {
         Invariants.require((waitingOnQuorum == 0) == all(DurabilityShardTracker::hasQuorumSuccess));
         return waitingOnQuorum == 0;
+    }
+
+    public boolean hasMinorityQuorumSuccess()
+    {
+        return all(DurabilityShardTracker::hasMinorityQuorumSuccess);
     }
 }
