@@ -168,7 +168,6 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
     @Override
     public String toString()
     {
-        boolean containsHomeKey = containsHomeKey();
-        return toString(containsHomeKey ? "" : "(homeKey:" + homeKey + ')', containsHomeKey ? test -> test.equals(homeKey) ? "*" : "" : null);
+        return toString(homeKey);
     }
 }

@@ -30,6 +30,7 @@ import accord.api.DataStore.FetchRanges;
 import accord.api.DataStore.FetchResult;
 import accord.api.DataStore.StartingRangeFetch;
 import accord.coordinate.CoordinateSyncPoint;
+import accord.local.durability.DurabilityService;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
 import accord.primitives.Timestamp;
@@ -40,6 +41,8 @@ import accord.utils.ReducingRangeMap;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
+import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
+import static accord.local.durability.DurabilityService.SyncRemote.Quorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
@@ -135,20 +138,24 @@ class Bootstrap
             // of these ranges as part of this attempt
             Ranges commitRanges = valid;
             safeStore = safeStore;
-            // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
-            safeStore.commandStore()
-                     .build((PreLoadContext.Empty) () -> "Start Bootstrap RX", safeStore0 -> {
-                         store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
-                         return CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges);
-                     })
-                     .flatMap(i -> i)
-                     .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> store.build((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
-                         if (valid.isEmpty()) // we've lost ownership of the range
-                             return AsyncResults.success(Ranges.EMPTY);
-                         return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
-                     })))
-                     .flatMap(i -> i)
-                     .begin(this);
+            CommandStore commandStore = safeStore.commandStore();
+            node.durability()
+                // we first make sure the sync point is durable to a majority, since any later durability conditions
+                // this node participates in will not guarantee a quorum for preceding transactions
+                .sync("Bootstrap " + commitRanges + " for " + safeStore.commandStore(), globalSyncId, commitRanges, NoLocal, Quorum, 1L, TimeUnit.HOURS)
+                .flatMap(success -> commandStore.build((PreLoadContext.Empty) () -> "Start Bootstrap RX", safeStore0 -> {
+                    // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
+                    store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
+                    return CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges);
+                }))
+                .flatMap(i -> i)
+                .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> store.build((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
+                    if (valid.isEmpty()) // we've lost ownership of the range
+                        return AsyncResults.success(Ranges.EMPTY);
+                    return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
+                })))
+                .flatMap(i -> i)
+                .begin(this);
         }
 
         // we no longer want to fetch these ranges (perhaps we no longer own them)

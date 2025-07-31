@@ -22,7 +22,6 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
 import accord.primitives.Range;
-import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Routables;
 import accord.primitives.Txn;
@@ -30,10 +29,12 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
-import accord.utils.ReducingRangeMap;
 
 import static accord.primitives.TxnId.maxIfNull;
 import static accord.primitives.TxnId.noneIfNull;
+
+import accord.primitives.Ranges;
+import accord.utils.ReducingRangeMap;
 
 public class MaxDecidedRX extends ReducingRangeMap<TxnId>
 {
