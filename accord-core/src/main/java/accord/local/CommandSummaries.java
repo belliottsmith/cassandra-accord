@@ -160,7 +160,6 @@ public interface CommandSummaries
         protected final Kinds testKind;
         protected final TxnId primaryTxnId, findAsDep, minTxnId, minDecidedId;
         protected final Timestamp maxTxnId;
-//        protected final TxnId minDecidedId;
 
         // TODO (expected): provide executeAt to PreLoadContext so we can more aggressively filter what we load, esp. by Kind
         public static SummaryLoader loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, PreLoadContext context)

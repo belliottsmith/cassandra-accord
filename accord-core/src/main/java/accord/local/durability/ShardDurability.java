@@ -346,7 +346,7 @@ public class ShardDurability
 
         synchronized void start()
         {
-            if (!isStarted())
+            if (!ShardDurability.this.isStarted())
                 return;
 
             Invariants.require(scheduled == null);
