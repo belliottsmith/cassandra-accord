@@ -591,8 +591,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
             TxnInfo info = (TxnInfo) o;
             return status() == info.status()
                    && (executeAt == this ? info.executeAt == info : Objects.equals(executeAt, info.executeAt))
-                   && Arrays.equals(missing(), info.missing());
+                   && TxnId.equalsStrict(missing(), info.missing());
         }
+
 
         public TxnId plainTxnId()
         {
@@ -2371,7 +2372,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 return false;
             if (!a.ballot().equals(b.ballot()))
                 return false;
-            if (!Arrays.equals(a.missing(), b.missing()))
+            if (!TxnId.equalsStrict(a.missing(), b.missing()))
                 return false;
         }
         return true;

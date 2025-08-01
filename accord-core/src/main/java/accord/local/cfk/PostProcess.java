@@ -175,20 +175,7 @@ abstract class PostProcess
 
         notify = cachedTxnIds().completeAndDiscard(notify, notifyCount);
         PostProcess newPostProcess = new NotifyNotWaiting(update.postProcess(), notify);
-
-        CommandsForKey cfk = update.cfk();
-        if (maxApplied != null)
-        {
-            int start = findFirstApply(cfk.unmanageds);
-            int end = findApply(cfk.unmanageds, start, maxApplied);
-            if (start != end)
-            {
-                TxnId[] notifyNotWaiting = selectUnmanaged(cfk.unmanageds, start, end);
-                cfk = cfk.update(removeUnmanaged(cfk.unmanageds, start, end));
-                newPostProcess = new PostProcess.NotifyNotWaiting(newPostProcess, notifyNotWaiting);
-            }
-        }
-        return new CommandsForKeyUpdateWithPostProcess(cfk, newPostProcess);
+        return new CommandsForKeyUpdateWithPostProcess(update.cfk(), newPostProcess);
     }
 
     static class NotifyUnmanagedOfCommit extends PostProcess
@@ -337,17 +324,20 @@ abstract class PostProcess
                     int start = firstApply;
                     int end = start;
                     int j = 1 + maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                    boolean hasUnapplied = false;
                     while (end < unmanageds.length && j < committedByExecuteAt.length)
                     {
+                        hasUnapplied |= committedByExecuteAt[j].compareTo(APPLIED) < 0;
                         int c = committedByExecuteAt[j].executeAt.compareTo(unmanageds[end].waitingUntil);
                         if (c == 0)
                         {
                             if (start != end)
                             {
-                                TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
+                                TxnId[] notify = selectUnmanaged(unmanageds, start, end);
                                 unmanageds = removeUnmanaged(unmanageds, start, end);
                                 end = start;
-                                notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                                notifier = hasUnapplied ? new PostProcess.NotifyUnmanagedOfCommit(notifier, notify)
+                                                        : new PostProcess.NotifyNotWaiting(notifier, notify);
                             }
                             start = ++end;
                         }
@@ -362,9 +352,10 @@ abstract class PostProcess
                     }
                     if (start != unmanageds.length)
                     {
-                        TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, unmanageds.length);
+                        TxnId[] notify = selectUnmanaged(unmanageds, start, unmanageds.length);
                         unmanageds = removeUnmanaged(unmanageds, start, unmanageds.length);
-                        notifier = new PostProcess.NotifyNotWaiting(notifier, notifyNotWaiting);
+                        notifier = hasUnapplied ? new PostProcess.NotifyUnmanagedOfCommit(notifier, notify)
+                                                : new PostProcess.NotifyNotWaiting(notifier, notify);
                     }
                 }
             }

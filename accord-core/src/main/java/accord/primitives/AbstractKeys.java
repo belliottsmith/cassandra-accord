@@ -229,6 +229,9 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
         if (printHomeKey == null) sb.append(']');
         else
         {
+            if (keys.length > 0)
+                sb.append(", ");
+
             Object prefix = printHomeKey.prefix();
             if (prefix != null)
             {

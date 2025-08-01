@@ -143,11 +143,23 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
         }
 
-        void save(CommandsForKey cfk)
+        void saveCallback(CommandsForKey cfk)
         {
-            commandsForKey.put(cfk.key(), Serialize.toBytesWithoutKey(cfk.maximalPrune()));
+            save(cfk);
             if (--waitingForCfk == 0)
                 trySuccess(this);
+        }
+
+        private void save(CommandsForKey cfk)
+        {
+            cfk = cfk.maximalPrune();
+            ByteBuffer serialized = Serialize.toBytesWithoutKey(cfk);
+            CommandsForKey roundTrip = Serialize.fromBytes(cfk.key(), serialized);
+            if (roundTrip != null)
+            {
+                Invariants.require(cfk.equalContents(roundTrip));
+                commandsForKey.put(cfk.key(), serialized);
+            }
         }
 
         public static AsyncResult<Snapshot> snapshot(InMemoryCommandStore commandStore)
@@ -167,7 +179,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 }
                 else
                 {
-                    snapshot.commandsForKey.put(cfk.key(), Serialize.toBytesWithoutKey(cfk.maximalPrune()));
+                    snapshot.save(cfk);
                 }
             }
             if (snapshot.waitingForCfk == 0)
@@ -592,7 +604,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         public GlobalState<CommandsForKey> value(CommandsForKey value)
         {
             if (!pendingSnapshots.isEmpty() && !value.isLoadingPruned())
-                pendingSnapshots.forEach(snapshot -> snapshot.save(value));
+                pendingSnapshots.forEach(snapshot -> snapshot.saveCallback(value));
             return super.value(value);
         }
 
