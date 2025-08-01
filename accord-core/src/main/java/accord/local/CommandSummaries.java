@@ -149,9 +149,9 @@ public interface CommandSummaries
 
     class SummaryLoader
     {
-        public interface Factory<L extends SummaryLoader, P>
+        public interface Factory<L extends SummaryLoader>
         {
-            L create(P param, RedundantBefore redundantBefore, @Nullable MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep);
+            L create(RedundantBefore redundantBefore, @Nullable MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep);
         }
 
         protected final RedundantBefore redundantBefore;
@@ -170,15 +170,15 @@ public interface CommandSummaries
 
         public static SummaryLoader loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, LoadKeysFor loadKeysFor, Unseekables<?> keysOrRanges)
         {
-            return loader(null, redundantBefore, maxDecidedRX, primaryTxnId, loadKeysFor, keysOrRanges, SummaryLoader::new);
+            return loader(redundantBefore, maxDecidedRX, primaryTxnId, loadKeysFor, keysOrRanges, SummaryLoader::new);
         }
 
-        public static <L extends SummaryLoader, P> L loader(P param, RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, PreLoadContext context, Factory<L, P> factory)
+        public static <L extends SummaryLoader> L loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, PreLoadContext context, Factory<L> factory)
         {
-            return loader(param, redundantBefore, maxDecidedRX, context.primaryTxnId(), context.loadKeysFor(), context.keys(), factory);
+            return loader(redundantBefore, maxDecidedRX, context.primaryTxnId(), context.loadKeysFor(), context.keys(), factory);
         }
 
-        public static <L extends SummaryLoader, P> L loader(P param, RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, LoadKeysFor loadKeysFor, Unseekables<?> keysOrRanges, Factory<L, P> factory)
+        public static <L extends SummaryLoader> L loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, LoadKeysFor loadKeysFor, Unseekables<?> keysOrRanges, Factory<L> factory)
         {
             Invariants.require(primaryTxnId != null);
             TxnId minTxnId = redundantBefore.min(keysOrRanges, Bounds::gcBefore);
@@ -187,10 +187,10 @@ public interface CommandSummaries
             Kinds kinds = primaryTxnId.witnesses().or(loadKeysFor == RECOVERY ? primaryTxnId.witnessedBy() : Nothing);
             if (!primaryTxnId.is(Txn.Kind.ExclusiveSyncPoint))
                 maxDecidedRX = null;
-            return factory.create(param, redundantBefore, maxDecidedRX, primaryTxnId, keysOrRanges, kinds, minTxnId, maxTxnId, findAsDep);
+            return factory.create(redundantBefore, maxDecidedRX, primaryTxnId, keysOrRanges, kinds, minTxnId, maxTxnId, findAsDep);
         }
 
-        public SummaryLoader(Object ignore, RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep)
+        public SummaryLoader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep)
         {
             this.redundantBefore = redundantBefore;
             this.maxDecidedRX = maxDecidedRX;

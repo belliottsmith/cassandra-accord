@@ -77,6 +77,7 @@ public class Serialize
     private static final int HAS_BALLOT_HEADER_BIT_SHIFT = 2;
     private static final int HAS_STATUS_OVERRIDES_HEADER_BIT = 0x8;
     private static final int HAS_STATUS_OVERRIDES_HEADER_BIT_SHIFT = 3;
+    private static final int HAS_MISSING_DEPS_FLAGS_HEADER_BIT = 0x10;
     private static final int COMMAND_HEADER_BIT_FLAGS_MASK = 0x1f;
     private static final int HAS_BOOTSTRAPPED_AT_HEADER_BIT = 0x20;
     private static final int HAS_BOUNDS_FLAGS_HEADER_BIT = 0x40;
@@ -159,8 +160,8 @@ public class Serialize
             // first compute the unique Node Ids and some basic characteristics of the data, such as
             // whether we have any missing transactions to encode, any executeAt that are not equal to their TxnId
             // and whether there are any non-standard flag bits to encode
-            int nodeIdCount, missingIdCount = 0, executeAtCount = 0, ballotCount = 0, overrideCount = 0;
-            int bitsPerExecuteAtEpoch = 0, bitsPerExecuteAtFlags = 0, bitsPerExecuteAtHlc = 1; // to permit us to use full 64 bits and encode in 5 bits we force at least one hlc bit
+            int nodeIdCount, missingIdCount = 0, missingIdWithFlagsCount = 0, executeAtCount = 0, ballotCount = 0, overrideCount = 0;
+            int bitsPerExecuteAtEpoch = 0, bitsPerExecuteAtFlags = 0, bitsPerExecuteAtHlc = 1, bitsPerMissingIdFlags = 0; // to permit us to use full 64 bits and encode in 5 bits we force at least one hlc bit
             {
                 nodeIds[0] = cfk.redundantBefore().node.id;
                 nodeIdCount = 1;
@@ -196,7 +197,21 @@ public class Serialize
                     if (txn.getClass() == TxnInfoExtra.class)
                     {
                         TxnInfoExtra extra = (TxnInfoExtra) txn;
-                        missingIdCount += extra.missing.length;
+                        TxnId[] missing = extra.missing;
+                        if (missing.length > 0)
+                        {
+                            Invariants.require(txn.hasDeps());
+                            missingIdCount += missing.length;
+                            for (TxnId txnId : missing)
+                            {
+                                int nonIdentityFlags = txnId.nonIdentityFlags();
+                                if (nonIdentityFlags != 0)
+                                {
+                                    ++missingIdWithFlagsCount;
+                                    bitsPerMissingIdFlags = Math.max(bitsPerMissingIdFlags, numberOfBitsToRepresent(nonIdentityFlags));
+                                }
+                            }
+                        }
                         Invariants.require(extra.missing.length == 0 || txn.hasDeps());
                         if (extra.ballot != Ballot.ZERO)
                         {
@@ -228,9 +243,9 @@ public class Serialize
             // of additional space we'll need to store the TxnId and its basic info
             int bitsPerNodeId = numberOfBitsToRepresent(nodeIdCount);
             int minHeaderBits = 10 + bitsPerNodeId + (overrideCount > 0 ? 1 : 0);
-            int headerFlags = (executeAtCount > 0 ? 1 : 0)
-                            | (missingIdCount > 0 ? 2 : 0)
-                            | (ballotCount > 0 ? 4 : 0);
+            int headerFlags = (executeAtCount > 0 ? HAS_EXECUTE_AT_HEADER_BIT : 0)
+                            | (missingIdCount > 0 ? HAS_MISSING_DEPS_HEADER_BIT : 0)
+                            | (ballotCount > 0    ? HAS_BALLOT_HEADER_BIT : 0);
 
             int maxHeaderBits = minHeaderBits;
             int totalBytes = 0;
@@ -281,11 +296,12 @@ public class Serialize
                     totalBytes += 1 + encodedFlagBits;
 
                 if (txn.hasExecuteAt())
-                    headerBits += headerFlags & 0x1;
+                    headerBits += (headerFlags >>> HAS_EXECUTE_AT_HEADER_BIT_SHIFT) & 1;
                 if (txn.hasDeps())
-                    headerBits += (headerFlags >>> 1) & 0x1;
+                    headerBits += (headerFlags >>> HAS_MISSING_DEPS_HEADER_BIT_SHIFT) & 1;
                 if (txn.hasBallot())
-                    headerBits += (headerFlags >>> 2);
+                    headerBits += (headerFlags >>> HAS_BALLOT_HEADER_BIT_SHIFT) & 1;
+
                 maxHeaderBits = Math.max(headerBits, maxHeaderBits);
                 int basicBytes = (headerBits + payloadBits + 7)/8;
                 bytesHistogram[basicBytes]++;
@@ -302,6 +318,7 @@ public class Serialize
                 bytesHistogram[i] += bytesHistogram[i-1];
 
             int globalFlags =   (missingIdCount          > 0  ? HAS_MISSING_DEPS_HEADER_BIT       : 0)
+                              | (missingIdWithFlagsCount > 0  ? HAS_MISSING_DEPS_FLAGS_HEADER_BIT : 0)
                               | (executeAtCount          > 0  ? HAS_EXECUTE_AT_HEADER_BIT         : 0)
                               | (ballotCount             > 0  ? HAS_BALLOT_HEADER_BIT             : 0)
                               | (overrideCount           > 0  ? HAS_STATUS_OVERRIDES_HEADER_BIT   : 0)
@@ -404,7 +421,9 @@ public class Serialize
                     totalBytes += 2; // encode bit widths
 
                 // account for encoding missing id stream
-                int missingIdBits = 1 + numberOfBitsToRepresent(commandCount);
+                int missingIdBits = (missingIdWithFlagsCount > 0 ? 1 : 0) // bit to encode whether there are extra flags
+                                    + 1 // last element bit
+                                    + numberOfBitsToRepresent(commandCount);
                 int executeAtBits = bitsPerNodeId
                                     + bitsPerExecuteAtEpoch
                                     + bitsPerExecuteAtHlc
@@ -414,6 +433,7 @@ public class Serialize
                                  + bitsPerBallotHlc
                                  + bitsPerBallotFlags;
                 totalBytes += (missingIdBits * missingIdCount
+                               + bitsPerMissingIdFlags * missingIdWithFlagsCount + (missingIdWithFlagsCount > 0 ? 4 : 0)
                                + executeAtBits * executeAtCount
                                + (ballotCount > 0 ? ballotBits * (ballotCount - 1) + bitsPerNodeId + 128 : 0)
                                + 7)/8;
@@ -607,6 +627,14 @@ public class Serialize
                 long buffer = 0L;
                 int bufferCount = 0;
 
+                if (0 != (globalFlags & HAS_MISSING_DEPS_FLAGS_HEADER_BIT))
+                {
+                    Invariants.require(bitsPerMissingIdFlags < 16);
+                    buffer = flushBits(buffer, bufferCount, bitsPerMissingIdFlags, 4, out);
+                    bufferCount = (bufferCount + 4) & 63;
+                    ++bitsPerMissingId;
+                }
+
                 Ballot prevBallot = null;
                 for (int i = 0 ; i < commandCount ; ++i)
                 {
@@ -648,17 +676,21 @@ public class Serialize
                         TxnId[] missing = extra.missing;
                         if (missing.length > 0)
                         {
-                            int j = 0;
-                            while (j < missing.length - 1)
+                            for (int j = 0 ; j < missing.length ; ++j)
                             {
-                                int missingId = cfk.indexOf(missing[j++]);
+                                TxnId txnId = missing[j];
+                                int missingId = cfk.indexOf(txnId);
+                                int nonIdentityFlags = txnId.nonIdentityFlags();
+                                missingId |= (nonIdentityFlags != 0 ? 1 : 0) << (bitsPerCommandId + 1);
+                                missingId |= (j == missing.length - 1 ? 1 : 0) << bitsPerCommandId;
                                 buffer = flushBits(buffer, bufferCount, missingId, bitsPerMissingId, out);
                                 bufferCount = (bufferCount + bitsPerMissingId) & 63;
+                                if (nonIdentityFlags != 0)
+                                {
+                                    buffer = flushBits(buffer, bufferCount, nonIdentityFlags, bitsPerMissingIdFlags, out);
+                                    bufferCount = (bufferCount + bitsPerMissingIdFlags) & 63;
+                                }
                             }
-                            int missingId = cfk.indexOf(missing[missing.length - 1]);
-                            missingId |= 1 << bitsPerCommandId;
-                            buffer = flushBits(buffer, bufferCount, missingId, bitsPerMissingId, out);
-                            bufferCount = (bufferCount + bitsPerMissingId) & 63;
                         }
 
                         Ballot ballot = extra.ballot;
@@ -927,6 +959,13 @@ public class Serialize
 
             Ballot prevBallot = null;
             final BitUtils.BitReader reader = new BitUtils.BitReader();
+            int bitsPerMissingIdFlags = 0;
+            if (0 != (globalFlags & HAS_MISSING_DEPS_FLAGS_HEADER_BIT))
+            {
+                bitsPerMissingIdFlags = (int) reader.read(4, in);
+                ++bitsPerMissingId;
+            }
+
             for (int i = 0 ; i < commandCount ; ++i)
             {
                 TxnId txnId = txnIds[i];
@@ -969,9 +1008,21 @@ public class Serialize
 
                         int next = (int) reader.read(bitsPerMissingId, in);
                         Invariants.require(next > prev);
-                        missingIdBuffer[missingIdCount++] = txnIds[next & txnIdMask];
-                        if (next >= commandCount)
-                            break; // finished this array
+                        int controlBits = next >>> Integer.bitCount(txnIdMask);
+                        next &= txnIdMask;
+                        missingIdBuffer[missingIdCount++] = txnIds[next];
+                        if (controlBits != 0)
+                        {
+                            // either finished this array or have non-standard flags
+                            if (controlBits > 1)
+                            {
+                                int nonIdentityFlags = (int) reader.read(bitsPerMissingIdFlags, in);
+                                missingIdBuffer[missingIdCount - 1] = missingIdBuffer[missingIdCount - 1].addFlags(nonIdentityFlags << TxnId.NON_IDENTITY_FLAGS_SHIFT);
+                                controlBits ^= 2;
+                            }
+                            if (controlBits != 0)
+                                break; // finished this array
+                        }
                         prev = next;
                     }
 
