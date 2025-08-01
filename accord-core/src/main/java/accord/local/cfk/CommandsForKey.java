@@ -1430,7 +1430,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             while (nextPruned != null && nextPruned.compareTo(txn) < 0)
             {
                 if (nextPruned.isVisible && nextPruned.is(testKind))
-                    visitor.visit(p1, p2, NOT_DIRECTLY_WITNESSED, key, nextPruned.plainTxnId());
+                    visitor.visit(p1, p2, NOT_DIRECTLY_WITNESSED, NotDurable, key, nextPruned.plainTxnId());
 
                 if (loadingPruned.hasNext()) nextPruned = loadingPruned.next();
                 else nextPruned = null;
@@ -1498,7 +1498,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                     }
             }
 
-            visitor.visit(p1, p2, txn.summaryStatus(), key, txn.plainTxnId());
+            visitor.visit(p1, p2, txn.summaryStatus(), txn.isDurable() ? Majority : NotDurable, key, txn.plainTxnId());
         }
 
         if (end <= prunedBeforeById)
@@ -1520,7 +1520,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                     break;
             }
             if (best.executeAt.epoch() <= startedBefore.epoch() && !best.equals(startedBefore))
-                visitor.visit(p1, p2, best.summaryStatus(), key, best.plainTxnId());
+                visitor.visit(p1, p2, best.summaryStatus(), best.isDurable() ? Majority : NotDurable, key, best.plainTxnId());
         }
     }
 
@@ -2038,7 +2038,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return (int) (unappliedCounters >>> ((WRITE_COUNTERS_DELTA_SHIFT >>> (kindOrdinal * 8)) & 63));
     }
 
-    public CommandsForKeyUpdate withRedundantBeforeAtLeast(QuickBounds newBounds)
+    public CommandsForKeyUpdate withRedundantBeforeAtLeast(QuickBounds newBounds, boolean expectUpToDate)
     {
         // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
         if (newBounds.gcBefore.hlc() < bounds.gcBefore.hlc())
@@ -2076,9 +2076,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
 
         Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBounds));
-        TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds);
+        TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds, expectUpToDate);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBounds));
-        Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.gcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
+        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.gcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
 
         return notifyManagedPreBootstrap(this, newBounds, reconstructAndUpdateUnmanaged(key, newBounds, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds));
     }
@@ -2089,14 +2089,14 @@ public class CommandsForKey extends CommandsForKeyUpdate
      * on load and not no-op due to e.g. newSafelyPrunedBefore or newBootstrappedAt being non-null.
      */
     @VisibleForImplementation
-    public CommandsForKey withRedundantBeforeAtLeast(TxnId newRedundantBefore)
+    public CommandsForKey withRedundantBeforeAtLeast(TxnId newRedundantBefore, boolean expectUpToDate)
     {
         QuickBounds newBoundsInfo = bounds.withGcBeforeBeforeAtLeast(newRedundantBefore);
 
         Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newRedundantBefore);
-        TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBoundsInfo);
+        TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBoundsInfo, expectUpToDate);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newRedundantBefore);
-        Invariants.paranoid(newPrunedBeforeById < 0 ? prunedBeforeById < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
+        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newRedundantBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
 
         return reconstruct(key, newBoundsInfo, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds);
     }

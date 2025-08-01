@@ -115,6 +115,10 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
                 {
                     cause.addSuppressed(t);
                 }
+                catch (Error rethrow)
+                {
+                    throw rethrow;
+                }
                 catch (Throwable ignore)
                 {
                     // can't add as suppressed...

@@ -26,6 +26,8 @@ import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
+import accord.primitives.Status;
+import accord.primitives.Status.Durability;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
@@ -56,9 +58,9 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
             this.txnId = txnId;
         }
 
-        boolean include(SummaryStatus status, Unseekable keyOrRange, TxnId depId)
+        boolean include(Durability durability, Unseekable keyOrRange, TxnId depId)
         {
-            if (status.compareTo(COMMITTED) >= 0 || depId.is(ExclusiveSyncPoint))
+            if (durability.isDurable() || depId.is(ExclusiveSyncPoint))
             {
                 if (absoluteMinDecidedId != null && depId.compareTo(absoluteMinDecidedId) < 0)
                     return false;
@@ -85,9 +87,9 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
     }
 
     @Override
-    public void visit(TxnId self, @Nullable MinDependencyCalculator minDepCalc, SummaryStatus status, Unseekable keyOrRange, TxnId depId)
+    public void visit(TxnId self, @Nullable MinDependencyCalculator minDepCalc, SummaryStatus status, Durability durability, Unseekable keyOrRange, TxnId depId)
     {
-        if (minDepCalc != null && !minDepCalc.include(status, keyOrRange, depId))
+        if (minDepCalc != null && !minDepCalc.include(durability, keyOrRange, depId))
             return;
 
         if (self == null || !self.equals(depId))

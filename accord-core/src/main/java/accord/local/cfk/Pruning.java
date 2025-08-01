@@ -530,7 +530,7 @@ public class Pruning
         return epochPrunedBefores;
     }
 
-    static TxnInfo[] removeRedundantById(TxnInfo[] byId, boolean hasRedundantLoadingPruned, QuickBounds prevBounds, QuickBounds newBounds)
+    static TxnInfo[] removeRedundantById(TxnInfo[] byId, boolean hasRedundantLoadingPruned, QuickBounds prevBounds, QuickBounds newBounds, boolean expectUpToDate)
     {
         TxnId newAppliedBefore = appliedBefore(newBounds);
         TxnId newRedundantBefore = redundantBefore(newBounds);
@@ -573,7 +573,7 @@ public class Pruning
                     {
                         if (byId[i].mayExecute())
                         {
-                            Invariants.require((byId[i].isNot(COMMITTED) && byId[i].isNot(STABLE)) || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
+                            Invariants.require(!expectUpToDate || (byId[i].isNot(COMMITTED) && byId[i].isNot(STABLE)) || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
                             // we only filter those that would apply locally
                             removeUnappliedCount++;
                         }

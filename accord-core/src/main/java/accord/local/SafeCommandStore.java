@@ -543,7 +543,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     private static void registerTransitive(SafeCommandStore safeStore, TxnId txnId, Ranges witnessedBy)
     {
         SafeCommand safeCommand = safeStore.unsafeGet(txnId);
-        if (safeCommand != null && safeCommand.current().known().has(MaybeRoute))
+        if (safeCommand != null && safeCommand.current().known().route() != MaybeRoute)
             return;
 
         CommandStores.RangesForEpoch rangesForEpoch = safeStore.ranges();

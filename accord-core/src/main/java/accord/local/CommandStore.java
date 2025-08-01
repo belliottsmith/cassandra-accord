@@ -870,11 +870,16 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     public static ImmutableSortedMap<TxnId, Ranges> bootstrap(TxnId at, Ranges ranges, NavigableMap<TxnId, Ranges> bootstrappedAt)
     {
-        Invariants.requireArgument(bootstrappedAt.lastKey().compareTo(at) < 0 || at == TxnId.NONE);
+        Invariants.requireArgument(!ranges.isEmpty());
         if (at == TxnId.NONE)
+        {
             for (Ranges rs : bootstrappedAt.values())
                 Invariants.require(!ranges.intersects(rs));
-        Invariants.requireArgument(!ranges.isEmpty());
+        }
+        else
+        {
+            bootstrappedAt.floorEntry(at).getValue().containsAll(ranges);
+        }
         // if we're bootstrapping these ranges, then any period we previously owned the ranges for is effectively invalidated
         return purgeAndInsert(bootstrappedAt, at, ranges);
     }

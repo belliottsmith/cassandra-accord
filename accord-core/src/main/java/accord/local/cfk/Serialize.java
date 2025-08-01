@@ -97,6 +97,7 @@ public class Serialize
      *   bit 1 is set if there are any executeAt specified
      *   bit 2 is set if there are any ballots specified
      *   bit 3 is set if there are any queries with override flags
+     *   bit 4 is set if there are any queries with missing ids that have non-identity flags set
      *   bits 6-7 number of header bytes to read for each command
      *   bits 8-9: level 0 extra hlc bytes to read
      *   bits 10-11: level 1 extra hlc bytes to read (+ 1 + level 0)

@@ -107,6 +107,7 @@ import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
+import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
@@ -832,11 +833,17 @@ public abstract class InMemoryCommandStore extends CommandStore
             {
                 GlobalCommand global = commandStore().commands.get(rangeCommand.txnId);
                 Command command = global == null ? null : global.value();
+                if (!loader.isMaybeRelevant(rangeCommand.txnId))
+                    continue;
+
                 Summary summary;
-                if (command == null) summary = loader.ifRelevant(rangeCommand.txnId, rangeCommand.txnId, NotDefined, rangeCommand.ranges, null);
+                if (command == null) summary = loader.ifRelevant(rangeCommand.txnId, rangeCommand.txnId, NotDefined, NotDurable, rangeCommand.ranges, null);
                 else summary = loader.ifRelevant(command);
                 if (summary != null)
+                {
                     summaries.put(summary.plainTxnId(), summary);
+                    loader.maybeRecordFutureRx(summary);
+                }
             }
 
             return commandsForRanges = () -> summaries;
