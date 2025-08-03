@@ -54,7 +54,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
         this.prevProgress = prevProgress;
         this.callback = callback;
         this.reportTo = reportTo;
-        Invariants.expect(!prevProgress.durability.isDurableOrInvalidated());
+        Invariants.expect(!prevProgress.outcome.isDurableOrInvalidated());
     }
 
     public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)

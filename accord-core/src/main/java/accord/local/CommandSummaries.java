@@ -80,7 +80,7 @@ public interface CommandSummaries
         private static final int IS_DEP_SHIFT = 3;
         private static final int IS_DEP_MASK = 0x7;
         private static final int DURABILITY_SHIFT = 6;
-        private static final int DURABILITY_MASK = 0x7;
+        private static final int DURABILITY_MASK = (1 << Durability.TOTAL_ENCODING_BITS) - 1;
 
         final @Nonnull Timestamp executeAt;
         final int encoded;
@@ -97,7 +97,7 @@ public interface CommandSummaries
             super(txnId);
             this.participants = participants;
             this.executeAt = executeAt.equals(txnId) ? this : executeAt;
-            this.encoded = status.ordinal() | (dep == null ? Integer.MIN_VALUE : (dep.ordinal() << IS_DEP_SHIFT)) | (durability.ordinal() << DURABILITY_SHIFT);
+            this.encoded = status.ordinal() | (dep == null ? Integer.MIN_VALUE : (dep.ordinal() << IS_DEP_SHIFT)) | (durability.encoded << DURABILITY_SHIFT);
         }
 
         private Summary(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, int encoded, Unseekables<?> participants)
@@ -122,7 +122,7 @@ public interface CommandSummaries
 
         public Durability durability()
         {
-            return Durability.forOrdinal((encoded >>> DURABILITY_SHIFT) & DURABILITY_MASK);
+            return Durability.forEncoded((encoded >>> DURABILITY_SHIFT) & DURABILITY_MASK);
         }
 
         public boolean is(SummaryStatus summaryStatus)
@@ -283,7 +283,7 @@ public interface CommandSummaries
                     return false;
             }
 
-            boolean mayFilterAsDecided = maxDecidedRX != null && (txnId.is(ExclusiveSyncPoint) || (durability != null && durability.isDurableOrInvalidated()));
+            boolean mayFilterAsDecided = maxDecidedRX != null && (txnId.is(ExclusiveSyncPoint) || (durability != null && durability.isDurablyCommitted()));
             if (!mayFilterAsDecided)
                 return true;
 
@@ -317,7 +317,7 @@ public interface CommandSummaries
             if (txnId.compareTo(minTxnId) < 0 || txnId.compareTo(maxTxnId) > 0)
                 return null;
 
-            boolean mayFilterAsDecided = maxDecidedRX != null && (durability.isDurableOrInvalidated() || txnId.is(ExclusiveSyncPoint));
+            boolean mayFilterAsDecided = maxDecidedRX != null && (txnId.is(ExclusiveSyncPoint) || durability.isDurablyCommitted());
             if (mayFilterAsDecided && minDecidedId != null && txnId.compareTo(minDecidedId) < 0)
                 return null;
 

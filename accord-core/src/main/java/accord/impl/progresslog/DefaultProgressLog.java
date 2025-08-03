@@ -69,6 +69,8 @@ import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.SaveStatus.Invalidated;
+import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
@@ -219,62 +221,28 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (!txnId.isVisible())
             return;
 
-        TxnState state = null;
         Route<?> beforeRoute = before.route();
         Route<?> afterRoute = after.route();
-        if (force || (afterRoute != null && beforeRoute == null) || (after.durability().isDurableOrInvalidated() && !before.durability().isDurableOrInvalidated()))
-            state = updateOrInitialiseHomeState(safeStore, after, get(txnId));
-
         SaveStatus beforeSaveStatus = before.saveStatus();
         SaveStatus afterSaveStatus = after.saveStatus();
-        if (beforeSaveStatus == afterSaveStatus && !force)
-            return;
 
-        if (state == null)
-            state = get(txnId);
-
-        if (state == null)
-            return;
-
-        state.waiting().record(this, afterSaveStatus);
-        if (state.isHomeInitialised())
-            updateHomeState(safeStore, state, before, after);
-    }
-
-    @Override
-    public void decided(SafeCommandStore safeStore, TxnId txnId)
-    {
-        TxnState state = get(txnId);
-        if (state != null && state.isHomeInitialised())
-            state.home().atLeast(safeStore, this, Decided, NoneExpected);
-    }
-
-    private void updateHomeState(SafeCommandStore safeStore, TxnState state, Command before, Command after)
-    {
-        switch (after.saveStatus())
+        boolean updateWaiting = force || beforeSaveStatus != afterSaveStatus;
+        boolean updateHome = updateWaiting || (afterRoute != null && beforeRoute == null) || !before.durability().isAtLeast(after.durability());
+        if (updateHome)
         {
-            case Stable:
-                if (!after.acceptedOrCommitted().equals(Ballot.ZERO) || (before != null && before.saveStatus() == SaveStatus.Committed))
-                    state.home().atLeast(safeStore, this, Decided, NoneExpected);
-            default:
-                // fall-through to default handler, which simply postpones any scheduled coordination attempt if we witness another coordination attempt in the meantime
-                if (state.homeProgress() == Queued && (before == null ? after.promised().compareTo(Ballot.ZERO) > 0 : (after.promised().compareTo(before.promised()) > 0) || after.acceptedOrCommitted().compareTo(before.acceptedOrCommitted()) > 0))
-                {
-                    clearPendingAndActive(Home, state.txnId);
-                    state.home().set(safeStore, this, state.phase(), Queued);
-                }
-                break;
-            case ReadyToExecute:
-            case PreApplied:
-                state.home().atLeast(safeStore, this, ReadyToExecute, Queued);
-                break;
+            TxnState state = updateOrInitialiseHomeState(safeStore, before, after, get(txnId));
+            if (updateWaiting && state != null)
+                state.waiting().record(this, afterSaveStatus);
         }
     }
 
-    private TxnState updateOrInitialiseHomeState(SafeCommandStore safeStore, Command after, @Nullable TxnState state)
+    private TxnState updateOrInitialiseHomeState(SafeCommandStore safeStore, @Nullable Command before, Command after, @Nullable TxnState state)
     {
+        if (state != null && state.isHomeDone())
+            return state;
+
         Route<?> route = after.route();
-        if (after.durability().isDurableOrInvalidated())
+        if (after.durability().isDurable() || after.saveStatus() == Invalidated)
         {
             // command is durable, so we don't need to coordinate it - whether we're the home shard or not
             if (state != null)
@@ -292,26 +260,38 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (route == null)
             return state; // we don't know if we're the home shard
 
+        Invariants.require(!after.durability().isDurable());
         TxnId txnId = after.txnId();
-        RoutingKey homeKey = route.homeKey();
-        Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
-        boolean isHome = coordinateRanges.contains(homeKey);
-        state = get(txnId);
-        if (isHome)
+        if (state == null || !state.isHomeInitialised())
         {
-            if (state == null)
-                state = insert(txnId);
-
-            Invariants.require(!after.durability().isDurableOrInvalidated());
-            if (!state.isHomeInitialised())
-                state.set(safeStore, this, Undecided, Queued); // initialise
-        }
-        else if (state != null)
-        {
-            // not home shard
-            state.setHomeDone(this);
+            RoutingKey homeKey = route.homeKey();
+            Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
+            if (!coordinateRanges.contains(homeKey))
+            {
+                if (state != null)
+                    state.setHomeDone(this);
+                return state;
+            }
+            if (state == null) state = insert(txnId);
+            else state.set(safeStore, this, Undecided, Queued); // initialise
         }
 
+        CoordinatePhase phase = state.phase();
+        if (phase.compareTo(ReadyToExecute) < 0)
+        {
+            if (after.saveStatus().compareTo(SaveStatus.ReadyToExecute) >= 0)
+            {
+                state.home().atLeast(safeStore, this, ReadyToExecute, Queued);
+            }
+            else if (phase.compareTo(Decided) < 0)
+            {
+                // TODO (desired): the second condition expression should simply imply the first (by updating durability earlier in processing)
+                boolean isDecided = after.durability().isDurablyStable()
+                                    || (after.saveStatus().compareTo(Stable) >= 0 && (!after.acceptedOrCommitted().equals(Ballot.ZERO) || (before != null && before.saveStatus() == SaveStatus.Committed)));
+                if (isDecided)
+                    state.home().atLeast(safeStore, this, Decided, NoneExpected);
+            }
+        }
         return state;
     }
 
@@ -509,7 +489,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
         // in case progress log hasn't been updated (e.g. bug on replay), force an update to the command's state since we're about to wait on it
         if (!state.isHomeInitialised() && command.route() != null)
-            updateOrInitialiseHomeState(safeStore, command, state);
+            updateOrInitialiseHomeState(safeStore, null, command, state);
     }
 
     @Override

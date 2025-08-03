@@ -37,7 +37,7 @@ import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.messages.Accept;
 import accord.messages.Commit;
-import accord.messages.InformDecided;
+import accord.messages.InformDurable;
 import accord.messages.MessageType;
 import accord.messages.ReadData;
 import accord.messages.ReadData.CommitOrReadNack;
@@ -76,6 +76,7 @@ import static accord.messages.Commit.Kind.StableSlowPath;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
 import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.primitives.SaveStatus.Stable;
+import static accord.primitives.Status.Durability.DurablyStable;
 import static accord.primitives.Status.Phase.Execute;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -188,7 +189,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         if (!hasInformedDecidedOrSucceeded && (reply.isOk() || reply == Waiting))
         {
             if (RequestStatus.Success == stable.recordSuccess(from))
-                informDecided();
+                informStable();
         }
     }
 
@@ -258,7 +259,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         else
         {
             if (!hasInformedDecidedOrSucceeded && stable.hasReachedQuorum())
-                informDecided();
+                informStable();
             callback.accept(null, failure);
         }
     }
@@ -268,7 +269,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     {
         // send stable messages to everyone not yet contacted, and then inform decided, to avoid unnecessary recoveries
         if (!hasInformedDecidedOrSucceeded && stable.hasReachedQuorum())
-            informDecided();
+            informStable();
         super.onSlowResponse(from);
     }
 
@@ -280,13 +281,12 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             tryFinishOnFailure();
     }
 
-    private void informDecided()
+    private void informStable()
     {
         Invariants.require(stable.hasReachedQuorum());
         hasInformedDecidedOrSucceeded = true;
-        InformDecided.informHome(node, topologies, txnId, route);
+        InformDurable.informHome(node, topologies, txnId, route, executeAt, DurablyStable);
     }
-
 
     protected CoordinationAdapter<Result> adapter()
     {

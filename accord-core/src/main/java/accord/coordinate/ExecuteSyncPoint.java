@@ -52,8 +52,8 @@ import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;
-import static accord.primitives.Status.Durability.Majority;
-import static accord.primitives.Status.Durability.UniversalOrInvalidated;
+import static accord.primitives.Status.Durability.HasOutcome.Quorum;
+import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implements Callback<ReadReply>
@@ -234,11 +234,11 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
             if (result.achievedRemote == SyncRemote.All)
             {
                 node.configService().reportEpochRetired(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
-                node.send(tracker.nodes(), new SetShardDurable(syncPoint, UniversalOrInvalidated));
+                node.send(tracker.nodes(), new SetShardDurable(syncPoint, Universal));
             }
             else if (result.achievedRemote == SyncRemote.Quorum)
             {
-                node.send(tracker.nodes(), new SetShardDurable(syncPoint, Majority));
+                node.send(tracker.nodes(), new SetShardDurable(syncPoint, Quorum));
             }
             else
             {

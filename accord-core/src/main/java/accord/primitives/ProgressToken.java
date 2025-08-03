@@ -20,10 +20,12 @@ package accord.primitives;
 
 import accord.coordinate.Outcome;
 import accord.local.Command;
-import accord.primitives.Status.Durability;
+import accord.primitives.Status.Durability.HasOutcomeOrInvalidated;
 
 import javax.annotation.Nonnull;
 
+import static accord.primitives.Status.Durability.HasOutcomeOrInvalidated.None;
+import static accord.primitives.Status.Durability.HasOutcomeOrInvalidated.UniversalOrInvalidated;
 import static accord.primitives.Status.Phase.Accept;
 import static accord.primitives.Status.Phase.Commit;
 
@@ -32,28 +34,27 @@ import static accord.primitives.Status.Phase.Commit;
  */
 public class ProgressToken implements Comparable<ProgressToken>, Outcome
 {
-    public static final ProgressToken NONE = new ProgressToken(Durability.NotDurable, Status.NotDefined, Ballot.ZERO, false);
-    public static final ProgressToken INVALIDATED = new ProgressToken(Durability.MajorityOrInvalidated, Status.Invalidated, Ballot.ZERO, false);
-    public static final ProgressToken APPLIED = new ProgressToken(Durability.NotDurable, Status.PreApplied, Ballot.ZERO, false);
-    public static final ProgressToken DURABLE = new ProgressToken(Durability.Majority, Status.PreApplied, Ballot.ZERO, false);
-    public static final ProgressToken TRUNCATED_DURABLE_OR_INVALIDATED = new ProgressToken(Durability.MajorityOrInvalidated, Status.Truncated, Ballot.ZERO, false);
+    public static final ProgressToken NONE = new ProgressToken(None, Status.NotDefined, Ballot.ZERO, false);
+    public static final ProgressToken INVALIDATED = new ProgressToken(UniversalOrInvalidated, Status.Invalidated, Ballot.ZERO, false);
+    public static final ProgressToken APPLIED = new ProgressToken(None, Status.PreApplied, Ballot.ZERO, false);
+    public static final ProgressToken TRUNCATED_DURABLE_OR_INVALIDATED = new ProgressToken(UniversalOrInvalidated, Status.Truncated, Ballot.ZERO, false);
 
-    public final Durability durability;
+    public final HasOutcomeOrInvalidated outcome;
     public final Status status;
     public final Ballot promised;
     public final boolean isAccepted; // is the *promised ballot* accepted
 
-    public ProgressToken(Durability durability, Status status, Ballot promised, boolean isAccepted)
+    public ProgressToken(HasOutcomeOrInvalidated outcome, Status status, Ballot promised, boolean isAccepted)
     {
-        this.durability = durability;
+        this.outcome = outcome;
         this.status = status;
         this.promised = promised;
         this.isAccepted = isAccepted;
     }
 
-    public ProgressToken(Durability durability, Status status, Ballot promised, Ballot accepted)
+    public ProgressToken(HasOutcomeOrInvalidated outcome, Status status, Ballot promised, Ballot accepted)
     {
-        this.durability = durability;
+        this.outcome = outcome;
         this.status = status;
         this.promised = promised;
         this.isAccepted = isAccepted(status, promised, accepted);
@@ -61,7 +62,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
 
     @Override public int compareTo(@Nonnull ProgressToken that)
     {
-        int c = this.durability.compareTo(that.durability);
+        int c = this.outcome.compareTo(that.outcome);
         if (c == 0) c = this.status.phase.compareTo(that.status.phase);
         if (c == 0) c = this.promised.compareTo(that.promised);
         if (c == 0 && this.isAccepted != that.isAccepted) c = this.isAccepted ? 1 : -1;
@@ -70,7 +71,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
     
     public int compareTo(@Nonnull Command that)
     {
-        int c = this.durability.compareTo(that.durability());
+        int c = this.outcome.compareTo(that.durability().allShardsOrInvalidated());
         if (c == 0) c = this.status.phase.compareTo(that.status().phase);
         if (c == 0) c = this.promised.compareTo(that.promised());
         if (c == 0 && this.isAccepted != isAccepted(that.status(), that.promised(), that.acceptedOrCommitted())) c = this.isAccepted ? 1 : -1;
@@ -79,7 +80,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
 
     public ProgressToken merge(ProgressToken that)
     {
-        Durability durability = this.durability.compareTo(that.durability) >= 0 ? this.durability : that.durability;
+        HasOutcomeOrInvalidated durability = this.outcome.mergeMax(that.outcome);
         Status status = this.status.compareTo(that.status) >= 0 ? this.status : that.status;
         Ballot promised = this.promised.compareTo(that.promised) >= 0 ? this.promised : that.promised;
         boolean isAccepted = (this.isAccepted && this.promised.equals(promised)) || (that.isAccepted && that.promised.equals(promised));
@@ -92,10 +93,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
 
     public ProgressToken merge(Command command)
     {
-        Durability durability = command.durability();
-        if (this.durability.compareTo(command.durability()) > 0)
-            durability = this.durability;
-
+        HasOutcomeOrInvalidated durability = this.outcome.mergeMax(command.durability().allShardsOrInvalidated());
         Status status = command.status();
         if (this.status.compareTo(status) > 0)
             status = this.status;
@@ -113,9 +111,9 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
         return new ProgressToken(durability, status, promised, isAccepted);
     }
 
-    private boolean isSame(Durability durability, Status status, Ballot promised, boolean isAccepted)
+    private boolean isSame(HasOutcomeOrInvalidated durability, Status status, Ballot promised, boolean isAccepted)
     {
-        return durability == this.durability && status == this.status && promised.equals(this.promised) && isAccepted == this.isAccepted;
+        return durability == this.outcome && status == this.status && promised.equals(this.promised) && isAccepted == this.isAccepted;
     }
 
     @Override

@@ -160,7 +160,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         //  OR we may be able to safely overwrite them with some better invariants and adequate testing
         public final TxnId[] bounds;
         // two entries per bound, first for equality (LE) matches, second for inequality (LT) matches
-        public final short[] statuses;
+        private final short[] statuses;
 
         private transient final long maxBoundEpoch, maxBoundHlc;
         public transient final TxnId depBound;
@@ -192,6 +192,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             require(isShardBound(gcBefore) || isMinBound(gcBefore));
         }
 
+        public final int status(int index)
+        {
+            return statuses[index] & 0xFFFF;
+        }
+
         public static Bounds create(Range range, TxnId bound, SomeStatus status, @Nullable Timestamp staleUntilAtLeast)
         {
             return create(range, Long.MIN_VALUE, Long.MAX_VALUE, bound, status, staleUntilAtLeast);
@@ -199,7 +204,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
         public static Bounds create(Range range, long startEpoch, long endEpoch, TxnId bound, SomeStatus status, @Nullable Timestamp staleUntilAtLeast)
         {
-            return new Bounds(range, startEpoch, endEpoch, new TxnId[] { bound }, new short[] { (short) (status.encoded & ONLY_LE_MASK), status.encoded }, staleUntilAtLeast);
+            return new Bounds(range, startEpoch, endEpoch, new TxnId[] { bound }, new short[] { (short) (status.encoded & ONLY_LE_MASK), (short)status.encoded }, staleUntilAtLeast);
         }
 
         private static TxnId depBound(TxnId[] bounds, short[] statuses)
@@ -258,33 +263,33 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                 Object[] boundBuf = null;
                 short[] statusBuf = null;
                 int mergedCount = 0;
-                short prevLtStatus = staleUntilAtLeast == null ? 0 : PRE_BOOTSTRAP_OR_STALE_ONLY.encodedPart(SOME);
-                short  prevExistingLtStatus = prevLtStatus; // we don't apply PRE_BOOTSTRAP_MERGE_MASK as this already applied
+                int prevLtStatus = staleUntilAtLeast == null ? 0 : PRE_BOOTSTRAP_OR_STALE_ONLY.encodedPart(SOME);
+                int prevExistingLtStatus = prevLtStatus; // we don't apply PRE_BOOTSTRAP_MERGE_MASK as this already applied
                 int i = 0, j = 0;
                 while (i < cur.bounds.length || j < add.bounds.length)
                 {
                     int c = i == cur.bounds.length ? -1 : j == add.bounds.length ? 1 : cur.bounds[i].compareTo(add.bounds[j]);
                     TxnId nextBound;
-                    short leStatus, ltStatus;
+                    int leStatus, ltStatus;
                     if (c > 0)
                     {
                         nextBound = cur.bounds[i];
-                        leStatus = addHistory(prevLtStatus, cur.statuses[i*2]);
-                        ltStatus = addHistory(prevLtStatus, prevExistingLtStatus = cur.statuses[i*2+1]);
+                        leStatus = addHistory(prevLtStatus, cur.status(i*2));
+                        ltStatus = addHistory(prevLtStatus, prevExistingLtStatus = cur.status(i*2+1));
                         ++i;
                     }
                     else if (c < 0)
                     {
                         nextBound = add.bounds[j];
-                        leStatus = addHistory((short) (prevLtStatus | add.statuses[j * 2]), prevExistingLtStatus);
-                        ltStatus = addHistory((short) (prevLtStatus | add.statuses[j * 2 + 1]), prevExistingLtStatus);
+                        leStatus = addHistory(prevLtStatus | add.status(j * 2), prevExistingLtStatus);
+                        ltStatus = addHistory(prevLtStatus | add.status(j * 2 + 1), prevExistingLtStatus);
                         ++j;
                     }
                     else
                     {
                         nextBound = cur.bounds[i].addFlags(add.bounds[j]);
-                        leStatus = addHistory((short) (prevLtStatus | add.statuses[j * 2]), cur.statuses[i * 2]);
-                        ltStatus = addHistory((short) (prevLtStatus | add.statuses[j * 2 + 1]), prevExistingLtStatus = cur.statuses[i * 2 + 1]);
+                        leStatus = addHistory(prevLtStatus | add.status(j * 2), cur.status(i * 2));
+                        ltStatus = addHistory(prevLtStatus | add.status(j * 2 + 1), prevExistingLtStatus = cur.status(i * 2 + 1));
                         ++i;
                         ++j;
                     }
@@ -298,9 +303,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                         if (mergedCount >= 2)
                         {
                             short[] prev = statusBuf != null ? statusBuf : cur.statuses;
-                            short prev2LtStatus = prev[mergedCount*2 - 3];
-                            short prevLeStatus = prev[mergedCount*2 - 2];
-                            Invariants.require(prevLtStatus == prev[mergedCount*2 - 1]);
+                            int prev2LtStatus = 0xFFFF & prev[mergedCount*2 - 3];
+                            int prevLeStatus = 0xFFFF & prev[mergedCount*2 - 2];
+                            Invariants.require(prevLtStatus == (0xFFFF & prev[mergedCount*2 - 1]));
                             if (prevLtStatus == prev2LtStatus && prevLeStatus == prev2LtStatus)
                                 --mergedCount;
                         }
@@ -309,7 +314,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                     if (boundBuf == null)
                     {
                         if (mergedCount < cur.bounds.length && cur.bounds[mergedCount].equalsStrict(nextBound)
-                            && cur.statuses[mergedCount*2] == leStatus && cur.statuses[mergedCount*2+1] == ltStatus)
+                            && cur.status(mergedCount*2) == leStatus && cur.status(mergedCount*2+1) == ltStatus)
                         {
                             prevLtStatus = ltStatus;
                             ++mergedCount;
@@ -322,8 +327,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                         System.arraycopy(cur.statuses, 0, statusBuf, 0, mergedCount*2);
                     }
                     boundBuf[mergedCount] = nextBound;
-                    statusBuf[mergedCount*2] = leStatus;
-                    statusBuf[mergedCount*2 + 1] = ltStatus;
+                    statusBuf[mergedCount*2] = (short) leStatus;
+                    statusBuf[mergedCount*2 + 1] = (short) ltStatus;
                     ++mergedCount;
                     prevLtStatus = ltStatus;
                 }
@@ -351,7 +356,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         {
             for (int i = 0 ; staleUntilAtLeast != null && i < bounds.length && bounds[i].compareTo(staleUntilAtLeast) > 0 ; ++i)
             {
-                if (any(statuses[i], PRE_BOOTSTRAP))
+                if (any(0xFFFF & statuses[i], PRE_BOOTSTRAP))
                     staleUntilAtLeast = null;
             }
             return staleUntilAtLeast;
@@ -360,7 +365,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         public Bounds with(TxnId newBound, SomeStatus addStatus)
         {
             // TODO (desired): introduce special-cased faster merge for adding a single value
-            return merge(range, this, new Bounds(range, Long.MIN_VALUE, Long.MAX_VALUE, new TxnId[] { newBound }, new short[] { addStatus.encoded }, null));
+            return merge(range, this, new Bounds(range, Long.MIN_VALUE, Long.MAX_VALUE, new TxnId[] { newBound }, new short[] { (short)addStatus.encoded }, null));
         }
 
         @VisibleForImplementation
@@ -669,7 +674,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             if (i < 0)
                 return noMatch;
 
-            short status = statuses[i];
+            int status = statuses[i] & 0xFFFF;
             if (any(status, GC_BEFORE))
             {
                 if (requiresUniqueHlcs() && txnId.isWrite())
@@ -678,7 +683,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                     {
                         // if this is partial input (e.g. compaction) we don't want to infer ERASE
                         // we anyway only EXPUNGE on summary information before this point
-                        status &= (short) ~(1 << GC_BEFORE.shift());
+                        status &= ~(1 << GC_BEFORE.shift());
                     }
                     else if (bounds[i/2].hlc() <= applyAtIfKnown.uniqueHlc())
                     {
@@ -686,7 +691,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                         i/= 2;
                         while (--i >= 0 && bounds[i].hlc() <= uniqueHlc) {}
                         if (i < 0 || !any(statuses[i*2+1], GC_BEFORE))
-                            status &= (short) ~(1 << GC_BEFORE.shift());
+                            status &= ~(1 << GC_BEFORE.shift());
                     }
                 }
             }
@@ -912,7 +917,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         if (ranges.isEmpty())
             return EMPTY;
 
-        Bounds bounds = new Bounds(null, startEpoch, endEpoch, new TxnId[] { bound }, new short[] { (short) (status.encoded & ONLY_LE_MASK), status.encoded }, staleUntilAtLeast);
+        Bounds bounds = new Bounds(null, startEpoch, endEpoch, new TxnId[] { bound }, new short[] { (short) (status.encoded & ONLY_LE_MASK), (short)status.encoded }, staleUntilAtLeast);
         Builder builder = new Builder(ranges.get(0).endInclusive(), ranges.size() * 2);
         for (int i = 0 ; i < ranges.size() ; ++i)
         {

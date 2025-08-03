@@ -70,12 +70,11 @@ import static accord.primitives.SaveStatus.AcceptedInvalidate;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedUnapplied;
-import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Uninitialised;
-import static accord.primitives.Status.Durability.Local;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.ShardUniversal;
+import static accord.primitives.Status.Durability.Universal;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.Paranoia.LINEAR;
@@ -216,7 +215,7 @@ public abstract class Command implements ICommand
     @Override
     public final Durability durability()
     {
-        return Command.durability(durability, saveStatus());
+        return durability;
     }
 
     public final SaveStatus saveStatus()
@@ -484,7 +483,7 @@ public abstract class Command implements ICommand
         {
             Invariants.requireArgument(executeAt != null);
             Invariants.requireArgument(saveStatus.status == Status.Truncated);
-            return Durability.mergeAtLeast(durability, ShardUniversal);
+            return durability.mergeMax(ShardUniversal);
         }
 
         public static Truncated invalidated(Command command)
@@ -1648,7 +1647,6 @@ public abstract class Command implements ICommand
                     // TODO (expected): enable this invariant; requires rethinking how we update StoreParticipants on PreCommitted
                     //     which must be done carefully as we cannot mess with touches()/Deps as the relationship there must be maintained
                     //     for state machine correctness
-//                    Invariants.require(participants.executes() != null);
                 case ExecuteAtProposed:
                     Invariants.require(executeAt != null);
                     int c =  executeAt.compareTo(validate.txnId());
@@ -1692,7 +1690,6 @@ public abstract class Command implements ICommand
                 case Abort:
                     Invariants.require(validate.durability().isMaybeInvalidated(), "%s is not invalidated", validate.durability());
                 case Unknown:
-                    Invariants.require(validate.durability() != Local);
                 case Erased:
                 case WasApply:
                     Invariants.require(writes == null, "Writes exist for %s", validate);
@@ -1718,13 +1715,6 @@ public abstract class Command implements ICommand
                 break;
         }
         return validate;
-    }
-
-    public static Durability durability(Durability durability, SaveStatus status)
-    {
-        if (durability == NotDurable && status.compareTo(SaveStatus.PreApplied) >= 0 && status.compareTo(Vestigial) < 0)
-            return Local; // not necessary anywhere, but helps for logical consistency
-        return durability;
     }
 
     private static boolean isSameClass(Command command, Class<? extends Command> klass)

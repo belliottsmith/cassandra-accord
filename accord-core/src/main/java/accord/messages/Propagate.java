@@ -507,7 +507,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
      */
     private Void updateDurability(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
     {
-        if (!durability.isDurable() || homeKey == null)
+        if (!durability.isFastPathDurablyDecided() || homeKey == null)
             return null;
 
         Commands.setDurability(safeStore, safeCommand, participants, durability, committedExecuteAt);

@@ -58,7 +58,7 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
 
         boolean include(Durability durability, Unseekable keyOrRange, TxnId depId)
         {
-            if (durability.isDurable() || depId.is(ExclusiveSyncPoint))
+            if (durability.isDurablyCommitted() || depId.is(ExclusiveSyncPoint))
             {
                 if (absoluteMinDecidedId != null && depId.compareTo(absoluteMinDecidedId) < 0)
                     return false;

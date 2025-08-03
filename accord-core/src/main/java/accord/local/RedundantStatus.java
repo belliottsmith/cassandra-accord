@@ -39,6 +39,7 @@ import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.Property.REVERSE_PROPERTIES;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.Property.WAS_OWNED;
+import static accord.utils.Invariants.illegalState;
 
 // TODO (testing): validate that we never lose a status previously held,
 //  i.e. once any particular property holds for a TxnId, it should continue to hold in perpetuity
@@ -91,10 +92,28 @@ public class RedundantStatus
         PRE_BOOTSTRAP_OR_STALE             ( true,  true,  LT, LOCALLY_DEFUNCT),
         PRE_BOOTSTRAP                      ( true,  true,  LT, PRE_BOOTSTRAP_OR_STALE),
 
+        /**
+         * Ranges can be marked as LOCALLY_LOST if the node has lost was forced by operator to give up knowledge
+         * of transactional history for a specific range.
+         */
+        LOCALLY_LOST                       (false, false, LT, PRE_BOOTSTRAP_OR_STALE),
+
         LOCALLY_WITNESSED                  (false,  true,  LE),
         // we've applied a sync point locally covering the transaction, but the transaction itself may not have applied
         LOCALLY_SYNCED                     (false,  true,  LE, LOCALLY_REDUNDANT),
         LOCALLY_APPLIED                    ( true, false,  LE, LOCALLY_SYNCED),
+
+        /**
+         * We have applied the preceding transactions durably to the store, so that we can safely truncate the Write
+         * information as we will not need to replay it to the store
+         */
+        LOCALLY_DURABLE_TO_DATA_STORE      (false, false,  LE, LOCALLY_APPLIED),
+
+        /**
+         * We have applied the preceding transactions durably to all summary structures, so that on restart we do
+         * not need to replay the transaction to restore any internal state.
+         */
+        LOCALLY_DURABLE_TO_COMMAND_STORE   (false, false,  LE, LOCALLY_APPLIED),
 
         /**
          * We have fully executed until across all a majority of replicas for the range in question,
@@ -114,20 +133,6 @@ public class RedundantStatus
         // not persisted
         WAS_OWNED                          (false,  false, LT, LOCALLY_DEFUNCT),
         NOT_OWNED                          (false,  false, LT),
-
-        // added later, so vaguely out of order (but no specific order to this enum)
-
-        /**
-         * We have applied the preceding transactions durably to the store, so that we can safely truncate the Write
-         * information as we will not need to replay it to the store
-         */
-        LOCALLY_DURABLE_TO_DATA_STORE      (false, false,  LE, LOCALLY_APPLIED),
-
-        /**
-         * We have applied the preceding transactions durably to all summary structures, so that on restart we do
-         * not need to replay the transaction to restore any internal state.
-         */
-        LOCALLY_DURABLE_TO_COMMAND_STORE   (false, false,  LE, LOCALLY_APPLIED),
         ;
 
 
@@ -167,7 +172,7 @@ public class RedundantStatus
 
     public static class SomeStatus
     {
-        public static final SomeStatus NONE = new SomeStatus((short)0);
+        public static final SomeStatus NONE = new SomeStatus(0);
 
         public static final SomeStatus PRE_BOOTSTRAP_ONLY = oneSlow(PRE_BOOTSTRAP);
         public static final SomeStatus LOCALLY_WITNESSED_ONLY = oneSlow(LOCALLY_WITNESSED);
@@ -178,9 +183,10 @@ public class RedundantStatus
         public static final SomeStatus LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_COMMAND_STORE);
         public static final SomeStatus GC_BEFORE_AND_LOCALLY_DURABLE = multi(GC_BEFORE, LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE);
 
-        final short encoded;
-        public SomeStatus(short encoded)
+        final int encoded;
+        public SomeStatus(int encoded)
         {
+            Invariants.require((encoded & ~0xFFFF) == 0);
             this.encoded = encoded;
         }
 
@@ -232,11 +238,11 @@ public class RedundantStatus
         return selectOrCreate(encoded, history, add);
     }
 
-    static short addHistory(short add, short history)
+    static int addHistory(int add, int history)
     {
         if (decode(history, PRE_BOOTSTRAP_OR_STALE) != Coverage.NONE)
             add &= PRE_BOOTSTRAP_MERGE_MASK;
-        return (short) (add | history);
+        return add | history;
     }
 
     static RedundantStatus selectOrCreate(int encoded, RedundantStatus a, RedundantStatus b)
@@ -246,27 +252,33 @@ public class RedundantStatus
         return new RedundantStatus(encoded);
     }
 
-    static SomeStatus selectOrCreate(short encoded, SomeStatus a, SomeStatus b)
+    static SomeStatus selectOrCreate(int encoded, SomeStatus a, SomeStatus b)
     {
+        Invariants.require(0 == (encoded & ~0xFFFF));
         if (encoded == a.encoded) return a;
         if (encoded == b.encoded) return b;
         return new SomeStatus(encoded);
     }
 
-    public short encodedPart(Coverage coverage)
+    public int encodedPart(Coverage coverage)
     {
         switch (coverage)
         {
             default: throw new UnhandledEnum(coverage);
-            case NONE: return (short)0;
-            case SOME: return (short)(encoded & 0xff);
-            case ALL:  return (short)((encoded >>> 16) & 0xff);
+            case NONE: return 0;
+            case SOME: return (encoded & 0xffff);
+            case ALL:  return (encoded >>> 16) & 0xffff;
         }
     }
 
     public Coverage get(Property property)
     {
         return get(encoded, property);
+    }
+
+    public static Coverage get(short encoded, Property property)
+    {
+        return get(encoded & 0xFF, property);
     }
 
     public static Coverage get(int encoded, Property property)
@@ -284,9 +296,19 @@ public class RedundantStatus
         return all(encoded, a, b);
     }
 
+    public static boolean all(short encoded, Property property)
+    {
+        return all(encoded & 0xFF, property);
+    }
+
     public static boolean all(int encoded, Property property)
     {
         return get(encoded, property) == ALL;
+    }
+
+    public static boolean all(short encoded, Property a, Property b)
+    {
+        return all(encoded & 0xFF, a, b);
     }
 
     public static boolean all(int encoded, Property a, Property b)
@@ -299,6 +321,11 @@ public class RedundantStatus
         return none(encoded, property);
     }
 
+    public static boolean none(short encoded, Property property)
+    {
+        return none(encoded & 0xFF, property);
+    }
+
     public static boolean none(int encoded, Property property)
     {
         return get(encoded, property) == Coverage.NONE;
@@ -309,9 +336,19 @@ public class RedundantStatus
         return any(encoded, property);
     }
 
+    public static boolean any(short encoded, Property property)
+    {
+        return any(encoded & 0xFF, property);
+    }
+
     public static boolean any(int encoded, Property property)
     {
         return get(encoded, property) != Coverage.NONE;
+    }
+
+    public static boolean matchesMask(short encoded, int propertyMask)
+    {
+        return matchesMask(encoded & 0xFF, propertyMask);
     }
 
     public static boolean matchesMask(int encoded, int propertyMask)
@@ -330,7 +367,7 @@ public class RedundantStatus
         int coverage = (int)((encoded >>> property.shift()) & ALL.mask);
         switch (coverage)
         {
-            default: throw new IllegalStateException("Invalid Coverage value encoded for " + property + ": " + coverage);
+            default: throw illegalState("Invalid Coverage value encoded for " + property + ": " + coverage);
             case 0: return Coverage.NONE;
             case 1: return SOME;
             case 0x10001: return ALL;
@@ -340,14 +377,14 @@ public class RedundantStatus
     private static final int ALL_BITS = 0xFFFF0000;
     private static final int ANY_BITS = 0x0000FFFF;
     private static final int WAS_OWNED_OVERRIDE_MASK;
-    static final short PRE_BOOTSTRAP_MERGE_MASK;
-    static final short ONLY_LE_MASK;
+    static final int PRE_BOOTSTRAP_MERGE_MASK;
+    static final int ONLY_LE_MASK;
     private static final int WAS_ALL_OWNED_MASK = ALL.mask << WAS_OWNED.shift();
     private static final int NOT_OWNED_MASK = ALL.mask << NOT_OWNED.shift();
     static
     {
         int wasOwnedMask = 0;
-        short preBootstrapMask = 0, leMask = 0;
+        int preBootstrapMask = 0, leMask = 0;
         for (Property property : Property.values())
         {
             if (!property.overrideWasOwned)
@@ -386,23 +423,23 @@ public class RedundantStatus
 
     private static SomeStatus multi(Property ... properties)
     {
-        short encoded = 0;
+        int encoded = 0;
         for (Property property : properties)
             encoded |= transitiveClosure(property);
         return new SomeStatus(encoded);
     }
 
-    private static short transitiveClosure(Property property)
+    private static int transitiveClosure(Property property)
     {
-        short encoded = encodeAny(property);
+        int encoded = encodeAny(property);
         for (Property implied : property.implies)
             encoded |= transitiveClosure(implied);
         return encoded;
     }
 
-    static short encodeAny(Property property)
+    static int encodeAny(Property property)
     {
-        return (short) (1 << property.shift());
+        return 1 << property.shift();
     }
 
     static int encodeAll(Property property)
@@ -410,9 +447,10 @@ public class RedundantStatus
         return ALL.mask << property.shift();
     }
 
-    static int toAll(short encodedKeyStatus)
+    static int toAll(int encodedKeyStatus)
     {
-        return encodedKeyStatus | (((int)encodedKeyStatus)<<16);
+        Invariants.require(0 == (encodedKeyStatus & ~0xFFFF));
+        return encodedKeyStatus | (encodedKeyStatus<<16);
     }
 
     static RedundantStatus toAll(SomeStatus key)

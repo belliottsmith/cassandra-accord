@@ -306,14 +306,15 @@ class Updating
         MergeCursor<TxnId, DepList> deps = command.partialDeps().txnIds(cfk.key());
         deps.find(cfk.redundantBefore());
 
-        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, plainTxnId, newStatus, mayExecute, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
+        int durablyCommitted = command.durability().isDurablyCommitted() ? 1 : 0;
+        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, plainTxnId, newStatus, mayExecute, durablyCommitted, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
     }
 
     /**
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, int durablyCommitted, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -412,7 +413,7 @@ class Updating
             }
         }
 
-        TxnInfo info = TxnInfo.create(plainTxnId, newStatus, mayExecute, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount), ballot);
+        TxnInfo info = TxnInfo.create(plainTxnId, newStatus, mayExecute, 0, durablyCommitted, executeAt, cachedTxnIds().completeAndDiscard(missing, missingCount), ballot);
         if (additionCount == 0)
             return info;
 
@@ -999,7 +1000,7 @@ class Updating
                             {
                                 if (newById == null)
                                     newById = byId.clone();
-                                newById[j] = TxnInfo.create(txn, TRANSITIVE_VISIBLE, txn.mayExecute(), txn.statusOverrides(), txn.executeAt, txn.missing(), txn.ballot());
+                                newById[j] = TxnInfo.create(txn, TRANSITIVE_VISIBLE, txn.mayExecute(), txn.statusOverrides(), 0, txn.executeAt, txn.missing(), txn.ballot());
                             }
                             ++i;
                         }

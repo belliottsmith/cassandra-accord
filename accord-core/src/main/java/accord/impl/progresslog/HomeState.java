@@ -31,7 +31,8 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.ProgressToken;
 import accord.primitives.Route;
-import accord.primitives.Status;
+import accord.primitives.Status.Durability;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
@@ -150,11 +151,12 @@ abstract class HomeState extends WaitingState
         Invariants.require(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog");
         if (Route.isFullRoute(command.route()))
         {
-            Status.Durability min = safeStore.durableBefore().min(txnId, command.route());
-            if (min.isDurableOrInvalidated())
+            HasOutcome min = safeStore.durableBefore().min(txnId, command.route());
+            if (min.isDurable())
             {
                 if (tracing != null)
                     tracing.trace(safeStore.commandStore(), "DurableBefore records %s; terminating home state", min);
+                safeCommand.incidentalUpdate(command.updateDurability(command.durability().mergeMax(Durability.UniversalOrInvalidated)));
                 setHomeDone(instance);
                 return;
             }
@@ -207,11 +209,23 @@ abstract class HomeState extends WaitingState
                 if (prevProgressToken != null)
                     token = token.merge(prevProgressToken);
 
-                if (token.durability.isDurableOrInvalidated())
+                if (token.outcome.isDurableOrInvalidated())
                 {
                     if (tracing != null)
                         tracing.trace(safeStore.commandStore(), "Callback: progress token %s reports durable; marking home state done.", token);
                     state.setHomeDoneAndMaybeRemove(instance);
+                    if (token.outcome.compareTo(command.durability().allShardsOrInvalidated()) >= 0)
+                    {
+                        Durability newDurability = null;
+                        switch (token.outcome)
+                        {
+                            case Quorum: newDurability = Durability.AllQuorums; break;
+                            case Universal: newDurability = Durability.Universal; break;
+                            case UniversalOrInvalidated: newDurability = Durability.UniversalOrInvalidated; break;
+                        }
+                        if (newDurability != null)
+                            safeCommand.incidentalUpdate(command.updateDurability(command.durability().mergeMax(newDurability)));
+                    }
                 }
                 else
                 {

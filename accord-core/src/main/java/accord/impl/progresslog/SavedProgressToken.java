@@ -27,7 +27,7 @@ class SavedProgressToken extends ProgressToken
 
     public SavedProgressToken(TxnId txnId, ProgressToken copy)
     {
-        super(copy.durability, copy.status, copy.promised, copy.isAccepted);
+        super(copy.outcome, copy.status, copy.promised, copy.isAccepted);
         this.txnId = txnId;
     }
 

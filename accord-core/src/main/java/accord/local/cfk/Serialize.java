@@ -106,6 +106,7 @@ public class Serialize
      *
      * In order, for each command, we consume:
      * 3 bits for the InternalStatus of the command
+     * 1 optional bit: if the status is not APPLIED_DURABLE for encoding if the transaction is durably committed
      * 1 optional bit: if any command has override flags; 2 bits more to read if this bit is set
      * 1 optional bit: if the status encodes an executeAt, indicating if the executeAt is not the TxnId
      * 1 optional bit: if the status encodes any dependencies and there are non-zero missing ids, indicating if there are any missing for this command
@@ -302,6 +303,8 @@ public class Serialize
                     headerBits += (headerFlags >>> HAS_MISSING_DEPS_HEADER_BIT_SHIFT) & 1;
                 if (txn.hasBallot())
                     headerBits += (headerFlags >>> HAS_BALLOT_HEADER_BIT_SHIFT) & 1;
+                if (txn.compareTo(InternalStatus.APPLIED_DURABLE) < 0)
+                    ++headerBits;
 
                 maxHeaderBits = Math.max(headerBits, maxHeaderBits);
                 int basicBytes = (headerBits + payloadBits + 7)/8;
@@ -520,6 +523,12 @@ public class Serialize
                 long hasBallot = txn.getClass() == TxnInfoExtra.class && ((TxnInfoExtra)txn).ballot != Ballot.ZERO ? 1 : 0;
                 bits |= hasBallot << bitIndex;
                 bitIndex += statusHasBallot & (flagsPlus >>> HAS_BALLOT_HEADER_BIT_SHIFT);
+
+                if (txn.compareTo(InternalStatus.APPLIED_DURABLE) < 0)
+                {
+                    bits |= (long)txn.durablyCommittedBit() << bitIndex;
+                    bitIndex += 1;
+                }
 
                 int encodedFlagBits;
                 {
@@ -842,6 +851,11 @@ public class Serialize
                 int ballotMask = status.hasBallot ? ((globalFlags >>> HAS_BALLOT_HEADER_BIT_SHIFT) & 0x1) : 0;
                 commandDecodeFlags |= ((int)header & ballotMask) << 2;
                 header >>>= ballotMask;
+                if (status.compareTo(InternalStatus.APPLIED_DURABLE) < 0)
+                {
+                    commandDecodeFlags |= ((int)header & 1) << 4;
+                    header >>>= 1;
+                }
                 commandFlags[i] = commandDecodeFlags;
             }
 
@@ -1074,7 +1088,8 @@ public class Serialize
                 int statusIndex = commandDecodeFlags >>> 6;
                 InternalStatus status = DECODE_STATUS[statusIndex];
                 int statusOverrides = (commandDecodeFlags >>> 3) & 0x1;
-                txns[i] = create(bounds, txnId, status, statusOverrides, executeAt, missing, ballot);
+                int durablyCommitted = (commandDecodeFlags >>> 4) & 0x1;
+                txns[i] = create(bounds, txnId, status, statusOverrides, durablyCommitted, executeAt, missing, ballot);
             }
 
             cachedTxnIds().forceDiscard(missingIdBuffer, maxIdBufferCount);
@@ -1087,7 +1102,8 @@ public class Serialize
                 int statusIndex = commandDecodeFlags >>> 6;
                 InternalStatus status = DECODE_STATUS[statusIndex];
                 int statusOverrides = (commandDecodeFlags >>> 3) & 0x1;
-                txns[i] = create(bounds, txnIds[i], status, statusOverrides, txnIds[i], NO_TXNIDS, Ballot.ZERO);
+                int durablyCommitted = (commandDecodeFlags >>> 4) & 0x1;
+                txns[i] = create(bounds, txnIds[i], status, statusOverrides, durablyCommitted, txnIds[i], NO_TXNIDS, Ballot.ZERO);
             }
         }
         cachedTxnIds().forceDiscard(txnIds, commandCount);
@@ -1095,11 +1111,11 @@ public class Serialize
         return CommandsForKey.SerializerSupport.create(key, txns, maxUniqueHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], bounds);
     }
 
-    private static TxnInfo create(QuickBounds bounds, @Nonnull TxnId txnId, InternalStatus status, int statusOverrides, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
+    private static TxnInfo create(QuickBounds bounds, @Nonnull TxnId txnId, InternalStatus status, int statusOverrides, int durablyCommitted, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
     {
         boolean mayExecute = status.isCommittedToExecute() ? CommandsForKey.executes(bounds, txnId, executeAt)
                                                            : CommandsForKey.mayExecute(bounds, txnId);
-        return TxnInfo.create(txnId, status, mayExecute, statusOverrides, executeAt, missing, ballot);
+        return TxnInfo.create(txnId, status, mayExecute, statusOverrides, durablyCommitted, executeAt, missing, ballot);
     }
 
     private static int getHlcBytes(int lookup, int index)

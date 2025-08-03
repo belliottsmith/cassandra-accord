@@ -79,6 +79,7 @@ import accord.primitives.Routable.Domain;
 import accord.primitives.RoutableKey;
 import accord.primitives.Route;
 import accord.primitives.Status;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.Txn.Kind.Kinds;
@@ -107,8 +108,8 @@ import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
+import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.primitives.Txn.Kind.EphemeralRead;
@@ -378,7 +379,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             Cleanup cleanup = Cleanup.shouldCleanup(FULL, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
             Invariants.require(command.hasBeen(Applied)
                                || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
-                               || (durableBefore().min(txnId) != UniversalOrInvalidated &&
+                               || (durableBefore().min(txnId) != Universal &&
                                       ((command.participants().stillExecutes() != null && command.participants().stillExecutes().isEmpty())
                                       || !Route.isFullRoute(command.route()))));
         }
@@ -386,10 +387,10 @@ public abstract class InMemoryCommandStore extends CommandStore
     }
 
     @Override
-    public void markShardDurable(SafeCommandStore safeStore, TxnId syncId, Ranges ranges, Status.Durability durability)
+    public void markShardDurable(SafeCommandStore safeStore, TxnId syncId, Ranges ranges, HasOutcome level)
     {
-        super.markShardDurable(safeStore, syncId, ranges, durability);
-        if (durability.compareTo(UniversalOrInvalidated) >= 0)
+        super.markShardDurable(safeStore, syncId, ranges, level);
+        if (level == Universal)
             markShardDurable(syncId, ranges);
     }
 

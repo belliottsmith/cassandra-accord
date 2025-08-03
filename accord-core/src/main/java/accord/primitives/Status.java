@@ -20,6 +20,7 @@ package accord.primitives;
 
 import accord.local.CommandSummaries.SummaryStatus;
 import accord.messages.BeginRecovery;
+import accord.utils.Invariants;
 
 import java.util.Collection;
 import java.util.function.Function;
@@ -48,7 +49,7 @@ import static accord.primitives.Status.Phase.*;
 
 public enum Status
 {
-    NotDefined        (None,      NOT_DIRECTLY_WITNESSED,                  Nothing),
+    NotDefined        (Phase.None, NOT_DIRECTLY_WITNESSED, Nothing),
     PreAccepted       (PreAccept, PREACCEPTED,                             DefinitionAndRoute),
 
     AcceptedInvalidate(Accept,    NOTACCEPTED,                             MaybeRoute,             DefinitionUnknown, ExecuteAtUnknown,      DepsUnknown,       Unknown), // may or may not have witnessed
@@ -123,82 +124,355 @@ public enum Status
         }
     }
 
-    /**
-     * Represents the durability of a transaction's Persist phase.
-     * NotDurable: the outcome has not been durably recorded
-     * Local:      the outcome has been durably recorded at least locally
-     * ShardUniversalOrInvalidated: the outcome has been durably recorded at all healthy replicas of the shard, or is invalidated
-     * ShardUniversal:      the outcome has been durably recorded at all healthy replicas of the shard
-     * MajorityOrInvalidated:   the outcome has been durably recorded to a majority of each participating shard
-     * Majority:   the outcome has been durably recorded to a majority of each participating shard
-     * Universal:  the outcome has been durably recorded to every healthy replica
-     * DurableOrInvalidated:  the outcome was either invalidated, or has been durably recorded to every healthy replica
-     */
-    public enum Durability
+    public static class Durability
     {
-        NotDurable, Local, ShardUniversal,
-        MajorityOrInvalidated, Majority,
-        UniversalOrInvalidated, Universal;
-
+        private static final int MAYBE_INVALIDATED_BIT = 1;
+        private static final int SHARDS_SHIFT = 3;
+        private static final int NON_SHARDS_MASK = (1 << SHARDS_SHIFT) - 1;
+        private static final int PHASE_SHIFT = 1;
+        private static final int PHASE_MASK = 0x3;
+        public static final int TOTAL_ENCODING_BITS = 6;
         private static final Durability[] lookup = values();
+
+        public static final Durability NotDurable = get(HasPhase.None, HasOutcome.None, HasOutcome.None, false);
+        public static final Durability DurablyCommitted = get(HasPhase.DurablyCommitted, HasOutcome.None, HasOutcome.None, false);
+        public static final Durability DurablyStable = get(HasPhase.DurablyStable, HasOutcome.None, HasOutcome.None, false);
+        public static final Durability ShardUniversal = get(HasPhase.None, HasOutcome.Universal, HasOutcome.None, false);
+        public static final Durability AllQuorums = get(HasPhase.DurablyStable, HasOutcome.Quorum, HasOutcome.Quorum, false);
+        public static final Durability Universal = get(HasPhase.DurablyStable, HasOutcome.Universal, HasOutcome.Universal, false);
+        public static final Durability Invalidated = get(HasPhase.None, HasOutcome.None, HasOutcome.None, true);
+        public static final Durability UniversalOrInvalidated = get(HasPhase.None, HasOutcome.Universal, HasOutcome.Universal, true);
+
+        public enum HasPhase
+        {
+            None('N'), FastPathDecided('F'), DurablyCommitted('C'), DurablyStable('S');
+
+            private static final HasPhase[] lookup = values();
+            final char shortName;
+
+            HasPhase(char shortName)
+            {
+                this.shortName = shortName;
+            }
+        }
+
+        /**
+         * Represents the durability of a transaction's Persist phase.
+         * NotDurable: the outcome has not been durably recorded
+         * Quorum:     the outcome has been durably recorded to a quorum (maybe minority quorum where intersects other quorums) of each participating shard
+         * Universal:  the outcome has been durably recorded to every healthy replica
+         */
+        public enum HasOutcome
+        {
+            None, Quorum, Universal;
+            public final boolean isDurable() { return this != None; }
+            private static final HasOutcome[] lookup = values();
+            public static HasOutcome forOrdinal(int ordinal) { return lookup[ordinal]; }
+            public static HasOutcome max(HasOutcome a, HasOutcome b) { return a.compareTo(b) >= 0 ? a : b; }
+            public static int maxEncoded() { return lookup.length; }
+        }
+
+        /**
+         * Represents the durability of a transaction's Persist phase.
+         * NotDurable: the outcome has not been durably recorded
+         * Quorum:     the outcome has been durably recorded to a quorum (maybe minority quorum where intersects other quorums) of each participating shard
+         * Universal:  the outcome has been durably recorded to every healthy replica
+         */
+        public enum HasOutcomeOrInvalidated
+        {
+            None, QuorumOrInvalidated, Quorum, UniversalOrInvalidated, Universal;
+            public final boolean isDurableOrInvalidated() { return this != None; }
+            public final HasOutcomeOrInvalidated mergeMax(HasOutcomeOrInvalidated that) { return max(this, that); }
+            private static final HasOutcomeOrInvalidated[] lookup = values();
+            public static HasOutcomeOrInvalidated forOrdinal(int ordinal) { return lookup[ordinal]; }
+            public static HasOutcomeOrInvalidated max(HasOutcomeOrInvalidated a, HasOutcomeOrInvalidated b) { return a.compareTo(b) >= 0 ? a : b; }
+            public static int maxEncoded() { return lookup.length; }
+        }
+
+        private static int encode(HasPhase phase, HasOutcome shardOutcome, HasOutcome allShardsOutcome, boolean isMaybeInvalidated)
+        {
+            return encode(phase.ordinal(), shardOutcome.ordinal(), allShardsOutcome.ordinal(), isMaybeInvalidated ? MAYBE_INVALIDATED_BIT : 0);
+        }
+
+        private static int encode(int phaseOrdinal, int shardOutcome, int allShardsOutcome, int maybeInvalidated)
+        {
+            Invariants.require(allShardsOutcome <= shardOutcome);
+            Invariants.require(phaseOrdinal < HasPhase.DurablyCommitted.ordinal() || (maybeInvalidated == 0));
+            int outcome = ((1 << shardOutcome) | allShardsOutcome) << SHARDS_SHIFT;
+            return (phaseOrdinal << PHASE_SHIFT) | outcome | maybeInvalidated;
+        }
+
+        public final boolean isMaybeInvalidated()
+        {
+            return isMaybeInvalidated(encoded);
+        }
+
+        private static boolean isMaybeInvalidated(int encoded)
+        {
+            return 0 != maybeInvalidated(encoded);
+        }
+
+        private static int bothMaybeInvalidated(int a, int b)
+        {
+            return maybeInvalidated(a & b);
+        }
+
+        private static int eitherMaybeInvalidated(int a, int b)
+        {
+            return maybeInvalidated(a | b);
+        }
+
+        private static int maybeInvalidated(int encoded)
+        {
+            return encoded & MAYBE_INVALIDATED_BIT;
+        }
+
+        private static int notInvalidatedOrdinal(int hasOutcomeOrdinal, int encoded)
+        {
+            return hasOutcomeOrdinal & (maybeInvalidated(encoded) - 1);
+        }
+
+        private static HasOutcome notInvalidated(int hasOutcomeOrdinal, int encoded)
+        {
+            return HasOutcome.lookup[notInvalidatedOrdinal(hasOutcomeOrdinal, encoded)];
+        }
+
+        private static int orInvalidatedOrdinal(int hasOutcomeOrdinal, int encoded)
+        {
+            return (hasOutcomeOrdinal << 1) - maybeInvalidated(encoded);
+        }
+
+        private static HasOutcomeOrInvalidated orInvalidated(int hasOutcomeOrdinal, int encoded)
+        {
+            return HasOutcomeOrInvalidated.lookup[orInvalidatedOrdinal(hasOutcomeOrdinal, encoded)];
+        }
+
+        private static int phaseOrdinal(int encoded)
+        {
+            return (encoded >>> PHASE_SHIFT) & PHASE_MASK;
+        }
+
+        private static int maxPhaseOrdinal(int a, int b)
+        {
+            return Math.max(phaseOrdinal(a), phaseOrdinal(b));
+        }
+
+        private static int shardOrdinal(int encoded)
+        {
+            return 28 - Integer.numberOfLeadingZeros(encoded);
+        }
+
+        private static int maxShardOrdinal(int a, int b)
+        {
+            return shardOrdinal(a | b);
+        }
+
+        private static int minShardOrdinal(int a, int b)
+        {
+            return Math.min(shardOrdinal(a), shardOrdinal(b));
+        }
+
+        private static int allShardsOrdinal(int encoded)
+        {
+            encoded ^= Integer.highestOneBit(encoded);
+            return encoded >>> SHARDS_SHIFT;
+        }
+
+        private static int maxAllShardsOrdinal(int a, int b)
+        {
+            a ^= Integer.highestOneBit(a);
+            b ^= Integer.highestOneBit(b);
+            return Math.max(a, b) >>> SHARDS_SHIFT;
+        }
+
+        private static int mergeMaybeInvalidated(int a, int b, int maxPhase)
+        {
+            int aob = a | b;
+            int anb = a & b;
+            if (maybeInvalidated(aob) == 0)
+                return 0;
+
+            if (maybeInvalidated(anb) != 0)
+                return MAYBE_INVALIDATED_BIT;
+
+            return maxPhase >= HasPhase.DurablyCommitted.ordinal() || (aob >>> SHARDS_SHIFT) > 0 ?
+                   0 : MAYBE_INVALIDATED_BIT;
+        }
+
+        public final int encoded;
+
+        private Durability(int encoded)
+        {
+            this.encoded = encoded;
+        }
+
+        public HasPhase phase()
+        {
+            return phase(encoded);
+        }
+
+        private static HasPhase phase(int encoded)
+        {
+            return HasPhase.lookup[phaseOrdinal(encoded)];
+        }
+
+        public HasOutcome shard()
+        {
+            return shard(encoded);
+        }
+
+        private static HasOutcome shard(int encoded)
+        {
+            return HasOutcome.lookup[notInvalidatedOrdinal(shardOrdinal(encoded), encoded)];
+        }
+
+        public HasOutcome allShards()
+        {
+            return allShards(encoded);
+        }
+
+        private static HasOutcome allShards(int encoded)
+        {
+            return notInvalidated(allShardsOrdinal(encoded), encoded);
+        }
+
+        public HasOutcomeOrInvalidated allShardsOrInvalidated()
+        {
+            return allShardsOrInvalidated(encoded);
+        }
+
+        private static HasOutcomeOrInvalidated allShardsOrInvalidated(int encoded)
+        {
+            return orInvalidated(allShardsOrdinal(encoded), encoded);
+        }
 
         public boolean isDurable()
         {
-            return this == Majority || this == Universal;
+            return notInvalidatedOrdinal(allShardsOrdinal(encoded), encoded) >= HasOutcome.Quorum.ordinal();
+        }
+
+        public boolean isUniversal()
+        {
+            return notInvalidatedOrdinal(allShardsOrdinal(encoded), encoded) >= HasOutcome.Universal.ordinal();
+        }
+
+        public boolean isUniversalOrInvalidated()
+        {
+            return orInvalidatedOrdinal(allShardsOrdinal(encoded), encoded) >= HasOutcomeOrInvalidated.UniversalOrInvalidated.ordinal();
         }
 
         public boolean isDurableOrInvalidated()
         {
-            return compareTo(MajorityOrInvalidated) >= 0;
+            return orInvalidatedOrdinal(allShardsOrdinal(encoded), encoded) >= HasOutcomeOrInvalidated.QuorumOrInvalidated.ordinal();
         }
 
-        public boolean isMaybeInvalidated()
+        public boolean isFastPathDurablyDecided()
         {
-            return this == NotDurable || this == MajorityOrInvalidated || this == UniversalOrInvalidated;
+            return phaseOrdinal(encoded) >= HasPhase.FastPathDecided.ordinal();
         }
 
-        public static Durability nonNullOrMerge(@Nullable Durability a, @Nullable Durability b)
+        public boolean isDurablyCommitted()
+        {
+            return phaseOrdinal(encoded) >= HasPhase.DurablyCommitted.ordinal();
+        }
+
+        public boolean isDurablyStable()
+        {
+            return phaseOrdinal(encoded) >= HasPhase.DurablyStable.ordinal();
+        }
+
+        @Override
+        public String toString()
+        {
+            return toString(encoded);
+        }
+
+        private static String toString(int encoded)
+        {
+            return "" + phase(encoded).shortName + shard(encoded).name().charAt(0) + allShards(encoded).name().charAt(0);
+        }
+
+        public static Durability nonNullOrMergeMax(@Nullable Durability a, @Nullable Durability b)
         {
             if (a == null) return b;
             if (b == null) return a;
-            return merge(a, b);
+            return a.mergeMax(b);
         }
 
-        public static Durability merge(Durability a, Durability b)
+        public final boolean isAtLeast(Durability that)
         {
-            int c = a.compareTo(b);
-            if (c < 0) { Durability tmp = a; a = b; b = tmp; }
-            // if we know we are applied, we can remove the OrInvalidated qualifier
-            if (a == UniversalOrInvalidated && (b == Majority || b == ShardUniversal || b == Local)) a = Universal;
-            // TODO (required, minor cleanup): should ShardUniversal+NotDurable=Local? It might be that we are stale.
-            if ((a == ShardUniversal) && (b == Local || b == NotDurable)) a = Local;
-            if (b == NotDurable && a.compareTo(MajorityOrInvalidated) < 0) a = NotDurable;
-            return a;
+            int phase = phaseOrdinal(this.encoded);
+            return phase >= phaseOrdinal(that.encoded)
+                   && shardOrdinal(encoded) >= shardOrdinal(that.encoded)
+                   && allShardsOrdinal(encoded) >= allShardsOrdinal(that.encoded)
+                   && mergeMaybeInvalidated(encoded, that.encoded, phase) == maybeInvalidated(encoded);
         }
 
-        public static Durability mergeAtLeast(Durability a, Durability b)
+        // max of each ordinal, and NOT_INVALIDATED if set on either
+        public Durability mergeMax(Durability that)
         {
-            int c = a.compareTo(b);
-            if (c < 0) { Durability tmp = a; a = b; b = tmp; }
-            if (a == UniversalOrInvalidated && (b == Majority || b == ShardUniversal || b == Local)) a = Universal;
-            return a;
+            int phase = maxPhaseOrdinal(this.encoded, that.encoded);
+            int shard = maxShardOrdinal(this.encoded, that.encoded);
+            int allShards = maxAllShardsOrdinal(this.encoded, that.encoded);
+            int maybeInvalidated = mergeMaybeInvalidated(this.encoded, that.encoded, phase);
+            return selfOrLookup(encode(phase, shard, allShards, maybeInvalidated));
         }
 
-        public static Durability max(Durability a, Durability b)
+        public Durability mergeShardsOrReplicas(Durability that)
         {
-            return a.compareTo(b) >= 0 ? a : b;
+            int phase = maxPhaseOrdinal(this.encoded, that.encoded);
+            int allShards = maxAllShardsOrdinal(this.encoded, that.encoded);
+            int shard = Math.max(allShards, minShardOrdinal(this.encoded, that.encoded));
+            int maybeInvalidated = mergeMaybeInvalidated(this.encoded, that.encoded, phase);
+            return selfOrLookup(encode(phase, shard, allShards, maybeInvalidated));
         }
 
-        public static Durability forOrdinal(int ordinal)
+        private Durability selfOrLookup(int encoded)
         {
-            if (ordinal < 0 || ordinal > lookup.length)
-                throw new IndexOutOfBoundsException(ordinal);
-            return lookup[ordinal];
+            if (encoded == this.encoded)
+                return this;
+            return forEncoded(encoded);
         }
 
-        public static int maxOrdinal()
+        public static Durability get(HasPhase phase, HasOutcome shardOutcome, HasOutcome allShardsOutcome, boolean isMaybeInvalidated)
         {
-            return lookup.length;
+            return forEncoded(encode(phase, shardOutcome, allShardsOutcome, isMaybeInvalidated));
+        }
+
+        public static Durability forEncoded(int encoded)
+        {
+            if (encoded < 0 || encoded > lookup.length)
+                throw new IndexOutOfBoundsException(encoded);
+            Durability durability = lookup[encoded];
+            Invariants.require(durability != null, "Invalid durability requested %d", encoded);
+            return durability;
+        }
+
+        private static Durability[] values()
+        {
+            Invariants.require(HasOutcome.lookup.length <= 4);
+            Durability[] result = new Durability[64];
+            for (HasPhase phase : HasPhase.lookup)
+            {
+                for (HasOutcome shard : HasOutcome.lookup)
+                {
+                    for (HasOutcome allShards : HasOutcome.lookup)
+                    {
+                        if (allShards.ordinal() > shard.ordinal())
+                            break;
+
+                        for (boolean isMaybeInvalidated : new boolean[] { false, true})
+                        {
+                            if (isMaybeInvalidated && phase.compareTo(HasPhase.DurablyCommitted) >= 0)
+                                continue;
+
+                            int encoded = encode(phase, shard, allShards, isMaybeInvalidated);
+                            result[encoded] = new Durability(encoded);
+                        }
+                    }
+                }
+            }
+            return result;
         }
     }
 

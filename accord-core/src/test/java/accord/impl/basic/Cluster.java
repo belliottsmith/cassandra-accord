@@ -126,6 +126,7 @@ import static accord.local.Cleanup.INVALIDATE;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.StoreParticipants.Filter.LOAD;
+import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 import static java.util.Collections.emptyMap;
@@ -985,7 +986,7 @@ public class Cluster
                         if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::shardAndLocallyRedundantBefore).compareTo(txnId) > 0)
                             continue;
 
-                        if (beforeCommand.participants().owns().isEmpty() && store.durableBefore().min(txnId).compareTo(Status.Durability.MajorityOrInvalidated) >= 0)
+                        if (beforeCommand.participants().owns().isEmpty() && store.durableBefore().min(txnId).compareTo(Quorum) >= 0)
                             continue;
 
                         if (!beforeCommand.saveStatus().hasBeen(Status.PreCommitted) && store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::locallyRedundantBefore).compareTo(txnId) > 0)

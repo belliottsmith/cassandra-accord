@@ -29,6 +29,7 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.cfk.NotifySink.DefaultNotifySink;
 import accord.primitives.Status;
+import accord.primitives.Status.Durability;
 import accord.primitives.TxnId;
 
 public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
@@ -111,8 +112,8 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         updateRedundantBefore(safeStore, safeStore.redundantBefore().get(key));
     }
 
-    public void setDurable(TxnId txnId)
+    public void setDurable(TxnId txnId, Durability durability)
     {
-        set(current().setDurable(txnId));
+        set(current().setDurable(txnId, durability));
     }
 }

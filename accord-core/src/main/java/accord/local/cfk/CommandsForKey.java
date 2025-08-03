@@ -51,6 +51,7 @@ import accord.primitives.Status;
 import accord.local.cfk.PostProcess.NotifyUnmanagedResult;
 import accord.local.cfk.Pruning.LoadingPruned;
 import accord.primitives.Ballot;
+import accord.primitives.Status.Durability;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind;
 import accord.primitives.Txn.Kind.Kinds;
@@ -100,7 +101,8 @@ import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.local.cfk.Updating.maybeUpdateMaxAppliedPreBootstrapWriteById;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Routable.Domain.Key;
-import static accord.primitives.Status.Durability.Majority;
+import static accord.primitives.Status.Durability.AllQuorums;
+import static accord.primitives.Status.Durability.DurablyCommitted;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
@@ -366,6 +368,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
         static final int SUMMARY_STATUS_ORDINAL_SHIFT = 12;
         static final int NOTIFIED_READY = 0x10000;
         static final int NOTIFIED_WAITING = 0x20000;
+        static final int DURABLY_COMMITTED = 0x40000;
+        static final int DURABLY_COMMITTED_SHIFT = Integer.numberOfTrailingZeros(DURABLY_COMMITTED);
 
         int encodedStatus;
         public final Timestamp executeAt;
@@ -402,21 +406,21 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
         public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean mayExecute, int statusOverrideXor, @Nonnull Timestamp executeAt, @Nonnull Ballot ballot)
         {
-            return create(txnId, status, mayExecute, statusOverrideXor, executeAt, NO_TXNIDS, ballot);
+            return create(txnId, status, mayExecute, statusOverrideXor, 0, executeAt, NO_TXNIDS, ballot);
         }
 
         public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean mayExecute, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
         {
-            return create(txnId, status, mayExecute, 0, executeAt, missing, ballot);
+            return create(txnId, status, mayExecute, 0, 0, executeAt, missing, ballot);
         }
 
-        public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean mayExecute, int statusOverrideXor, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
+        public static TxnInfo create(@Nonnull TxnId txnId, InternalStatus status, boolean mayExecute, int statusOverrideXor, int durablyCommitted, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
         {
             Invariants.require(executeAt == txnId || !executeAt.equals(txnId));
             Invariants.require(status.hasExecuteAt || executeAt == txnId);
             Invariants.require(status.hasDeps || missing == NO_TXNIDS);
             Invariants.expect(status.hasBallot || ballot == Ballot.ZERO);
-            int encodedStatus = encode(txnId, status, mayExecute, statusOverrideXor);
+            int encodedStatus = encode(txnId, status, mayExecute, statusOverrideXor, durablyCommitted);
             if (missing == NO_TXNIDS && (!status.hasBallot || ballot == Ballot.ZERO))
                 return new TxnInfo(txnId, encodedStatus, executeAt);
             Invariants.require(missing.length > 0 || missing == NO_TXNIDS);
@@ -489,9 +493,25 @@ public class CommandsForKey extends CommandsForKeyUpdate
             return (encodedStatus >>> INTERNAL_STATUS_FLAGS_SHIFT) & 0x7;
         }
 
-        public boolean isDurable()
+        public boolean isDurablyCommitted()
         {
-            return is(APPLIED_DURABLE);
+            return 0 != (encodedStatus & DURABLY_COMMITTED);
+        }
+
+        public int durablyCommittedBit()
+        {
+            return (encodedStatus >>> DURABLY_COMMITTED_SHIFT) & 1;
+        }
+
+        public Durability durability()
+        {
+            if (is(APPLIED_DURABLE))
+                return AllQuorums;
+
+            if (isDurablyCommitted())
+                return DurablyCommitted;
+
+            return NotDurable;
         }
 
         // This field may differ from status().hasDeps(), in the event that the key is out of range for the transaction when committed.
@@ -589,8 +609,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             TxnInfo info = (TxnInfo) o;
-            return status() == info.status()
+            return super.equals(info)
+                   && status() == info.status()
                    && (executeAt == this ? info.executeAt == info : Objects.equals(executeAt, info.executeAt))
+                   && isDurablyCommitted() == info.isDurablyCommitted()
                    && TxnId.equalsStrict(missing(), info.missing());
         }
 
@@ -634,6 +656,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                    "txnId=" + toPlainString() +
                    ", status=" + status() +
                    ", executeAt=" + plainExecuteAt() +
+                   (isDurablyCommitted() && !is(APPLIED_DURABLE) ? "*" : "") +
                    '}';
         }
 
@@ -666,6 +689,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
             if (v.isCommittedToExecute) encoded |= COMMITTED_TO_EXECUTE;
             if (v.depsKnownUntilExecuteAt()) encoded |= DEPS_KNOWN_UNTIL_EXECUTE_AT;
             if (v.hasBallot) encoded |= HAS_BALLOT;
+            if (v == APPLIED_DURABLE)
+                encoded |= DURABLY_COMMITTED;
             return encoded;
         }
 
@@ -677,12 +702,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
 
         // statusOverrides is the bitmask we xor, not the new values of the flag (so providing zero has no effect, and providing the base value sets to zero)
-        private static int encode(TxnId txnId, InternalStatus internalStatus, boolean mayExecute, int statusOverrideXor)
+        private static int encode(TxnId txnId, InternalStatus internalStatus, boolean mayExecute, int statusOverrideXor, int durablyCommitted)
         {
             Invariants.requireArgument(statusOverrideXor <= 1);
             int encoded = internalStatus.txnInfoEncoded | (mayExecute ? MAY_EXECUTE : 0);
             if (txnId.is(Key)) encoded |= MANAGED;
             encoded ^= statusOverrideXor << INTERNAL_STATUS_FLAGS_SHIFT;
+            encoded |= durablyCommitted << DURABLY_COMMITTED_SHIFT;
             return encoded;
         }
 
@@ -696,12 +722,17 @@ public class CommandsForKey extends CommandsForKeyUpdate
             return 0 != (encodedStatus & NOTIFIED_WAITING);
         }
 
-        void setDurableInPlace()
+        void setAppliedDurableInPlace()
         {
             Invariants.require(is(APPLIED_NOT_DURABLE));
             encodedStatus &= ~((SUMMARY_STATUS_ORDINAL_MASK << SUMMARY_STATUS_ORDINAL_SHIFT) | (INTERNAL_STATUS_ORDINAL_MASK << INTERNAL_STATUS_ORDINAL_SHIFT));
             encodedStatus |= APPLIED_DURABLE.ordinal() << INTERNAL_STATUS_ORDINAL_SHIFT;
             encodedStatus |= APPLIED_DURABLE.summaryStatus.ordinal() << SUMMARY_STATUS_ORDINAL_SHIFT;
+        }
+
+        void setDurablyCommittedInPlace()
+        {
+            encodedStatus |= DURABLY_COMMITTED;
         }
 
         void setNotifiedReadyInPlace()
@@ -1009,7 +1040,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         {
             SaveStatus saveStatus = command.saveStatus();
             InternalStatus status = (includeIntermediate ? FROM_SAVE_STATUS : FROM_SAVE_STATUS_FILTERED)[saveStatus.ordinal()];
-            if (status == APPLIED_NOT_DURABLE && command.durability().isDurable())
+            if (status == APPLIED_NOT_DURABLE && command.durability().allShards().isDurable())
                 status = APPLIED_DURABLE;
             if (status == PREACCEPTED_WITH_DEPS && command.txnId().node.equals(safeStore.node().id()) && !Ballot.ZERO.equals(command.promised()))
                 status = PREACCEPTED_COORD_NO_FAST_COMMIT;
@@ -1364,7 +1395,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 }
             }
 
-            if (!visitor.visit(key, txn.plainTxnId(), executeAt, summaryStatus, dep, txn.isDurable() ? Majority : NotDurable))
+            if (!visitor.visit(key, txn.plainTxnId(), executeAt, summaryStatus, dep, txn.isDurablyCommitted() ? DurablyCommitted : NotDurable))
                 return false;
         }
 
@@ -1456,8 +1487,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
                     switch (dependencyElision())
                     {
-                        case IF_DURABLE:
-                            if (!txn.isDurable())
+                        case IF_DURABLY_COMMITTED:
+                            if (!txn.isDurablyCommitted())
                                 break;
 
                         case ON:
@@ -1498,7 +1529,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                     }
             }
 
-            visitor.visit(p1, p2, txn.summaryStatus(), txn.isDurable() ? Majority : NotDurable, key, txn.plainTxnId());
+            visitor.visit(p1, p2, txn.summaryStatus(), txn.durability(), key, txn.plainTxnId());
         }
 
         if (end <= prunedBeforeById)
@@ -1520,7 +1551,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                     break;
             }
             if (best.executeAt.epoch() <= startedBefore.epoch() && !best.equals(startedBefore))
-                visitor.visit(p1, p2, best.summaryStatus(), best.isDurable() ? Majority : NotDurable, key, best.plainTxnId());
+                visitor.visit(p1, p2, best.summaryStatus(), best.durability(), key, best.plainTxnId());
         }
     }
 
@@ -1607,13 +1638,16 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, minUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
     }
 
-    public CommandsForKey setDurable(TxnId txnId)
+    public CommandsForKey setDurable(TxnId txnId, Durability durability)
     {
         TxnInfo txn = get(txnId);
-        if (txn == null || !txn.is(APPLIED_NOT_DURABLE))
+        if (txn == null || !durability.isDurablyCommitted())
             return this;
 
-        txn.setDurableInPlace();
+        if (durability.isDurable() && txn.is(APPLIED_NOT_DURABLE)) txn.setAppliedDurableInPlace();
+        else if (!txn.isDurablyCommitted()) txn.setDurablyCommittedInPlace();
+        else return this;
+
         // return the exact same data as we have updated in place, but change detection relies on identity
         return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedPreBootstrapWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, prunedBeforeById, unmanageds);
     }
@@ -1704,7 +1738,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             }
 
             if (isOutOfRange) result = insertOrUpdateOutOfRange(pos, txnId, cur, newStatus, mayExecute, updated, witnessedBy);
-            else if (cur.compareTo(STABLE) >= 0) result = update(pos, txnId, cur, cur.withEncodedStatus(TxnInfo.encode(txnId, newStatus, cur.mayExecute(), cur.statusOverrides())), updated, witnessedBy);
+            else if (cur.compareTo(STABLE) >= 0) result = update(pos, txnId, cur, cur.withEncodedStatus(TxnInfo.encode(txnId, newStatus, cur.mayExecute(), cur.statusOverrides(), cur.durablyCommittedBit())), updated, witnessedBy);
             else if (newStatus.hasDeps()) result = update(pos, txnId, cur, newStatus, mayExecute, updated, witnessedBy);
             else result = update(pos, txnId, cur, TxnInfo.create(txnId, newStatus, mayExecute, updated), updated, witnessedBy);
         }
@@ -1741,7 +1775,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         int statusOverridesXor = newStatus.flags & 1;
         TxnInfo newInfo;
         if (curInfo == null) newInfo = TxnInfo.create(plainTxnId, newStatus, false, statusOverridesXor, plainTxnId, newStatus.hasBallot ? updated.acceptedOrCommitted() : Ballot.ZERO);
-        else newInfo = curInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, false, statusOverridesXor));
+        else newInfo = curInfo.withEncodedStatus(TxnInfo.encode(plainTxnId, newStatus, false, statusOverridesXor, updated.durability().isDurablyCommitted() ? 1 : 0));
         // out of range means we have no deps, we're just marking committed, so we set HAS_DEPS to 0
         return insertOrUpdate(this, updatePos, plainTxnId, curInfo, newInfo, updated, witnessedBy);
     }

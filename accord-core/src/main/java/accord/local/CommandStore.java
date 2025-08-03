@@ -48,7 +48,7 @@ import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantStatus.SomeStatus;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
-import accord.primitives.Status.Durability;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -71,6 +71,8 @@ import static accord.local.RedundantStatus.SomeStatus.PRE_BOOTSTRAP_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.SHARD_APPLIED_ONLY;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Status.Durability.HasOutcome.Quorum;
+import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.nonNull;
@@ -625,12 +627,12 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     }
 
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
-    public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges, Durability durability)
+    public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges, HasOutcome durability)
     {
-        if (durability.compareTo(Durability.MajorityOrInvalidated) < 0)
+        if (durability.compareTo(Quorum) < 0)
             return;
 
-        SomeStatus status = durability.compareTo(Durability.UniversalOrInvalidated) >= 0 ? SHARD_APPLIED_ONLY : MAJORITY_APPLIED_ONLY;
+        SomeStatus status = durability.compareTo(Universal) >= 0 ? SHARD_APPLIED_ONLY : MAJORITY_APPLIED_ONLY;
         final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
         TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, Bounds::maxLocallyAppliedBefore);
         RedundantBefore addNow = RedundantBefore.create(slicedRanges, globalSyncId, status);
@@ -661,7 +663,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     protected void updatedRedundantBefore(SafeCommandStore safeStore, RedundantBefore added)
     {
         TxnId clearWaitingBefore = redundantBefore.minShardAndLocallyAppliedBefore();
-        TxnId clearAllBefore = TxnId.min(clearWaitingBefore, durableBefore().min.majorityBefore);
+        TxnId clearAllBefore = TxnId.min(clearWaitingBefore, durableBefore().min.quorumBefore);
         progressLog.clearBefore(safeStore, clearWaitingBefore, clearAllBefore);
         listeners.clearBefore(this, clearWaitingBefore);
     }

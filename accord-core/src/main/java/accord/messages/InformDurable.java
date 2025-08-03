@@ -39,7 +39,7 @@ import accord.topology.Topologies;
 import accord.topology.Topology;
 import accord.utils.async.Cancellable;
 
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
+import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
 import static accord.api.ProtocolModifiers.Toggles.informOfDurability;
 import static accord.messages.MessageType.StandardMessage.INFORM_DURABLE_REQ;
@@ -88,7 +88,7 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
         }
     }
 
-    public static void informHome(Node node, Topologies any, TxnId txnId, Route<?> route, Timestamp executeAt, Durability durability)
+    public static void informHome(Node node, Topologies any, TxnId txnId, Route<?> route, @Nullable Timestamp executeAt, Durability durability)
     {
         Shard homeShard = homeShard(node, any, txnId, route.homeKey());
         Topologies homeTopology = new Topologies.Single(any, new Topology(txnId.epoch(), homeShard));
@@ -141,7 +141,7 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     @Override
     public LoadKeys loadKeys()
     {
-        return dependencyElision() == IF_DURABLE ? LoadKeys.ASYNC : LoadKeys.NONE;
+        return dependencyElision() == IF_DURABLY_COMMITTED ? LoadKeys.ASYNC : LoadKeys.NONE;
     }
 
     @Override
