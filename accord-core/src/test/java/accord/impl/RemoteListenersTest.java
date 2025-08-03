@@ -44,7 +44,6 @@ import accord.api.RemoteListeners;
 import accord.api.RemoteListeners.Registration;
 import accord.api.RoutingKey;
 import accord.impl.LocalListenersTest.TestSafeCommand;
-import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.CommandSummaries;
@@ -59,6 +58,7 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.primitives.Route;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -71,6 +71,7 @@ import org.agrona.collections.IntHashSet;
 import org.agrona.collections.ObjectHashSet;
 
 import static accord.primitives.SaveStatus.Uninitialised;
+import static accord.primitives.Status.Durability.HasPhase.DurablyStable;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Known.KnownRoute.FullRoute;
 
@@ -99,9 +100,9 @@ public class RemoteListenersTest
     static class StateKey implements Comparable<StateKey>
     {
         final SaveStatus saveStatus;
-        final Durability durability;
+        final HasOutcome durability;
 
-        StateKey(SaveStatus saveStatus, Durability durability)
+        StateKey(SaveStatus saveStatus, HasOutcome durability)
         {
             this.saveStatus = saveStatus;
             this.durability = durability;
@@ -181,7 +182,7 @@ public class RemoteListenersTest
         final Supplier<TxnId> txnIds;
         final Supplier<Node.Id> nodeIds;
         final Supplier<SaveStatus> awaits;
-        final Supplier<Durability> durabilities;
+        final Supplier<HasOutcome> durabilities;
         final IntSupplier storeIds;
         final IntSupplier storeIdCount;
 
@@ -210,7 +211,7 @@ public class RemoteListenersTest
             this.awaits = rnd.randomWeightedPicker(Arrays.stream(SaveStatus.values())
                                                          .filter(s -> s.known.route() == FullRoute)
                                                          .toArray(SaveStatus[]::new));
-            this.durabilities = rnd.randomWeightedPicker(Durability.values());
+            this.durabilities = rnd.randomWeightedPicker(Durability.HasOutcome.values());
 
             int maxStoreId = rnd.nextInt(16, 128);
             int maxStoreIdCount = rnd.nextInt(2, maxStoreId / 4);
@@ -228,12 +229,12 @@ public class RemoteListenersTest
                 else
                 {
                     SaveStatus saveStatus = awaits.get();
-                    Durability durability = durabilities.get();
-                    notifyOne(saveStatus, Command.durability(durability, saveStatus), notifyRatio);
+                    HasOutcome durability = durabilities.get();
+                    notifyOne(saveStatus, durability, notifyRatio);
                 }
             }
             while (!canonical.isEmpty())
-                notifyOne(SaveStatus.Invalidated, Durability.Universal, notifyRatio);
+                notifyOne(SaveStatus.Invalidated, Durability.HasOutcome.Universal, notifyRatio);
         }
 
         void registerOne()
@@ -244,7 +245,7 @@ public class RemoteListenersTest
             while (registerCount-- > 0)
             {
                 SaveStatus awaitSaveStatus = awaits.get();
-                Durability awaitDurability = durabilities.get();
+                HasOutcome awaitDurability = durabilities.get();
                 Node.Id nodeId = nodeIds.get();
                 int callbackId = rnd.nextInt(0, Integer.MAX_VALUE);
 
@@ -272,7 +273,7 @@ public class RemoteListenersTest
             }
         }
 
-        void notifyOne(SaveStatus newStatus, Durability newDurability, float notifyRatio)
+        void notifyOne(SaveStatus newStatus, HasOutcome newDurability, float notifyRatio)
         {
             TxnId txnId;
             {
@@ -281,7 +282,7 @@ public class RemoteListenersTest
             }
 
             TreeMap<StateKey, State> stateMap = canonical.get(txnId);
-            TestSafeCommand safeCommand = new TestSafeCommand(txnId, newStatus, newDurability);
+            TestSafeCommand safeCommand = new TestSafeCommand(txnId, newStatus, Durability.get(DurablyStable, newDurability, newDurability, false));
 
             Map<StateKey, State> subMap = stateMap.headMap(new StateKey(newStatus, newDurability), true);
             subMap.forEach((key, state) -> {

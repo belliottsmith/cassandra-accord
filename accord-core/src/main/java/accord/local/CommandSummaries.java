@@ -47,7 +47,6 @@ import static accord.local.LoadKeysFor.RECOVERY;
 import static accord.local.MaxDecidedRX.minDecidedDependencyId;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Nothing;
 
 public interface CommandSummaries
@@ -70,7 +69,7 @@ public interface CommandSummaries
 
     enum IsDep
     {
-        IS_COORD_DEP, IS_NOT_COORD_DEP, NOT_ELIGIBLE, IS_STABLE_DEP, IS_NOT_STABLE_DEP;
+        IS_COORD_DEP, IS_NOT_COORD_DEP, NOT_ELIGIBLE, IS_PROPOSED_OR_STABLE_DEP, IS_NOT_PROPOSED_OR_STABLE_DEP;
         private static final IsDep[] IS_DEPS = values();
     }
 
@@ -80,7 +79,7 @@ public interface CommandSummaries
         private static final int IS_DEP_SHIFT = 3;
         private static final int IS_DEP_MASK = 0x7;
         private static final int DURABILITY_SHIFT = 6;
-        private static final int DURABILITY_MASK = 0x7;
+        private static final int DURABILITY_MASK = (1 << Durability.TOTAL_ENCODING_BITS) - 1;
 
         final @Nonnull Timestamp executeAt;
         final int encoded;
@@ -97,7 +96,7 @@ public interface CommandSummaries
             super(txnId);
             this.participants = participants;
             this.executeAt = executeAt.equals(txnId) ? this : executeAt;
-            this.encoded = status.ordinal() | (dep == null ? Integer.MIN_VALUE : (dep.ordinal() << IS_DEP_SHIFT)) | (durability.ordinal() << DURABILITY_SHIFT);
+            this.encoded = status.ordinal() | (dep == null ? Integer.MIN_VALUE : (dep.ordinal() << IS_DEP_SHIFT)) | (durability.encoded() << DURABILITY_SHIFT);
         }
 
         private Summary(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, int encoded, Unseekables<?> participants)
@@ -122,7 +121,7 @@ public interface CommandSummaries
 
         public Durability durability()
         {
-            return Durability.forOrdinal((encoded >>> DURABILITY_SHIFT) & DURABILITY_MASK);
+            return Durability.forEncoded((encoded >>> DURABILITY_SHIFT) & DURABILITY_MASK);
         }
 
         public boolean is(SummaryStatus summaryStatus)
@@ -197,10 +196,10 @@ public interface CommandSummaries
         {
             Invariants.require(primaryTxnId != null);
             TxnId minTxnId = redundantBefore.min(keysOrRanges, Bounds::gcBefore);
-            Timestamp maxTxnId = loadKeysFor == RECOVERY || !primaryTxnId.is(ExclusiveSyncPoint) ? Timestamp.MAX : primaryTxnId;
+            Timestamp maxTxnId = loadKeysFor == RECOVERY || !primaryTxnId.isSyncPoint() ? Timestamp.MAX : primaryTxnId;
             TxnId findAsDep = loadKeysFor == RECOVERY ? primaryTxnId : null;
             Kinds kinds = primaryTxnId.witnesses().or(loadKeysFor == RECOVERY ? primaryTxnId.witnessedBy() : Nothing);
-            if (!primaryTxnId.is(Txn.Kind.ExclusiveSyncPoint))
+            if (!primaryTxnId.is(Txn.Kind.ExclusiveSyncPoint)) // the main distinction between RX and RV is that RV doesn't filter out decided transactions
                 maxDecidedRX = null;
             return factory.create(redundantBefore, maxDecidedRX, primaryTxnId, keysOrRanges, kinds, minTxnId, maxTxnId, findAsDep);
         }
@@ -248,7 +247,7 @@ public interface CommandSummaries
         // the caller must manage mutual exclusion for this method, but not to any others
         public void maybeRecordFutureRx(Summary summary)
         {
-            if (summary.is(ExclusiveSyncPoint) && summary.compareTo(primaryTxnId) > 0 && (summary.is(SummaryStatus.STABLE) || summary.is(APPLIED)))
+            if (summary.isSyncPoint() && summary.compareTo(primaryTxnId) > 0 && (summary.is(SummaryStatus.STABLE) || summary.is(APPLIED)))
             {
                 minVisitedFutureRX = ReducingRangeMap.merge(minVisitedFutureRX, ReducingRangeMap.create(summary.participants.toRanges(), summary.plainTxnId()), TxnId::min);
                 maxRx = minVisitedFutureRX.foldlWithDefault(searchKeysOrRanges, TxnId::max, TxnId.MAX, TxnId.NONE);
@@ -274,7 +273,7 @@ public interface CommandSummaries
             if (txnId.compareTo(minTxnId) < 0 || txnId.compareTo(maxTxnId) > 0)
                 return false;
 
-            if (txnId.is(ExclusiveSyncPoint))
+            if (txnId.isSyncPoint())
             {
                 if (txnId.compareTo(maxRx) >= 0)
                     return false;
@@ -283,7 +282,7 @@ public interface CommandSummaries
                     return false;
             }
 
-            boolean mayFilterAsDecided = maxDecidedRX != null && (txnId.is(ExclusiveSyncPoint) || (durability != null && durability.isDurableOrInvalidated()));
+            boolean mayFilterAsDecided = maxDecidedRX != null && (txnId.isSyncPoint() || (durability != null && durability.isDurablyCommitted()));
             if (!mayFilterAsDecided)
                 return true;
 
@@ -317,7 +316,7 @@ public interface CommandSummaries
             if (txnId.compareTo(minTxnId) < 0 || txnId.compareTo(maxTxnId) > 0)
                 return null;
 
-            boolean mayFilterAsDecided = maxDecidedRX != null && (durability.isDurableOrInvalidated() || txnId.is(ExclusiveSyncPoint));
+            boolean mayFilterAsDecided = maxDecidedRX != null && (txnId.isSyncPoint() || durability.isDurablyCommitted());
             if (mayFilterAsDecided && minDecidedId != null && txnId.compareTo(minDecidedId) < 0)
                 return null;
 
@@ -364,8 +363,8 @@ public interface CommandSummaries
                     boolean isAnyDep = index >= 0 && partialDeps.isStable(index)
                                        && partialDeps.participants(index).containsAll(intersecting);
 
-                    isDep = isAnyDep ? (isCoordDeps ? IsDep.IS_COORD_DEP     : IsDep.IS_STABLE_DEP)
-                                     : (isCoordDeps ? IsDep.IS_NOT_COORD_DEP : IsDep.IS_NOT_STABLE_DEP);
+                    isDep = isAnyDep ? (isCoordDeps ? IsDep.IS_COORD_DEP     : IsDep.IS_PROPOSED_OR_STABLE_DEP)
+                                     : (isCoordDeps ? IsDep.IS_NOT_COORD_DEP : IsDep.IS_NOT_PROPOSED_OR_STABLE_DEP);
                 }
             }
 

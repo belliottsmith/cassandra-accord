@@ -211,6 +211,7 @@ public class TopologyManager
             ranges = ranges.without(retired);
             if (ranges.isEmpty())
                 return ranges;
+            synced = synced.union(MERGE_ADJACENT, ranges);
             closed = closed.union(MERGE_ADJACENT, ranges);
             retired = retired.union(MERGE_ADJACENT, ranges);
             Invariants.require(closed.mergeTouching() == closed);
@@ -304,12 +305,8 @@ public class TopologyManager
             for (int i = epochs.length - 1; i > 0; i--)
             {
                 EpochState epochState = epochs[i];
-                if (epochState.allRetired() &&
-                    (truncateFrom == -1 || truncateFrom == i + 1))
-                {
-                    Invariants.require(epochs[i].syncComplete());
+                if (epochState.allRetired() && (truncateFrom == -1 || truncateFrom == i + 1))
                     truncateFrom = i;
-                }
             }
 
             if (truncateFrom == -1)

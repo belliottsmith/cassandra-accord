@@ -68,10 +68,11 @@ import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.Command.NotDefined.uninitialised;
+import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -124,7 +125,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private final Object2ObjectHashMap<TxnId, PendingTask> pendingHome = new Object2ObjectHashMap<>();
 
     private final Long2ObjectHashMap<Object> active = new Long2ObjectHashMap<>();
-    private final Map<TxnId, StackTraceElement[]> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
+    private final Map<TxnId, Boolean> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
 
     private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
     private static final RunInvoker[] EMPTY_AWAITING_EPOCH_BUFFER = new RunInvoker[0];
@@ -219,60 +220,36 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (!txnId.isVisible())
             return;
 
-        TxnState state = null;
         Route<?> beforeRoute = before.route();
         Route<?> afterRoute = after.route();
-        if (force || (afterRoute != null && beforeRoute == null) || (after.durability().isDurableOrInvalidated() && !before.durability().isDurableOrInvalidated()))
-            state = updateOrInitialiseHomeState(safeStore, after, get(txnId));
-
         SaveStatus beforeSaveStatus = before.saveStatus();
         SaveStatus afterSaveStatus = after.saveStatus();
-        if (beforeSaveStatus == afterSaveStatus && !force)
-            return;
 
-        if (state == null)
-            state = get(txnId);
-
-        if (state == null)
-            return;
-
-        state.waiting().record(this, afterSaveStatus);
-        if (state.isHomeInitialised())
-            updateHomeState(safeStore, state, before, after);
-    }
-
-    @Override
-    public void decided(SafeCommandStore safeStore, TxnId txnId)
-    {
-        TxnState state = get(txnId);
-        if (state != null && state.isHomeInitialised())
-            state.home().atLeast(safeStore, this, Decided, NoneExpected);
-    }
-
-    private void updateHomeState(SafeCommandStore safeStore, TxnState state, Command before, Command after)
-    {
-        switch (after.saveStatus())
+        boolean recordWaiting = force || beforeSaveStatus != afterSaveStatus;
+        boolean updatedDurability = force || !before.durability().isAtLeast(after.durability());
+        boolean updateWaiting = updatedDurability && afterSaveStatus.compareTo(after.durability().durablyUnblocked().unblockedFrom) < 0;
+        boolean update = recordWaiting || updatedDurability || (afterRoute != null && beforeRoute == null);
+        if (update)
         {
-            case Stable:
-                if (!after.acceptedOrCommitted().equals(Ballot.ZERO) || (before != null && before.saveStatus() == SaveStatus.Committed))
-                    state.home().atLeast(safeStore, this, Decided, NoneExpected);
-            default:
-                // fall-through to default handler, which simply postpones any scheduled coordination attempt if we witness another coordination attempt in the meantime
-                if (state.homeProgress() == Queued && (before == null ? after.promised().compareTo(Ballot.ZERO) > 0 : (after.promised().compareTo(before.promised()) > 0) || after.acceptedOrCommitted().compareTo(before.acceptedOrCommitted()) > 0))
-                {
-                    clearPendingAndActive(Home, state.txnId);
-                    state.home().set(safeStore, this, state.phase(), Queued);
-                }
-                break;
-            case ReadyToExecute:
-            case PreApplied:
-                state.home().atLeast(safeStore, this, ReadyToExecute, Queued);
-                break;
+            TxnState state = get(txnId);
+            if (updateWaiting)
+            {
+                if (state == null)
+                    state = insert(txnId);
+                state.waiting().setBlockedUntil(safeStore, this, after.durability().durablyUnblocked());
+            }
+            state = updateHomeState(safeStore, before, after, state);
+
+            if (recordWaiting && state != null)
+                state.waiting().record(this, afterSaveStatus);
         }
     }
 
-    private TxnState updateOrInitialiseHomeState(SafeCommandStore safeStore, Command after, @Nullable TxnState state)
+    private TxnState updateHomeState(SafeCommandStore safeStore, @Nullable Command before, Command after, @Nullable TxnState state)
     {
+        if (state != null && state.isHomeDone())
+            return state;
+
         Route<?> route = after.route();
         if (after.durability().isDurableOrInvalidated())
         {
@@ -292,26 +269,43 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (route == null)
             return state; // we don't know if we're the home shard
 
+        Invariants.require(!after.durability().isDurableOrInvalidated());
         TxnId txnId = after.txnId();
-        RoutingKey homeKey = route.homeKey();
-        Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
-        boolean isHome = coordinateRanges.contains(homeKey);
-        state = get(txnId);
-        if (isHome)
+        if (state == null || !state.isHomeInitialised())
         {
+            RoutingKey homeKey = route.homeKey();
+            Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
+            if (!coordinateRanges.contains(homeKey))
+            {
+                if (state != null)
+                    state.setHomeDone(this);
+                return state;
+            }
             if (state == null)
+            {
+                if (txnId.compareTo(safeStore.redundantBefore().get(homeKey).maxBound(QUORUM_APPLIED)) < 0)
+                    return null;
                 state = insert(txnId);
-
-            Invariants.require(!after.durability().isDurableOrInvalidated());
-            if (!state.isHomeInitialised())
-                state.set(safeStore, this, Undecided, Queued); // initialise
+            }
+            state.set(safeStore, this, Undecided, Queued); // initialise
         }
-        else if (state != null)
+
+        CoordinatePhase phase = state.phase();
+        if (phase.compareTo(ReadyToExecute) < 0)
         {
-            // not home shard
-            state.setHomeDone(this);
+            if (after.saveStatus().compareTo(SaveStatus.ReadyToExecute) >= 0)
+            {
+                state.home().atLeast(safeStore, this, ReadyToExecute, Queued);
+            }
+            else if (phase.compareTo(Decided) < 0)
+            {
+                // TODO (desired): the second condition expression should simply imply the first (by updating durability earlier in processing)
+                boolean isDecided = after.durability().isDurablyStable()
+                                    || (after.saveStatus().compareTo(Stable) >= 0 && (!after.acceptedOrCommitted().equals(Ballot.ZERO) || (before != null && before.saveStatus() == SaveStatus.Committed)));
+                if (isDecided)
+                    state.home().atLeast(safeStore, this, Decided, NoneExpected);
+            }
         }
-
         return state;
     }
 
@@ -439,7 +433,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     {
         stateMap = BTreeRemoval.<TxnId, TxnState>remove(stateMap, (id, s) -> id.compareTo(s.txnId), txnId);
         if (debugDeleted != null)
-            debugDeleted.put(txnId, Thread.currentThread().getStackTrace());
+            debugDeleted.put(txnId, Boolean.TRUE);
     }
 
     @Override
@@ -456,9 +450,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (!blockedBy.txnId().isVisible())
             return;
 
-
         Command command = blockedBy.current();
         if (command == null) command = uninitialised(blockedBy.txnId());
+
         SaveStatus saveStatus = command.saveStatus();
         Invariants.require(saveStatus.compareTo(blockedUntil.unblockedFrom) < 0);
 
@@ -494,8 +488,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             command = blockedBy.incidentalUpdate(update);
 
         // TODO (required): tighten up ExclusiveSyncPoint range bounds
-        Invariants.require((command.txnId().is(ExclusiveSyncPoint) ? safeStore.ranges().all()
-                                                                   : safeStore.ranges().allSince(command.txnId().epoch())
+        Invariants.require((command.txnId().isSyncPoint() ? safeStore.ranges().all()
+                                                          : safeStore.ranges().allSince(command.txnId().epoch())
                               ).intersects(command.participants().hasTouched()));
 
         // TODO (desired):  consider triggering a preemption of existing coordinator (if any) in some circumstances;
@@ -509,7 +503,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
         // in case progress log hasn't been updated (e.g. bug on replay), force an update to the command's state since we're about to wait on it
         if (!state.isHomeInitialised() && command.route() != null)
-            updateOrInitialiseHomeState(safeStore, command, state);
+            updateHomeState(safeStore, null, command, state);
     }
 
     @Override

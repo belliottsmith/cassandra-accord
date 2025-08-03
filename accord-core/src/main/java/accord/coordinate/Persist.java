@@ -41,7 +41,7 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 
 import static accord.coordinate.tracking.RequestStatus.Success;
-import static accord.primitives.Status.Durability.Majority;
+import static accord.primitives.Status.Durability.AllQuorums;
 
 public abstract class Persist implements Callback<ApplyReply>
 {
@@ -99,7 +99,7 @@ public abstract class Persist implements Callback<ApplyReply>
                     // since we should only invoke Persist with sendTo != route when the remainder of the route is already persisted and truncated
                     // but we make this explicit for the caller with informDurableOnDone
                     isDone = true;
-                    InformDurable.informDefault(node, topologies, txnId, route, ballot, executeAt, Majority);
+                    InformDurable.informDefault(node, topologies, txnId, route, ballot, executeAt, AllQuorums);
                 }
             case RaceWithRecovery:
                 // don't count this towards durability; otherwise it is possible (though very unlikely)

@@ -271,7 +271,7 @@ public class Pruning
                                       newMinUndecidedById, newMaxAppliedPreBootstrapWriteById,
                                       cfk.committedByExecuteAt, cfk.maxAppliedWriteByExecuteAt,
                                       cfk.maxUniqueHlc, cfk.loadingPruned, newPrunedBeforeId,
-                                      cfk.unmanageds);
+                                      cfk.unmanageds, true);
         }
         int pos = cfk.insertPos(pruneBefore);
         if (pos == 0)
@@ -488,7 +488,7 @@ public class Pruning
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
         int newMaxAppliedPreBootstrapWriteById = recomputeMaxAppliedPreBootstrapWriteById(cfk.bounds, newById, cfk.maxAppliedPreBootstrapWriteById);
         Invariants.require(newById[retainCount] == newPrunedBefore);
-        return new CommandsForKey(cfk.key, cfk.bounds, newById, minUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds);
+        return new CommandsForKey(cfk.key, cfk.bounds, newById, minUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds, true);
     }
 
     /**
@@ -546,7 +546,7 @@ public class Pruning
         if (appliedPos < 0) appliedPos = -1 - appliedPos;
         if (pos != 0 || appliedPos != 0 || hasRedundantLoadingPruned)
         {
-            if (Invariants.isParanoid() && testParanoia(LINEAR, NONE, LOW))
+            if (Invariants.isParanoid() && expectUpToDate && testParanoia(LINEAR, NONE, LOW))
             {
                 int startPos = prevBootstrappedAt == null ? 0 : insertPos(byId, prevBootstrappedAt);
                 for (int i = startPos ; i < pos ; ++i)
@@ -569,14 +569,11 @@ public class Pruning
                 // and rely on the applied RX to correctly reject recovery of the transaction.
                 for (int i = pos ; i < appliedPos ; ++i)
                 {
-                    if (byId[i].compareTo(APPLIED) < 0)
+                    if (byId[i].compareTo(APPLIED) < 0 && byId[i].mayExecute())
                     {
-                        if (byId[i].mayExecute())
-                        {
-                            Invariants.require(!expectUpToDate || (byId[i].isNot(COMMITTED) && byId[i].isNot(STABLE)) || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
-                            // we only filter those that would apply locally
-                            removeUnappliedCount++;
-                        }
+                        Invariants.require(!expectUpToDate || (byId[i].isNot(COMMITTED) && byId[i].isNot(STABLE)) || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
+                        // we only filter those that would apply locally
+                        removeUnappliedCount++;
                     }
                 }
             }

@@ -36,6 +36,8 @@ import accord.primitives.Status;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
 import accord.primitives.KnownMap;
+import accord.primitives.Status.Durability.HasOutcome;
+import accord.primitives.Status.Durability.HasPhase;
 import accord.primitives.WithQuorum;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
@@ -61,17 +63,21 @@ import static accord.messages.MessageType.StandardMessage.CHECK_STATUS_REQ;
 import static accord.messages.MessageType.StandardMessage.CHECK_STATUS_RSP;
 import static accord.primitives.Known.Definition.DefinitionKnown;
 import static accord.primitives.Known.Definition.DefinitionUnknown;
+import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
+import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
+import static accord.primitives.Known.KnownExecuteAt.ExecuteAtProposed;
 import static accord.primitives.Status.Durability;
-import static accord.primitives.Status.Durability.Local;
-import static accord.primitives.Status.Durability.Majority;
-import static accord.primitives.Status.Durability.ShardUniversal;
-import static accord.primitives.Status.Durability.Universal;
 
 import accord.primitives.Known;
 import accord.utils.async.Cancellable;
 
+import static accord.primitives.Status.Durability.HasOutcome.None;
+import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.primitives.Status.NotDefined;
+import static accord.primitives.Status.Durability.HasPhase.DurablyCommitted;
+import static accord.primitives.Status.Durability.HasPhase.DurablyStable;
+import static accord.primitives.Status.Durability.HasPhase.FastPathDecided;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.messages.TxnRequest.computeScope;
@@ -314,7 +320,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         public ProgressToken toProgressToken()
         {
             Status status = maxSaveStatus.status;
-            return new ProgressToken(durability, status, maxPromised, maxAcceptedOrCommitted);
+            return new ProgressToken(durability.allShardsOrInvalidated(), status, maxPromised, maxAcceptedOrCommitted);
         }
 
         public Timestamp executeAtIfKnown()
@@ -327,13 +333,6 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         public CheckStatusOk finish(Unseekables<?> queried, Unseekables<?> requestedFor, Unseekables<?> routeOrParticipants, WithQuorum withQuorum, InvalidIf previouslyKnownToBeInvalidIf)
         {
             CheckStatusOk finished = this;
-            if (withQuorum == HasQuorum)
-            {
-                Durability durability = this.durability;
-                if (durability == Local) durability = Majority;
-                else if (durability == ShardUniversal) durability = Universal;
-                finished = finished.merge(durability);
-            }
 
             if (Route.isRoute(routeOrParticipants))
             {
@@ -346,14 +345,30 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             }
 
             Known validForAll = map.computeValidForAll(routeOrParticipants);
-            if (withQuorum == HasQuorum && (invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted) && queried.containsAll(requestedFor))
+            if (withQuorum == HasQuorum)
             {
                 Known minKnown = finished.minMaxKnown(queried), maxKnown = finished.maxKnown(queried);
-                InvalidIf invalidIf = this.invalidIf.inferWithQuorum(minKnown, maxKnown);
-                invalidIf = invalidIf.inferWithNewQuorum(previouslyKnownToBeInvalidIf, maxKnown);
-                if (invalidIf == IsInvalid)
-                    validForAll = validForAll.atLeast(Known.Invalidated);
-                finished = finished.with(invalidIf);
+                {
+                    HasOutcome addShard = Durability.HasOutcome.max(minKnown.outcome().isOrWasApply() ? Quorum : None, finished.durability.shard());
+                    HasOutcome addAllShards = None;
+                    if (addShard != None && Route.isFullRoute(finished.route) && queried.containsAll(finished.route))
+                        addAllShards = addShard;
+                    HasPhase addPhase;
+                    if (minKnown.is(DepsKnown)) addPhase = DurablyStable;
+                    else if (minKnown.is(ExecuteAtKnown)) addPhase = DurablyCommitted;
+                    else if (minKnown.is(ExecuteAtProposed)) addPhase = FastPathDecided;
+                    else addPhase = Durability.HasPhase.None;
+                    finished = finished.merge((Durability.get(addPhase, addShard, addAllShards, minKnown.isInvalidated())));
+                }
+                // TODO (required): should we require that we contacted the coordination epoch?
+                if (invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted)
+                {
+                    InvalidIf invalidIf = this.invalidIf.inferWithQuorum(minKnown, maxKnown);
+                    invalidIf = invalidIf.inferWithNewQuorum(previouslyKnownToBeInvalidIf, minKnown);
+                    if (invalidIf == IsInvalid)
+                        validForAll = validForAll.atLeast(Known.Invalidated);
+                    finished = finished.with(invalidIf);
+                }
             }
 
             return finished.with(map.with(validForAll));
@@ -375,7 +390,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
 
         public CheckStatusOk merge(@Nonnull Durability durability)
         {
-            durability = Durability.merge(durability, this.durability);
+            durability = durability.mergeMax(this.durability);
             if (durability == this.durability)
                 return this;
             return new CheckStatusOk(map, maxKnowledgeSaveStatus, maxSaveStatus, maxPromised, maxAcceptedOrCommitted, acceptedOrCommitted,
@@ -462,7 +477,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             CheckStatusOk maxHomeKey = prefer.homeKey != null || defer.homeKey == null ? prefer : defer;
             CheckStatusOk maxExecuteAt = prefer.maxKnown().executeAt().compareTo(defer.maxKnown().executeAt()) >= 0 ? prefer : defer;
             Route<?> mergedRoute = Route.merge(prefer.route, (Route)defer.route);
-            Durability mergedDurability = Durability.merge(prefer.durability, defer.durability);
+            Durability mergedDurability = prefer.durability.mergeShardsOrReplicas(defer.durability);
             InvalidIf invalidIf = prefer.invalidIf.atLeast(defer.invalidIf);
 
             // if the maximum (or preferred equal) is the same on all dimensions, return it
@@ -500,6 +515,11 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         public Known minMaxKnown(Unseekables<?> query)
         {
             return map.foldlWithDefault(query, Known::nonNullOrMin, MinMax.Nothing, null, i -> false);
+        }
+
+        public Known minMaxKnown(RoutingKey key)
+        {
+            return Known.nonNullOrMin(map.get(key), MinMax.Nothing);
         }
 
         @Override
@@ -553,7 +573,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
 
         public CheckStatusOkFull merge(@Nonnull Durability durability)
         {
-            durability = Durability.merge(durability, this.durability);
+            durability = durability.mergeMax(this.durability);
             if (durability == this.durability)
                 return this;
             return new CheckStatusOkFull(map, maxKnowledgeSaveStatus, maxSaveStatus, maxPromised, maxAcceptedOrCommitted, acceptedOrCommitted,

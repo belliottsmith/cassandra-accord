@@ -29,17 +29,17 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
 import accord.primitives.SaveStatus;
-import accord.primitives.Status.Durability;
 import accord.primitives.Participants;
 import accord.primitives.Route;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.SortedArrays;
 
 import static accord.api.ProgressLog.BlockedUntil.Query.HOME;
 import static accord.api.ProgressLog.BlockedUntil.Query.SHARD;
-import static accord.primitives.Status.Durability.Majority;
-import static accord.primitives.Status.Durability.NotDurable;
+import static accord.primitives.Status.Durability.HasOutcome.None;
+import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.utils.SortedArrays.Search.FAST;
 
 /**
@@ -76,14 +76,14 @@ public interface ProgressLog
 
     enum BlockedUntil
     {
-        NotBlocked(HOME, HOME, SaveStatus.NotDefined, NotDurable),
+        NotBlocked(HOME, HOME, SaveStatus.NotDefined, None),
 
         /**
          * Wait for the transaction to decide its executeAt (or else decide to be invalidated).
          *
          * This also waits for a FullRoute to be known.
          */
-        HasDecidedExecuteAt(HOME, HOME, SaveStatus.PreCommitted, NotDurable),
+        HasDecidedExecuteAt(HOME, HOME, SaveStatus.PreCommitted, None),
 
         /**
          * Wait for the transaction to be Committed, or guaranteed not to fast-path commit.
@@ -92,7 +92,7 @@ public interface ProgressLog
          *
          * This is used for transactions that may have used the coordinator optimisation.
          */
-        CommittedOrNotFastPathCommit(SHARD, SHARD, SaveStatus.Committed, NotDurable, null),
+        CommittedOrNotFastPathCommit(SHARD, SHARD, SaveStatus.Committed, None, null),
 
         /**
          * Wait for the transaction to be Committed.
@@ -103,29 +103,29 @@ public interface ProgressLog
          * This BlockedUntil is useful for remote listeners performing recovery that are waiting for transactions in
          * the Accept phase that need to reach Committed to advance the recovery machine.
          */
-        HasCommittedDeps(SHARD, SHARD, SaveStatus.Committed, NotDurable),
+        HasCommittedDeps(SHARD, SHARD, SaveStatus.Committed, None),
 
         /**
          * Wait for the transaction's dependencies to stabilise. This provides enough information
          * to locally execute a transaction (if all the dependencies have applied).
          */
-        HasStableDeps(SHARD, SHARD, SaveStatus.Stable, NotDurable),
+        HasStableDeps(SHARD, SHARD, SaveStatus.Stable, None),
 
         /**
          * Wait for all shards to be ReadyToExecute so that a recovery coordinator may make progress
          */
-        CanCoordinateExecution(SHARD, SHARD, SaveStatus.ReadyToExecute, NotDurable),
+        CanCoordinateExecution(SHARD, SHARD, SaveStatus.ReadyToExecute, None),
 
         /**
          * Wait for the transaction to have enough information to apply.
          * It does not need to be ready to apply yet.
          */
-        CanApply(HOME, SHARD, SaveStatus.PreApplied, Majority),
+        CanApply(HOME, SHARD, SaveStatus.PreApplied, Quorum),
 
         /**
          * Wait for the transaction to be applied.
          */
-        IsApplied(SHARD, SHARD, SaveStatus.Applied, NotDurable);
+        IsApplied(SHARD, SHARD, SaveStatus.Applied, None);
 
         public enum Query { HOME, SHARD }
 
@@ -137,20 +137,20 @@ public interface ProgressLog
         public final @Nullable Predicate<SaveStatus> additionallyUnblockedBy;
         // have remote listeners wait for the Durability before responding
         // this permits us to wait for only the home shard for CanApply
-        public final Durability remoteDurability;
+        public final HasOutcome remoteOutcomeDurability;
 
-        BlockedUntil(Query waitsOn, Query fetchFrom, SaveStatus unblockedFrom, Durability remoteDurability)
+        BlockedUntil(Query waitsOn, Query fetchFrom, SaveStatus unblockedFrom, HasOutcome remoteOutcomeDurability)
         {
-            this(waitsOn, fetchFrom, unblockedFrom, remoteDurability, null);
+            this(waitsOn, fetchFrom, unblockedFrom, remoteOutcomeDurability, null);
         }
 
-        BlockedUntil(Query waitsOn, Query fetchFrom, SaveStatus unblockedFrom, Durability remoteDurability, @Nullable Predicate<SaveStatus> additionallyUnblockedBy)
+        BlockedUntil(Query waitsOn, Query fetchFrom, SaveStatus unblockedFrom, HasOutcome remoteOutcomeDurability, @Nullable Predicate<SaveStatus> additionallyUnblockedBy)
         {
             this.waitsOn = waitsOn;
             this.fetchFrom = fetchFrom;
             this.unblockedFrom = unblockedFrom;
             this.additionallyUnblockedBy = additionallyUnblockedBy;
-            this.remoteDurability = remoteDurability;
+            this.remoteOutcomeDurability = remoteOutcomeDurability;
         }
 
         public long fetchEpoch(TxnId txnId, Timestamp executeAt)
@@ -180,11 +180,6 @@ public interface ProgressLog
      * Record an updated local status for the transaction, to clear any waiting state it satisfies.
      */
     void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force);
-
-    /**
-     * Record a remote notification that the command has been decided, so does not need to be recovered until ready to execute.
-     */
-    void decided(SafeCommandStore safeStore, TxnId txnId);
 
     /**
      * Process a remote asynchronous callback.
@@ -242,7 +237,7 @@ public interface ProgressLog
     class NoOpProgressLog implements ProgressLog
     {
         @Override public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force) {}
-        @Override public void decided(SafeCommandStore safeStore, TxnId txnId) {}
+
         @Override public void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from) {}
         @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants participants) {}
         @Override public void invalidIfUncommitted(TxnId txnId) {}

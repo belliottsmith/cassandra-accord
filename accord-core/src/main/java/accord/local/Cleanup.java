@@ -26,10 +26,10 @@ import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
-import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.Cleanup.Input.FULL;
@@ -50,9 +50,8 @@ import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.SaveStatus.Vestigial;
-import static accord.primitives.Status.Durability.MajorityOrInvalidated;
-import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Status.Durability.UniversalOrInvalidated;
+import static accord.primitives.Status.Durability.HasOutcome.None;
+import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Status.Truncated;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
@@ -200,36 +199,24 @@ public enum Cleanup
         if (!redundant.all(LOCALLY_DURABLE_TO_DATA_STORE))
             return truncateWithOutcome(txnId, input, redundant, min);
 
+        HasOutcome test = durability.allShards();
         if (saveStatus.compareTo(Vestigial) >= 0)
         {
             // we can't use durability from an Invalidated record to decide if we can erase/expunge,
             // as we don't know that this has been persisted at all shards.
             // Similarly, vestigial/erased records don't know their etymology, and may derive from Invalidate
-            durability = NotDurable;
+            test = None;
         }
 
-        Durability test;
-        if (durability.compareTo(UniversalOrInvalidated) >= 0) test = durability;
-        else test = Durability.max(durability, durableBefore.min(txnId, participants.route()));
+        if (test != Universal)
+            test = Durability.HasOutcome.max(test, durableBefore.min(txnId, participants.route()));
 
-        switch (test)
-        {
-            default: throw new UnhandledEnum(durability);
-            case Local:
-            case NotDurable:
-            case ShardUniversal:
-                // TODO (required): consider how we guarantee not to break recovery of other shards if a majority on this shard are PRE_BOOTSTRAP
-                //   (if the condition is false and we fall through to removing Outcome)
-            case MajorityOrInvalidated:
-            case Majority:
-                return truncateWithOutcome(txnId, input, redundant, min);
+        if (test != Universal)
+            return truncateWithOutcome(txnId, input, redundant, min);
 
-            case UniversalOrInvalidated:
-            case Universal:
-                if (redundant.all(GC_BEFORE))
-                    return erase(txnId, min);
-                return truncate(txnId, min);
-        }
+        if (redundant.all(GC_BEFORE))
+            return erase(txnId, min);
+        return truncate(txnId, min);
     }
 
     private static Cleanup cleanupWithoutFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
@@ -265,7 +252,7 @@ public enum Cleanup
         if (ownStatus.any(LOCALLY_APPLIED))
             return invalidate(txnId);
 
-        // TODO (desired): safe to use MAJORITY_APPLIED, LOCALLY_REDUNDANT?
+        // TODO (desired): safe to use QUORUM_APPLIED, LOCALLY_REDUNDANT?
         // TODO (required): can we guarantee we will always eventually obtain a covering route if others are garbage collecting?
         if (isCoveringRoute && ownStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
             return vestigial(txnId);
@@ -276,7 +263,7 @@ public enum Cleanup
     private static boolean expunge(TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         // since we cannot guarantee to witness participants for all records, we must use the global durableBefore bounds
-        if (txnId.is(Any) && durableBefore.min(txnId).compareTo(MajorityOrInvalidated) < 0)
+        if (txnId.is(Any) && !durableBefore.min(txnId).isDurable())
             return false;
 
         TxnId minGcBefore = redundantBefore.minGcBefore();

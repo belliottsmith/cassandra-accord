@@ -48,8 +48,10 @@ import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
 import static accord.local.CommandSummaries.ComputeIsDep.EITHER;
+import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.local.CommandSummaries.TestStartedAt.ANY;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
@@ -62,7 +64,6 @@ import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.Phase;
 import static accord.primitives.Status.PreAccepted;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 
@@ -146,7 +147,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         boolean supersedingRejects;
         Deps earlierNoWait, earlierWait;
         Deps laterCoordRejects;
-        if (command.hasBeen(AcceptedMedium) || txnId.is(ExclusiveSyncPoint))
+        if (command.hasBeen(AcceptedMedium) || txnId.isSyncPoint())
         {
             supersedingRejects = !command.hasBeen(AcceptedMedium);
             earlierNoWait = earlierWait = Deps.NONE;
@@ -230,7 +231,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     @Override
     public LoadKeysFor loadKeysFor()
     {
-        if (txnId.is(ExclusiveSyncPoint))
+        if (txnId.isSyncPoint())
             return LoadKeysFor.READ_WRITE;
         return LoadKeysFor.RECOVERY;
     }
@@ -275,7 +276,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
 
             if (c < 0)
             {
-                if (testTxnId.is(ExclusiveSyncPoint) && testTxnId.hlc() > txnId.hlc() && txnId.is(Write))
+                if (testTxnId.isSyncPoint() && testTxnId.hlc() > txnId.hlc() && txnId.is(Write))
                 {
                     // TODO (required): define our invariants and make sure they're enforce elsewhere.
                     //   Specifically, consider whether truncation/GC can lead to erroneous answers here.
@@ -305,11 +306,12 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
                 switch (dep)
                 {
                     default: throw new UnhandledEnum(dep);
-                    case IS_STABLE_DEP:
-                        ensureEarlierNoWait().add(keyOrRange, testTxnId);
+                    case IS_PROPOSED_OR_STABLE_DEP:
+                        if (status == STABLE || status == APPLIED)
+                            ensureEarlierNoWait().add(keyOrRange, testTxnId);
                         break;
 
-                    case IS_NOT_STABLE_DEP:
+                    case IS_NOT_PROPOSED_OR_STABLE_DEP:
                         /*
                          * The idea here is to discover those transactions that have been decided to execute after us
                          * and did not witness us as part of their pre-accept or accept round, as this means that we CANNOT have
@@ -347,7 +349,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
             {
                 switch (dep)
                 {
-                    case IS_NOT_STABLE_DEP:
+                    case IS_NOT_PROPOSED_OR_STABLE_DEP:
                         /*
                          * The idea here is to discover those transactions that were started after us and have been Accepted
                          * and did not witness us as part of their pre-accept round, as this means that we CANNOT have taken
@@ -359,7 +361,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
 
                     case NOT_ELIGIBLE:
                         // the command doesn't have any coordinator deps; or we are its coordinator and cannot commit on the privileged fast path
-                    case IS_STABLE_DEP:
+                    case IS_PROPOSED_OR_STABLE_DEP:
                         // the command has been committed with stable deps that witness us, so we're a durable dependency
                     case IS_COORD_DEP:
                         // the original coordinator witnessed us, so if it takes the fast or medium path we will be a durable dependency

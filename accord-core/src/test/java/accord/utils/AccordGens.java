@@ -600,6 +600,7 @@ public class AccordGens
             }
             break;
             case ExclusiveSyncPoint:
+            case VisibilitySyncPoint:
                 //TODO (coverage, now):
                 keyDepsGen = i -> KeyDeps.NONE;
                 rangeDepsGen = i -> RangeDeps.NONE;

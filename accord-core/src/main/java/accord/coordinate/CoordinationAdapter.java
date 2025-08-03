@@ -59,7 +59,6 @@ import static accord.local.durability.DurabilityService.SyncRemote.NoRemote;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.messages.Apply.Kind.Minimal;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 public interface CoordinationAdapter<R>
 {
@@ -85,7 +84,7 @@ public interface CoordinationAdapter<R>
         @Override
         public <R> CoordinationAdapter<R> get(TxnId txnId, Kind kind)
         {
-            if (txnId.is(ExclusiveSyncPoint))
+            if (txnId.isSyncPoint())
             {
                 // callback types are different, and we pass through the recovery adapter for sync points so should not invoke Continue
                 Invariants.require(kind == Recovery);

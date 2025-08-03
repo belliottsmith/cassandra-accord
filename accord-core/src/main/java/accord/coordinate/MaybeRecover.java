@@ -35,6 +35,7 @@ import accord.utils.UnhandledEnum;
 import static accord.api.TraceEventType.RECOVER;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
+import static accord.primitives.Known.Outcome.Unknown;
 import static accord.primitives.WithQuorum.HasQuorum;
 
 /**
@@ -54,7 +55,6 @@ public class MaybeRecover extends CheckShards<Route<?>>
         this.prevProgress = prevProgress;
         this.callback = callback;
         this.reportTo = reportTo;
-        Invariants.expect(!prevProgress.durability.isDurableOrInvalidated());
     }
 
     public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
@@ -67,15 +67,14 @@ public class MaybeRecover extends CheckShards<Route<?>>
     @Override
     protected boolean isSufficient(CheckStatusOk ok)
     {
-        // We don't accept a single truncated response - must have a quorum so we can make inferences about invalidation
-        return !ok.map.hasTruncated() && (hasMadeProgress(ok) || ok.durability.isDurableOrInvalidated());
+        // We don't accept a single response if any are truncated - must have a quorum so we can make inferences about invalidation
+        return !merged.map.hasTruncated() && hasMadeProgress(ok);
     }
 
     public boolean hasMadeProgress(CheckStatusOk ok)
     {
         // TODO (required): if Ballot.hlc is stale enough then preempt; also do not query isCoordinating, query directly the node that owns the ballot (or TxnId if Ballot is ZERO)
-        return ok != null && (ok.isCoordinating
-                              || ok.toProgressToken().compareTo(prevProgress) > 0);
+        return ok.durability.isDurable() || ok.isCoordinating || ok.toProgressToken().compareTo(prevProgress) > 0;
     }
 
     @Override
@@ -104,7 +103,6 @@ public class MaybeRecover extends CheckShards<Route<?>>
                 default: throw new UnhandledEnum(known.outcome());
                 case Unknown:
                 {
-
                     // ErasedOrInvalidated takes Unknown, and so permits invalidation to be initiated.
                     // This might prima facie seem unsafe, as ErasedOrInvalidated might mean the command
                     // has been executed and erased, in which case it is not safe to invalidate.
@@ -128,6 +126,17 @@ public class MaybeRecover extends CheckShards<Route<?>>
                         tracing.trace(null, "MaybeRecover found quorum of Unknown that did not permit invalidation; falling through.");
                     // fall through otherwise to recovery
                 }
+                case WasApply:
+                {
+                    if (merged.durability.isDurable() && full.minMaxKnown(someRoute.homeKey()).outcome().isOrWasApply())
+                    {
+                        ProgressToken progressToken = full.toProgressToken();
+                        if (tracing != null)
+                            tracing.trace(null, "MaybeRecover found %s which need not be recovered; reporting %s", known.outcome(), progressToken);
+                        callback.accept(progressToken, null);
+                        break;
+                    }
+                }
                 case Apply:
                 {
                     // we have included the home key, and one that witnessed the definition has responded, so it should also know the full route
@@ -149,10 +158,17 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     }
                     break;
                 }
-                case WasApply:
                 case Erased:
                 {
-                    // TODO (required): if we're home replica, don't want to cancel coordination without either invalidating or applying unless we're stale
+                    if (full.minMaxKnown(someRoute.homeKey()).outcome() == Unknown)
+                    {
+                        if (previouslyKnownToBeInvalidIf != full.invalidIf)
+                        {
+                            MaybeRecover.maybeRecover(node, txnId, full.invalidIf, someRoute, full.toProgressToken(), reportTo, callback);
+                            break;
+                        }
+                        else Invariants.expect(false, "Expect home shard to know outcome before completing recovery");
+                    }
                     ProgressToken progressToken = full.toProgressToken();
                     if (tracing != null)
                         tracing.trace(null, "MaybeRecover found %s which cannot be recovered; reporting %s", known.outcome(), progressToken);

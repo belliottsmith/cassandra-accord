@@ -64,10 +64,11 @@ public class Topology
     public static final long EMPTY_EPOCH = 0;
     private static final int[] EMPTY_SUBSET = new int[0];
     public static final SortedArrayList<Id> NO_IDS = new SortedArrayList<>(new Id[0]);
-    public static final Topology EMPTY = new Topology(null, EMPTY_EPOCH, new Shard[0], Ranges.EMPTY, NO_IDS, NO_IDS, new Int2ObjectHashMap<>(0, 0.9f), Ranges.EMPTY, EMPTY_SUBSET);
+    public static final Topology EMPTY = new Topology(null, EMPTY_EPOCH, new Shard[0], Ranges.EMPTY, NO_IDS, NO_IDS, NO_IDS, new Int2ObjectHashMap<>(0, 0.9f), Ranges.EMPTY, EMPTY_SUBSET);
 
     final long epoch;
-    final SortedArrayList<Id> staleNodes;
+    final SortedArrayList<Id> removedIds;
+    final SortedArrayList<Id> staleIds;
     final Shard[] shards;
     final Ranges ranges;
 
@@ -136,14 +137,15 @@ public class Topology
     @VisibleForTesting
     public Topology(long epoch, Shard... shards)
     {
-        this(epoch, NO_IDS, shards);
+        this(epoch, NO_IDS, NO_IDS, shards);
     }
     
-    public Topology(long epoch, SortedArrayList<Id> staleNodes, Shard... shards)
+    public Topology(long epoch, SortedArrayList<Id> removedIds, SortedArrayList<Id> staleIds, Shard... shards)
     {
         this.global = null;
         this.epoch = epoch;
-        this.staleNodes = staleNodes;
+        this.removedIds = removedIds;
+        this.staleIds = staleIds;
         this.ranges = Ranges.ofSortedAndDeoverlapped(Arrays.stream(shards).map(shard -> shard.range).toArray(Range[]::new));
         this.shards = shards;
         this.subsetOfRanges = ranges;
@@ -169,11 +171,12 @@ public class Topology
     }
 
     @VisibleForTesting
-    Topology(@Nullable Topology global, long epoch, Shard[] shards, Ranges ranges, SortedArrayList<Id> staleNodes, SortedArrayList<Id> nodeIds, Int2ObjectHashMap<NodeInfo> nodeById, Ranges subsetOfRanges, int[] supersetIndexes)
+    Topology(@Nullable Topology global, long epoch, Shard[] shards, Ranges ranges, SortedArrayList<Id> removedIds, SortedArrayList<Id> staleIds, SortedArrayList<Id> nodeIds, Int2ObjectHashMap<NodeInfo> nodeById, Ranges subsetOfRanges, int[] supersetIndexes)
     {
         this.global = global;
         this.epoch = epoch;
-        this.staleNodes = staleNodes;
+        this.removedIds = removedIds;
+        this.staleIds = staleIds;
         this.shards = shards;
         this.ranges = ranges;
         this.nodeIds = nodeIds;
@@ -185,7 +188,7 @@ public class Topology
     @VisibleForTesting
     public Topology withEpoch(long epoch)
     {
-        return new Topology(global, epoch, shards, ranges, staleNodes, nodeIds, nodeLookup, subsetOfRanges, supersetIndexes);
+        return new Topology(global, epoch, shards, ranges, removedIds, staleIds, nodeIds, nodeLookup, subsetOfRanges, supersetIndexes);
     }
 
     public Topology global()
@@ -201,11 +204,12 @@ public class Topology
 
     public boolean isEquivalent(Topology topology)
     {
-        if (!staleNodes.equals(topology.staleNodes))
+        if (!staleIds.equals(topology.staleIds) || !removedIds.equals(topology.removedIds))
             return false;
 
         if (shards.length != topology.shards.length)
             return false;
+
         for (int i = 0; i < shards.length; i++)
         {
             if (!shards[i].equals(topology.shards[i]))
@@ -217,7 +221,7 @@ public class Topology
 
     public Topology cloneEquivalentWithEpoch(long epoch)
     {
-        return new Topology(epoch, staleNodes, shards);
+        return new Topology(epoch, removedIds, staleIds, shards);
     }
 
     @Override
@@ -245,12 +249,12 @@ public class Topology
         return result;
     }
 
-    private static Topology select(long epoch, SortedArrayList<Id> staleIds, Shard[] shards, int[] indexes)
+    private static Topology select(long epoch, SortedArrayList<Id> removedIds, SortedArrayList<Id> staleIds, Shard[] shards, int[] indexes)
     {
         Shard[] subset = new Shard[indexes.length];
         for (int i = 0; i < indexes.length; i++)
             subset[i] = shards[indexes[i]];
-        return new Topology(epoch, staleIds, subset);
+        return new Topology(epoch, removedIds, staleIds, subset);
     }
 
     public boolean isEmpty()
@@ -275,12 +279,12 @@ public class Topology
             return Topology.EMPTY;
 
         SortedArrayList<Id> nodeIds = new SortedArrayList<>(new Id[] { node });
-        return new Topology(global(), epoch, shards, ranges, staleNodes, nodeIds, nodeLookup, info.ranges, info.supersetIndexes);
+        return new Topology(global(), epoch, shards, ranges, removedIds, staleIds, nodeIds, nodeLookup, info.ranges, info.supersetIndexes);
     }
 
     public Topology trim()
     {
-        return select(epoch, staleNodes, shards, this.supersetIndexes);
+        return select(epoch, removedIds, staleIds, shards, this.supersetIndexes);
     }
 
     public Ranges rangesForNode(Id node)
@@ -362,7 +366,7 @@ public class Topology
             subsetOfRanges = Ranges.ofSortedAndDeoverlapped(ranges);
         }
 
-        return new Topology(global(), epoch, this.shards, this.ranges, staleNodes, keepIds, nodeLookup, subsetOfRanges, supersetIndexes);
+        return new Topology(global(), epoch, this.shards, this.ranges, removedIds, staleIds, keepIds, nodeLookup, subsetOfRanges, supersetIndexes);
     }
 
     @VisibleForTesting
@@ -394,7 +398,7 @@ public class Topology
         for (int i = nodes.firstSetBit() ; i >= 0 ; i = nodes.nextSetBit(i + 1, -1))
             nodeIds[count++] = this.nodeIds.get(i);
 
-        return new Topology(global(), epoch, shards, ranges, staleNodes, new SortedArrayList<>(nodeIds), nodeLookup, rangeSubset, newSubset);
+        return new Topology(global(), epoch, shards, ranges, removedIds, staleIds, new SortedArrayList<>(nodeIds), nodeLookup, rangeSubset, newSubset);
     }
 
     private int[] subsetFor(Routables<?> select, boolean permitMissing)
@@ -666,9 +670,14 @@ public class Topology
 
     public SortedArrayList<Id> staleIds()
     {
-        return staleNodes;
+        return staleIds;
     }
     
+    public SortedArrayList<Id> removedIds()
+    {
+        return staleIds;
+    }
+
     public Shard[] unsafeGetShards()
     {
         return shards;

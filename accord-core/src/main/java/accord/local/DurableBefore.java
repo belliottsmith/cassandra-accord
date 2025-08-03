@@ -24,8 +24,7 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.primitives.AbstractRanges;
-import accord.primitives.Participants;
-import accord.primitives.Status.Durability;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
@@ -35,9 +34,9 @@ import accord.utils.ReducingRangeMap;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import static accord.primitives.Status.Durability.MajorityOrInvalidated;
-import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Status.Durability.UniversalOrInvalidated;
+import static accord.primitives.Status.Durability.HasOutcome.None;
+import static accord.primitives.Status.Durability.HasOutcome.Quorum;
+import static accord.primitives.Status.Durability.HasOutcome.Universal;
 
 public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 {
@@ -59,13 +58,13 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         public static final Entry MAX = new Entry(TxnId.MAX, TxnId.MAX);
         public static final Entry NONE = new Entry(TxnId.NONE, TxnId.NONE);
 
-        public final @Nonnull TxnId majorityBefore, universalBefore;
+        public final @Nonnull TxnId quorumBefore, universalBefore;
 
-        public Entry(@Nonnull TxnId majority, @Nonnull TxnId universalBefore)
+        public Entry(@Nonnull TxnId quorum, @Nonnull TxnId universal)
         {
-            Invariants.requireArgument(majority.compareTo(universalBefore) >= 0, "majority %s < universal %s", majority, universalBefore);
-            this.majorityBefore = majority;
-            this.universalBefore = universalBefore;
+            Invariants.requireArgument(quorum.compareTo(universal) >= 0, "quorum %s < universal %s", quorum, universal);
+            this.quorumBefore = quorum;
+            this.universalBefore = universal;
         }
 
         public static Entry max(Entry a, Entry b)
@@ -80,33 +79,33 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 
         private static Entry reduce(Entry a, Entry b, BiFunction<TxnId, TxnId, TxnId> reduce)
         {
-            TxnId majority = reduce.apply(a.majorityBefore, b.majorityBefore);
+            TxnId majority = reduce.apply(a.quorumBefore, b.quorumBefore);
             TxnId universal = reduce.apply(a.universalBefore, b.universalBefore);
 
-            if (majority == a.majorityBefore && universal == a.universalBefore)
+            if (majority == a.quorumBefore && universal == a.universalBefore)
                 return a;
-            if (majority.equals(b.majorityBefore) && universal.equals(b.universalBefore))
+            if (majority.equals(b.quorumBefore) && universal.equals(b.universalBefore))
                 return b;
 
             return new Entry(majority, universal);
         }
 
-        public Durability get(TxnId txnId)
+        public HasOutcome get(TxnId txnId)
         {
-            if (txnId.compareTo(majorityBefore) < 0)
-                return txnId.compareTo(universalBefore) < 0 ? UniversalOrInvalidated : MajorityOrInvalidated;
-            return NotDurable;
+            if (txnId.compareTo(quorumBefore) < 0)
+                return txnId.compareTo(universalBefore) < 0 ? Universal : Quorum;
+            return None;
         }
 
-        static Durability mergeMin(Entry entry, @Nullable Durability prev, TxnId txnId)
+        static HasOutcome mergeMin(Entry entry, @Nullable HasOutcome prev, TxnId txnId)
         {
-            Durability next = entry.get(txnId);
+            HasOutcome next = entry.get(txnId);
             return prev != null && prev.compareTo(next) <= 0 ? prev : next;
         }
 
-        static Durability mergeMax(Entry entry, Durability prev, TxnId txnId)
+        static HasOutcome mergeMax(Entry entry, HasOutcome prev, TxnId txnId)
         {
-            Durability next = entry.get(txnId);
+            HasOutcome next = entry.get(txnId);
             return prev != null && prev.compareTo(next) >= 0 ? prev : next;
         }
 
@@ -117,14 +116,14 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 
         public boolean equals(Entry that)
         {
-            return    this.majorityBefore.equals(that.majorityBefore)
+            return    this.quorumBefore.equals(that.quorumBefore)
                    && this.universalBefore.equals(that.universalBefore);
         }
 
         @Override
         public String toString()
         {
-            return "(majority=" + majorityBefore + ",universal=" + universalBefore + ")";
+            return "(majority=" + quorumBefore + ",universal=" + universalBefore + ")";
         }
     }
 
@@ -172,9 +171,9 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         return ReducingIntervalMap.merge(a, b, DurableBefore.Entry::max, Builder::new);
     }
 
-    public Durability min(TxnId txnId, Unseekables<?> unseekables)
+    public HasOutcome min(TxnId txnId, Unseekables<?> unseekables)
     {
-        return notDurableIfNull(foldlWithDefault(unseekables, Entry::mergeMin, Entry.NONE, null, txnId, test -> test == NotDurable));
+        return notDurableIfNull(foldlWithDefault(unseekables, Entry::mergeMin, Entry.NONE, null, txnId, test -> test == None));
     }
 
     public Entry minEntry(Unseekables<?> unseekables)
@@ -182,44 +181,39 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         return foldlWithDefault(unseekables, Entry::min, Entry.NONE, Entry.MAX);
     }
 
-    public Durability max(TxnId txnId, Unseekables<?> unseekables)
+    public HasOutcome max(TxnId txnId, Unseekables<?> unseekables)
     {
-        return notDurableIfNull(foldl(unseekables, Entry::mergeMax, null, txnId, test -> test == UniversalOrInvalidated));
+        return notDurableIfNull(foldl(unseekables, Entry::mergeMax, null, txnId, test -> test == Universal));
     }
 
-    public Durability get(TxnId txnId, RoutingKey participant)
+    public HasOutcome get(TxnId txnId, RoutingKey participant)
     {
         DurableBefore.Entry entry = get(participant);
-        return entry == null ? NotDurable : entry.get(txnId);
+        return entry == null ? None : entry.get(txnId);
     }
 
     public boolean isUniversal(TxnId txnId, RoutingKey participant)
     {
-        return get(txnId, participant) == UniversalOrInvalidated;
+        return get(txnId, participant) == Universal;
     }
 
-    public boolean isSomeShardDurable(TxnId txnId, Participants<?> participants, Durability durability)
-    {
-        return max(txnId, participants).compareTo(durability) >= 0;
-    }
-
-    public Durability min(TxnId txnId)
+    public HasOutcome min(TxnId txnId)
     {
         if (min.universalBefore.compareTo(txnId) > 0)
-            return UniversalOrInvalidated;
-        if (min.majorityBefore.compareTo(txnId) > 0)
-            return MajorityOrInvalidated;
-        return NotDurable;
+            return Universal;
+        if (min.quorumBefore.compareTo(txnId) > 0)
+            return Quorum;
+        return None;
     }
 
     public long maxEpoch()
     {
-        return foldl((e, v) -> TxnId.max(v, TxnId.max(e.majorityBefore, e.universalBefore)), TxnId.NONE, i -> false).epoch();
+        return foldl((e, v) -> TxnId.max(v, TxnId.max(e.quorumBefore, e.universalBefore)), TxnId.NONE, i -> false).epoch();
     }
 
-    private static Durability notDurableIfNull(Durability status)
+    private static HasOutcome notDurableIfNull(HasOutcome status)
     {
-        return status == null ? NotDurable : status;
+        return status == null ? None : status;
     }
 
     static class Builder extends AbstractBoundariesBuilder<RoutingKey, Entry, DurableBefore>

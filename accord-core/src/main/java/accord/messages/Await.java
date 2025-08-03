@@ -161,7 +161,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             RemoteListeners.Registration registered = asyncRegistration;
             if (registered == null)
             {
-                registered = node.remoteListeners().register(txnId, blockedUntil.unblockedFrom, blockedUntil.remoteDurability, replyTo, callbackId);
+                registered = node.remoteListeners().register(txnId, blockedUntil.unblockedFrom, blockedUntil.remoteOutcomeDurability, replyTo, callbackId);
                 if (!registrationUpdater.compareAndSet(this, null, registered))
                     registered = asyncRegistration;
             }

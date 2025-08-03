@@ -57,7 +57,7 @@ import static accord.primitives.Known.Outcome.Apply;
 import static accord.primitives.ProgressToken.APPLIED;
 import static accord.primitives.ProgressToken.INVALIDATED;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
-import static accord.primitives.Status.Durability.Majority;
+import static accord.primitives.Status.Durability.AllQuorums;
 import static accord.topology.Topologies.SelectNodeOwnership.SLICE;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
@@ -246,7 +246,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             if (tracing != null)
                                 tracing.trace(null, "RecoverWithRoute found Apply truncated at all shards; advancing Durability to at least Majority");
 
-                            propagate = full.merge(Majority);
+                            propagate = full.merge(AllQuorums);
                         }
                     }
                     else

@@ -133,6 +133,7 @@ public class Known
     {
         return a == null | b == null ? a == null ? b : a : a.min(b);
     }
+
     public Known min(Known that)
     {
         Invariants.requireArgument(compatibleWith(that));
