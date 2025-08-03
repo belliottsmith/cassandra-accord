@@ -21,7 +21,7 @@ package accord.messages;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.AbstractRanges;
-import accord.primitives.Status.Durability;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.SyncPoint;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -30,20 +30,22 @@ import accord.utils.async.Cancellable;
 
 import static accord.messages.MessageType.StandardMessage.SET_SHARD_DURABLE_REQ;
 import static accord.messages.SimpleReply.Ok;
+import static accord.primitives.Status.Durability.HasOutcome.Quorum;
+import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 
 public class SetShardDurable extends AbstractRequest<SimpleReply>
         implements Request, PreLoadContext, MapReduceConsume<SafeCommandStore, SimpleReply>
 {
     public final SyncPoint exclusiveSyncPoint;
-    public final Durability durability;
+    public final HasOutcome durability;
 
-    public SetShardDurable(SyncPoint exclusiveSyncPoint, Durability durability)
+    public SetShardDurable(SyncPoint exclusiveSyncPoint, HasOutcome durability)
     {
         super(exclusiveSyncPoint.syncId);
         this.exclusiveSyncPoint = exclusiveSyncPoint;
         this.durability = durability;
-        Invariants.require(durability.compareTo(Durability.MajorityOrInvalidated) >= 0);
+        Invariants.require(durability.compareTo(Quorum) >= 0);
     }
 
     private TxnId syncIdWithFlags()
@@ -54,9 +56,9 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
     @Override
     public Cancellable submit()
     {
-        Invariants.require(durability.compareTo(Durability.MajorityOrInvalidated) >= 0);
+        Invariants.require(durability.compareTo(Quorum) >= 0);
         TxnId syncIdWithFlags = syncIdWithFlags();
-        node.markDurable(exclusiveSyncPoint.route.toRanges(), syncIdWithFlags, durability.compareTo(Durability.UniversalOrInvalidated) >= 0 ? syncIdWithFlags : TxnId.NONE)
+        node.markDurable(exclusiveSyncPoint.route.toRanges(), syncIdWithFlags, durability.compareTo(Universal) >= 0 ? syncIdWithFlags : TxnId.NONE)
         .invoke((success, fail) -> {
             if (fail != null) node.reply(replyTo, replyContext, null, fail);
             else node.mapReduceConsumeLocal(this, exclusiveSyncPoint.route, waitForEpoch(), waitForEpoch(), this);

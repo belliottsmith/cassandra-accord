@@ -79,8 +79,8 @@ import accord.primitives.Routable.Domain;
 import accord.primitives.RoutableKey;
 import accord.primitives.Route;
 import accord.primitives.Status;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -107,12 +107,11 @@ import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
+import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.primitives.Txn.Kind.EphemeralRead;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
 import static java.lang.String.format;
 
@@ -378,7 +377,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             Cleanup cleanup = Cleanup.shouldCleanup(FULL, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
             Invariants.require(command.hasBeen(Applied)
                                || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
-                               || (durableBefore().min(txnId) != UniversalOrInvalidated &&
+                               || (durableBefore().min(txnId) != Universal &&
                                       ((command.participants().stillExecutes() != null && command.participants().stillExecutes().isEmpty())
                                       || !Route.isFullRoute(command.route()))));
         }
@@ -386,10 +385,10 @@ public abstract class InMemoryCommandStore extends CommandStore
     }
 
     @Override
-    public void markShardDurable(SafeCommandStore safeStore, TxnId syncId, Ranges ranges, Status.Durability durability)
+    public void markShardDurable(SafeCommandStore safeStore, TxnId syncId, Ranges ranges, HasOutcome level)
     {
-        super.markShardDurable(safeStore, syncId, ranges, durability);
-        if (durability.compareTo(UniversalOrInvalidated) >= 0)
+        super.markShardDurable(safeStore, syncId, ranges, level);
+        if (level == Universal)
             markShardDurable(syncId, ranges);
     }
 
@@ -890,7 +889,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         public void updateExclusiveSyncPoint(Command prev, Command updated, boolean force)
         {
             super.updateExclusiveSyncPoint(prev, updated, force);
-            if (updated.txnId().kind() != Txn.Kind.ExclusiveSyncPoint || updated.txnId().domain() != Range || !updated.hasBeen(Applied) || (prev.hasBeen(Applied) && !force) || updated.hasBeen(Truncated)) return;
+            if (!updated.txnId().isSyncPoint() || updated.txnId().domain() != Range || !updated.hasBeen(Applied) || (prev.hasBeen(Applied) && !force) || updated.hasBeen(Truncated)) return;
 
             Participants<?> covering = updated.participants().touches();
             for (Map.Entry<TxnId, GlobalCommand> entry : commandStore().commands.headMap(updated.txnId(), false).entrySet())
@@ -900,7 +899,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (!command.hasBeen(Committed)) continue;
                 if (command.hasBeen(Applied)) continue;
                 if (txnId.is(EphemeralRead)) continue;
-                Participants<?> intersecting = (txnId.is(ExclusiveSyncPoint) ? command.participants().owns(): command.participants().stillWaitsOn()).intersecting(covering, Minimal);
+                Participants<?> intersecting = (txnId.isSyncPoint() ? command.participants().owns(): command.participants().stillWaitsOn()).intersecting(covering, Minimal);
                 if (intersecting.isEmpty()) continue;
                 if (commandStore().unsafeGetRedundantBefore().locallyDefunct(command.txnId(), intersecting) == ALL) continue;
                 if (txnId.is(Key))

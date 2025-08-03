@@ -23,7 +23,7 @@ import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
-import accord.primitives.Status.Durability;
+import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.TxnId;
 
 /**
@@ -54,7 +54,7 @@ public interface RemoteListeners
     /**
      * CallbackId must be a non-negative integer
      */
-    Registration register(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId);
+    Registration register(TxnId txnId, SaveStatus awaitSaveStatus, HasOutcome awaitOutcomeDurability, Node.Id listener, int callbackId);
     void notify(SafeCommandStore safeStore, SafeCommand safeCommand, Command prev);
 
     class NoOpRemoteListeners implements RemoteListeners
@@ -65,7 +65,7 @@ public interface RemoteListeners
             @Override public int done() { return 0; }
         }
 
-        @Override public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId) { return new NoOpRegistration();}
+        @Override public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, HasOutcome awaitOutcomeDurability, Node.Id listener, int callbackId) { return new NoOpRegistration();}
         @Override public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, Command prev) {}
     }
 }

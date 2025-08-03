@@ -88,9 +88,16 @@ public interface Topologies extends TopologySorter
      */
     SortedArrayList<Id> nodes();
 
-    default SortedArrayList<Id> staleNodes()
+    default SortedArrayList<Id> staleOrRemovedIds()
     {
-        return current().staleNodes;
+        SortedArrayList<Id> cur = current().staleIds;
+        for (int i = size() - 1 ; i >= 1 ; --i)
+        {
+            Topology topology = get(i);
+            if (!topology.removedIds.isEmpty())
+                cur = cur.with(topology.removedIds);
+        }
+        return cur;
     }
 
     Ranges computeRangesForNode(Id node);

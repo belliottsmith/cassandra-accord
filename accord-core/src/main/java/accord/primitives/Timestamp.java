@@ -31,8 +31,9 @@ import static accord.primitives.Timestamp.Flag.UNSTABLE;
  * TxnId flag bits:
  *      [0..1)    - TxnId Domain
  *      [1..4)    - TxnId Kind
- *      [4..6)    - TxnId uses FastPath
- *      [6..8)    - TxnId uses Medium Path
+ *      [4..5)    - TxnId Cardinality
+ *      [5..7)    - TxnId uses FastPath
+ *      [7..8)    - TxnId uses Medium Path
  *      [11..12)  - TxnId is unstable - used by Dep handling only
  *
  * Timestamp flag bits
@@ -137,6 +138,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         Invariants.requireArgument(hlc >= 0, "hlc must be positive or zero; given %d", hlc);
         Invariants.requireArgument(epoch <= MAX_EPOCH, "epoch %d > MAX_EPOCH %d", epoch, MAX_EPOCH);
         Invariants.requireArgument(flags <= MAX_FLAGS, "flags %d > MAX_FLAGS %d", flags, MAX_FLAGS);
+        Invariants.requireArgument(flags >= 0, "flags %d < 0", flags);
         this.msb = epochMsb(epoch) | hlcMsb(hlc);
         this.lsb = hlcLsb(hlc) | flags;
         this.node = node;
@@ -166,6 +168,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     Timestamp(Timestamp copy, int flags)
     {
         Invariants.requireArgument(flags <= MAX_FLAGS);
+        Invariants.requireArgument(flags >= 0);
         this.msb = copy.msb;
         this.lsb = notFlags(copy.lsb) | flags;
         this.node = copy.node;

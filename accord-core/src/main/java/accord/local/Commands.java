@@ -26,6 +26,7 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.ProtocolModifiers.Toggles.DependencyElision;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
@@ -61,7 +62,9 @@ import accord.utils.async.AsyncChains;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
+import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
+import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_PREAPPLIED;
+import static accord.api.ProtocolModifiers.Toggles.DependencyElision.OFF;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
 import static accord.api.ProtocolModifiers.Toggles.markStaleIfCannotExecute;
 import static accord.local.Cleanup.Input.FULL;
@@ -118,7 +121,6 @@ import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.primitives.Route.isFullRoute;
 import static accord.primitives.Txn.Kind.EphemeralRead;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
@@ -1091,13 +1093,15 @@ public class Commands
         return true;
     }
 
-    public static Command setDurability(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Durability durability, @Nullable Timestamp executeAt)
+    public static Command setDurability(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Durability addDurability, @Nullable Timestamp executeAt)
     {
         final Command command = safeCommand.current();
         if (command.is(Truncated))
             return command;
 
-        if (command.durability().compareTo(durability) >= 0)
+        Durability oldDurability = command.durability();
+        Durability newDurability = oldDurability.mergeMax(addDurability);
+        if (newDurability == oldDurability)
             return command;
 
         Command updated = supplementParticipants(safeStore, safeCommand, participants);
@@ -1105,30 +1109,30 @@ public class Commands
         if (executeAt != null && command.status().hasBeen(Committed) && !command.executeAt().equals(executeAt))
             safeStore.agent().onInconsistentTimestamp(command, command.asCommitted().executeAt(), executeAt);
 
-        if (command.durability().compareTo(durability) < 0)
+        updated = safeCommand.update(safeStore, updated.updateDurability(newDurability));
+        TxnId txnId = command.txnId();
+        DependencyElision updates = OFF;
+        if (newDurability.isDurable() && !oldDurability.isDurable()) updates = IF_DURABLY_PREAPPLIED;
+        else if (newDurability.isDurablyCommitted() && !oldDurability.isDurablyCommitted()) updates = IF_DURABLY_COMMITTED;
+        if (updates.compareTo(dependencyElision()) >= 0 && CommandsForKey.manages(txnId))
         {
-            updated = safeCommand.update(safeStore, updated.updateDurability(durability));
-            TxnId txnId = command.txnId();
-            if (dependencyElision() == IF_DURABLE && CommandsForKey.manages(txnId))
+            AbstractUnseekableKeys keys = (AbstractUnseekableKeys)updated.participants().touches();
+            PreLoadContext context = PreLoadContext.contextFor(keys, INCR, WRITE, "Set Durable");
+            PreLoadContext execute = safeStore.canExecute(context);
+            if (execute != null)
             {
-                AbstractUnseekableKeys keys = (AbstractUnseekableKeys)updated.participants().touches();
-                PreLoadContext context = PreLoadContext.contextFor(keys, INCR, WRITE, "Set Durable");
-                PreLoadContext execute = safeStore.canExecute(context);
+                setDurable(safeStore, execute, txnId, newDurability);
+            }
+            if (execute != context)
+            {
                 if (execute != null)
-                {
-                    setDurable(safeStore, execute, txnId);
-                }
-                if (execute != context)
-                {
-                    if (execute != null)
-                        context = contextFor(keys.without(execute.keys()), INCR, WRITE, "Set Durable");
+                    context = contextFor(keys.without(execute.keys()), INCR, WRITE, "Set Durable");
 
-                    Invariants.require(!context.keys().isEmpty());
-                    safeStore = safeStore; // prevent accidental usage inside lambda
-                    safeStore.commandStore().execute(context, safeStore0 -> {
-                        setDurable(safeStore0, safeStore0.context(), txnId);
-                    }, safeStore.commandStore().agent);
-                }
+                Invariants.require(!context.keys().isEmpty());
+                safeStore = safeStore; // prevent accidental usage inside lambda
+                safeStore.commandStore().execute(context, safeStore0 -> {
+                    setDurable(safeStore0, safeStore0.context(), txnId, newDurability);
+                }, safeStore.commandStore().agent);
             }
         }
 
@@ -1139,10 +1143,10 @@ public class Commands
         return updated;
     }
 
-    private static void setDurable(SafeCommandStore safeStore, PreLoadContext context, TxnId txnId)
+    private static void setDurable(SafeCommandStore safeStore, PreLoadContext context, TxnId txnId, Durability durability)
     {
         for (RoutingKey key : (AbstractUnseekableKeys)context.keys())
-            safeStore.get(key).setDurable(txnId);
+            safeStore.get(key).setDurable(txnId, durability);
     }
 
     static class NotifyWaitingOn implements PreLoadContext, Consumer<SafeCommandStore>
@@ -1313,7 +1317,7 @@ public class Commands
 
             boolean remove = status.all(LOCALLY_REDUNDANT);
             // TODO (required): consider this logic again, incl. whether it is even needed
-            if (remove && waitingSafe.txnId().is(ExclusiveSyncPoint) && depId.is(ExclusiveSyncPoint))
+            if (remove && waitingSafe.txnId().isSyncPoint() && depId.isSyncPoint())
                 remove = status.all(LOCALLY_SYNCED) || status.all(PRE_BOOTSTRAP_OR_STALE);
 
             if (!remove)

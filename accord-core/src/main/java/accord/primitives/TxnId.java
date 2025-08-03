@@ -345,7 +345,7 @@ public class TxnId extends Timestamp
 
     public final Kinds witnesses()
     {
-        return kind().witnesses();
+        return kind().witnessesKinds();
     }
 
     public final boolean witnesses(TxnId txnId)
@@ -360,7 +360,7 @@ public class TxnId extends Timestamp
 
     public final Kinds witnessedBy()
     {
-        return kind().witnessedBy();
+        return kind().witnessedByKinds();
     }
 
     public final Domain domain()
@@ -456,7 +456,7 @@ public class TxnId extends Timestamp
 
     public static int kindOrdinal(int flags)
     {
-        return (flags >> 1) & 7;
+        return (flags >>> 1) & 7;
     }
 
     public final int kindOrdinal()

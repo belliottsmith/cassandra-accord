@@ -397,7 +397,7 @@ public class LocalListenersTest
     static class TestSafeCommand extends SafeCommand
     {
         Command current;
-        public TestSafeCommand(TxnId txnId, SaveStatus saveStatus, final Durability durability)
+        public TestSafeCommand(TxnId txnId, SaveStatus saveStatus, Durability durability)
         {
             super(txnId);
             current = new TestCommand(txnId, saveStatus, durability);

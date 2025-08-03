@@ -132,7 +132,7 @@ public class KeyBarriers
                 return true;
 
             SyncLocal knownLocal = status.compareTo(APPLIED) >= 0 ? Self : NoLocal;
-            SyncRemote knownRemote = minDurability.compareTo(Status.Durability.MajorityOrInvalidated) >= 0 ? Quorum : NoRemote;
+            SyncRemote knownRemote = minDurability.isDurable() ? Quorum : NoRemote;
             if (found != null && (found.knownRemote.compareTo(knownRemote) > 0 || found.knownRemote == knownRemote && found.knownLocal.compareTo(knownLocal) >= 0))
                 return true;
 

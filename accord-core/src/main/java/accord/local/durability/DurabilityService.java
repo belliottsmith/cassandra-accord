@@ -37,6 +37,7 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.utils.Invariants;
@@ -96,47 +97,47 @@ public class DurabilityService implements ConfigurationService.Listener
         global.stop();
     }
 
-    public AsyncResult<Void> close(String requestedBy, Ranges ranges, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<Void> close(String requestedBy, Txn.Kind kind, Ranges ranges, long timeoutDelay, TimeUnit timeoutUnits)
     {
-        return close(requestedBy, TxnId.NONE, ranges, timeoutDelay, timeoutUnits);
+        return close(requestedBy, kind, TxnId.NONE, ranges, timeoutDelay, timeoutUnits);
     }
 
-    public AsyncResult<Void> close(Object requestedBy, Timestamp minBound, Ranges ranges, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<Void> close(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, long timeoutDelay, TimeUnit timeoutUnits)
     {
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        return submit(new DurabilityRequest(requestedBy, minBound, ranges, SyncLocal.NoLocal, SyncRemote.NoRemote, null, startedAt, timeoutAt)).result;
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, SyncLocal.NoLocal, SyncRemote.NoRemote, null, startedAt, timeoutAt)).result;
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
-        return sync(requestedBy, TxnId.NONE, ranges, local, remote, timeoutDelay, timeoutUnits);
+        return sync(requestedBy, kind, TxnId.NONE, ranges, local, remote, timeoutDelay, timeoutUnits);
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Timestamp minBound, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
-    {
-        long startedAt = node.elapsed(MICROSECONDS);
-        long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        return submit(new DurabilityRequest(requestedBy, minBound, ranges, local, remote, null, startedAt, timeoutAt)).result;
-    }
-
-    public AsyncResult<Void> sync(Object requestedBy, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
-    {
-        return sync(requestedBy, TxnId.NONE, ranges, include, local, remote, timeoutDelay, timeoutUnits);
-    }
-
-    public AsyncResult<Void> sync(Object requestedBy, Timestamp minBound, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        return submit(new DurabilityRequest(requestedBy, minBound, ranges, local, remote, include, startedAt, timeoutAt)).result;
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, local, remote, null, startedAt, timeoutAt)).result;
+    }
+
+    public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    {
+        return sync(requestedBy, kind, TxnId.NONE, ranges, include, local, remote, timeoutDelay, timeoutUnits);
+    }
+
+    public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    {
+        long startedAt = node.elapsed(MICROSECONDS);
+        long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, local, remote, include, startedAt, timeoutAt)).result;
     }
 
     public AsyncResult<Void> sync(Object requestedBy, SyncPoint<Range> syncPoint, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        DurabilityRequest request = new DurabilityRequest(requestedBy, syncPoint.syncId, syncPoint.route.toRanges(), local, remote, null, startedAt, timeoutAt);
+        DurabilityRequest request = new DurabilityRequest(requestedBy, syncPoint.syncId.kind(), syncPoint.syncId, syncPoint.route.toRanges(), local, remote, null, startedAt, timeoutAt);
         logger.info("Requesting durability {}", request);
         register(request);
         shards.queue().submit(syncPoint, request);

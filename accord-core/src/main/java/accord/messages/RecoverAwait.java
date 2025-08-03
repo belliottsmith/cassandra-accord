@@ -29,7 +29,6 @@ import accord.local.SafeCommandStore;
 import accord.primitives.Ballot;
 import accord.primitives.Known.KnownDeps;
 import accord.primitives.Participants;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
@@ -81,7 +80,7 @@ public class RecoverAwait extends Await
 
         if ((knownDeps.hasCommittedOrDecidedDeps() ? command.executeAt() : txnId).compareTo(recoverId) < 0)
         {
-            if (txnId.is(Txn.Kind.ExclusiveSyncPoint) && txnId.hlc() > recoverId.hlc() && command.executeAt().is(HLC_BOUND))
+            if (txnId.isSyncPoint() && txnId.hlc() > recoverId.hlc() && command.executeAt().is(HLC_BOUND))
             {
                 rejects = true;
                 node.reply(replyTo, replyContext, RecoverAwaitOk.Reject, null);

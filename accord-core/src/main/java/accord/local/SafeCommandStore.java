@@ -269,7 +269,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     public void updateExclusiveSyncPoint(Command prev, Command updated, boolean force)
     {
-        if (updated.txnId().kind() != Kind.ExclusiveSyncPoint || updated.txnId().domain() != Range) return;
+        if (!updated.txnId().isSyncPoint() || updated.txnId().domain() != Range) return;
         if (updated.route() == null) return;
 
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
@@ -426,7 +426,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         TxnId txnId = next.txnId();
         RoutingKeys keys;
 
-        if (!txnId.is(Kind.ExclusiveSyncPoint)) keys = next.asCommitted().waitingOn().keys;
+        if (!txnId.isSyncPoint()) keys = next.asCommitted().waitingOn().keys;
         else
         {
             Command.WaitingOn waitingOn = next.asCommitted().waitingOn;
@@ -510,7 +510,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     private static void registerTransitiveRangeDeps(SafeCommandStore safeStore, TxnId syncId, Command syncCommand)
     {
-        if (!syncId.is(Kind.ExclusiveSyncPoint))
+        if (!syncId.is(Kind.VisibilitySyncPoint))
             return;
 
         CommandStore commandStore = safeStore.commandStore();

@@ -392,6 +392,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             return;
         }
 
+        logger.debug("Epoch {} received with isLoad={} and startSync={}", topology.epoch(), isLoad, startSync);
         epochs.receive(topology);
         for (Listener listener : listeners)
             listener.onTopologyUpdate(topology, isLoad, startSync);

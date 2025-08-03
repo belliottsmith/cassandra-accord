@@ -40,7 +40,6 @@ import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.tryCastToRoute;
 import static accord.primitives.SaveStatus.Erased;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
 // TODO (expected): add invariants confirming owns contains AT LEAST anything in hasTouched() that intersects txnId.epoch()
 public class StoreParticipants
@@ -354,7 +353,7 @@ public class StoreParticipants
         if (stillExecutes != null)
         {
             stillExecutes = redundantBefore.expectToExecute(txnId, executeAtIfKnown, stillExecutes);
-            if (txnId.is(ExclusiveSyncPoint))
+            if (txnId.isSyncPoint())
             {
                 curStillWaitsOn = stillWaitsOn();
                 stillWaitsOn = redundantBefore.expectExclusiveSyncPointToWaitOn(txnId, executeAtIfKnown, curStillWaitsOn);
@@ -390,7 +389,7 @@ public class StoreParticipants
             Participants<?> extraTouches = touches.without(owns);
             if (!extraTouches.isEmpty())
             {
-                Participants<?> filteredExtra = txnId.is(ExclusiveSyncPoint)
+                Participants<?> filteredExtra = txnId.isSyncPoint()
                                                 ? redundantBefore.withoutShardAppliedLocallySynced(txnId, extraTouches)
                                                 : redundantBefore.withoutShardApplied(txnId, extraTouches);
                 if (extraTouches != filteredExtra)
@@ -505,7 +504,7 @@ public class StoreParticipants
     // TODO (required): retire this method, merge with executes()
     public Ranges executeRanges(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt)
     {
-        Ranges ranges = txnId.is(ExclusiveSyncPoint)
+        Ranges ranges = txnId.isSyncPoint()
                         ? safeStore.ranges().all()
                         : safeStore.ranges().allAt(executeAt.epoch());
 
@@ -517,7 +516,7 @@ public class StoreParticipants
     public static Route<?> touches(SafeCommandStore safeStore, long fromEpoch, TxnId txnId, long toEpoch, Route<?> route)
     {
         // TODO (required): remove pre-bootstrap?
-        if (txnId.is(ExclusiveSyncPoint))
+        if (txnId.isSyncPoint())
             return route.slice(safeStore.ranges().all(), Minimal);
 
         return route.slice(safeStore.ranges().allBetween(fromEpoch, toEpoch), Minimal);
@@ -632,7 +631,7 @@ public class StoreParticipants
         {
             Ranges executeRanges = storeRanges.allAt(executeAtEpoch);
             executes = executeRanges == ownedRanges ? owns : participants.slice(executeRanges, Minimal);
-            waitsOn = txnId.is(ExclusiveSyncPoint) ? touches : executes;
+            waitsOn = txnId.isSyncPoint() ? touches : executes;
         }
         return create(tryCastToRoute(participants), owns, executes, waitsOn, touches, touches);
     }
@@ -685,7 +684,7 @@ public class StoreParticipants
     private static long computeFetchLowEpoch(SafeCommandStore safeStore, TxnId txnId, Participants<?> touches, Participants<?> owns)
     {
         long txnIdEpoch = txnId.epoch();
-        if (txnId.is(ExclusiveSyncPoint))
+        if (txnId.isSyncPoint())
             return computeCoveringEpoch(safeStore, txnIdEpoch, touches);
 
         if (touches.equals(owns))
@@ -696,7 +695,7 @@ public class StoreParticipants
 
     public static long computePropagateLowEpoch(SafeCommandStore safeStore, TxnId txnId, Route<?> newRoute)
     {
-        if (txnId.is(ExclusiveSyncPoint)) return computeCoveringEpoch(safeStore, txnId.epoch(), newRoute);
+        if (txnId.isSyncPoint()) return computeCoveringEpoch(safeStore, txnId.epoch(), newRoute);
         else return computeUnsyncedEpoch(safeStore, txnId.epoch(), newRoute);
     }
 

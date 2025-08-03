@@ -195,9 +195,9 @@ public class RedundantBeforeTest
         else return e.getValue().mergedLt;
     }
 
-    private static short merge(short a, short b)
+    private static int merge(int a, int b)
     {
-        return (short) (a | b);
+        return a | b;
     }
 
     private static SomeStatus merge(SomeStatus a, SomeStatus b)

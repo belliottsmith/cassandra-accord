@@ -33,11 +33,12 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPo
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.DoNotChase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owned;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLE;
+import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
 import static accord.api.ProtocolModifiers.Toggles.InformOfDurability.ALL;
 import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS;
 import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS_OR_NONE_IF_FASTEXEC;
 import static accord.primitives.Txn.Kind.EphemeralRead;
+import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
 
 /**
  * Configure various protocol behaviours. Many of these switches are correctness impacting, and should not be touched.
@@ -232,18 +233,18 @@ public class ProtocolModifiers
             markStaleIfCannotExecute = newMarkStaleIfCannotExecute;
         }
 
-        private static int transitiveDependenciesAreVisible = TinyEnumSet.encode(Txn.Kind.ExclusiveSyncPoint);
+        private static int transitiveDependenciesAreVisible = TinyEnumSet.encode(VisibilitySyncPoint);
         public static boolean isTransitiveDependencyVisible(TxnId txnId) { return TinyEnumSet.contains(transitiveDependenciesAreVisible, txnId.kindOrdinal()); }
         public static boolean isTransitiveDependencyVisible(Txn.Kind kind) { return TinyEnumSet.contains(transitiveDependenciesAreVisible, kind); }
         public static void setTransitiveDependenciesAreVisible(Txn.Kind ... kinds)
         {
             int newTransitiveDependenciesAreVisible = TinyEnumSet.encode(kinds);
-            Invariants.require(TinyEnumSet.contains(newTransitiveDependenciesAreVisible, Txn.Kind.ExclusiveSyncPoint));
+            Invariants.require(TinyEnumSet.contains(newTransitiveDependenciesAreVisible, Txn.Kind.VisibilitySyncPoint));
             transitiveDependenciesAreVisible = newTransitiveDependenciesAreVisible;
         }
 
-        public enum DependencyElision { OFF, ON, IF_DURABLE }
-        private static DependencyElision dependencyElision = IF_DURABLE;
+        public enum DependencyElision { OFF, ON, IF_DURABLY_COMMITTED, IF_DURABLY_PREAPPLIED }
+        private static DependencyElision dependencyElision = IF_DURABLY_COMMITTED;
         public static DependencyElision dependencyElision() { return dependencyElision; }
         public static void setDependencyElision(DependencyElision newDependencyElision) { dependencyElision = newDependencyElision; }
 

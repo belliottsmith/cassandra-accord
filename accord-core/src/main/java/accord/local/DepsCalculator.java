@@ -58,7 +58,7 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
 
         boolean include(Durability durability, Unseekable keyOrRange, TxnId depId)
         {
-            if (durability.isDurable() || depId.is(ExclusiveSyncPoint))
+            if (durability.isDurablyCommitted() || depId.isSyncPoint())
             {
                 if (absoluteMinDecidedId != null && depId.compareTo(absoluteMinDecidedId) < 0)
                     return false;
@@ -135,13 +135,14 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
             TxnId maxRedundantBefore = redundant.maxTxnId(null);
             if (maxRedundantBefore != null && maxRedundantBefore.compareTo(executeAt) >= 0)
             {
-                Invariants.require(maxRedundantBefore.is(ExclusiveSyncPoint));
+                Invariants.require(maxRedundantBefore.isSyncPoint());
                 return null;
             }
         }
 
         // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
         MinDependencyCalculator minDepCalc = null;
+        // the main difference between RX and RV is whether we apply this filtering
         if (txnId.is(ExclusiveSyncPoint)) minDepCalc = new MinDependencyCalculator(safeStore.maxDecidedRX(), touches, txnId);
         safeStore.visit(touches, executeAt, txnId.witnesses(), this, executeAt.equals(txnId) ? null : txnId, minDepCalc);
         Deps result = super.build();
