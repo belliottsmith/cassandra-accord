@@ -43,20 +43,22 @@ import static accord.primitives.Routables.Slice.Minimal;
 
 public interface Txn
 {
+    enum Witnesses { Writes, ReadsOrWrites, AnyVisible }
+    enum WitnessedBy { All, WritesOrSyncPoints, SyncPoints, Nothing }
     /**
      * NOTE: we keep Read/Write adjacent to make it easier to check for non-standard flags in serialization
      */
     enum Kind
     {
-        Read('R', true, false, false, false),
-        Write('W', true, false, false, false),
+        Read('R', true, false, false, false, Witnesses.Writes, WitnessedBy.WritesOrSyncPoints),
+        Write('W', true, false, false, false, Witnesses.ReadsOrWrites, WitnessedBy.All),
 
         /**
          * A non-durable read that cannot be recovered and provides only per-key linearizability guarantees.
          * This may be used to implement single-partition-key reads with strict serializable isolation OR
          * weaker isolation multi-key/range reads for interoperability with weaker isolation systems.
          */
-        EphemeralRead('E', false, false, false, true),
+        EphemeralRead('E', false, false, false, true, Witnesses.Writes, WitnessedBy.Nothing),
 
         /**
          * A pseudo-transaction whose deps represent the complete set of transactions that may execute before it,
@@ -88,7 +90,12 @@ public interface Txn
          *
          * Invisible to other transactions.
          */
-        ExclusiveSyncPoint('X', true, true, true, true),
+        ExclusiveSyncPoint('X', true, true, true, true, Witnesses.AnyVisible, WitnessedBy.SyncPoints),
+        /**
+         * An ExclusiveSyncPoint that does not filter its dependencies so that they may be used for
+         * ensuring a new epoch's quorum can perform coordination without earlier epochs
+         */
+        VisibilitySyncPoint('V', true, true, true, true, Witnesses.AnyVisible, WitnessedBy.SyncPoints)
         ;
 
         public static class Kinds extends TinyEnumSet<Kind>
@@ -120,17 +127,20 @@ public interface Txn
         private static final int COUNT = VALUES.length;
         private static final long ENCODED_ORDINAL_INFO;
         private static final long ENCODED_WITNESSES_INFO;
-        private static final long IS_VISIBLE_ORDINAL_INFO_OFFSET = 0;
-        private static final long IS_SYNCPOINT_ORDINAL_INFO_OFFSET = COUNT;
-        private static final long IS_SYSTEM_ORDINAL_INFO_OFFSET = 2 * COUNT;
-        private static final long AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET = 3 * COUNT;
+        private static final int IS_VISIBLE_ORDINAL_INFO_OFFSET = 0;
+        private static final int IS_SYNCPOINT_ORDINAL_INFO_OFFSET = COUNT;
+        private static final int IS_SYSTEM_ORDINAL_INFO_OFFSET = 2 * COUNT;
+        private static final int AWAITS_ONLY_DEPS_ORDINAL_INFO_OFFSET = 3 * COUNT;
 
         public static final Kinds Nothing = new Kinds();
         public static final Kinds Ws = new Kinds(Write);
         public static final Kinds RsOrWs = new Kinds(Write, Read);
-        public static final Kinds WsOrSyncPoints = new Kinds(Write, ExclusiveSyncPoint);
-        public static final Kinds ExclusiveSyncPoints = new Kinds(ExclusiveSyncPoint);
-        public static final Kinds AnyGloballyVisible = new Kinds(Write, Read, ExclusiveSyncPoint);
+        public static final Kinds WsOrSyncPoints = new Kinds(Write, ExclusiveSyncPoint, VisibilitySyncPoint);
+        public static final Kinds SyncPoints = new Kinds(ExclusiveSyncPoint, VisibilitySyncPoint);
+        public static final Kinds AnyVisible = new Kinds(Write, Read, ExclusiveSyncPoint, VisibilitySyncPoint);
+        public static final Kinds All = new Kinds(Write, Read, EphemeralRead, ExclusiveSyncPoint, VisibilitySyncPoint);
+        private static final Kinds[] WITNESSES = new Kinds[] { Ws, RsOrWs, AnyVisible };
+        private static final Kinds[] WITNESSED_BY = new Kinds[] { All, WsOrSyncPoints, SyncPoints, Nothing };
 
         static
         {
@@ -153,7 +163,7 @@ public interface Txn
             {
                 for (Kind witnessed : VALUES)
                 {
-                    if (witness.witnesses().test(witnessed))
+                    if (witness.witnessesKinds().test(witnessed))
                         encodedWitnessesInfo |= 1L << offset;
                     ++offset;
                 }
@@ -166,14 +176,18 @@ public interface Txn
         public final boolean isSyncPoint;
         public final boolean isSystem;
         public final boolean awaitsOnlyDeps;
+        public final Witnesses witnesses;
+        public final WitnessedBy witnessedBy;
 
-        Kind(char shortName, boolean isVisible, boolean isSyncPoint, boolean isSystem, boolean awaitsOnlyDeps)
+        Kind(char shortName, boolean isVisible, boolean isSyncPoint, boolean isSystem, boolean awaitsOnlyDeps, Witnesses witnesses, WitnessedBy witnessedBy)
         {
             this.shortName = shortName;
             this.isVisible = isVisible;
             this.isSyncPoint = isSyncPoint;
             this.isSystem = isSystem;
             this.awaitsOnlyDeps = awaitsOnlyDeps;
+            this.witnesses = witnesses;
+            this.witnessedBy = witnessedBy;
         }
 
 
@@ -237,22 +251,12 @@ public interface Txn
 
         public static boolean awaitsPreviouslyOwned(int ordinal)
         {
-            return ordinal == ExclusiveSyncPoint.ordinal();
+            return ordinal == ExclusiveSyncPoint.ordinal() || ordinal == VisibilitySyncPoint.ordinal();
         }
 
-        public Kinds witnesses()
+        public Kinds witnessesKinds()
         {
-            switch (this)
-            {
-                default: throw new AssertionError();
-                case EphemeralRead:
-                case Read:
-                    return Ws;
-                case Write:
-                    return RsOrWs;
-                case ExclusiveSyncPoint:
-                    return AnyGloballyVisible;
-            }
+            return WITNESSES[witnesses.ordinal()];
         }
 
         public boolean witnesses(TxnId txnId)
@@ -275,20 +279,9 @@ public interface Txn
             return kind.witnesses(this);
         }
 
-        public Kinds witnessedBy()
+        public Kinds witnessedByKinds()
         {
-            switch (this)
-            {
-                default: throw new AssertionError();
-                case EphemeralRead:
-                    return Nothing;
-                case Read:
-                    return WsOrSyncPoints;
-                case Write:
-                    return AnyGloballyVisible;
-                case ExclusiveSyncPoint:
-                    return ExclusiveSyncPoints;
-            }
+            return WITNESSED_BY[witnessedBy.ordinal()];
         }
 
         public char shortName()
@@ -340,7 +333,7 @@ public interface Txn
             this.update = update;
             this.query = query;
             this.implementationDefined = implementationDefined;
-            Invariants.require(kind != Kind.ExclusiveSyncPoint || keys.domain() == Routable.Domain.Range);
+            Invariants.require(!kind.isSyncPoint() || keys.domain() == Routable.Domain.Range);
         }
 
         @Override

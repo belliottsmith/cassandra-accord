@@ -32,7 +32,7 @@ import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_COMMAND_S
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
-import static accord.local.RedundantStatus.Property.MAJORITY_APPLIED;
+import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.local.RedundantStatus.Property.NOT_OWNED;
 import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP;
 import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
@@ -119,13 +119,13 @@ public class RedundantStatus
          * We have fully executed until across all a majority of replicas for the range in question,
          * but not necessarily ourselves.
          */
-        MAJORITY_APPLIED                   (false,  true,  LE),
+        QUORUM_APPLIED(false, true, LE),
 
         /**
          * We have fully executed until across all healthy non-bootstrapping replicas for the range in question,
          * but not necessarily ourselves.
          */
-        SHARD_APPLIED                      (false,  true,  LE, MAJORITY_APPLIED),
+        SHARD_APPLIED                      (false, true, LE, QUORUM_APPLIED),
 
         TRUNCATE_BEFORE                    (false,  true,  LT, SHARD_APPLIED, LOCALLY_SYNCED),
         GC_BEFORE                          (false,  true,  LT, TRUNCATE_BEFORE),
@@ -177,7 +177,7 @@ public class RedundantStatus
         public static final SomeStatus PRE_BOOTSTRAP_ONLY = oneSlow(PRE_BOOTSTRAP);
         public static final SomeStatus LOCALLY_WITNESSED_ONLY = oneSlow(LOCALLY_WITNESSED);
         public static final SomeStatus LOCALLY_APPLIED_ONLY = oneSlow(LOCALLY_APPLIED);
-        public static final SomeStatus MAJORITY_APPLIED_ONLY = oneSlow(MAJORITY_APPLIED);
+        public static final SomeStatus QUORUM_APPLIED_ONLY = oneSlow(QUORUM_APPLIED);
         public static final SomeStatus SHARD_APPLIED_ONLY = oneSlow(SHARD_APPLIED);
         public static final SomeStatus LOCALLY_DURABLE_TO_DATA_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_DATA_STORE);
         public static final SomeStatus LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_COMMAND_STORE);

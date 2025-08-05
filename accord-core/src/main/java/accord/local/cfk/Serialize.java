@@ -1088,7 +1088,7 @@ public class Serialize
                 int statusIndex = commandDecodeFlags >>> 6;
                 InternalStatus status = DECODE_STATUS[statusIndex];
                 int statusOverrides = (commandDecodeFlags >>> 3) & 0x1;
-                int durablyCommitted = (commandDecodeFlags >>> 4) & 0x1;
+                boolean durablyCommitted = 0 != (commandDecodeFlags & 0x10);
                 txns[i] = create(bounds, txnId, status, statusOverrides, durablyCommitted, executeAt, missing, ballot);
             }
 
@@ -1102,16 +1102,16 @@ public class Serialize
                 int statusIndex = commandDecodeFlags >>> 6;
                 InternalStatus status = DECODE_STATUS[statusIndex];
                 int statusOverrides = (commandDecodeFlags >>> 3) & 0x1;
-                int durablyCommitted = (commandDecodeFlags >>> 4) & 0x1;
+                boolean durablyCommitted = 0 != (commandDecodeFlags & 0x10);
                 txns[i] = create(bounds, txnIds[i], status, statusOverrides, durablyCommitted, txnIds[i], NO_TXNIDS, Ballot.ZERO);
             }
         }
         cachedTxnIds().forceDiscard(txnIds, commandCount);
         cachedAny().forceDiscard(nodeIds, nodeIdCount);
-        return CommandsForKey.SerializerSupport.create(key, txns, maxUniqueHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], bounds);
+        return CommandsForKey.SerializerSupport.create(key, txns, maxUniqueHlc, unmanageds, prunedBeforeIndex == -1 ? TxnId.NONE : txns[prunedBeforeIndex], bounds, false);
     }
 
-    private static TxnInfo create(QuickBounds bounds, @Nonnull TxnId txnId, InternalStatus status, int statusOverrides, int durablyCommitted, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
+    private static TxnInfo create(QuickBounds bounds, @Nonnull TxnId txnId, InternalStatus status, int statusOverrides, boolean durablyCommitted, @Nonnull Timestamp executeAt, @Nonnull TxnId[] missing, @Nonnull Ballot ballot)
     {
         boolean mayExecute = status.isCommittedToExecute() ? CommandsForKey.executes(bounds, txnId, executeAt)
                                                            : CommandsForKey.mayExecute(bounds, txnId);

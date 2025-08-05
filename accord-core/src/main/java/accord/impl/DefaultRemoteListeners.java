@@ -272,7 +272,7 @@ public class DefaultRemoteListeners implements RemoteListeners
         @Override
         public String toString()
         {
-            return awaitSaveStatus(await) + "+" + awaitOutcomeDurability(await);
+            return awaitSaveStatus(await) + "+" + awaitDurability(await);
         }
     }
 
@@ -344,18 +344,18 @@ public class DefaultRemoteListeners implements RemoteListeners
     {
         final TxnId txnId;
         final SaveStatus awaitSaveStatus;
-        final HasOutcome awaitOutcomeDurability;
+        final HasOutcome awaitDurability;
         final Node.Id listeningNodeId;
         final int callbackId;
 
         int[] waitingOn = new int[4];
         int count = 0;
 
-        Register(TxnId txnId, SaveStatus awaitSaveStatus, HasOutcome awaitOutcomeDurability, Node.Id listeningNodeId, int callbackId)
+        Register(TxnId txnId, SaveStatus awaitSaveStatus, HasOutcome awaitDurability, Node.Id listeningNodeId, int callbackId)
         {
             this.txnId = txnId;
             this.awaitSaveStatus = awaitSaveStatus;
-            this.awaitOutcomeDurability = awaitOutcomeDurability;
+            this.awaitDurability = awaitDurability;
             this.listeningNodeId = listeningNodeId;
             this.callbackId = callbackId;
         }
@@ -399,7 +399,7 @@ public class DefaultRemoteListeners implements RemoteListeners
             if (waitingOn.length > 4 && count < waitingOn.length / 2)
                 waitingOn = Arrays.copyOf(waitingOn, count);
 
-            StatusListeners listener = new StatusListeners(awaitSaveStatus, awaitOutcomeDurability, waitingOn, count, listeningNodeId.id, callbackId);
+            StatusListeners listener = new StatusListeners(awaitSaveStatus, awaitDurability, waitingOn, count, listeningNodeId.id, callbackId);
             listeners.merge(txnId, new Listeners(listener), Listeners::merge);
             return count;
         }
@@ -419,10 +419,10 @@ public class DefaultRemoteListeners implements RemoteListeners
     }
 
     @Override
-    public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, HasOutcome awaitOutcomeDurability, Node.Id listener, int callbackId)
+    public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, HasOutcome awaitDurability, Node.Id listener, int callbackId)
     {
         Invariants.requireArgument(callbackId >= 0);
-        return new Register(txnId, awaitSaveStatus, awaitOutcomeDurability, listener, callbackId);
+        return new Register(txnId, awaitSaveStatus, awaitDurability, listener, callbackId);
     }
 
     @Override
@@ -445,7 +445,7 @@ public class DefaultRemoteListeners implements RemoteListeners
             if (awaitSaveStatus(listener.await).compareTo(newStatus) > 0)
                 return;
 
-            if (awaitOutcomeDurability(listener.await).compareTo(newDurability.allShards()) > 0)
+            if (awaitDurability(listener.await).compareTo(newDurability.allShards()) > 0)
                 continue;
 
             listener.removeWaitingOn(storeId);
@@ -486,7 +486,7 @@ public class DefaultRemoteListeners implements RemoteListeners
 
     static
     {
-        Invariants.require(Durability.HasOutcome.maxEncoded() < 16);
+        Invariants.require(HasOutcome.maxEncoded() < 16);
     }
 
     private static SaveStatus awaitSaveStatus(int encodedAwait)
@@ -494,13 +494,13 @@ public class DefaultRemoteListeners implements RemoteListeners
         return SaveStatus.forOrdinal(encodedAwait >>> 4);
     }
 
-    private static HasOutcome awaitOutcomeDurability(int encodedAwait)
+    private static HasOutcome awaitDurability(int encodedAwait)
     {
-        return Durability.HasOutcome.forOrdinal(encodedAwait & 0xf);
+        return HasOutcome.forOrdinal(encodedAwait & 0xf);
     }
 
-    private static int encodeAwait(SaveStatus awaitSaveStatus, HasOutcome awaitOutcomeDurability)
+    private static int encodeAwait(SaveStatus awaitSaveStatus, HasOutcome awaitDurability)
     {
-        return (awaitSaveStatus.ordinal() << 4) | awaitOutcomeDurability.ordinal();
+        return (awaitSaveStatus.ordinal() << 4) | awaitDurability.ordinal();
     }
 }

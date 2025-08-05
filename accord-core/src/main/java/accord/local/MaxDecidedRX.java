@@ -72,7 +72,7 @@ public class MaxDecidedRX extends ReducingRangeMap<TxnId>
 
     public @Nullable TxnId minDecidedDependencyId(Unseekables<?> keysOrRanges, TxnId txnId)
     {
-        Invariants.require(txnId.is(Txn.Kind.ExclusiveSyncPoint));
+        Invariants.require(txnId.isSyncPoint());
         // first check max, as if this is later we don't know that we can safely filter
         TxnId maxDecidedId = max(keysOrRanges);
         if (maxDecidedId.compareTo(txnId) < 0)
@@ -83,7 +83,7 @@ public class MaxDecidedRX extends ReducingRangeMap<TxnId>
     @VisibleForImplementation
     public @Nullable TxnId minDecidedDependencyId(Unseekable keyOrRange, TxnId txnId)
     {
-        Invariants.require(txnId.is(Txn.Kind.ExclusiveSyncPoint));
+        Invariants.require(txnId.isSyncPoint());
         if (keyOrRange.domain() == Domain.Key)
         {
             TxnId minMaxDecidedId = get((RoutingKey) keyOrRange);

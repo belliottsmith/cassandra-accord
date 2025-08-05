@@ -1318,7 +1318,7 @@ public class Commands
 
             boolean remove = status.all(LOCALLY_REDUNDANT);
             // TODO (required): consider this logic again, incl. whether it is even needed
-            if (remove && waitingSafe.txnId().is(ExclusiveSyncPoint) && depId.is(ExclusiveSyncPoint))
+            if (remove && waitingSafe.txnId().isSyncPoint() && depId.isSyncPoint())
                 remove = status.all(LOCALLY_SYNCED) || status.all(PRE_BOOTSTRAP_OR_STALE);
 
             if (!remove)

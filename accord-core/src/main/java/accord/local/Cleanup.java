@@ -212,7 +212,7 @@ public enum Cleanup
             test = Durability.HasOutcome.max(test, durableBefore.min(txnId, participants.route()));
 
         if (test != Universal)
-            truncateWithOutcome(txnId, input, redundant, min);
+            return truncateWithOutcome(txnId, input, redundant, min);
 
         if (redundant.all(GC_BEFORE))
             return erase(txnId, min);
@@ -252,7 +252,7 @@ public enum Cleanup
         if (ownStatus.any(LOCALLY_APPLIED))
             return invalidate(txnId);
 
-        // TODO (desired): safe to use MAJORITY_APPLIED, LOCALLY_REDUNDANT?
+        // TODO (desired): safe to use QUORUM_APPLIED, LOCALLY_REDUNDANT?
         // TODO (required): can we guarantee we will always eventually obtain a covering route if others are garbage collecting?
         if (isCoveringRoute && ownStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
             return vestigial(txnId);

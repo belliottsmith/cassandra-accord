@@ -124,11 +124,10 @@ public enum Status
         }
     }
 
-    public static class Durability
+    public static final class Durability
     {
         private static final int MAYBE_INVALIDATED_BIT = 1;
         private static final int SHARDS_SHIFT = 3;
-        private static final int NON_SHARDS_MASK = (1 << SHARDS_SHIFT) - 1;
         private static final int PHASE_SHIFT = 1;
         private static final int PHASE_MASK = 0x3;
         public static final int TOTAL_ENCODING_BITS = 6;
@@ -145,14 +144,19 @@ public enum Status
 
         public enum HasPhase
         {
-            None('N'), FastPathDecided('F'), DurablyCommitted('C'), DurablyStable('S');
+            None('N', "None"),
+            FastPathDecided('F', "FastPath"),
+            DurablyCommitted('C', "Committed"),
+            DurablyStable('S', "Stable");
 
             private static final HasPhase[] lookup = values();
             final char shortName;
+            final String mediumName;
 
-            HasPhase(char shortName)
+            HasPhase(char shortName, String mediumName)
             {
                 this.shortName = shortName;
+                this.mediumName = mediumName;
             }
         }
 
@@ -166,6 +170,7 @@ public enum Status
         {
             None, Quorum, Universal;
             public final boolean isDurable() { return this != None; }
+            public final boolean isUniversal() { return this == Universal; }
             private static final HasOutcome[] lookup = values();
             public static HasOutcome forOrdinal(int ordinal) { return lookup[ordinal]; }
             public static HasOutcome max(HasOutcome a, HasOutcome b) { return a.compareTo(b) >= 0 ? a : b; }
@@ -182,6 +187,7 @@ public enum Status
         {
             None, QuorumOrInvalidated, Quorum, UniversalOrInvalidated, Universal;
             public final boolean isDurableOrInvalidated() { return this != None; }
+            public final boolean isMaybeInvalidated() { return this == QuorumOrInvalidated || this == UniversalOrInvalidated; }
             public final HasOutcomeOrInvalidated mergeMax(HasOutcomeOrInvalidated that) { return max(this, that); }
             private static final HasOutcomeOrInvalidated[] lookup = values();
             public static HasOutcomeOrInvalidated forOrdinal(int ordinal) { return lookup[ordinal]; }
@@ -212,29 +218,19 @@ public enum Status
             return 0 != maybeInvalidated(encoded);
         }
 
-        private static int bothMaybeInvalidated(int a, int b)
-        {
-            return maybeInvalidated(a & b);
-        }
-
-        private static int eitherMaybeInvalidated(int a, int b)
-        {
-            return maybeInvalidated(a | b);
-        }
-
         private static int maybeInvalidated(int encoded)
         {
             return encoded & MAYBE_INVALIDATED_BIT;
         }
 
-        private static int notInvalidatedOrdinal(int hasOutcomeOrdinal, int encoded)
+        private static int zeroIfInvalidated(int maybeNonZero, int maybeInvalidated)
         {
-            return hasOutcomeOrdinal & (maybeInvalidated(encoded) - 1);
+            return maybeNonZero & (maybeInvalidated - 1);
         }
 
         private static HasOutcome notInvalidated(int hasOutcomeOrdinal, int encoded)
         {
-            return HasOutcome.lookup[notInvalidatedOrdinal(hasOutcomeOrdinal, encoded)];
+            return HasOutcome.lookup[zeroIfInvalidated(hasOutcomeOrdinal, maybeInvalidated(encoded))];
         }
 
         private static int orInvalidatedOrdinal(int hasOutcomeOrdinal, int encoded)
@@ -287,23 +283,28 @@ public enum Status
 
         private static int mergeMaybeInvalidated(int a, int b, int maxPhase)
         {
-            int aob = a | b;
-            int anb = a & b;
-            if (maybeInvalidated(aob) == 0)
-                return 0;
+            int ami = maybeInvalidated(a);
+            int bmi = maybeInvalidated(b);
+            if (ami == bmi)
+                return ami;
 
-            if (maybeInvalidated(anb) != 0)
-                return MAYBE_INVALIDATED_BIT;
-
-            return maxPhase >= HasPhase.DurablyCommitted.ordinal() || (aob >>> SHARDS_SHIFT) > 0 ?
+            a = zeroIfInvalidated(a, ami);
+            b = zeroIfInvalidated(b, bmi);
+            return maxPhase >= HasPhase.DurablyCommitted.ordinal() || ((a | b) >>> SHARDS_SHIFT) > 1 ?
                    0 : MAYBE_INVALIDATED_BIT;
         }
 
-        public final int encoded;
+        private final int encoded;
 
         private Durability(int encoded)
         {
+            Invariants.require(0 == (encoded & ~0xFF));
             this.encoded = encoded;
+        }
+
+        public int encoded()
+        {
+            return encoded;
         }
 
         public HasPhase phase()
@@ -323,7 +324,12 @@ public enum Status
 
         private static HasOutcome shard(int encoded)
         {
-            return HasOutcome.lookup[notInvalidatedOrdinal(shardOrdinal(encoded), encoded)];
+            return HasOutcome.lookup[zeroIfInvalidated(shardOrdinal(encoded), maybeInvalidated(encoded))];
+        }
+
+        private static HasOutcome shardUnsafe(int encoded)
+        {
+            return HasOutcome.lookup[shardOrdinal(encoded)];
         }
 
         public HasOutcome allShards()
@@ -334,6 +340,11 @@ public enum Status
         private static HasOutcome allShards(int encoded)
         {
             return notInvalidated(allShardsOrdinal(encoded), encoded);
+        }
+
+        private static HasOutcome allShardsUnsafe(int encoded)
+        {
+            return HasOutcome.lookup[allShardsOrdinal(encoded)];
         }
 
         public HasOutcomeOrInvalidated allShardsOrInvalidated()
@@ -348,12 +359,12 @@ public enum Status
 
         public boolean isDurable()
         {
-            return notInvalidatedOrdinal(allShardsOrdinal(encoded), encoded) >= HasOutcome.Quorum.ordinal();
+            return zeroIfInvalidated(allShardsOrdinal(encoded), maybeInvalidated(encoded)) >= HasOutcome.Quorum.ordinal();
         }
 
         public boolean isUniversal()
         {
-            return notInvalidatedOrdinal(allShardsOrdinal(encoded), encoded) >= HasOutcome.Universal.ordinal();
+            return zeroIfInvalidated(allShardsOrdinal(encoded), maybeInvalidated(encoded)) >= HasOutcome.Universal.ordinal();
         }
 
         public boolean isUniversalOrInvalidated()
@@ -389,7 +400,10 @@ public enum Status
 
         private static String toString(int encoded)
         {
-            return "" + phase(encoded).shortName + shard(encoded).name().charAt(0) + allShards(encoded).name().charAt(0);
+            HasPhase phase = phase(encoded);
+            HasOutcome shard = shardUnsafe(encoded);
+            HasOutcome allShards = allShardsUnsafe(encoded);
+            return phase.mediumName + "/" + shard.name() + "/" + allShards.name();
         }
 
         public static Durability nonNullOrMergeMax(@Nullable Durability a, @Nullable Durability b)

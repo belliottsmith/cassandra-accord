@@ -27,6 +27,7 @@ import accord.api.Tracing;
 import accord.coordinate.AsynchronousAwait;
 import accord.coordinate.FetchData;
 import accord.coordinate.FetchRoute;
+import accord.coordinate.Infer;
 import accord.local.Command;
 import accord.local.CommandStores.IncludingSpecificStoreSelector;
 import accord.local.CommandStores.RangesForEpoch;
@@ -413,6 +414,7 @@ abstract class WaitingState extends BaseTxnState
         {
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Blocked until %s. Fetching route from %s", blockedUntil, maxContactable);
+            // TODO (required): pass in InvalidIf
             fetchRoute(owner, blockedUntil, txnId, maxContactable);
             return;
         }
@@ -440,7 +442,7 @@ abstract class WaitingState extends BaseTxnState
             // including the home shard to get us to at least PreCommitted where we can safely wait on individual shards
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Blocked until %s; not currently decided. Fetching from %s for epochs [%d..%d].", blockedUntil, slicedRoute, lowEpoch, highEpoch);
-            fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, slicedRoute.withHomeKey(), route);
+            fetch(owner, blockedUntil, txnId, invalidIf(), executeAt, slicedRoute, slicedRoute.withHomeKey(), route);
             return;
         }
 
@@ -453,7 +455,7 @@ abstract class WaitingState extends BaseTxnState
             // at this point we can switch to polling as we know someone has the relevant state
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Blocked until %s. Fetching %s%s for epochs [%d..%d].", blockedUntil, slicedRoute, slicedRoute == fetchRoute ? "" : " from " + fetchRoute, lowEpoch, highEpoch);
-            fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, fetchRoute, route);
+            fetch(owner, blockedUntil, txnId, invalidIf(), executeAt, slicedRoute, fetchRoute, route);
             return;
         }
 
@@ -486,7 +488,7 @@ abstract class WaitingState extends BaseTxnState
 
             // all of the shards we are awaiting have been processed and found at least one replica that has the state needed to answer our query
             // at this point we can switch to polling as we know someone has the relevant state
-            fetch(owner, blockedUntil, txnId, executeAt, slicedRoute, fetchRoute, route);
+            fetch(owner, blockedUntil, txnId, invalidIf(), executeAt, slicedRoute, fetchRoute, route);
             return;
         }
 
@@ -819,12 +821,12 @@ abstract class WaitingState extends BaseTxnState
         owner.start(invoker, FetchRoute.fetchRoute(owner.node(), txnId, contactable, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker));
     }
 
-    static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
+    static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Infer.InvalidIf invalidIf, Timestamp executeAt, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
     {
         Invariants.require(!slicedRoute.isEmpty());
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         CallbackInvoker<BlockedUntil, FetchData.FetchResult> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
-        owner.start(invoker, FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, executeAt, fetchRoute, maxRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker));
+        owner.start(invoker, FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, invalidIf, executeAt, fetchRoute, maxRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker));
     }
 
     void awaitHomeKey(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route)

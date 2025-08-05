@@ -44,6 +44,7 @@ import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topology;
@@ -357,13 +358,18 @@ public class ShardDurability
             lastStartedAtMicros = node.elapsed(MICROSECONDS);
             long minEpoch = 0;
             long minHlc = 0;
-            if (activeRequest != null && activeRequest.min != null)
+            Txn.Kind kind = ExclusiveSyncPoint;
+            if (activeRequest != null)
             {
-                minEpoch = activeRequest.min.epoch();
-                minHlc = activeRequest.min.hlc();
+                kind = activeRequest.kind;
+                if (activeRequest.min != null)
+                {
+                    minEpoch = activeRequest.min.epoch();
+                    minHlc = activeRequest.min.hlc();
+                }
             }
             minHlc = Math.max(minHlc, node.agent().minStaleHlc(node, activeRequest != null));
-            TxnId staleId = node.nextStaleTxnId(minEpoch, minHlc, ExclusiveSyncPoint, Domain.Range);
+            TxnId staleId = node.nextStaleTxnId(minEpoch, minHlc, kind, Domain.Range);
             if (activeRequest != null) logger.info("Initiating RX requested by {} for {} with TxnId {}. Remaining: {}.", activeRequest.requestedBy, ranges, staleId, active);
             else logger.debug("Initiating RX for durability of {} with TxnId {}.", ranges, staleId);
 

@@ -261,7 +261,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public AsyncResult<Void> unsafeStart()
     {
         EpochReady ready = onTopologyUpdateInternal(configService.currentTopology(), false);
-        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
+        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, ready.epoch));
         configService.acknowledgeEpoch(ready, false);
         return ready.metadata;
     }
@@ -382,7 +382,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         if (topology.epoch() <= this.topology.epoch())
             return AsyncResults.success(null);
         EpochReady ready = onTopologyUpdateInternal(topology, startSync);
-        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, topology.epoch()));
+        long epoch = topology.epoch();
+        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, epoch)).begin(agent);
         configService.acknowledgeEpoch(ready, startSync);
         return ready.coordinate;
     }
@@ -767,7 +768,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private static TxnId newTxnId(long epoch, long now, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags, Node.Id node)
     {
         Invariants.require(domain == Key || rw != Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
-        Invariants.require(domain == Range || rw != Txn.Kind.ExclusiveSyncPoint, "Key ExclusiveSyncPoint not supported without improvements to CommandsForKey for managing execution");
+        Invariants.require(domain == Range || !rw.isSyncPoint, "Key ExclusiveSyncPoint not supported without improvements to CommandsForKey for managing execution");
         TxnId txnId = new TxnId(epoch, now, flags, rw, domain, cardinality, node);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;

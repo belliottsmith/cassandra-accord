@@ -179,6 +179,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         {
             super(startEpoch, endEpoch, maxBound(bounds, statuses, PRE_BOOTSTRAP), maxBound(bounds, statuses, GC_BEFORE),
                   maxBound(bounds, statuses, LOCALLY_APPLIED));
+            Invariants.require(statuses.length == bounds.length * 2);
             this.range = range;
             this.bounds = bounds;
             this.statuses = statuses;
@@ -187,7 +188,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             this.maxBoundEpoch = bounds.length == 0 ? 0 : bounds[0].epoch();
             this.maxBoundHlc = bounds.length == 0 ? 0 : bounds[0].hlc();
             this.depBound = depBound(bounds, statuses);
-            checkMinBoundOrRX(bounds);
+            checkMinBoundOrSyncPoint(bounds);
             requireStrictlyOrdered(Comparator.reverseOrder(), bounds);
             require(isShardBound(gcBefore) || isMinBound(gcBefore));
         }
@@ -215,15 +216,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return depBound.addFlag(SHARD_BOUND);
         }
 
-        private static void checkMinBoundOrRX(TxnId ... txnIds)
+        private static void checkMinBoundOrSyncPoint(TxnId ... txnIds)
         {
             for (TxnId txnId : txnIds)
-                checkMinBoundOrRX(txnId);
+                checkMinBoundOrSyncPoint(txnId);
         }
 
-        private static void checkMinBoundOrRX(TxnId txnId)
+        private static void checkMinBoundOrSyncPoint(TxnId txnId)
         {
-            Invariants.requireArgument(txnId.domain().isRange() && txnId.is(ExclusiveSyncPoint) || isMinBound(txnId));
+            Invariants.requireArgument(txnId.domain().isRange() && txnId.isSyncPoint() || isMinBound(txnId));
         }
 
         private static boolean isMinBound(TxnId txnId)
@@ -233,7 +234,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
         private static boolean isShardBound(TxnId txnId)
         {
-            return txnId.domain().isRange() && txnId.is(ExclusiveSyncPoint) && txnId.is(SHARD_BOUND);
+            return txnId.domain().isRange() && txnId.isSyncPoint() && txnId.is(SHARD_BOUND);
         }
 
         public static Bounds reduce(Bounds a, Bounds b)
@@ -1037,7 +1038,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
      */
     public Participants<?> expectToOwn(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
     {
-        if (txnId.is(ExclusiveSyncPoint))
+        if (txnId.isSyncPoint())
         {
             if (!mayFilterStaleOrPreBootstrapOrRetiredOrNotOwned(txnId, executeAt, participants))
                 return participants;
@@ -1069,7 +1070,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
      */
     public Participants<?> expectExclusiveSyncPointToWaitOn(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
     {
-        Invariants.require(txnId.is(ExclusiveSyncPoint));
+        Invariants.require(txnId.isSyncPoint());
         if (!mayFilterStaleOrPreBootstrapOrRetiredOrNotOwned(txnId, executeAt, participants))
             return participants;
 

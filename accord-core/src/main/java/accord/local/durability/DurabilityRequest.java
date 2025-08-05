@@ -37,6 +37,7 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncResults;
@@ -44,6 +45,7 @@ import accord.utils.async.AsyncResults;
 import static accord.local.durability.DurabilityService.SyncRemote.All;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
 
 public class DurabilityRequest
 {
@@ -65,6 +67,7 @@ public class DurabilityRequest
 
     final AsyncResults.SettableResult<Void> result = new AsyncResults.SettableResult<>();
     final Object requestedBy;
+    final Txn.Kind kind;
     final Timestamp min;
     final Ranges ranges;
     final SyncLocal local;
@@ -78,9 +81,10 @@ public class DurabilityRequest
 
     private LinkedHashMap<TxnId, DurableEvents> events;
 
-    DurabilityRequest(Object requestedBy, Timestamp min, Ranges ranges, SyncLocal local, SyncRemote remote, @Nullable Collection<Node.Id> including, long startedAt, long timeoutAt)
+    DurabilityRequest(Object requestedBy, Txn.Kind kind, Timestamp min, Ranges ranges, SyncLocal local, SyncRemote remote, @Nullable Collection<Node.Id> including, long startedAt, long timeoutAt)
     {
         this.requestedBy = requestedBy;
+        this.kind = kind;
         this.min = min == null ? TxnId.NONE : min;
         this.ranges = ranges;
         this.local = local;
@@ -141,6 +145,9 @@ public class DurabilityRequest
     synchronized boolean report(DurabilityResult durability, long finishedAt)
     {
         SyncPoint<Range> syncPoint = durability.syncPoint;
+        if (kind == VisibilitySyncPoint && !syncPoint.syncId.is(VisibilitySyncPoint))
+            return false;
+
         Ranges intersecting = ranges.intersecting(syncPoint.route, Minimal);
         if (intersecting.isEmpty())
             return false;

@@ -306,7 +306,7 @@ class Updating
         MergeCursor<TxnId, DepList> deps = command.partialDeps().txnIds(cfk.key());
         deps.find(cfk.redundantBefore());
 
-        int durablyCommitted = command.durability().isDurablyCommitted() ? 1 : 0;
+        boolean durablyCommitted = command.durability().isDurablyCommitted();
         return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, plainTxnId, newStatus, mayExecute, durablyCommitted, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
     }
 
@@ -314,7 +314,7 @@ class Updating
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, int durablyCommitted, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, boolean durablyCommitted, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -374,7 +374,7 @@ class Updating
                     // we can take dependencies on ExclusiveSyncPoints to represent a GC point in the log
                     // if we don't ordinarily witness a transaction it is meaningless to include it as a dependency
                     // as we will not logically be able to work with it (the missing collection will not correctly represent it anyway)
-                    Invariants.require(d.is(ExclusiveSyncPoint));
+                    Invariants.require(d.isSyncPoint());
                 }
                 deps.advance();
             }
@@ -1000,7 +1000,7 @@ class Updating
                             {
                                 if (newById == null)
                                     newById = byId.clone();
-                                newById[j] = TxnInfo.create(txn, TRANSITIVE_VISIBLE, txn.mayExecute(), txn.statusOverrides(), 0, txn.executeAt, txn.missing(), txn.ballot());
+                                newById[j] = TxnInfo.create(txn, TRANSITIVE_VISIBLE, txn.mayExecute(), txn.statusOverrides(), false, txn.executeAt, txn.missing(), txn.ballot());
                             }
                             ++i;
                         }
@@ -1120,7 +1120,7 @@ class Updating
                 {
                     int prunedBeforeById = cfk.prunedBeforeById;
                     Invariants.require(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
-                    newCfk = new CommandsForKey(cfk.key(), cfk.bounds, newById, newMinUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, newLoadingPruned, prunedBeforeById, newUnmanaged);
+                    newCfk = new CommandsForKey(cfk.key(), cfk.bounds, newById, newMinUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, newLoadingPruned, prunedBeforeById, newUnmanaged, true);
                 }
 
                 CommandsForKeyUpdate result = newCfk;

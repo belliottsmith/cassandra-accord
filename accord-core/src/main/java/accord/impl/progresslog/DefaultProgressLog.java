@@ -38,6 +38,7 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.PreLoadContext;
+import accord.local.RedundantStatus;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Ballot;
@@ -68,6 +69,7 @@ import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.Command.NotDefined.uninitialised;
+import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Invalidated;
 import static accord.primitives.SaveStatus.Stable;
@@ -126,7 +128,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private final Object2ObjectHashMap<TxnId, PendingTask> pendingHome = new Object2ObjectHashMap<>();
 
     private final Long2ObjectHashMap<Object> active = new Long2ObjectHashMap<>();
-    private final Map<TxnId, StackTraceElement[]> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
+    private final Map<TxnId, Boolean> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
 
     private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
     private static final RunInvoker[] EMPTY_AWAITING_EPOCH_BUFFER = new RunInvoker[0];
@@ -230,19 +232,19 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         boolean updateHome = updateWaiting || (afterRoute != null && beforeRoute == null) || !before.durability().isAtLeast(after.durability());
         if (updateHome)
         {
-            TxnState state = updateOrInitialiseHomeState(safeStore, before, after, get(txnId));
+            TxnState state = updateHomeState(safeStore, before, after, get(txnId));
             if (updateWaiting && state != null)
                 state.waiting().record(this, afterSaveStatus);
         }
     }
 
-    private TxnState updateOrInitialiseHomeState(SafeCommandStore safeStore, @Nullable Command before, Command after, @Nullable TxnState state)
+    private TxnState updateHomeState(SafeCommandStore safeStore, @Nullable Command before, Command after, @Nullable TxnState state)
     {
         if (state != null && state.isHomeDone())
             return state;
 
         Route<?> route = after.route();
-        if (after.durability().isDurable() || after.saveStatus() == Invalidated)
+        if (after.durability().isDurableOrInvalidated())
         {
             // command is durable, so we don't need to coordinate it - whether we're the home shard or not
             if (state != null)
@@ -260,7 +262,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (route == null)
             return state; // we don't know if we're the home shard
 
-        Invariants.require(!after.durability().isDurable());
+        Invariants.require(!after.durability().isDurableOrInvalidated());
         TxnId txnId = after.txnId();
         if (state == null || !state.isHomeInitialised())
         {
@@ -272,8 +274,13 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
                     state.setHomeDone(this);
                 return state;
             }
-            if (state == null) state = insert(txnId);
-            else state.set(safeStore, this, Undecided, Queued); // initialise
+            if (state == null)
+            {
+                if (txnId.compareTo(safeStore.redundantBefore().get(homeKey).maxBound(QUORUM_APPLIED)) < 0)
+                    return null;
+                state = insert(txnId);
+            }
+            state.set(safeStore, this, Undecided, Queued); // initialise
         }
 
         CoordinatePhase phase = state.phase();
@@ -419,7 +426,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     {
         stateMap = BTreeRemoval.<TxnId, TxnState>remove(stateMap, (id, s) -> id.compareTo(s.txnId), txnId);
         if (debugDeleted != null)
-            debugDeleted.put(txnId, Thread.currentThread().getStackTrace());
+            debugDeleted.put(txnId, Boolean.TRUE);
     }
 
     @Override
@@ -474,8 +481,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             command = blockedBy.incidentalUpdate(update);
 
         // TODO (required): tighten up ExclusiveSyncPoint range bounds
-        Invariants.require((command.txnId().is(ExclusiveSyncPoint) ? safeStore.ranges().all()
-                                                                   : safeStore.ranges().allSince(command.txnId().epoch())
+        Invariants.require((command.txnId().isSyncPoint() ? safeStore.ranges().all()
+                                                          : safeStore.ranges().allSince(command.txnId().epoch())
                               ).intersects(command.participants().hasTouched()));
 
         // TODO (desired):  consider triggering a preemption of existing coordinator (if any) in some circumstances;
@@ -489,7 +496,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
         // in case progress log hasn't been updated (e.g. bug on replay), force an update to the command's state since we're about to wait on it
         if (!state.isHomeInitialised() && command.route() != null)
-            updateOrInitialiseHomeState(safeStore, null, command, state);
+            updateHomeState(safeStore, null, command, state);
     }
 
     @Override

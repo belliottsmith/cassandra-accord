@@ -52,6 +52,7 @@ import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
+import accord.utils.UnhandledEnum;
 
 import javax.annotation.Nullable;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
@@ -73,7 +74,6 @@ import static accord.primitives.Known.Nothing;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
-import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.WithQuorum.HasQuorum;
 import static accord.utils.Invariants.illegalState;
 
@@ -302,8 +302,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         switch (propagate.status)
         {
-            default: throw illegalState("Unexpected status: " + propagate);
-            case Truncated: throw illegalState("Status expected to be handled elsewhere: " + propagate);
+            default: throw UnhandledEnum.invalid(propagate);
+            case NotDefined:
+            case Truncated:
+                throw illegalState("Status expected to be handled elsewhere: " + propagate);
+
             case AcceptedMedium:
             case AcceptedSlow:
             case AcceptedInvalidate:
@@ -349,14 +352,6 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                     if (tracing != null)
                         tracing.trace(safeStore.commandStore(), "Pre-accepting");
                     Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false);
-                }
-
-            case NotDefined:
-                if (invalidIf == IfUncommitted)
-                {
-                    if (tracing != null)
-                        tracing.trace(safeStore.commandStore(), "Marking invalidIfUncommitted");
-                    safeStore.progressLog().invalidIfUncommitted(txnId);
                 }
                 break;
         }
@@ -421,7 +416,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         Known required = PreApplied.minKnown;
         Known requireExtra = required.subtract(command.known()); // the extra information we need to reach pre-applied
 
-        Participants<?> stillOwnsOrMayExecute = txnId.is(ExclusiveSyncPoint) ? participants.stillTouches() : participants.stillOwns();
+        Participants<?> stillOwnsOrMayExecute = txnId.isSyncPoint() ? participants.stillTouches() : participants.stillOwns();
         Participants<?> notStaleTouches = known.knownFor(Nothing.with(requireExtra.deps()), stillTouches); // the ranges for which we can already successfully achieve this
         Participants<?> notStaleOwnsOrMayExecute = known.knownFor(requireExtra.with(DepsUnknown), stillOwnsOrMayExecute); // the ranges for which we can already successfully achieve this
 

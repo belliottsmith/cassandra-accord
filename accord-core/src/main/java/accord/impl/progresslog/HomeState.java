@@ -148,7 +148,7 @@ abstract class HomeState extends WaitingState
         Invariants.require(command.durability() != null);
         // TODO (expected): when invalidated, safer to maintain HomeState until known to be globally invalidated
         // TODO (expected): validate that we clear HomeState when we receive a Durable reply, to replace the token check logic
-        Invariants.require(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog");
+        Invariants.expect(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog");
         if (Route.isFullRoute(command.route()))
         {
             HasOutcome min = safeStore.durableBefore().min(txnId, command.route());

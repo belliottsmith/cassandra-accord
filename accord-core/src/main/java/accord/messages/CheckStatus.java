@@ -360,10 +360,11 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
                     else addPhase = Durability.HasPhase.None;
                     finished = finished.merge((Durability.get(addPhase, addShard, addAllShards, minKnown.isInvalidated())));
                 }
-                if ((invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted) && queried.containsAll(requestedFor))
+                // TODO (required): should we require that we contacted the coordination epoch?
+                if (invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted)
                 {
                     InvalidIf invalidIf = this.invalidIf.inferWithQuorum(minKnown, maxKnown);
-                    invalidIf = invalidIf.inferWithNewQuorum(previouslyKnownToBeInvalidIf, maxKnown);
+                    invalidIf = invalidIf.inferWithNewQuorum(previouslyKnownToBeInvalidIf, minKnown);
                     if (invalidIf == IsInvalid)
                         validForAll = validForAll.atLeast(Known.Invalidated);
                     finished = finished.with(invalidIf);
@@ -514,6 +515,11 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         public Known minMaxKnown(Unseekables<?> query)
         {
             return map.foldlWithDefault(query, Known::nonNullOrMin, MinMax.Nothing, null, i -> false);
+        }
+
+        public Known minMaxKnown(RoutingKey key)
+        {
+            return Known.nonNullOrMin(map.get(key), MinMax.Nothing);
         }
 
         @Override

@@ -891,7 +891,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         public void updateExclusiveSyncPoint(Command prev, Command updated, boolean force)
         {
             super.updateExclusiveSyncPoint(prev, updated, force);
-            if (updated.txnId().kind() != Txn.Kind.ExclusiveSyncPoint || updated.txnId().domain() != Range || !updated.hasBeen(Applied) || (prev.hasBeen(Applied) && !force) || updated.hasBeen(Truncated)) return;
+            if (!updated.txnId().isSyncPoint() || updated.txnId().domain() != Range || !updated.hasBeen(Applied) || (prev.hasBeen(Applied) && !force) || updated.hasBeen(Truncated)) return;
 
             Participants<?> covering = updated.participants().touches();
             for (Map.Entry<TxnId, GlobalCommand> entry : commandStore().commands.headMap(updated.txnId(), false).entrySet())
@@ -901,7 +901,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (!command.hasBeen(Committed)) continue;
                 if (command.hasBeen(Applied)) continue;
                 if (txnId.is(EphemeralRead)) continue;
-                Participants<?> intersecting = (txnId.is(ExclusiveSyncPoint) ? command.participants().owns(): command.participants().stillWaitsOn()).intersecting(covering, Minimal);
+                Participants<?> intersecting = (txnId.isSyncPoint() ? command.participants().owns(): command.participants().stillWaitsOn()).intersecting(covering, Minimal);
                 if (intersecting.isEmpty()) continue;
                 if (commandStore().unsafeGetRedundantBefore().locallyDefunct(command.txnId(), intersecting) == ALL) continue;
                 if (txnId.is(Key))

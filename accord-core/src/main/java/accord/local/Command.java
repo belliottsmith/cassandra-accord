@@ -74,7 +74,6 @@ import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.ShardUniversal;
-import static accord.primitives.Status.Durability.Universal;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.Paranoia.LINEAR;
@@ -1073,7 +1072,7 @@ public abstract class Command implements ICommand
             public static Initialise initialise(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, StoreParticipants participants, PartialDeps deps)
             {
                 Initialise initialise = new Initialise(txnId, participants, executeAt, deps);
-                if (txnId.is(Txn.Kind.ExclusiveSyncPoint))
+                if (txnId.isSyncPoint())
                 {
                     CommandStores.RangesForEpoch rangesForEpoch = safeStore.ranges();
                     long prevEpoch = Long.MAX_VALUE;
@@ -1089,7 +1088,7 @@ public abstract class Command implements ICommand
                                 TxnId id = upd.txnId(idx);
                                 // because we use RX as RedundantBefore bounds, we must not let an RX on a closing range
                                 // get ahead of one that isn't closed but has overlapping transactions (else we may erroneously treat as redundant)
-                                if (id.epoch() >= epoch && (id.is(Txn.Kind.ExclusiveSyncPoint) || id.epoch() < maxEpoch))
+                                if (id.epoch() >= epoch && (id.isSyncPoint() || id.epoch() < maxEpoch))
                                     initialise.initialise(idx);
                             });
                             int lbound = deps.rangeDeps.txnIdCount();

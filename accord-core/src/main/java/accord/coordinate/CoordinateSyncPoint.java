@@ -164,7 +164,8 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         else
         {
             TxnId withFlags = txnId;
-            if (txnId.is(ExclusiveSyncPoint) && txnId.epoch() == executeAt.epoch())
+            Invariants.require(txnId.isSyncPoint());
+            if (txnId.epoch() == executeAt.epoch())
                 withFlags = txnId.addFlag(HLC_BOUND);
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             node.agent().coordinatorEvents().onPreAccepted(txnId);

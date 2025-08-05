@@ -66,15 +66,14 @@ import static accord.local.RedundantStatus.SomeStatus.LOCALLY_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_DATA_STORE_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
-import static accord.local.RedundantStatus.SomeStatus.MAJORITY_APPLIED_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.QUORUM_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.PRE_BOOTSTRAP_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.SHARD_APPLIED_ONLY;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
-import static accord.primitives.Status.Durability.HasOutcome.Quorum;
-import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
+import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
 import static accord.utils.Invariants.nonNull;
 
 /**
@@ -466,7 +465,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     final void markExclusiveSyncPoint(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
     {
         // TODO (desired): narrow ranges to those that are owned
-        Invariants.requireArgument(txnId.is(ExclusiveSyncPoint));
+        Invariants.requireArgument(txnId.isSyncPoint());
         RejectBefore newRejectBefore = rejectBefore != null ? rejectBefore : new RejectBefore();
         newRejectBefore = RejectBefore.add(newRejectBefore, ranges, txnId);
         unsafeSetRejectBefore(newRejectBefore);
@@ -480,7 +479,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     final void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
     {
         // TODO (desired): narrow ranges to those that are owned
-        Invariants.requireArgument(txnId.is(ExclusiveSyncPoint));
+        Invariants.requireArgument(txnId.isSyncPoint());
         RedundantBefore addNow = RedundantBefore.create(ranges, txnId, LOCALLY_APPLIED_ONLY);
         safeStore.upsertRedundantBefore(addNow);
         RedundantBefore addOnDataStoreDurable = RedundantBefore.create(ranges, txnId, LOCALLY_DURABLE_TO_DATA_STORE_ONLY);
@@ -581,7 +580,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     private void ensureReadyToCoordinate(long epoch, Ranges ranges)
     {
         TxnId minForEpoch = TxnId.minForEpoch(epoch);
-        node.durability().close("[" + this + " Epoch " + epoch + ']', minForEpoch, ranges, 1, TimeUnit.HOURS)
+        node.durability().close("[" + this + " Epoch " + epoch + ']', VisibilitySyncPoint, minForEpoch, ranges, 1, TimeUnit.HOURS)
             .begin((success, fail) -> {
                 if (fail != null)
                 {
@@ -629,10 +628,10 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
     public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges, HasOutcome durability)
     {
-        if (durability.compareTo(Quorum) < 0)
+        if (!durability.isDurable())
             return;
 
-        SomeStatus status = durability.compareTo(Universal) >= 0 ? SHARD_APPLIED_ONLY : MAJORITY_APPLIED_ONLY;
+        SomeStatus status = durability.isUniversal() ? SHARD_APPLIED_ONLY : QUORUM_APPLIED_ONLY;
         final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
         TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, Bounds::maxLocallyAppliedBefore);
         RedundantBefore addNow = RedundantBefore.create(slicedRanges, globalSyncId, status);
@@ -734,6 +733,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     protected final void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
+        Invariants.require(syncId.is(VisibilitySyncPoint));
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
 
@@ -788,6 +788,10 @@ public abstract class CommandStore implements SequentialAsyncExecutor
             // make sure no in-progress bootstrap attempts will override the stale since for commands whose staleness bounds are unknown
             staleUntilAtLeast = Timestamp.max(bootstrapBeganAt.lastKey(), staleUntilAtLeast);
         }
+
+        if (ranges.isEmpty())
+            return;
+
         agent.onStale(staleSince, ranges);
 
         RedundantBefore addRedundantBefore = RedundantBefore.createStale(ranges, staleUntilAtLeast);
