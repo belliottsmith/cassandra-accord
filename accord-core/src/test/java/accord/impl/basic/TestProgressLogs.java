@@ -18,7 +18,6 @@
 
 package accord.impl.basic;
 
-import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 
 import accord.api.ProgressLog;

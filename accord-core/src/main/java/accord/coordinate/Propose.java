@@ -21,7 +21,6 @@ package accord.coordinate;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
-import accord.api.CoordinatorEventListener;
 import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;

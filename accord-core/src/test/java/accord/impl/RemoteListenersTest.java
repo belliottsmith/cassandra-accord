@@ -54,7 +54,6 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.RangeDeps;
 import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
@@ -68,7 +67,6 @@ import accord.utils.AccordGens;
 import accord.utils.RandomSource;
 import accord.utils.RandomTestRunner;
 import accord.utils.async.AsyncChain;
-import accord.utils.async.AsyncChains;
 import org.agrona.collections.IntHashSet;
 import org.agrona.collections.ObjectHashSet;
 

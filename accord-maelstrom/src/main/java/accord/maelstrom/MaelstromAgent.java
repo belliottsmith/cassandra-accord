@@ -152,19 +152,19 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener
     }
 
     @Override
-    public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
+    public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }

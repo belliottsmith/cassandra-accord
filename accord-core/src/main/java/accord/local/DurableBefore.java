@@ -25,7 +25,6 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.primitives.AbstractRanges;
 import accord.primitives.Participants;
-import accord.primitives.Ranges;
 import accord.primitives.Status.Durability;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;

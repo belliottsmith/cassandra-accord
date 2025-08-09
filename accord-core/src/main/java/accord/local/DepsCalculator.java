@@ -26,7 +26,6 @@ import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
-import accord.primitives.Status;
 import accord.primitives.Status.Durability;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -37,7 +36,6 @@ import accord.utils.Invariants;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
-import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 

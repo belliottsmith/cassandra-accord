@@ -21,9 +21,7 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.api.Tracing;
-import accord.local.CommandStores;
 import accord.local.CommandStores.LatentStoreSelector;
-import accord.local.CommandStores.StoreSelector;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.InformDurable;
 import accord.primitives.*;

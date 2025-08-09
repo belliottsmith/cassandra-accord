@@ -42,7 +42,6 @@ import accord.utils.async.AsyncResults;
 
 import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
 import static accord.local.durability.DurabilityService.SyncRemote.MinorityQuorum;
-import static accord.local.durability.DurabilityService.SyncRemote.Quorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;

@@ -29,7 +29,6 @@ import accord.api.DataStore;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
-import accord.impl.InMemoryCommandStore;
 import accord.local.CommandStores.RangesForEpochSupplier;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;

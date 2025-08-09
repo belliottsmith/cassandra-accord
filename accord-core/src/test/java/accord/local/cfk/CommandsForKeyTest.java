@@ -62,7 +62,6 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
-import accord.primitives.RangeDeps;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
@@ -89,7 +88,6 @@ import accord.utils.DefaultRandom;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
-import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
 
 import static accord.local.Command.Executed.executed;
@@ -1091,19 +1089,19 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
+        public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt)
         {
             return 0;
         }
 
         @Override
-        public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units)
+        public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil blockedUntil, TimeUnit units)
         {
             return 0;
         }
 
         @Override
-        public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
+        public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil retrying, TimeUnit units)
         {
             return 0;
         }

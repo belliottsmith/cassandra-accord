@@ -89,8 +89,10 @@ abstract class WaitingState extends BaseTxnState
     private static final long BLOCKED_UNTIL_MASK = 0x7;
     private static final int HOME_SATISFIES_SHIFT = 5;
     private static final long HOME_SATISFIES_MASK = 0x7;
-    private static final int AWAIT_SHIFT = 8;
-    private static final int AWAIT_BITS = 28;
+    private static final int AWAIT_STARTED_SHIFT = 8;
+    private static final int AWAIT_STARTED_BIT = 1 << AWAIT_STARTED_SHIFT;
+    private static final int AWAIT_SHIFT = AWAIT_STARTED_SHIFT + 1;
+    private static final int AWAIT_BITS = 27;
     private static final long AWAIT_MASK = (1L << AWAIT_BITS) - 1;
     private static final int AWAIT_EPOCH_SHIFT = AWAIT_SHIFT + AWAIT_BITS;
     private static final int AWAIT_EPOCH_BITS = 4;
@@ -173,6 +175,7 @@ abstract class WaitingState extends BaseTxnState
 
     private void clearAwaitState()
     {
+        encodedState &= ~AWAIT_STARTED_BIT;
         encodedState = clearRoundState(encodedState, AWAIT_SHIFT, AWAIT_MASK);
     }
 
@@ -189,6 +192,16 @@ abstract class WaitingState extends BaseTxnState
     private void setAwaitBitSet(int bitSet, int roundSize)
     {
         encodedState = setBitSet(encodedState, bitSet, roundSize, AWAIT_SHIFT);
+    }
+
+    private boolean hasAwaitStarted()
+    {
+        return 0 != (encodedState & AWAIT_STARTED_BIT);
+    }
+
+    private void setAwaitStarted()
+    {
+        encodedState |= AWAIT_STARTED_BIT;
     }
 
     private int awaitRoundIndex(int roundSize)
@@ -208,12 +221,12 @@ abstract class WaitingState extends BaseTxnState
         encodedState = setMaxRoundIndexAndClearBitSet(encodedState, roundSize, AWAIT_SHIFT, AWAIT_BITS, AWAIT_MASK);
     }
 
-    final int waitingRetryCounter()
+    final int waitingRunCounter()
     {
         return (int) ((encodedState >>> RETRY_COUNTER_SHIFT) & RETRY_COUNTER_MASK);
     }
 
-    final void incrementWaitingRetryCounter()
+    final void incrementWaitingRunCounter()
     {
         long shiftedMask = RETRY_COUNTER_MASK << RETRY_COUNTER_SHIFT;
         long current = encodedState & shiftedMask;
@@ -222,7 +235,7 @@ abstract class WaitingState extends BaseTxnState
         encodedState |= updated;
     }
 
-    final void clearWaitingRetryCounter()
+    final void clearWaitingRunCounter()
     {
         long shiftedMask = RETRY_COUNTER_MASK << RETRY_COUNTER_SHIFT;
         encodedState &= ~shiftedMask;
@@ -349,7 +362,7 @@ abstract class WaitingState extends BaseTxnState
     {
         set(null, owner, CanApply, NoneExpected);
         owner.clearPendingAndActive(Waiting, txnId);
-        clearWaitingRetryCounter();
+        clearWaitingRunCounter();
     }
 
     void setBlockedUntil(SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil blockedUntil)
@@ -358,7 +371,7 @@ abstract class WaitingState extends BaseTxnState
         if (blockedUntil.compareTo(currentlyBlockedUntil) > 0 || isUninitialised())
         {
             clearAwaitState();
-            clearWaitingRetryCounter();
+            clearWaitingRunCounter();
             owner.clearPendingAndActive(Waiting, txnId);
             set(safeStore, owner, blockedUntil, Queued);
         }
@@ -384,6 +397,7 @@ abstract class WaitingState extends BaseTxnState
 
     private void runInternal(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, @Nullable Tracing tracing)
     {
+        incrementWaitingRunCounter();
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
         Invariants.require(!owner.hasPending(Waiting, txnId));
@@ -434,7 +448,6 @@ abstract class WaitingState extends BaseTxnState
         // the fetchRoute may also be only the home shard, if that is sufficient to answer our query (e.g. for executeAt)
         Route<?> awaitRoute = awaitRoute(slicedRoute, blockedUntil);
         Route<?> fetchRoute = fetchRoute(slicedRoute, awaitRoute, blockedUntil, safeStore, lowEpoch, txnId, highEpoch, route);
-
         if (awaitRoute.isHomeKeyOnlyRoute())
         {
             // at this point we can switch to polling as we know someone has the relevant state
@@ -445,8 +458,11 @@ abstract class WaitingState extends BaseTxnState
         }
 
         int roundSize = awaitRoundSize(awaitRoute);
-        if (hasNewLowEpoch(safeStore, txnId, prevLowEpoch, lowEpoch) || hasNewHighEpoch(safeStore, txnId, prevHighEpoch, highEpoch))
+        if (hasAwaitStarted() && (hasNewLowEpoch(safeStore, txnId, prevLowEpoch, lowEpoch) || hasNewHighEpoch(safeStore, txnId, prevHighEpoch, highEpoch)))
         {
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Epoch bounds changed between invocations from [%d...%d] to [%d...%d]", prevLowEpoch, prevHighEpoch, lowEpoch, highEpoch);
+
             // update round counters because we have changed the epochs involved
             Route<?> prevSlicedRoute = slicedRoute(safeStore, txnId, route, prevLowEpoch, prevHighEpoch);
             Route<?> prevAwaitRoute = awaitRoute(prevSlicedRoute, blockedUntil);
@@ -480,6 +496,7 @@ abstract class WaitingState extends BaseTxnState
         //   to either periodically fetch the whole remaining route or gradually increase the slice length
         if (tracing != null)
             tracing.trace(owner.commandStore, "Blocked until %s. Waiting for %s to satisfy; round %d of %d.", blockedUntil, awaitRoute, roundIndex, (awaitRoute.size() + (roundSize - 1))/roundSize);
+        setAwaitStarted();
         awaitSlice(owner, blockedUntil, txnId, executeAt, awaitRoute, (roundIndex << 1) | 1);
     }
 
@@ -538,8 +555,8 @@ abstract class WaitingState extends BaseTxnState
                             tracing.trace(owner.commandStore, "Callback success. Home key ready.");
                         // the home shard was found to already have the necessary state, with no distributed await;
                         // we can immediately progress the state machine
-                        Invariants.require(0 == state.awaitRoundIndex(roundSize));
-                        Invariants.require(0 == state.awaitBitSet(roundSize));
+                        Invariants.expect(0 == state.awaitRoundIndex(roundSize));
+                        Invariants.expect(0 == state.awaitBitSet(roundSize));
                         state.runInternal(safeStore, safeCommand, owner, tracing);
                     }
                     else
@@ -552,7 +569,8 @@ abstract class WaitingState extends BaseTxnState
                     break;
 
                 case AwaitSlice:
-                    Invariants.require(awaitRoute == slicedRoute);
+                    Invariants.expect(state.hasAwaitStarted());
+                    Invariants.require(awaitRoute.equals(slicedRoute));
                     // In a production system it is safe for the roundIndex to get corrupted as we will just start polling a bit early,
                     // but for testing we would like to know it has happened.
                     if (Invariants.expect(roundStart < slicedRoute.size()))
@@ -562,9 +580,9 @@ abstract class WaitingState extends BaseTxnState
 
                         if (notReady.isEmpty())
                         {
-                            Invariants.expect((int) awaitRoute.findNextSameKindIntersection(roundStart, (Unseekables) ready, 0) / roundSize == roundIndex);
-                            // TODO (desired): in this case perhaps upgrade to fetch for next round?
-                            state.updateAwaitRound(roundIndex + 1, roundSize);
+                            Invariants.expect((int) slicedRoute.findNextSameKindIntersection(roundStart, (Unseekables) ready, 0) / roundSize == roundIndex);
+                            if (roundStart + roundSize >= slicedRoute.size()) state.setAwaitDone(roundSize);
+                            else state.updateAwaitRound(roundIndex + 1, roundSize);
                             state.runInternal(safeStore, safeCommand, owner, tracing);
                         }
                         else
@@ -581,6 +599,8 @@ abstract class WaitingState extends BaseTxnState
                 case FetchRoute:
                     if (state.homeSatisfies().compareTo(blockedUntil) < 0)
                     {
+                        if (tracing != null)
+                            tracing.trace(owner.commandStore, "Successfully fetched route; invoking runInternal");
                         state.runInternal(safeStore, safeCommand, owner, tracing);
                         return;
                     }
@@ -588,35 +608,57 @@ abstract class WaitingState extends BaseTxnState
                 case Fetch:
                 {
                     Participants<?> notReady = slicedRoute.without(ready);
-                    Invariants.expect(!notReady.isEmpty(), "Fetch was successful for all keys, but the WaitingState has not been cleared");
-                    int nextIndex;
-                    if (roundStart >= awaitRoute.size()) nextIndex = -1;
-                    else if (slicedRoute == awaitRoute) nextIndex = (int) awaitRoute.findNextSameKindIntersection(roundStart, (Unseekables) notReady, 0);
+                    if (!awaitRoute.equals(slicedRoute))
+                    {
+                        Invariants.expect(awaitRoute.isHomeKeyOnlyRoute());
+                        Invariants.expect(state.homeSatisfies().compareTo(blockedUntil) >= 0);
+                        // nothing to do, fall through and retry
+                    }
                     else
                     {
-                        Invariants.require(roundIndex == 0);
-                        nextIndex = 0;
+                        Invariants.expect(!notReady.isEmpty(), "Fetch was successful for all keys, but the WaitingState has not been cleared");
+                        if (roundStart < slicedRoute.size())
+                        {
+                            int nextIndex;
+                            if (slicedRoute.equals(awaitRoute)) nextIndex = (int) slicedRoute.findNextSameKindIntersection(roundStart, (Unseekables) notReady, 0);
+                            else
+                            {
+                                if (Invariants.expect(!state.hasAwaitStarted())) nextIndex = 0;
+                                else nextIndex = -1;
+                            }
+                            state.setAwaitStarted();
+
+                            if (nextIndex >= 0)
+                            {
+                                if (tracing != null)
+                                    tracing.trace(owner.commandStore, "Found %s notReady %s", notReady);
+
+                                Invariants.require(nextIndex >= roundStart);
+                                Invariants.require(roundStart < slicedRoute.size());
+                                roundIndex = nextIndex / roundSize;
+                                Invariants.require(roundIndex * roundSize < slicedRoute.size());
+                                state.updateAwaitRound(roundIndex, roundSize);
+                                state.initialiseAwaitBitSet(slicedRoute, notReady, roundIndex, roundSize);
+                                state.runInternal(safeStore, safeCommand, owner, tracing);
+                                return;
+                            }
+                        }
                     }
 
-                    if (nextIndex < 0)
-                    {
-                        // we don't think we have anything to wait for, but we have encountered some notReady responses; queue up a retry
-                        state.setAwaitDone(roundSize);
-                        state.retry(safeStore, safeCommand, owner, blockedUntil, tracing);
-                    }
-                    else
-                    {
-                        Invariants.require(nextIndex >= roundStart);
-                        roundIndex = nextIndex / roundSize;
-                        state.updateAwaitRound(roundIndex, roundSize);
-                        state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
-                        state.runInternal(safeStore, safeCommand, owner, tracing);
-                    }
+                    if (tracing != null)
+                        tracing.trace(owner.commandStore, "Found %s notReady, but no more intersections; marking await done and continuing.", notReady);
+
+                    // we don't think we have anything to wait for, but we have encountered some notReady responses; queue up a retry
+                    state.setAwaitDone(roundSize);
+                    state.incrementWaitingRunCounter();
+                    state.set(safeStore, owner, blockedUntil, Queued);
                 }
             }
         }
         else
         {
+            if (tracing != null)
+                tracing.trace(owner.commandStore, "Fai");
             safeStore.agent().onCaughtException(fail, "Failed fetching data for " + state);
             state.retry(safeStore, safeCommand, owner, blockedUntil, tracing);
         }
@@ -764,7 +806,7 @@ abstract class WaitingState extends BaseTxnState
         {
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Retry queued for later.");
-            // queue a retry
+            incrementWaitingRunCounter();
             set(safeStore, owner, blockedUntil, Queued);
         }
     }

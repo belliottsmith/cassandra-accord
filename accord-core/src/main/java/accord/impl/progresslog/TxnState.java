@@ -18,7 +18,6 @@
 
 package accord.impl.progresslog;
 
-import java.time.temporal.TemporalUnit;
 import javax.annotation.Nullable;
 
 import com.google.common.primitives.Ints;
@@ -59,15 +58,15 @@ public final class TxnState extends HomeState implements PreLoadContext
                 {
                     default: throw new UnhandledEnum(updated);
                     case Waiting:
-                        newDelay = instance.commandStore.agent().slowReplicaDelay(instance.node, safeStore, txnId, 1 + waitingRetryCounter(), blockedUntil, MICROSECONDS);
+                        newDelay = instance.commandStore.agent().slowReplicaDelay(instance.node, safeStore, txnId, 1 + waitingRunCounter(), blockedUntil, MICROSECONDS);
                         break;
                     case Home:
-                        newDelay = instance.commandStore.agent().slowCoordinatorDelay(instance.node, safeStore, txnId, MICROSECONDS, 1 + homeRetryCounter());
+                        newDelay = instance.commandStore.agent().slowCoordinatorDelay(instance.node, safeStore, txnId, MICROSECONDS, 1 + homeRunCounter());
                 }
                 Invariants.require(newDelay > 0);
                 break;
             case Awaiting:
-                int retries = updated == TxnStateKind.Home ? homeRetryCounter() : waitingRetryCounter();
+                int retries = updated == TxnStateKind.Home ? homeRunCounter() : waitingRunCounter();
                 newDelay = instance.commandStore.agent().slowAwaitDelay(instance.node, safeStore, txnId, 1 + retries, blockedUntil, MICROSECONDS);
                 Invariants.require(newDelay > 0);
                 break;

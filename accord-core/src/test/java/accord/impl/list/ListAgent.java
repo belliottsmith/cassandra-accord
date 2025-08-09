@@ -211,22 +211,22 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     }
 
     @Override
-    public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount)
+    public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt)
     {
         // TODO (required): meta randomise
-        return units.convert(rnd.nextInt(100, 1000) * retryCount, MILLISECONDS);
+        return units.convert(rnd.nextInt(100, 1000) * attempt, MILLISECONDS);
     }
 
     @Override
-    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units)
+    public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
     @Override
-    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
+    public long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil retrying, TimeUnit units)
     {
-        int retryDelay = Math.min(16, 1 << retryCount);
+        int retryDelay = Math.min(16, 1 << attempt);
         return units.convert(retryDelay, SECONDS);
     }
 
