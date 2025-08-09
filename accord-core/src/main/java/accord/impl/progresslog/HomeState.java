@@ -56,11 +56,11 @@ abstract class HomeState extends WaitingState
     private static final long PROGRESS_MASK = 0x3;
     private static final int STATUS_SHIFT = PROGRESS_SHIFT + 2;
     private static final long STATUS_MASK = 0x7;
-    private static final int RETRY_COUNTER_SHIFT = STATUS_SHIFT + 3;
-    private static final long RETRY_COUNTER_MASK = 0x7;
+    private static final int RUN_COUNTER_SHIFT = STATUS_SHIFT + 3;
+    private static final long RUN_COUNTER_MASK = 0x7;
     private static final long SET_MASK = ~((PROGRESS_MASK << PROGRESS_SHIFT)
                                            | (STATUS_MASK << STATUS_SHIFT));
-    static final int HOME_STATE_END_SHIFT = RETRY_COUNTER_SHIFT + 3;
+    static final int HOME_STATE_END_SHIFT = RUN_COUNTER_SHIFT + 3;
 
     static
     {
@@ -103,23 +103,23 @@ abstract class HomeState extends WaitingState
         return Progress.forOrdinal((int) ((encodedState >>> PROGRESS_SHIFT) & PROGRESS_MASK));
     }
 
-    final int homeRetryCounter()
+    final int homeRunCounter()
     {
-        return (int) ((encodedState >>> RETRY_COUNTER_SHIFT) & RETRY_COUNTER_MASK);
+        return (int) ((encodedState >>> RUN_COUNTER_SHIFT) & RUN_COUNTER_MASK);
     }
 
-    final void incrementHomeRetryCounter()
+    final void incrementHomeRunCounter()
     {
-        long shiftedMask = RETRY_COUNTER_MASK << RETRY_COUNTER_SHIFT;
+        long shiftedMask = RUN_COUNTER_MASK << RUN_COUNTER_SHIFT;
         long current = encodedState & shiftedMask;
-        long updated = Math.min(shiftedMask, current + (1L << RETRY_COUNTER_SHIFT));
+        long updated = Math.min(shiftedMask, current + (1L << RUN_COUNTER_SHIFT));
         encodedState &= ~shiftedMask;
         encodedState |= updated;
     }
 
-    final void clearHomeRetryCounter()
+    final void clearHomeRunCounter()
     {
-        long shiftedMask = RETRY_COUNTER_MASK << RETRY_COUNTER_SHIFT;
+        long shiftedMask = RUN_COUNTER_MASK << RUN_COUNTER_SHIFT;
         encodedState &= ~shiftedMask;
     }
 
@@ -131,13 +131,14 @@ abstract class HomeState extends WaitingState
         if (newPhase.compareTo(phase()) > 0)
         {
             instance.clearPendingAndActive(Home, txnId);
-            clearHomeRetryCounter();
+            clearHomeRunCounter();
             set(safeStore, instance, newPhase, newProgress);
         }
     }
 
     final void runHome(DefaultProgressLog instance, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
+        incrementHomeRunCounter();
         Tracing tracing = instance.node.agent().trace(txnId, HOME_PROGRESS);
         Invariants.require(!isHomeDoneOrUninitialised());
         Command command = safeCommand.current();
@@ -190,7 +191,7 @@ abstract class HomeState extends WaitingState
                 if (tracing != null)
                 {
                     tracing.trace(safeStore.commandStore(), "Failed to recover: " + Tracing.format(fail));
-                    tracing.trace(safeStore.commandStore(), "Waiting to retry (%d) with progress token %s", state.homeRetryCounter(), prevProgressToken);
+                    tracing.trace(safeStore.commandStore(), "Waiting to retry (%d) with progress token %s", state.homeRunCounter(), prevProgressToken);
                 }
 
                 safeStore.agent().onCaughtException(fail, "Failed recovering " + state);
@@ -198,7 +199,6 @@ abstract class HomeState extends WaitingState
                 // re-save prior progress token
                 if (prevProgressToken != null && prevProgressToken.compareTo(command) > 0)
                     instance.saveProgressToken(command.txnId(), prevProgressToken);
-                state.incrementHomeRetryCounter();
                 state.set(safeStore, instance, status, Queued);
             }
             else
@@ -216,10 +216,9 @@ abstract class HomeState extends WaitingState
                 else
                 {
                     if (tracing != null)
-                        tracing.trace(safeStore.commandStore(), "Callback: progress token %s reports not durable; saving token and scheduling retry (%d).", token, state.homeRetryCounter());
+                        tracing.trace(safeStore.commandStore(), "Callback: progress token %s reports not durable; saving token and scheduling retry (%d).", token, state.homeRunCounter());
                     if (prevProgressToken != null && token.compareTo(command) > 0)
                         instance.saveProgressToken(command.txnId(), token);
-                    state.incrementHomeRetryCounter();
                     state.set(safeStore, instance, status, Queued);
                 }
             }
@@ -236,7 +235,7 @@ abstract class HomeState extends WaitingState
     void setHomeDone(DefaultProgressLog instance)
     {
         set(null, instance, Done, NoneExpected);
-        clearHomeRetryCounter();
+        clearHomeRunCounter();
         instance.clearPendingAndActive(Home, txnId);
     }
 

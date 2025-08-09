@@ -221,12 +221,12 @@ abstract class WaitingState extends BaseTxnState
         encodedState = setMaxRoundIndexAndClearBitSet(encodedState, roundSize, AWAIT_SHIFT, AWAIT_BITS, AWAIT_MASK);
     }
 
-    final int waitingRetryCounter()
+    final int waitingRunCounter()
     {
         return (int) ((encodedState >>> RETRY_COUNTER_SHIFT) & RETRY_COUNTER_MASK);
     }
 
-    final void incrementWaitingRetryCounter()
+    final void incrementWaitingRunCounter()
     {
         long shiftedMask = RETRY_COUNTER_MASK << RETRY_COUNTER_SHIFT;
         long current = encodedState & shiftedMask;
@@ -235,7 +235,7 @@ abstract class WaitingState extends BaseTxnState
         encodedState |= updated;
     }
 
-    final void clearWaitingRetryCounter()
+    final void clearWaitingRunCounter()
     {
         long shiftedMask = RETRY_COUNTER_MASK << RETRY_COUNTER_SHIFT;
         encodedState &= ~shiftedMask;
@@ -362,7 +362,7 @@ abstract class WaitingState extends BaseTxnState
     {
         set(null, owner, CanApply, NoneExpected);
         owner.clearPendingAndActive(Waiting, txnId);
-        clearWaitingRetryCounter();
+        clearWaitingRunCounter();
     }
 
     void setBlockedUntil(SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil blockedUntil)
@@ -371,7 +371,7 @@ abstract class WaitingState extends BaseTxnState
         if (blockedUntil.compareTo(currentlyBlockedUntil) > 0 || isUninitialised())
         {
             clearAwaitState();
-            clearWaitingRetryCounter();
+            clearWaitingRunCounter();
             owner.clearPendingAndActive(Waiting, txnId);
             set(safeStore, owner, blockedUntil, Queued);
         }
@@ -397,6 +397,7 @@ abstract class WaitingState extends BaseTxnState
 
     private void runInternal(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, @Nullable Tracing tracing)
     {
+        incrementWaitingRunCounter();
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
         Invariants.require(!owner.hasPending(Waiting, txnId));
@@ -792,7 +793,6 @@ abstract class WaitingState extends BaseTxnState
         {
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Retry queued for later.");
-            // queue a retry
             set(safeStore, owner, blockedUntil, Queued);
         }
     }
