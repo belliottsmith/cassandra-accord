@@ -128,15 +128,15 @@ public class FetchData extends CheckShards<Route<?>>
     // (i.e. if preaccept/accept contact a later epoch than execution is decided for)
     final LatentStoreSelector reportTo;
 
-    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing tracing)
     {
-        this(node, target, txnId, invalidIf, route, route.withHomeKey(), maxRoute, sourceEpoch, reportTo, callback);
+        this(node, target, txnId, invalidIf, route, route.withHomeKey(), maxRoute, sourceEpoch, reportTo, callback, tracing);
     }
 
-    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing tracing)
     {
         // TODO (desired, efficiency): restore behaviour of only collecting info if e.g. Committed or Executed
-        super(node, node.someSequentialExecutor(), txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf);
+        super(node, node.someSequentialExecutor(), txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf, tracing);
         this.reportTo = reportTo;
         this.maxRoute = maxRoute;
         Invariants.requireArgument(routeWithHomeKey.contains(route.homeKey()), "route %s does not contain %s", routeWithHomeKey, route.homeKey());
@@ -147,14 +147,14 @@ public class FetchData extends CheckShards<Route<?>>
     private static FetchData fetchData(Node node, Route<?> route, Route<?> maxRoute, FetchRequest req)
     {
         Invariants.require(!req.contactable.isEmpty());
-        FetchData fetch = new FetchData(node, req.fetch, req.txnId, req.invalidIf, route, maxRoute, req.srcEpoch, req.reportTo, req.callback);
+        FetchData fetch = new FetchData(node, req.fetch, req.txnId, req.invalidIf, route, maxRoute, req.srcEpoch, req.reportTo, req.callback, req.tracing);
         fetch.start();
         return fetch;
     }
 
     private static FetchData fetchData(Node node, Known fetch, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        FetchData fetchData = new FetchData(node, fetch, txnId, invalidIf, route, maxRoute, sourceEpoch, reportTo, callback);
+        FetchData fetchData = new FetchData(node, fetch, txnId, invalidIf, route, maxRoute, sourceEpoch, reportTo, callback, node.agent().trace(txnId, FETCH));
         fetchData.start();
         return fetchData;
     }
