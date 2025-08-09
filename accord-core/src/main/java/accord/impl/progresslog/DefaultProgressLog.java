@@ -781,18 +781,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         Invariants.require(run.pendingTimer() != runKind, "We are actively executing %s, but we also have a pending scheduled task to run this same TxnState later. This should not happen.", runKind);
 
         validatePreRunState(run, runKind);
-        if (runKind == Home)
-        {
-            boolean isRetry = run.homeProgress() != Queued;
-            if (isRetry) run.incrementHomeRetryCounter();
-            run.runHome(DefaultProgressLog.this, safeStore, safeCommand);
-        }
-        else
-        {
-            boolean isRetry = run.waitingProgress() != Queued;
-            if (isRetry) run.incrementWaitingRetryCounter();
-            run.runWaiting(DefaultProgressLog.this, safeStore, safeCommand);
-        }
+        if (runKind == Home) run.runHome(DefaultProgressLog.this, safeStore, safeCommand);
+        else run.runWaiting(DefaultProgressLog.this, safeStore, safeCommand);
     }
 
     long nextCallbackId()
@@ -1015,7 +1005,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         @Nonnull
         public int waitingRetryCounter()
         {
-            return current.waitingRetryCounter();
+            return current.waitingRunCounter();
         }
 
         @Nonnull
@@ -1032,7 +1022,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
         public int homeRetryCounter()
         {
-            return current.homeRetryCounter();
+            return current.homeRunCounter();
         }
     }
 }

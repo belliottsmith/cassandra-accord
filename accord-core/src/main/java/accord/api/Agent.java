@@ -130,7 +130,7 @@ public interface Agent extends UncaughtExceptionListener
      *
      *  This should aim to prevent two home replicas from attempting to initiate coordination at the same time.
      */
-    long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int retryCount);
+    long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt);
 
     /**
      *  This method permits implementations to configure a delay for waiting to attempt to progress the local
@@ -139,7 +139,7 @@ public interface Agent extends UncaughtExceptionListener
      *  This method should only attempt to minimise wasted work that would anyway be achieved by the transaction's
      *  coordinator, while ensuring prompt when the coordinator considers the transaction to be durable.
      */
-    long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units);
+    long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil blockedUntil, TimeUnit units);
 
     /**
      * When a peer is queries for a local state, asynchronous callbacks may be registered.
@@ -147,7 +147,7 @@ public interface Agent extends UncaughtExceptionListener
      * This method configures a retry timeout on the node querying its peer to renew any callback registrations
      * and re-query the local state.
      */
-    long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units);
+    long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil retrying, TimeUnit units);
     long retrySyncPointDelay(Node node, int attempt, TimeUnit units);
     long retryDurabilityDelay(Node node, int attempt, TimeUnit units);
     long expireEpochWait(TimeUnit units);
