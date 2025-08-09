@@ -18,6 +18,9 @@
 package accord.api;
 
 import java.util.Arrays;
+import java.util.function.BiConsumer;
+
+import javax.annotation.Nullable;
 
 import accord.local.CommandStore;
 
@@ -38,5 +41,14 @@ public interface Tracing
         StackTraceElement[] ste = failure.getStackTrace();
         return failure.getClass().getSimpleName() + ":" + failure.getLocalizedMessage()
                + (ste.length > 0 ? " (@" + ste[0].getClassName() + "." + ste[0].getMethodName() + ":" + ste[0].getLineNumber() + ")" : "");
+    }
+
+    static <V> BiConsumer<V, Throwable> wrap(BiConsumer<V, Throwable> wrap, String context, @Nullable Tracing tracing)
+    {
+        if (tracing == null) return wrap;
+        return (success, fail) -> {
+            if (fail != null) tracing.trace(null, "Failure when %s: %s", context, format(fail));
+            wrap.accept(success, fail);
+        };
     }
 }

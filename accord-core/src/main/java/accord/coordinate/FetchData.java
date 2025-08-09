@@ -63,7 +63,7 @@ public class FetchData extends CheckShards<Route<?>>
     }
 
     // TODO (expected): separate keys we fetch deps and txns for
-    public static class FetchRequest
+    public static class FetchRequest implements BiConsumer<FetchResult, Throwable>
     {
         final SequentialAsyncExecutor executor;
         final Known fetch;
@@ -90,6 +90,13 @@ public class FetchData extends CheckShards<Route<?>>
             this.reportTo = reportTo;
             this.tracing = tracing;
         }
+
+        @Override
+        public void accept(FetchResult success, Throwable fail)
+        {
+            if (fail != null && tracing != null) tracing.trace(null, "Failed fetch: %s", Tracing.format(fail));
+            callback.accept(success, fail);
+        }
     }
 
     /**
@@ -112,7 +119,11 @@ public class FetchData extends CheckShards<Route<?>>
     {
         long srcEpoch = request.srcEpoch;
         if (!node.topology().hasAtLeastEpoch(srcEpoch))
-            return node.withEpochAtLeast(srcEpoch, request.executor, request.callback, () -> fetchSpecific(node, query, maxRoute, request));
+        {
+            if (request.tracing != null)
+                request.tracing.trace(null, "Epoch %d not ready; waiting", srcEpoch);
+            return node.withEpochAtLeast(srcEpoch, request.executor, request, () -> fetchSpecific(node, query, maxRoute, request));
+        }
 
         return fetchData(node, query, maxRoute, request);
     }
