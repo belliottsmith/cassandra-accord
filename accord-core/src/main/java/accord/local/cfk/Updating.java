@@ -907,7 +907,7 @@ class Updating
         int i = txnIds.find(cfk.redundantOrBootstrappedBefore());
         if (i < 0) i = -1 - i;
         int waitingFromIndex = i; // the min input index we expect to execute
-        if (waitingTxnId.is(ExclusiveSyncPoint) && waitingTxnId.is(Range) && mode == REGISTER)
+        if (waitingTxnId.isSyncPoint() && waitingTxnId.is(Range) && mode == REGISTER)
         {
             // for RX we register all our transitive dependencies to make sure we can answer coordinated dependency calculations
             // in this case we separate out the position from which we insert missing txnId and where we compute readiness to execute
