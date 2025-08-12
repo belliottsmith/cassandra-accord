@@ -140,7 +140,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
 
     public DurabilityTracker(Topologies topologies)
     {
-        super(topologies, DurabilityShardTracker[]::new, topologies.current().staleIds(), (p, i, s) -> new DurabilityShardTracker(p, s));
+        super(topologies, DurabilityShardTracker[]::new, topologies.staleOrRemovedIds(), (p, i, s) -> new DurabilityShardTracker(p, s));
         failures = SortedListSet.noneOf(topologies.nodes());
         waitingOnQuorum = waitingOnShards;
     }
