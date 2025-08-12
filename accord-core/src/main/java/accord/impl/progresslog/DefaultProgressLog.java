@@ -48,6 +48,7 @@ import accord.primitives.Participants;
 import accord.primitives.ProgressToken;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
+import accord.primitives.Status;
 import accord.primitives.TxnId;
 import accord.utils.ArrayBuffers;
 import accord.utils.ArrayBuffers.BufferList;
@@ -59,6 +60,7 @@ import org.agrona.collections.Long2ObjectHashMap;
 import org.agrona.collections.Object2ObjectHashMap;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
+import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.api.ProgressLog.BlockedUntil.NotBlocked;
 import static accord.impl.progresslog.CoordinatePhase.Decided;
 import static accord.impl.progresslog.CoordinatePhase.ReadyToExecute;
@@ -228,12 +230,22 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         SaveStatus beforeSaveStatus = before.saveStatus();
         SaveStatus afterSaveStatus = after.saveStatus();
 
-        boolean updateWaiting = force || beforeSaveStatus != afterSaveStatus;
-        boolean updateHome = updateWaiting || (afterRoute != null && beforeRoute == null) || !before.durability().isAtLeast(after.durability());
-        if (updateHome)
+        boolean recordWaiting = force || beforeSaveStatus != afterSaveStatus;
+        boolean updatedDurability = force || !before.durability().isAtLeast(after.durability());
+        boolean updateWaiting = updatedDurability && afterSaveStatus.compareTo(after.durability().durablyUnblocked().unblockedFrom) < 0;
+        boolean update = recordWaiting || updatedDurability || (afterRoute != null && beforeRoute == null);
+        if (update)
         {
-            TxnState state = updateHomeState(safeStore, before, after, get(txnId));
-            if (updateWaiting && state != null)
+            TxnState state = get(txnId);
+            if (updateWaiting)
+            {
+                if (state == null)
+                    state = insert(txnId);
+                state.waiting().setBlockedUntil(safeStore, this, after.durability().durablyUnblocked());
+            }
+            state = updateHomeState(safeStore, before, after, state);
+
+            if (recordWaiting && state != null)
                 state.waiting().record(this, afterSaveStatus);
         }
     }
@@ -443,9 +455,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (!blockedBy.txnId().isVisible())
             return;
 
-
         Command command = blockedBy.current();
         if (command == null) command = uninitialised(blockedBy.txnId());
+
         SaveStatus saveStatus = command.saveStatus();
         Invariants.require(saveStatus.compareTo(blockedUntil.unblockedFrom) < 0);
 

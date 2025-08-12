@@ -448,6 +448,8 @@ abstract class WaitingState extends BaseTxnState
 
         // the awaitRoute may be only the home shard, if that is sufficient to indicate the fetchRoute will be able to answer our query;
         // the fetchRoute may also be only the home shard, if that is sufficient to answer our query (e.g. for executeAt)
+        // TODO (expected): this handles range transactions very poorly, as a range may be split amongst multiple shards but we cannot wait for them async independently
+        //   we probably want to deterministically split ranges into shards on the epochs we care about and treat them separately
         Route<?> awaitRoute = awaitRoute(slicedRoute, blockedUntil);
         Route<?> fetchRoute = fetchRoute(slicedRoute, awaitRoute, blockedUntil, safeStore, lowEpoch, txnId, highEpoch, route);
         if (awaitRoute.isHomeKeyOnlyRoute())

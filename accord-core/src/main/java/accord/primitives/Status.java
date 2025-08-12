@@ -18,9 +18,11 @@
 
 package accord.primitives;
 
+import accord.api.ProgressLog;
 import accord.local.CommandSummaries.SummaryStatus;
 import accord.messages.BeginRecovery;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
 import java.util.Collection;
 import java.util.function.Function;
@@ -28,6 +30,10 @@ import java.util.function.Predicate;
 
 import javax.annotation.Nullable;
 
+import static accord.api.ProgressLog.BlockedUntil.CanApply;
+import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
+import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
+import static accord.api.ProgressLog.BlockedUntil.NotBlocked;
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
@@ -355,6 +361,39 @@ public enum Status
         private static HasOutcomeOrInvalidated allShardsOrInvalidated(int encoded)
         {
             return orInvalidated(allShardsOrdinal(encoded), encoded);
+        }
+
+        public SaveStatus durableSaveStatus()
+        {
+            HasPhase phase = phase();
+            switch (phase)
+            {
+                default: throw new UnhandledEnum(phase);
+                case None:
+                case FastPathDecided:  return SaveStatus.NotDefined;
+                case DurablyCommitted: return SaveStatus.Committed;
+                case DurablyStable:    return allShards().isDurable() ? SaveStatus.PreApplied : SaveStatus.Stable;
+            }
+        }
+
+        public ProgressLog.BlockedUntil durablyUnblocked()
+        {
+            HasPhase phase = phase();
+            switch (phase)
+            {
+                default: throw new UnhandledEnum(phase);
+                case None:
+                case FastPathDecided:
+                    return NotBlocked;
+
+                case DurablyCommitted:
+                    // we could report HasCommittedDeps here, but we don't much care to fetch Committed deps
+                    // as it doesn't advance the state machine. The BlockedUntil is used for await in recovery.
+                    return HasDecidedExecuteAt;
+
+                case DurablyStable:
+                    return allShards().isDurable() ? CanApply : HasStableDeps;
+            }
         }
 
         public boolean isDurable()
