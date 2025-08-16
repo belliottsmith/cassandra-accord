@@ -49,13 +49,13 @@ public interface NodeCommandStoreService extends TimeService, UniqueTimeService,
     {
         long epoch = epoch();
         long now = uniqueNow();
-        return factory.create(epoch, now, id());
+        return factory.create(epoch, now, 0, id());
     }
 
     default <T extends Timestamp> T uniqueTimestamp(Timestamp greaterThan, Timestamp.ValueFactory<T> factory)
     {
         long epoch = Math.max(epoch(), greaterThan.epoch());
         long now = uniqueNow(greaterThan.hlc());
-        return factory.create(epoch, now, id());
+        return factory.create(epoch, now, 0, id());
     }
 }

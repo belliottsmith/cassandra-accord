@@ -22,6 +22,7 @@ import javax.annotation.Nullable;
 
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.CommandSummaries.SummaryStatus;
+import accord.local.MaxDecidedRX.DecidedRX;
 import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
@@ -44,15 +45,15 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
     public static class MinDependencyCalculator
     {
         final MaxDecidedRX maxDecidedRX;
-        final TxnId absoluteMinDecidedId;
+        final DecidedRX minDecidedRx;
         final TxnId txnId;
         Unseekable prevKeyOrRange;
-        TxnId prevMinDecidedId;
+        DecidedRX prevDecidedRx;
 
         MinDependencyCalculator(MaxDecidedRX maxDecidedRX, Unseekables<?> keysOrRanges, TxnId txnId)
         {
             this.maxDecidedRX = maxDecidedRX;
-            this.absoluteMinDecidedId = maxDecidedRX.minDecidedDependencyId(keysOrRanges, txnId);
+            this.minDecidedRx = maxDecidedRX.forDeps(keysOrRanges, txnId);
             this.txnId = txnId;
         }
 
@@ -60,16 +61,16 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
         {
             if (durability.isDurablyCommitted() || depId.isSyncPoint())
             {
-                if (absoluteMinDecidedId != null && depId.compareTo(absoluteMinDecidedId) < 0)
+                if (minDecidedRx != null && minDecidedRx.excludeDecided(depId))
                     return false;
 
                 if (!keyOrRange.equals(prevKeyOrRange))
                 {
                     prevKeyOrRange = keyOrRange;
-                    prevMinDecidedId = maxDecidedRX.minDecidedDependencyId(keyOrRange, txnId);
+                    prevDecidedRx = maxDecidedRX.forDeps(keyOrRange, txnId);
                 }
 
-                if (prevMinDecidedId != null && depId.compareTo(prevMinDecidedId) < 0)
+                if (prevDecidedRx != null && prevDecidedRx.excludeDecided(depId))
                     return false;
             }
             return true;

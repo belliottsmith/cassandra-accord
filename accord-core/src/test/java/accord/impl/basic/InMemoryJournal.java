@@ -42,8 +42,6 @@ import accord.impl.CommandChange;
 import accord.impl.InMemoryCommandStore;
 import accord.local.Cleanup;
 import accord.local.Command;
-import accord.local.Command.WaitingOnWithExecuteAt;
-import accord.local.Command.WaitingOnWithMinUniqueHlc;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
@@ -69,6 +67,8 @@ import accord.utils.async.AsyncResult;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.Journal.Load.ALL;
+import static accord.api.Journal.Load.MINIMAL;
+import static accord.api.Journal.Load.MINIMAL_WITH_DEPS;
 import static accord.impl.CommandChange.Field;
 import static accord.impl.CommandChange.Field.ACCEPTED;
 import static accord.impl.CommandChange.Field.CLEANUP;
@@ -84,7 +84,6 @@ import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
-import static accord.impl.CommandChange.WaitingOnProvider;
 import static accord.impl.CommandChange.anyFieldChanged;
 import static accord.impl.CommandChange.getFlags;
 import static accord.impl.CommandChange.isChanged;
@@ -152,8 +151,7 @@ public class InMemoryJournal implements Journal
         return builder.construct(redundantBefore);
     }
 
-    @Override
-    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    private CommandChange.Builder loadMinimalInternal(Load load, int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         Builder builder = reconstruct(commandStoreId, txnId, load);
         if (builder == null || builder.isEmpty())
@@ -169,7 +167,21 @@ public class InMemoryJournal implements Journal
         }
 
         Invariants.require(builder.saveStatus() != null, "No saveSatus loaded, but next was called and cleanup was not: %s", builder);
-        return builder.asMinimal();
+        return builder;
+    }
+
+    @Override
+    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    {
+        CommandChange.Builder builder = loadMinimalInternal(MINIMAL, commandStoreId, txnId, redundantBefore, durableBefore);
+        return builder == null ? null : builder.asMinimal();
+    }
+
+    @Override
+    public Command.MinimalWithDeps loadMinimalWithDeps(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    {
+        CommandChange.Builder builder = loadMinimalInternal(MINIMAL_WITH_DEPS, commandStoreId, txnId, redundantBefore, durableBefore);
+        return builder == null ? null : builder.asMinimalWithDeps();
     }
 
     private Builder reconstruct(int commandStoreId, TxnId txnId, Load load)
@@ -805,13 +817,7 @@ public class InMemoryJournal implements Journal
                         break;
                     case WAITING_ON:
                         Command.WaitingOn waitingOn = after.waitingOn();
-                        changes.put(WAITING_ON, (WaitingOnProvider) (txnId, deps, executeAtLeast, minUniqueHlc) -> {
-                            Invariants.require(waitingOn.executeAtLeast() == null || waitingOn.executeAtLeast().compareTo(executeAtLeast) <= 0);
-                            Invariants.require(waitingOn.minUniqueHlc() == 0 || waitingOn.minUniqueHlc() <= minUniqueHlc);
-                            if (executeAtLeast != waitingOn.executeAtLeast()) return new WaitingOnWithExecuteAt(waitingOn, executeAtLeast);
-                            if (minUniqueHlc != waitingOn.minUniqueHlc()) return new WaitingOnWithMinUniqueHlc(waitingOn, minUniqueHlc);
-                            return waitingOn;
-                        });
+                        changes.put(WAITING_ON, new CommandChange.WaitingOnBitSets(waitingOn.waitingOn, waitingOn.appliedOrInvalidated));
                         break;
                     case WRITES:
                         changes.put(WRITES, after.writes());
@@ -854,14 +860,10 @@ public class InMemoryJournal implements Journal
             super(txnId, load);
         }
 
-        public TxnId txnId()
+        @Override
+        public PartialDeps partialDeps()
         {
-            return txnId;
-        }
-
-        public Timestamp executeAt()
-        {
-            return executeAt;
+            return (PartialDeps) partialDeps;
         }
 
         Diff toDiff()
@@ -959,7 +961,7 @@ public class InMemoryJournal implements Journal
                     partialDeps = Invariants.nonNull((PartialDeps) diff.changes.get(PARTIAL_DEPS));
                     break;
                 case WAITING_ON:
-                    waitingOn = Invariants.nonNull((WaitingOnProvider) diff.changes.get(WAITING_ON));
+                    waitingOn = Invariants.nonNull((CommandChange.WaitingOnBitSets) diff.changes.get(WAITING_ON));
                     break;
                 case WRITES:
                     writes = Invariants.nonNull((Writes) diff.changes.get(WRITES));

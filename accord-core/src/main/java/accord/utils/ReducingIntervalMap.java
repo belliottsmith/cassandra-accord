@@ -52,7 +52,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     public static final Comparable[] NO_OBJECTS = new Comparable[0];
 
     // for simplicity at construction, we permit this to be overridden by the first insertion
-    final boolean inclusiveEnds;
+    protected final boolean inclusiveEnds;
     // starts is 1 longer than values, so that starts[0] == start of values[0]
     protected final K[] starts;
     protected final V[] values;
@@ -160,6 +160,15 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         if (idx < 0 || idx >= values.length)
             return null;
         return values[idx];
+    }
+
+    public V getOrDefault(K key, V ifNull)
+    {
+        int idx = find(key);
+        if (idx < 0 || idx >= values.length)
+            return ifNull;
+        V result = values[idx];
+        return result == null ? ifNull : result;
     }
 
     public K startAt(int idx)

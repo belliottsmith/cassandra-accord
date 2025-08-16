@@ -649,27 +649,29 @@ public class Cluster
             {
                 final RandomSource random = randomSupplier.get();
                 // TODO (testing): slow/expires should be broadly in sync with our link latency config
-                final LongSupplier slowAt, expiresAt, failsAt;
+                final LongSupplier slowDelay, expiresDelay, failsDelay;
                 {
-                    int medianSlowAt = random.nextInt(100, 200);
-                    int medianExpiresAt = random.nextInt(1000, 2000);
-                    int medianFailsAt = random.nextInt(1000, 2000);
+                    int medianSlowDelay = random.nextInt(100, 200);
+                    int medianExpiresDelay = random.nextInt(1000, 2000);
+                    int medianFailsDelay = random.nextInt(1000, 2000);
 
-                    int minSlowAt = random.nextInt(0, 100);
-                    int minExpiresAt = random.nextBiasedInt(500, 800, 1000);
-                    int minFailsAt = random.nextBiasedInt(500, 800, 1000);
+                    int minSlowDelay = random.nextInt(0, 100);
+                    int minExpiresDelay = random.nextBiasedInt(500, 800, 1000);
+                    int minFailsDelay = random.nextBiasedInt(500, 800, 1000);
 
-                    int maxSlowAt = random.nextBiasedInt(medianSlowAt + 100, medianSlowAt + 200, 1000);
-                    int maxExpiresAt = random.nextBiasedInt(medianExpiresAt + 500, 3000, 10000);
-                    int maxFailsAt = random.nextBiasedInt(medianFailsAt + 500, 3000, 10000);
+                    int maxSlowDelay = random.nextBiasedInt(medianSlowDelay + 100, medianSlowDelay + 200, 1000);
+                    int maxExpiresDelay = random.nextBiasedInt(medianExpiresDelay + 500, 3000, 10000);
+                    int maxFailsDelay = random.nextBiasedInt(medianFailsDelay + 500, 3000, 10000);
 
-                    slowAt = random.biasedUniformLongs(minSlowAt, medianSlowAt, maxSlowAt);
-                    expiresAt = random.biasedUniformLongs(minExpiresAt, medianExpiresAt, maxExpiresAt);
-                    failsAt = random.biasedUniformLongs(minFailsAt, medianFailsAt, maxFailsAt);
+                    slowDelay = random.biasedUniformLongs(minSlowDelay, medianSlowDelay, maxSlowDelay);
+                    expiresDelay = random.biasedUniformLongs(minExpiresDelay, medianExpiresDelay, maxExpiresDelay);
+                    failsDelay = random.biasedUniformLongs(minFailsDelay, medianFailsDelay, maxFailsDelay);
                 }
-                @Override public long slowAt() { return now() + slowAt.getAsLong();}
-                @Override public long expiresAt() { return now() + expiresAt.getAsLong(); }
-                @Override public long failsAt() { return now() + failsAt.getAsLong(); }
+                @Override public long slowDelay() { return slowDelay.getAsLong();}
+                @Override public long expiresDelay() { return expiresDelay.getAsLong(); }
+                @Override public long slowAt() { return now() + slowDelay.getAsLong();}
+                @Override public long expiresAt() { return now() + expiresDelay.getAsLong(); }
+                @Override public long failsAt() { return now() + failsDelay.getAsLong(); }
                 @Override public long now() { return sinks.pending.nowInMillis(); }
                 @Override public TimeUnit units() { return MILLISECONDS; }
             };

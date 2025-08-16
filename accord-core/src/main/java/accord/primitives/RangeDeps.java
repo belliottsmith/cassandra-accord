@@ -94,19 +94,29 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     {
         private SerializerSupport() {}
 
-        public static int rangesToTxnIdsCount(RangeDeps deps)
+        public static int[] rangesToTxnIds(RangeDeps deps)
         {
-            return deps.rangesToTxnIds.length;
+            return deps.rangesToTxnIds();
         }
 
-        public static int rangesToTxnIds(RangeDeps deps, int idx)
+        public static int[] txnIdsToRanges(RangeDeps deps)
         {
-            return deps.rangesToTxnIds[idx];
+            return deps.txnIdsToRanges();
         }
 
-        public static RangeDeps create(Range[] ranges, TxnId[] txnIds, int[] rangesToTxnIds)
+        public static TxnId[] txnIds(RangeDeps deps)
         {
-            return new RangeDeps(ranges, txnIds, rangesToTxnIds);
+            return deps.txnIds;
+        }
+
+        public static Range[] ranges(RangeDeps deps)
+        {
+            return deps.ranges;
+        }
+
+        public static RangeDeps create(Range[] ranges, TxnId[] txnIds, int[] rangesToTxnIds, int[] txnIdsToRanges)
+        {
+            return new RangeDeps(ranges, txnIds, rangesToTxnIds, txnIdsToRanges);
         }
     }
 
@@ -124,8 +134,8 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
      *      to index into the dynamic portion of the array. We started with this, but decided it was
      *      hard to justify the extra work for two layouts for the moment.
      */
-    final int[] rangesToTxnIds;
-    int[] txnIdsToRanges;
+    private int[] rangesToTxnIds;
+    private int[] txnIdsToRanges;
 
     private SearchableRangeList searchable;
     private Ranges covering;
@@ -153,10 +163,10 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
                 if (deps == null || deps.isEmpty())
                     continue;
 
-                linearMerger.update(deps, deps.ranges, deps.txnIds, deps.rangesToTxnIds);
+                linearMerger.update(deps, deps.ranges, deps.txnIds, deps.rangesToTxnIds());
             }
 
-            return linearMerger.get(RangeDeps::new, NONE);
+            return linearMerger.get(RangeDeps::constructRangesToTxnIds, NONE);
         }
     }
 
@@ -166,22 +176,25 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         {
             merge.forEach(deps -> {
                 if (!deps.isEmpty())
-                    linearMerger.update(deps, deps.ranges, deps.txnIds, deps.rangesToTxnIds);
+                    linearMerger.update(deps, deps.ranges, deps.txnIds, deps.rangesToTxnIds());
             });
 
-            return linearMerger.get(RangeDeps::new, NONE);
+            return linearMerger.get(RangeDeps::constructRangesToTxnIds, NONE);
         }
     }
 
-    private RangeDeps(Range[] ranges, TxnId[] txnIds, int[] rangesToTxnIds)
+    private static RangeDeps constructRangesToTxnIds(Range[] ranges, TxnId[] txnIds, int[] rangesToTxnIds)
     {
-        this(ranges, txnIds, rangesToTxnIds, null);
+        return new RangeDeps(ranges, txnIds, rangesToTxnIds, null);
+    }
+
+    private static RangeDeps constructTxnIdsToRanges(TxnId[] txnIds, Range[] ranges, int[] txnIdsToRanges)
+    {
+        return new RangeDeps(ranges, txnIds, null, txnIdsToRanges);
     }
 
     private RangeDeps(Range[] ranges, TxnId[] txnIds, int[] rangesToTxnIds, int[] txnIdsToRanges)
     {
-        Invariants.requireArgument(rangesToTxnIds.length >= ranges.length);
-        Invariants.requireArgument(ranges.length > 0 || rangesToTxnIds.length == 0);
         Invariants.paranoid(SortedArrays.isSorted(ranges, Range::compare));
         this.ranges = ranges;
         this.txnIds = txnIds;
@@ -263,6 +276,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     private <P1> void visitTxnIdsForRangeIndex(BiConsumer<P1, TxnId> forEach, P1 p1, @Nullable BitSet visited, int rangeIndex)
     {
+        int[] rangesToTxnIds = rangesToTxnIds();
         for (int i = startOffset(ranges, rangesToTxnIds, rangeIndex), end = endOffset(rangesToTxnIds, rangeIndex) ; i < end ; ++i)
             visitTxnId(rangesToTxnIds[i], forEach, p1, visited);
     }
@@ -271,6 +285,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     {
         if (end <= start)
             return;
+        int[] rangesToTxnIds = rangesToTxnIds();
         for (int i = startOffset(ranges, rangesToTxnIds, start) ; i < endOffset(rangesToTxnIds, end - 1) ; ++i)
             visitTxnId(rangesToTxnIds[i], forEach, p1, visited);
     }
@@ -289,6 +304,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     private <P1, P2> void visitTxnIdxsForRangeIndex(IndexedBiConsumer<P1, P2> forEach, P1 p1, P2 p2, int rangeIndex)
     {
+        int[] rangesToTxnIds = rangesToTxnIds();
         for (int i = startOffset(ranges, rangesToTxnIds, rangeIndex), end = endOffset(rangesToTxnIds, rangeIndex) ; i < end ; ++i)
             forEach.accept(p1, p2, rangesToTxnIds[i]);
     }
@@ -297,6 +313,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     {
         if (end == 0)
             return;
+        int[] rangesToTxnIds = rangesToTxnIds();
         for (int i = startOffset(ranges, rangesToTxnIds, start) ; i < endOffset(rangesToTxnIds, end - 1) ; ++i)
             forEach.accept(p1, p2, rangesToTxnIds[i]);
     }
@@ -463,7 +480,8 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     // if the mapping is empty we return false, whether or not we have any ranges or txnId by themselves
     public boolean isEmpty()
     {
-        return RelationMultiMap.isEmpty(ranges, rangesToTxnIds);
+        return rangesToTxnIds != null ? RelationMultiMap.isEmpty(ranges, rangesToTxnIds)
+                                      : RelationMultiMap.isEmpty(txnIds, txnIdsToRanges);
     }
 
     public Ranges participants(TxnId txnId)
@@ -487,7 +505,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     public Ranges participants(Predicate<TxnId> select)
     {
-        ensureTxnIdToRange();
+        int[] txnIdsToRanges = txnIdsToRanges();
         SimpleBitSet bitSet = new SimpleBitSet(ranges.length, cachedLongs());
         for (int idIdx = 0 ; idIdx < txnIds.length ; ++idIdx)
         {
@@ -523,7 +541,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     public Ranges ranges(int txnIdx)
     {
-        ensureTxnIdToRange();
+        int[] txnIdsToRanges = txnIdsToRanges();
 
         int start = txnIdx == 0 ? txnIds.length : txnIdsToRanges[txnIdx - 1];
         int end = txnIdsToRanges[txnIdx];
@@ -560,7 +578,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     public boolean intersects(int txnIdx, Ranges intersects)
     {
-        ensureTxnIdToRange();
+        int[] txnIdsToRanges = txnIdsToRanges();
 
         int start = txnIdx == 0 ? txnIds.length : txnIdsToRanges[txnIdx - 1];
         int end = txnIdsToRanges[txnIdx];
@@ -589,7 +607,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     public boolean intersects(int txnIdx, RoutableKey key)
     {
-        ensureTxnIdToRange();
+        int[] txnIdsToRanges = txnIdsToRanges();
 
         int start = txnIdx == 0 ? txnIds.length : txnIdsToRanges[txnIdx - 1];
         int end = txnIdsToRanges[txnIdx];
@@ -609,7 +627,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     public <P1, V> V foldEachRange(int txnIdx, P1 p1, V accumulate, TriFunction<P1, Range, V, V> fold)
     {
-        ensureTxnIdToRange();
+        int[] txnIdsToRanges = txnIdsToRanges();
 
         int start = txnIdx == 0 ? txnIds.length : txnIdsToRanges[txnIdx - 1];
         int end = txnIdsToRanges[txnIdx];
@@ -618,12 +636,22 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         return accumulate;
     }
 
-    void ensureTxnIdToRange()
+    int[] txnIdsToRanges()
     {
         if (txnIdsToRanges != null)
-            return;
+            return txnIdsToRanges;
 
         txnIdsToRanges = invert(rangesToTxnIds, rangesToTxnIds.length, ranges.length, txnIds.length);
+        return txnIdsToRanges;
+    }
+
+    int[] rangesToTxnIds()
+    {
+        if (rangesToTxnIds != null)
+            return rangesToTxnIds;
+
+        rangesToTxnIds = invert(txnIdsToRanges, txnIdsToRanges.length, txnIds.length, ranges.length);
+        return rangesToTxnIds;
     }
 
     public RangeDeps intersecting(Unseekables<?> select)
@@ -644,11 +672,11 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     private RangeDeps slice(AbstractRanges select)
     {
         if (isEmpty())
-            return new RangeDeps(NO_RANGES, txnIds, NO_INTS);
+            return new RangeDeps(NO_RANGES, txnIds, NO_INTS, NO_INTS);
 
         try (RangeAndMapCollector collector = new RangeAndMapCollector(ensureSearchable().maxScanAndCheckpointMatches))
         {
-            forEach(select, collector, collector, ranges, rangesToTxnIds, null, null);
+            forEach(select, collector, collector, ranges, rangesToTxnIds(), null, null);
             return build(collector);
         }
     }
@@ -656,11 +684,11 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     private RangeDeps intersecting(AbstractUnseekableKeys select)
     {
         if (isEmpty())
-            return new RangeDeps(NO_RANGES, txnIds, NO_INTS);
+            return new RangeDeps(NO_RANGES, txnIds, NO_INTS, NO_INTS);
 
         try (RangeAndMapCollector collector = new RangeAndMapCollector(ensureSearchable().maxScanAndCheckpointMatches))
         {
-            forEach(select, collector, collector, ranges, rangesToTxnIds, null, null);
+            forEach(select, collector, collector, ranges, rangesToTxnIds(), null, null);
             return build(collector);
         }
     }
@@ -676,7 +704,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     private RangeDeps build(RangeAndMapCollector collector)
     {
         if (collector.rangesCount == 0)
-            return new RangeDeps(NO_RANGES, NO_TXNIDS, NO_INTS);
+            return new RangeDeps(NO_RANGES, NO_TXNIDS, NO_INTS, NO_INTS);
 
         if (collector.rangesCount == this.ranges.length)
             return this;
@@ -684,7 +712,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         Range[] ranges = collector.getRanges();
         int[] rangesToTxnIds = collector.getRangesToTxnIds();
         TxnId[] txnIds = trimUnusedValues(ranges, this.txnIds, rangesToTxnIds, TxnId[]::new);
-        return new RangeDeps(ranges, txnIds, rangesToTxnIds);
+        return new RangeDeps(ranges, txnIds, rangesToTxnIds, null);
     }
 
     public RangeDeps with(RangeDeps that)
@@ -692,22 +720,40 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         if (isEmpty() || that.isEmpty())
             return isEmpty() ? that : this;
 
-        return linearUnion(
-                this.ranges, this.ranges.length, this.txnIds, this.txnIds.length, this.rangesToTxnIds, this.rangesToTxnIds.length,
-                that.ranges, that.ranges.length, that.txnIds, that.txnIds.length, that.rangesToTxnIds, that.rangesToTxnIds.length,
-                rangeComparator(), TxnId::compareTo, null, TxnId::addFlags,
-                cachedRanges(), cachedTxnIds(), cachedInts(),
-                (ranges, rangesLength, txnIds, txnIdsLength, out, outLength) ->
-                        new RangeDeps(cachedRanges().complete(ranges, rangesLength),
-                                cachedTxnIds().complete(txnIds, txnIdsLength),
-                                cachedInts().complete(out, outLength))
-        );
+        if (preferByRange(that))
+        {
+            return linearUnion(
+                    this.ranges, this.ranges.length, this.txnIds, this.txnIds.length, this.rangesToTxnIds(), this.rangesToTxnIds.length,
+                    that.ranges, that.ranges.length, that.txnIds, that.txnIds.length, that.rangesToTxnIds(), that.rangesToTxnIds.length,
+                    rangeComparator(), TxnId::compareTo, null, TxnId::addFlags,
+                    cachedRanges(), cachedTxnIds(), cachedInts(),
+                    (ranges, rangesLength, txnIds, txnIdsLength, out, outLength) ->
+                            new RangeDeps(cachedRanges().complete(ranges, rangesLength),
+                                    cachedTxnIds().complete(txnIds, txnIdsLength),
+                                    cachedInts().complete(out, outLength),
+                                          null)
+            );
+        }
+        else
+        {
+            return linearUnion(
+                    this.txnIds, this.txnIds.length, this.ranges, this.ranges.length, this.txnIdsToRanges(), this.txnIdsToRanges.length,
+                    that.txnIds, that.txnIds.length, that.ranges, that.ranges.length, that.txnIdsToRanges(), that.txnIdsToRanges.length,
+                    TxnId::compareTo, rangeComparator(), TxnId::addFlags, null,
+                    cachedTxnIds(), cachedRanges(), cachedInts(),
+                    (txnIds, txnIdsLength, ranges, rangesLength, out, outLength) ->
+                            new RangeDeps(cachedRanges().complete(ranges, rangesLength),
+                                    cachedTxnIds().complete(txnIds, txnIdsLength),
+                                    null,
+                                    cachedInts().complete(out, outLength))
+            );
+        }
     }
 
     public RangeDeps without(Predicate<TxnId> remove)
     {
-        return remove(this, ranges, txnIds, rangesToTxnIds, remove,
-                      NONE, TxnId[]::new, ranges, RangeDeps::new);
+        return remove(this, ranges, txnIds, rangesToTxnIds(), remove,
+                      NONE, TxnId[]::new, ranges, RangeDeps::constructRangesToTxnIds);
     }
 
     public RangeDeps without(RangeDeps remove)
@@ -715,10 +761,8 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         if (isEmpty() || remove.isEmpty()) return this;
         try (BuilderByTxnId builder = new BuilderByTxnId())
         {
-            ensureTxnIdToRange();
-            remove.ensureTxnIdToRange();
-            if (!RelationMultiMap.removeWithPartialMatches(txnIds, ranges, txnIdsToRanges,
-                                                           remove.txnIds, remove.ranges, remove.txnIdsToRanges,
+            if (!RelationMultiMap.removeWithPartialMatches(txnIds, ranges, txnIdsToRanges(),
+                                                           remove.txnIds, remove.ranges, remove.txnIdsToRanges(),
                                                            TxnId::compareTo, Range::compareIntersecting, builder, (b, id, kr, rr) -> {
                 if (rr == null)
                 {
@@ -770,6 +814,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     public DepRelationList txnIdsWithFlagsForRangeIndex(int rangeIndex)
     {
         Invariants.require(rangeIndex < ranges.length);
+        int[] rangesToTxnIds = rangesToTxnIds();
         int start = startOffset(ranges, rangesToTxnIds, rangeIndex);
         int end = endOffset(rangesToTxnIds, rangeIndex);
         Invariants.require(end >= start);
@@ -857,6 +902,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     public TxnId minTxnId(Range range, TxnId orElse)
     {
         Min min = new Min();
+        int[] rangesToTxnIds = rangesToTxnIds();
         forEach(range, min, min, ranges, rangesToTxnIds, null, null, 0);
         return min.minIndex == Integer.MAX_VALUE ? orElse : txnIds[min.minIndex];
     }
@@ -875,6 +921,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     public TxnId maxTxnId(Range range, TxnId orElse)
     {
         Max max = new Max();
+        int[] rangesToTxnIds = rangesToTxnIds();
         forEach(range, max, max, ranges, rangesToTxnIds, null, null, 0);
         return max.maxIndex < 0 ? orElse : txnIds[max.maxIndex];
     }
@@ -891,6 +938,23 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         return covering;
     }
 
+    private boolean preferByRange(RangeDeps that)
+    {
+        int byRangeScore = (this.rangesToTxnIds != null ? 1 : 0) + (that.rangesToTxnIds != null ? 1 : 0);
+        int byTxnIdScore = (this.txnIdsToRanges != null ? 1 : 0) + (that.txnIdsToRanges != null ? 1 : 0);
+        return byRangeScore >= byTxnIdScore;
+    }
+
+    public boolean hasByRange()
+    {
+        return rangesToTxnIds != null;
+    }
+
+    public boolean hasByTxnId()
+    {
+        return txnIdsToRanges != null;
+    }
+
     @Override
     public boolean equals(Object that)
     {
@@ -899,13 +963,16 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     public boolean equals(RangeDeps that)
     {
-        return Objects.equals(covering, that.covering) && testEquality(this.ranges, this.txnIds, this.rangesToTxnIds, that.ranges, that.txnIds, that.rangesToTxnIds);
+        if (!Objects.equals(covering, that.covering))
+            return false;
+        if (preferByRange(that)) return testEquality(this.ranges, this.txnIds, this.rangesToTxnIds(), that.ranges, that.txnIds, that.rangesToTxnIds());
+        else return testEquality(this.txnIds, this.ranges, this.txnIdsToRanges(), that.txnIds, that.ranges, that.txnIdsToRanges());
     }
 
     @Override
     public String toString()
     {
-        return RelationMultiMap.toSimpleString(ranges, txnIds, rangesToTxnIds);
+        return RelationMultiMap.toSimpleString(ranges, txnIds, rangesToTxnIds());
     }
 
     public String toBriefString()
@@ -917,7 +984,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     @Override
     public Iterator<Map.Entry<Range, TxnId>> iterator()
     {
-        return newIterator(ranges, txnIds, rangesToTxnIds);
+        return newIterator(ranges, txnIds, rangesToTxnIds());
     }
 
     private SearchableRangeList ensureSearchable()
@@ -1125,9 +1192,9 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         }
 
         @Override
-        protected RangeDeps build(Range[] ranges, TxnId[] txnIds, int[] keyToValue)
+        protected RangeDeps build(Range[] ranges, TxnId[] txnIds, int[] rangesToTxnIds)
         {
-            return new RangeDeps(ranges, txnIds, keyToValue);
+            return constructRangesToTxnIds(ranges, txnIds, rangesToTxnIds);
         }
     }
 
@@ -1152,7 +1219,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
         @Override
         protected RangeDeps build(TxnId[] txnIds, Range[] ranges, int[] txnIdsToRanges)
         {
-            return new RangeDeps(ranges, txnIds, invert(txnIdsToRanges, txnIdsToRanges.length, txnIds.length, ranges.length), txnIdsToRanges);
+            return constructTxnIdsToRanges(txnIds, ranges, txnIdsToRanges);
         }
 
         @Override

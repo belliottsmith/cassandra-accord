@@ -88,9 +88,15 @@ public class LoggingJournal implements Journal
     }
 
     @Override
-    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        return delegate.loadMinimal(commandStoreId, txnId, load, redundantBefore, durableBefore);
+        return delegate.loadMinimal(commandStoreId, txnId, redundantBefore, durableBefore);
+    }
+
+    @Override
+    public Command.MinimalWithDeps loadMinimalWithDeps(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    {
+        return delegate.loadMinimalWithDeps(commandStoreId, txnId, redundantBefore, durableBefore);
     }
 
     @Override

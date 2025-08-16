@@ -211,14 +211,6 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
     }
 
     @Override
-    public RegisteredTimeout registerWithDelay(Timeout timeout, long delay, TimeUnit units)
-    {
-        long now = time.elapsed(MICROSECONDS);
-        long deadline = now + Math.max(1, units.toMicros(delay));
-        return registerAt(timeout, now, deadline);
-    }
-
-    @Override
     public RegisteredTimeout registerAt(Timeout timeout, long deadline, TimeUnit units)
     {
         long now = time.elapsed(MICROSECONDS);

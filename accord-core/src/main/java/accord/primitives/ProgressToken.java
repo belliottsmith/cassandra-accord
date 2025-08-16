@@ -126,4 +126,15 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
     {
         return (status.phase == Accept || status.phase == Commit) && promised.equals(acceptedOrCommitted);
     }
+
+    @Override
+    public String toString()
+    {
+        return "ProgressToken{" +
+               "outcome=" + outcome +
+               ", status=" + status +
+               ", promised=" + promised +
+               ", isAccepted=" + isAccepted +
+               '}';
+    }
 }

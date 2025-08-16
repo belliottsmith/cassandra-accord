@@ -24,6 +24,7 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import accord.local.MaxDecidedRX.DecidedRX;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.PartialDeps;
@@ -39,15 +40,17 @@ import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.ReducingRangeMap;
+import accord.utils.TriPredicate;
 import accord.utils.UnhandledEnum;
 
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.LoadKeysFor.RECOVERY;
-import static accord.local.MaxDecidedRX.minDecidedDependencyId;
+import static accord.local.MaxDecidedRX.forDeps;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Txn.Kind.Nothing;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 
 public interface CommandSummaries
 {
@@ -91,12 +94,12 @@ public interface CommandSummaries
         }
 
         @VisibleForTesting
-        public Summary(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, @Nonnull SummaryStatus status, Durability durability, IsDep dep, Unseekables<?> participants)
+        public Summary(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, @Nonnull SummaryStatus status, @Nonnull Durability durability, IsDep dep, Unseekables<?> participants)
         {
             super(txnId);
             this.participants = participants;
             this.executeAt = executeAt.equals(txnId) ? this : executeAt;
-            this.encoded = status.ordinal() | (dep == null ? Integer.MIN_VALUE : (dep.ordinal() << IS_DEP_SHIFT)) | (durability.encoded() << DURABILITY_SHIFT);
+            this.encoded = Invariants.nonNull(status).ordinal() | (dep == null ? Integer.MIN_VALUE : (dep.ordinal() << IS_DEP_SHIFT)) | (Invariants.nonNull(durability).encoded() << DURABILITY_SHIFT);
         }
 
         private Summary(@Nonnull TxnId txnId, @Nonnull Timestamp executeAt, int encoded, Unseekables<?> participants)
@@ -170,7 +173,8 @@ public interface CommandSummaries
         protected final Unseekables<?> searchKeysOrRanges;
         // TODO (expected): separate out Kinds we need before/after primaryTxnId/executeAt
         protected final Kinds testKind;
-        protected final TxnId primaryTxnId, findAsDep, minTxnId, minDecidedId;
+        protected final TxnId primaryTxnId, findAsDep, minTxnId;
+        protected final DecidedRX decidedRx;
         protected final Timestamp maxTxnId;
 
         private ReducingRangeMap<TxnId> minVisitedFutureRX = NO_FUTURE_RX;
@@ -214,7 +218,7 @@ public interface CommandSummaries
             this.minTxnId = minTxnId;
             this.maxTxnId = maxTxnId;
             this.findAsDep = findAsDep;
-            this.minDecidedId = minDecidedDependencyId(maxDecidedRX, searchKeysOrRanges, primaryTxnId);
+            this.decidedRx = forDeps(maxDecidedRX, searchKeysOrRanges, primaryTxnId);
         }
 
         public boolean isRelevant(CommandsForKey cfk)
@@ -237,11 +241,12 @@ public interface CommandSummaries
             if (minUndecided != null)
                 return true;
 
-            if (minDecidedId != null && last.compareTo(minDecidedId) < 0)
+            // TODO (expected): can we improve our inferences to avoid looping?
+            if (decidedRx != null && decidedRx.excludeDecided(last))
                 return false;
 
-            TxnId minDecidedId = maxDecidedRX.minDecidedDependencyId(cfk.key(), primaryTxnId);
-            return minDecidedId == null || last.compareTo(minDecidedId) >= 0;
+            DecidedRX decidedRx = maxDecidedRX.forDeps(cfk.key(), primaryTxnId);
+            return decidedRx == null || decidedRx.includeDecided(last);
         }
 
         // the caller must manage mutual exclusion for this method, but not to any others
@@ -257,6 +262,16 @@ public interface CommandSummaries
         public final Summary ifRelevant(Command cmd)
         {
             return ifRelevant(cmd.txnId(), cmd.executeAtOrTxnId(), cmd.saveStatus(), cmd.durability(), cmd.participants(), cmd.partialDeps());
+        }
+
+        public final Summary ifRelevant(Command.Minimal cmd)
+        {
+            return ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants, null);
+        }
+
+        public final Summary ifRelevant(Command.MinimalWithDeps cmd)
+        {
+            return this.ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants.touches(), cmd, (c, find, intersecting) -> isDep(c.partialDeps(), find, intersecting));
         }
 
         public final boolean isMaybeRelevant(TxnId txnId)
@@ -286,14 +301,14 @@ public interface CommandSummaries
             if (!mayFilterAsDecided)
                 return true;
 
-            if (minDecidedId != null && txnId.compareTo(minDecidedId) < 0)
+            if (decidedRx != null && !decidedRx.includeDecided(txnId))
                 return false;
 
             if (participants == null)
                 return true;
 
-            TxnId moreSpecificMinDecidedId = minDecidedDependencyId(maxDecidedRX, participants, primaryTxnId);
-            return moreSpecificMinDecidedId == null || txnId.compareTo(moreSpecificMinDecidedId) >= 0;
+            DecidedRX decidedRx = forDeps(maxDecidedRX, participants, primaryTxnId);
+            return decidedRx == null || decidedRx.includeDecided(txnId);
         }
 
         public final Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable PartialDeps partialDeps)
@@ -306,6 +321,19 @@ public interface CommandSummaries
 
         public final Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable PartialDeps partialDeps)
         {
+            return ifRelevant(txnId, executeAt, saveStatus, durability, touches, partialDeps, SummaryLoader::isDep);
+        }
+
+        public final <P> Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable P deps, TriPredicate<P, TxnId, Unseekables<?>> depTester)
+        {
+            if (participants == null)
+                return null;
+
+            return ifRelevant(txnId, executeAt, saveStatus, durability, participants.touches(), deps, depTester);
+        }
+
+        public final <P> Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable P deps, TriPredicate<P, TxnId, Unseekables<?>> depTester)
+        {
             SummaryStatus summaryStatus = saveStatus.summary;
             if (summaryStatus == null)
                 return null;
@@ -317,7 +345,7 @@ public interface CommandSummaries
                 return null;
 
             boolean mayFilterAsDecided = maxDecidedRX != null && (txnId.isSyncPoint() || durability.isDurablyCommitted());
-            if (mayFilterAsDecided && minDecidedId != null && txnId.compareTo(minDecidedId) < 0)
+            if (mayFilterAsDecided && decidedRx != null && decidedRx.excludeDecided(txnId))
                 return null;
 
             // start in search key domain, since this is what we consult to decide if can be recovered
@@ -342,27 +370,22 @@ public interface CommandSummaries
 
             if (mayFilterAsDecided)
             {
-                TxnId minDecidedId = minDecidedDependencyId(maxDecidedRX, intersecting, primaryTxnId);
-                if (minDecidedId != null && txnId.compareTo(minDecidedId) < 0)
+                DecidedRX decidedRx = forDeps(maxDecidedRX, intersecting, primaryTxnId);
+                if (decidedRx != null && decidedRx.excludeDecided(txnId))
                     return null;
             }
 
-            Invariants.require(partialDeps != null || findAsDep == null || !saveStatus.known.deps().hasProposedOrDecidedDeps());
             IsDep isDep = null;
             if (findAsDep != null)
             {
-                if (partialDeps == null || !isEligibleDep(summaryStatus, findAsDep, txnId, executeAt))
+                if (deps == null || !isEligibleDep(summaryStatus, findAsDep, txnId, executeAt))
                 {
                     isDep = IsDep.NOT_ELIGIBLE;
                 }
                 else
                 {
                     boolean isCoordDeps = summaryStatus.compareTo(ACCEPTED) < 0;
-                    int index = partialDeps.indexOf(findAsDep);
-                    // TODO (desired): don't construct participants, pass intersecting as parameter
-                    boolean isAnyDep = index >= 0 && partialDeps.isStable(index)
-                                       && partialDeps.participants(index).containsAll(intersecting);
-
+                    boolean isAnyDep = depTester.test(deps, findAsDep, intersecting);
                     isDep = isAnyDep ? (isCoordDeps ? IsDep.IS_COORD_DEP     : IsDep.IS_PROPOSED_OR_STABLE_DEP)
                                      : (isCoordDeps ? IsDep.IS_NOT_COORD_DEP : IsDep.IS_NOT_PROPOSED_OR_STABLE_DEP);
                 }
@@ -383,7 +406,7 @@ public interface CommandSummaries
                     return false;
                 case NOTACCEPTED:
                 case PREACCEPTED:
-                    if (!txnId.is(TxnId.FastPath.PrivilegedCoordinatorWithDeps))
+                    if (!txnId.is(PrivilegedCoordinatorWithDeps))
                         return false;
                 case ACCEPTED:
                     return txnId.compareTo(findAsDep) > 0;
@@ -392,6 +415,15 @@ public interface CommandSummaries
                 case STABLE:
                     return executeAt.compareTo(findAsDep) > 0;
             }
+        }
+
+        private static boolean isDep(PartialDeps deps, TxnId find, Unseekables<?> intersecting)
+        {
+            int index = deps.indexOf(find);
+            // TODO (desired): don't construct participants, pass intersecting as parameter
+            return index >= 0 && deps.isStable(index)
+                   && deps.participants(index).containsAll(intersecting);
+
         }
 
         protected Summary construct(TxnId txnId, Timestamp executeAt, SummaryStatus summaryStatus, Durability durability, IsDep isDep, Unseekables<?> participants)

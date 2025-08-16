@@ -35,7 +35,6 @@ public interface Timeouts
         void cancel();
     }
 
-    RegisteredTimeout registerWithDelay(Timeout timeout, long delay, TimeUnit units);
     RegisteredTimeout registerAt(Timeout timeout, long deadline, TimeUnit units);
     void maybeNotify();
 }

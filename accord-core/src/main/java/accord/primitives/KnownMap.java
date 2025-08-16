@@ -29,48 +29,100 @@ import accord.utils.ReducingRangeMap;
 
 import static accord.utils.SortedArrays.Search.FAST;
 
-public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
+public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
 {
-    public static final class MinMax extends Known
+    public static final class MinAndMaxKnown
     {
-        public static final MinMax Nothing = new MinMax(Known.Nothing);
+        public static final MinAndMaxKnown Nothing = new MinAndMaxKnown(Known.Nothing);
 
-        public final Known min;
+        public final Known max;
+        // the minimum we witness on a shard that owns the relevant data
+        public final @Nullable Known minOwned;
 
-        public MinMax(Known minmax)
+        public MinAndMaxKnown(Known minmax)
         {
             this(minmax, minmax);
         }
 
-        public MinMax(Known min, Known max)
+        public MinAndMaxKnown(@Nullable Known minOwned, Known max)
         {
-            super(max);
-            this.min = min.equals(max) ? this : min.getClass() == MinMax.class ? new Known(min) : min;
+            this.minOwned = minOwned;
+            this.max  = max;
         }
 
-        public MinMax atLeast(Known that)
+        public MinAndMaxKnown atLeast(Known that)
         {
-            Known max = super.atLeast(that);
-            if (max.equals(this))
+            Known max = this.max.atLeast(that);
+            if (max.equals(this.max))
                 return this;
-            return new MinMax(min, max);
+            return new MinAndMaxKnown(minOwned, max);
         }
 
-        MinMax merge(MinMax that)
+        MinAndMaxKnown merge(MinAndMaxKnown that)
         {
-            Known max = super.atLeast(that);
-            Known min = this.min.min(that.min);
-            if (max.equals(this) && min.equals(this.min))
+            Known max = this.max.atLeast(that.max);
+            Known min = Known.nonNullOrMin(this.minOwned, that.minOwned);
+            if (max.equals(this.max) && Objects.equals(min, this.minOwned))
                 return this;
-            if (max.equals(that) && min.equals(that.min))
+            if (max.equals(that.max) && Objects.equals(min, that.minOwned))
                 return that;
-            return new MinMax(min, max);
+            return new MinAndMaxKnown(min, max);
+        }
+
+        public Known nonNullOrMax(@Nullable Known known)
+        {
+            if (known == null)
+                return max;
+            return known.atLeast(max);
+        }
+
+        public Known nonNullOrMin(@Nullable Known known)
+        {
+            if (known == null)
+                return minOwned;
+            if (minOwned == null)
+                return known;
+            return known.min(minOwned);
+        }
+
+        public Known nonNullOrMinMax(@Nullable Known known)
+        {
+            if (known == null)
+                return max;
+            return known.min(max);
+        }
+
+        public Known minOwnedElse(Known ifNull)
+        {
+            return minOwned != null ? minOwned : ifNull;
+        }
+
+        public boolean isFullyTruncated()
+        {
+            return max.isTruncated() && (minOwned != null && minOwned.isTruncated());
+        }
+
+        @Override
+        public boolean equals(Object that)
+        {
+            return that instanceof MinAndMaxKnown && equals((MinAndMaxKnown) that);
+        }
+
+        public boolean equals(MinAndMaxKnown that)
+        {
+            return max.equals(that.max) && Objects.equals(minOwned, that.minOwned);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "[" + minOwned + "..." + max + "]";
         }
     }
 
     public static class SerializerSupport
     {
-        public static KnownMap create(boolean inclusiveEnds, RoutingKey[] ends, MinMax[] values)
+        public static KnownMap create(boolean inclusiveEnds, RoutingKey[] ends, MinAndMaxKnown[] values)
         {
             return new KnownMap(inclusiveEnds, ends, values);
         }
@@ -82,15 +134,15 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
 
     private KnownMap()
     {
-        this.validForAll = MinMax.Nothing;
+        this.validForAll = Known.Nothing;
     }
 
-    public KnownMap(boolean inclusiveEnds, RoutingKey[] starts, MinMax[] values)
+    public KnownMap(boolean inclusiveEnds, RoutingKey[] starts, MinAndMaxKnown[] values)
     {
-        this(inclusiveEnds, starts, values, MinMax.Nothing);
+        this(inclusiveEnds, starts, values, Known.Nothing);
     }
 
-    private KnownMap(boolean inclusiveEnds, RoutingKey[] starts, MinMax[] values, Known validForAll)
+    private KnownMap(boolean inclusiveEnds, RoutingKey[] starts, MinAndMaxKnown[] values, Known validForAll)
     {
         super(inclusiveEnds, starts, values);
         this.validForAll = validForAll;
@@ -103,10 +155,10 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
 
     public static KnownMap create(Unseekables<?> keysOrRanges, Known known)
     {
-        return create(keysOrRanges, new MinMax(known));
+        return create(keysOrRanges, new MinAndMaxKnown(known));
     }
 
-    public static KnownMap create(Unseekables<?> keysOrRanges, MinMax known)
+    public static KnownMap create(Unseekables<?> keysOrRanges, MinAndMaxKnown known)
     {
         if (keysOrRanges.isEmpty())
             return new KnownMap();
@@ -116,12 +168,12 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
 
     public static KnownMap merge(KnownMap a, KnownMap b)
     {
-        return ReducingRangeMap.merge(a, b, MinMax::merge, Builder::new);
+        return ReducingRangeMap.merge(a, b, MinAndMaxKnown::merge, Builder::new);
     }
 
     public Known computeValidForAll(Unseekables<?> routeOrParticipants)
     {
-        Known validForAll = foldlWithDefault(routeOrParticipants, KnownMap::reduceKnownFor, MinMax.Nothing, null, i -> false);
+        Known validForAll = foldlWithDefault(routeOrParticipants, KnownMap::reduceKnownFor, MinAndMaxKnown.Nothing, null, i -> false);
         return this.validForAll.atLeast(validForAll).validForAll();
     }
 
@@ -133,11 +185,11 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
         int i = 0;
         for (; i < size(); ++i)
         {
-            Known pre = values[i];
+            MinAndMaxKnown pre = values[i];
             if (pre == null)
                 continue;
 
-            Known post = pre.atLeast(validForAll);
+            MinAndMaxKnown post = pre.atLeast(validForAll);
             if (!pre.equals(post))
                 break;
         }
@@ -146,14 +198,14 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
             return new KnownMap(inclusiveEnds(), starts, values, validForAll);
 
         RoutingKey[] newStarts = new RoutingKey[size() + 1];
-        MinMax[] newValues = new MinMax[size()];
+        MinAndMaxKnown[] newValues = new MinAndMaxKnown[size()];
         System.arraycopy(starts, 0, newStarts, 0, i);
         System.arraycopy(values, 0, newValues, 0, i);
         int count = i;
         while (i < size())
         {
-            MinMax pre = values[i++];
-            MinMax post = pre == null ? null : pre.atLeast(validForAll);
+            MinAndMaxKnown pre = values[i++];
+            MinAndMaxKnown post = pre == null ? null : pre.atLeast(validForAll);
             if (count == 0 || !Objects.equals(post, newValues[count - 1]))
             {
                 newStarts[count] = starts[i-1];
@@ -171,25 +223,25 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
 
     public boolean hasAnyFullyTruncated(Routables<?> routables)
     {
-        return foldlWithDefault(routables, (known, prev) -> known.isTruncated() && known.min.isTruncated(), MinMax.Nothing, false, i -> i);
+        return foldlWithDefault(routables, (known, prev) -> known.isFullyTruncated(), MinAndMaxKnown.Nothing, false, i -> i);
     }
 
     public boolean hasFullyTruncated(Routables<?> routables)
     {
-        return foldlWithDefault(routables, (known, prev) -> known.isTruncated() && known.min.isTruncated(), MinMax.Nothing, true, i -> !i);
+        return foldlWithDefault(routables, (known, prev) -> known.isFullyTruncated(), MinAndMaxKnown.Nothing, true, i -> !i);
     }
 
     public boolean hasTruncated()
     {
-        return foldl((known, prev) -> known.isTruncated(), false, i -> i);
+        return foldl((known, prev) -> known.max.isTruncated(), false, i -> i);
     }
 
     public Known knownFor(Routables<?> owns, Routables<?> touches)
     {
-        Known known = owns.isEmpty() ? knownForAny() : validForAll.atLeast(foldlWithDefault(owns, KnownMap::reduceKnownFor, MinMax.Nothing, null, i -> false));
+        Known known = owns.isEmpty() ? knownForAny() : validForAll.atLeast(foldlWithDefault(owns, KnownMap::reduceKnownFor, MinAndMaxKnown.Nothing, null, i -> false));
         if (owns != touches && !touches.isEmpty())
         {
-            Known knownDeps = validForAll.atLeast(foldlWithDefault(touches, KnownMap::reduceKnownFor, MinMax.Nothing, null, i -> false));
+            Known knownDeps = validForAll.atLeast(foldlWithDefault(touches, KnownMap::reduceKnownFor, MinAndMaxKnown.Nothing, null, i -> false));
             known = known.with(knownDeps.deps());
         }
         return known;
@@ -197,26 +249,26 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
 
     public Known knownForAny()
     {
-        return validForAll.atLeast(foldl(Known::atLeast, Known.Nothing, i -> false));
+        return validForAll.atLeast(foldl(MinAndMaxKnown::nonNullOrMax, null, i -> false));
     }
 
-    public Ranges matchingRanges(Predicate<MinMax> match)
+    public Ranges matchingRanges(Predicate<MinAndMaxKnown> match)
     {
         return foldlWithBounds((known, ranges, start, end) -> match.test(known) ? ranges.with(Ranges.of(start.rangeFactory().newRange(start, end))) : ranges, Ranges.EMPTY, i -> false);
     }
 
-    private static Known reduceKnownFor(Known foundKnown, @Nullable Known prev)
+    private static Known reduceKnownFor(MinAndMaxKnown bounds, @Nullable Known prev)
     {
         if (prev == null)
-            return foundKnown;
+            return bounds.max;
 
-        return prev.reduce(foundKnown);
+        return prev.reduce(bounds.max);
     }
 
     public Participants<?> knownFor(Known required, Participants<?> expect)
     {
         return foldlWithDefaultAndBounds(expect, (known, prev, start, end) -> {
-            if (known == null || !required.isSatisfiedBy(known))
+            if (known == null || !required.isSatisfiedBy(known.max))
             {
                 if (end != null)
                     return prev.without(Ranges.of(start.rangeFactory().newAntiRange(start, end)));
@@ -236,7 +288,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
         }, null, expect, i -> false);
     }
 
-    public static class Builder extends AbstractBoundariesBuilder<RoutingKey, MinMax, KnownMap>
+    public static class Builder extends AbstractBoundariesBuilder<RoutingKey, MinAndMaxKnown, KnownMap>
     {
         public Builder(boolean inclusiveEnds, int capacity)
         {
@@ -246,7 +298,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinMax>
         @Override
         protected KnownMap buildInternal()
         {
-            return new KnownMap(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new MinMax[0]));
+            return new KnownMap(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new MinAndMaxKnown[0]));
         }
     }
 }

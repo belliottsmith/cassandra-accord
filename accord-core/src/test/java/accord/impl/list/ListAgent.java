@@ -71,7 +71,6 @@ import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.local.Node.Id.NONE;
 import static com.google.common.base.Functions.identity;
-import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -279,13 +278,13 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     @Override
     public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
-        return unit.convert(timeoutSupplier.slowAt(), MICROSECONDS);
+        return time.elapsed(unit) + unit.convert(timeoutSupplier.slowDelay(), timeoutSupplier.units());
     }
 
     @Override
     public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
-        return unit.convert(timeoutSupplier.expiresAt(), MICROSECONDS);
+        return time.elapsed(unit) + unit.convert(timeoutSupplier.expiresDelay(), timeoutSupplier.units());
     }
 
     @Override

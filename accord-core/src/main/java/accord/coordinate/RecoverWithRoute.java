@@ -156,7 +156,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                         tracing.trace(null, "RecoverWithRoute found definition; invoking Recover.");
 
                     Txn txn = full.partialTxn.reconstitute(query);
-                    Recover.recover(node, txnId, txn, query, reportTo, callback, tracing);
+                    Recover.recover(node, txnId, txn, query, full.durability.isFastPathDurablyDecided(), reportTo, callback, tracing);
                 }
                 else if (!known.definition().isOrWasKnown())
                 {
@@ -198,7 +198,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                     {
                         // we might have only part of the full transaction, and a shard may have truncated;
                         // in this case we want to skip straight to apply, but only for the shards that haven't truncated
-                        Route<?> trySendTo = query.without(full.map.matchingRanges(minMax -> minMax.min.isTruncated()));
+                        Route<?> trySendTo = query.without(full.map.matchingRanges(minMax -> minMax.minOwnedElse(Known.Nothing).isTruncated()));
                         if (!trySendTo.isEmpty())
                         {
                             if (known.isInvalidated())
@@ -209,10 +209,10 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                             }
                             else
                             {
-                                boolean informDurableOnDone = success == Quorum; // if we have a quorum of truncated responses for the part of the remote we have removed, it is safe to consider this part durable
                                 known = full.knownFor(txnId, trySendTo, trySendTo);
                                 if (known.isDefinitionKnown() && known.is(ApplyAtKnown) && known.outcome() == Apply)
                                 {
+                                    boolean informDurableOnDone = success == Quorum; // if we have a quorum of truncated responses for the part of the remote we have removed, it is safe to consider this part durable
                                     if (!known.is(DepsKnown))
                                     {
                                         if (tracing != null)
@@ -302,7 +302,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                     if (tracing != null)
                         tracing.trace(null, "RecoverWithRoute found %s; invoking Recover", known);
 
-                    Recover.recover(node, txnId, txn, query, callback, tracing);
+                    Recover.recover(node, txnId, txn, query, full.durability.isFastPathDurablyDecided(), callback, tracing);
                 }
                 break;
             }

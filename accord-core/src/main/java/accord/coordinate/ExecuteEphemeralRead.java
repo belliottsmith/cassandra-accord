@@ -18,6 +18,7 @@
 
 package accord.coordinate;
 
+import java.util.List;
 import java.util.function.BiConsumer;
 
 import org.slf4j.Logger;
@@ -105,7 +106,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
 
 
     @Override
-    protected void start(Iterable<Id> to)
+    protected void start(List<Id> to)
     {
         to.forEach(this::contact);
     }
@@ -199,7 +200,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
         @Override
         public void accept(CommitOrReadNack reply, Throwable failure)
         {
-            if (failure == null && reply == null)
+            if (failure == null && (reply == null || reply == Waiting))
             {
                 reply = Waiting;
                 // TODO (expected): share implementation with ExecuteTxn

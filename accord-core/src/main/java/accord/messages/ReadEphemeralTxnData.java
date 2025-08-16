@@ -123,6 +123,12 @@ public class ReadEphemeralTxnData extends ReadData
     }
 
     @Override
+    protected boolean mayFastExecute()
+    {
+        return true;
+    }
+
+    @Override
     protected ExecuteOn executeOn()
     {
         return EXECUTE_ON;

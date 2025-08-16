@@ -120,6 +120,31 @@ public abstract class Command implements ICommand
         }
     }
 
+    public static abstract class MinimalWithDeps extends Minimal
+    {
+        public MinimalWithDeps(TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, Durability durability, Timestamp executeAt)
+        {
+            super(txnId, saveStatus, participants, durability, executeAt);
+        }
+
+        abstract public PartialDeps partialDeps();
+    }
+
+    public static class MinimalWithConcreteDeps extends MinimalWithDeps
+    {
+        final PartialDeps partialDeps;
+        public MinimalWithConcreteDeps(TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, Durability durability, Timestamp executeAt, PartialDeps partialDeps)
+        {
+            super(txnId, saveStatus, participants, durability, executeAt);
+            this.partialDeps = partialDeps;
+        }
+
+        public PartialDeps partialDeps()
+        {
+            return partialDeps;
+        }
+    }
+
     private final TxnId txnId;
     private final SaveStatus saveStatus;
     private final Durability durability;

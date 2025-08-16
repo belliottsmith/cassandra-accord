@@ -40,7 +40,6 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.Ballot;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.primitives.Participants;
@@ -70,7 +69,6 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
-import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
 import static accord.utils.ArrayBuffers.cachedAny;
@@ -299,10 +297,12 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             }
             else if (phase.compareTo(Decided) < 0)
             {
-                // TODO (desired): the second condition expression should simply imply the first (by updating durability earlier in processing)
-                boolean isDecided = after.durability().isDurablyStable()
-                                    || (after.saveStatus().compareTo(Stable) >= 0 && (!after.acceptedOrCommitted().equals(Ballot.ZERO) || (before != null && before.saveStatus() == SaveStatus.Committed)));
-                if (isDecided)
+                // while we can infer that a command is durably decided by looking at Stable and accepted/commit ballots
+                // this doesn't tell us whether the Stable record is itself durable at other replicas.
+                // Since we currently gate further execution progress on the home shard's ability to execute, we want
+                // all shards to independently be able to reach Stable before we stop performing home shard progress work
+                // So, we rely exclusively on Durability information which records a coordinator's knowledge about a phase's durability
+                if (after.durability().isDurablyStable())
                     state.home().atLeast(safeStore, this, Decided, NoneExpected);
             }
         }

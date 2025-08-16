@@ -74,12 +74,12 @@ public class Infer
             return this.compareTo(that) >= 0 ? this : that;
         }
 
-        public InvalidIf inferWithQuorum(Known minKnown, Known maxKnown)
+        public InvalidIf inferWithQuorum(Known minMaxKnown, Known maxKnown)
         {
             if (this != IfUncommitted)
                 return this;
 
-            if (minKnown.isDecided())
+            if (minMaxKnown.isDecided())
             {
                 // could be invalidated or committed, not important as should be derivable from minKnown
                 // if we can't, it's erased everywhere, so we already know the outcome else we are stale
@@ -95,9 +95,9 @@ public class Infer
             return IfUncommitted;
         }
 
-        public InvalidIf inferWithNewQuorum(InvalidIf previouslyKnownToBeInvalidIf, Known minKnownByNewQuorum)
+        public InvalidIf inferWithNewQuorum(InvalidIf previouslyKnownToBeInvalidIf, Known minMaxKnownByNewQuorum)
         {
-            if (previouslyKnownToBeInvalidIf != IfUncommitted || minKnownByNewQuorum.isDecided())
+            if (previouslyKnownToBeInvalidIf != IfUncommitted || minMaxKnownByNewQuorum.isDecided())
                 return this.atLeast(previouslyKnownToBeInvalidIf);
 
             return IsInvalid;

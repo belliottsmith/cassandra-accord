@@ -30,7 +30,7 @@ import accord.local.Node.Id;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.KnownMap.MinMax;
+import accord.primitives.KnownMap.MinAndMaxKnown;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
@@ -43,7 +43,6 @@ import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
 import accord.primitives.ProgressToken;
-import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -67,6 +66,7 @@ import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtProposed;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.Durability;
 
 import accord.primitives.Known;
@@ -186,9 +186,10 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         {
             Participants<?> validFor = query.owns();
             if (saveStatus != SaveStatus.Erased) // no StoreParticipants for Erased commands
-                validFor = validFor.intersecting(command.participants().owns());
+                validFor = validFor.intersecting(command.participants().owns(), Minimal);
 
             KnownMap result = KnownMap.create(validFor, saveStatus.known);
+            // TODO (expected): consider this case more carefully - should we reply null for minOwned? Should we explicitly handle truncated states?
             if (validFor != query.owns())
                 result = KnownMap.merge(result, KnownMap.create(query.owns(), saveStatus.known.validForAll()));
             return result;
@@ -199,7 +200,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         if (known.deps().hasProposedOrDecidedDeps())
         {
             Invariants.require(command.participants().touches().containsAll(command.partialDeps().covering));
-            result = KnownMap.create(command.partialDeps().covering, Known.Nothing.with(saveStatus.known.deps()));
+            result = KnownMap.create(command.partialDeps().covering, new MinAndMaxKnown(null, Known.Nothing.with(saveStatus.known.deps())));
             known = known.with(DepsUnknown);
         }
         if (known.definition() == DefinitionKnown && !txnId.isSystemTxn())
@@ -208,11 +209,12 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             {
                 Participants<?> participants = command.partialTxn().keys().toParticipants();
                 Invariants.require(command.participants().owns().containsAll(participants));
-                result = KnownMap.merge(result, KnownMap.create(participants, Known.DefinitionOnly));
+                result = KnownMap.merge(result, KnownMap.create(participants, new MinAndMaxKnown(null, Known.DefinitionOnly)));
             }
             else Invariants.require(command.participants().stillOwns().isEmpty());
             known = known.with(DefinitionUnknown);
         }
+        // TODO (expected): consider this case more carefully - should we reply null for minOwned? Should we explicitly handle truncated states?
         result = KnownMap.merge(result, KnownMap.create(query.owns(), known));
         return result;
     }
@@ -347,24 +349,28 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             Known validForAll = map.computeValidForAll(routeOrParticipants);
             if (withQuorum == HasQuorum)
             {
-                Known minKnown = finished.minMaxKnown(queried), maxKnown = finished.maxKnown(queried);
+                Known minKnown = finished.minKnown(queried),
+                      minMaxKnown = finished.minMaxKnown(queried),
+                      maxKnown = finished.maxKnown(queried);
                 {
-                    HasOutcome addShard = Durability.HasOutcome.max(minKnown.outcome().isOrWasApply() ? Quorum : None, finished.durability.shard());
+                    HasOutcome addShard = HasOutcome.max(minKnown.outcome().isOrWasApply() ? Quorum : None, finished.durability.shard());
+                    boolean upgradeAll = Route.isFullRoute(finished.route) && queried.containsAll(finished.route);
                     HasOutcome addAllShards = None;
-                    if (addShard != None && Route.isFullRoute(finished.route) && queried.containsAll(finished.route))
+                    HasPhase addPhase = HasPhase.None;
+                    if (upgradeAll)
+                    {
                         addAllShards = addShard;
-                    HasPhase addPhase;
-                    if (minKnown.is(DepsKnown)) addPhase = DurablyStable;
-                    else if (minKnown.is(ExecuteAtKnown)) addPhase = DurablyCommitted;
-                    else if (minKnown.is(ExecuteAtProposed)) addPhase = FastPathDecided;
-                    else addPhase = Durability.HasPhase.None;
+                        if (minKnown.is(DepsKnown)) addPhase = DurablyStable;
+                        else if (minKnown.is(ExecuteAtKnown)) addPhase = DurablyCommitted;
+                        else if (minKnown.is(ExecuteAtProposed)) addPhase = FastPathDecided;
+                    }
                     finished = finished.merge((Durability.get(addPhase, addShard, addAllShards, minKnown.isInvalidated())));
                 }
                 // TODO (required): should we require that we contacted the coordination epoch?
                 if (invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted)
                 {
-                    InvalidIf invalidIf = this.invalidIf.inferWithQuorum(minKnown, maxKnown);
-                    invalidIf = invalidIf.inferWithNewQuorum(previouslyKnownToBeInvalidIf, minKnown);
+                    InvalidIf invalidIf = this.invalidIf.inferWithQuorum(minMaxKnown, maxKnown);
+                    invalidIf = invalidIf.inferWithNewQuorum(previouslyKnownToBeInvalidIf, minMaxKnown);
                     if (invalidIf == IsInvalid)
                         validForAll = validForAll.atLeast(Known.Invalidated);
                     finished = finished.with(invalidIf);
@@ -372,11 +378,6 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
             }
 
             return finished.with(map.with(validForAll));
-        }
-
-        public Ranges truncatedResponse()
-        {
-            return map.matchingRanges(Known::isTruncated);
         }
 
         public CheckStatusOk merge(@Nonnull Route<?> route)
@@ -501,12 +502,12 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
 
         public Known maxKnown()
         {
-            return map.foldl(Known::atLeast, Known.Nothing, i -> false);
+            return map.foldl(MinAndMaxKnown::nonNullOrMax, Known.Nothing, i -> false);
         }
 
         public Known maxKnown(Unseekables<?> query)
         {
-            return map.foldl(query, Known::atLeast, Known.Nothing, i -> false);
+            return map.foldl(query, MinAndMaxKnown::nonNullOrMax, Known.Nothing, i -> false);
         }
 
         /**
@@ -514,12 +515,22 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
          */
         public Known minMaxKnown(Unseekables<?> query)
         {
-            return map.foldlWithDefault(query, Known::nonNullOrMin, MinMax.Nothing, null, i -> false);
+            return map.foldlWithDefault(query, MinAndMaxKnown::nonNullOrMinMax, MinAndMaxKnown.Nothing, null, i -> false);
+        }
+
+        /**
+         * The minimum of all minimum knowns, i.e. what is the least state we are guaranteed to reach for the
+         * intersecting shards if we have a quorum both times
+         */
+        public Known minKnown(Unseekables<?> query)
+        {
+            Known known = map.foldlWithDefault(query, MinAndMaxKnown::nonNullOrMin, MinAndMaxKnown.Nothing, null, i -> false);
+            return known == null ? Known.Nothing : known;
         }
 
         public Known minMaxKnown(RoutingKey key)
         {
-            return Known.nonNullOrMin(map.get(key), MinMax.Nothing);
+            return map.getOrDefault(key, MinAndMaxKnown.Nothing).max;
         }
 
         @Override

@@ -128,6 +128,7 @@ public class RedundantStatus
         SHARD_APPLIED                      (false, true, LE, QUORUM_APPLIED),
 
         TRUNCATE_BEFORE                    (false,  true,  LT, SHARD_APPLIED, LOCALLY_SYNCED),
+        // TODO (desired): separate GC_BEFORE with HLC_BOUND and without
         GC_BEFORE                          (false,  true,  LT, TRUNCATE_BEFORE),
 
         // not persisted
