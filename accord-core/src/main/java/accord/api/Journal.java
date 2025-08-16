@@ -50,15 +50,16 @@ public interface Journal
     enum Load
     {
         ALL,
-        PURGEABLE,
-        MINIMAL
+        MINIMAL,
+        MINIMAL_WITH_DEPS
     }
 
     void start(Node node);
 
     Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
-    default List<? extends Supplier<CommandChange.Builder>> debugCommand(int store, TxnId txnId) { throw new UnsupportedOperationException(); }
-    Command.Minimal loadMinimal(int store, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    default List<? extends Supplier<CommandChange.Builder>> debugCommand(int commandStoreId, TxnId txnId) { throw new UnsupportedOperationException(); }
+    Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    Command.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
 
     // TODO (required): propagate exceptions
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);

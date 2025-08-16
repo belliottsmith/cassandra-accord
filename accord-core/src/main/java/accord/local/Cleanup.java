@@ -54,7 +54,6 @@ import static accord.primitives.Status.Durability.HasOutcome.None;
 import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.primitives.Status.PreCommitted;
 import static accord.primitives.Status.Truncated;
-import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.Any;
@@ -275,7 +274,9 @@ public enum Cleanup
         // note, it is safe to use ApplyAtKnown even with PARTIAL input here, because we are only discarding information,
         // and we can safely discard any stale executeAt
         if (executeAt == null) return true;
-        if (minGcBefore.is(HLC_BOUND) && executeAt.uniqueHlc() < minGcBefore.hlc()) return true;
+
+        long minGcHlcBefore = redundantBefore.minGcHlcBefore();
+        if (executeAt.uniqueHlc() < minGcHlcBefore) return true;
         if (participants == null)
             return true;
         Participants<?> waitsOn = participants.waitsOn();

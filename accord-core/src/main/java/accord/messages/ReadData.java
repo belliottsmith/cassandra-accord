@@ -242,7 +242,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         waitingOn = new IntHashSet();
         reading = new IntHashSet();
         Cancellable cancel = submit();
-        RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerWithDelay(this, expiresAt, MICROSECONDS);
+        RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
         synchronized (this)
         {
             switch (state)
@@ -262,11 +262,13 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         if (timeout != null) timeout.cancel();
     }
 
+    protected boolean mayFastExecute() { return false; }
+
     protected Cancellable submit()
     {
         stamp = node.currentStamp();
 
-        if (flags.contains(READY_TO_EXECUTE) && fastReadsMayBypassSafeStore(txnId) && partialTxn != null && executeAt != null && (txnId.is(EphemeralRead) || flags.contains(HAS_UNIQUE_HLC)))
+        if (flags.contains(READY_TO_EXECUTE) && fastReadsMayBypassSafeStore(txnId) && partialTxn != null && executeAt != null && mayFastExecute() && (txnId.is(EphemeralRead) || flags.contains(HAS_UNIQUE_HLC)))
             return node.commandStores().mapReduceConsume(scope, minEpoch(), executeAtEpoch, this::applyFastRead, this, this);
 
         return node.mapReduceConsumeLocal(this, scope, minEpoch(), executeAtEpoch, this);

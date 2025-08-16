@@ -151,7 +151,12 @@ public class ExecuteSyncPoint extends SettableResult<DurabilityResult> implement
         }
         else
         {
-            update(tracker.recordSuccess(from));
+            ReadData.ReadOk ok = (ReadData.ReadOk) reply;
+            // TODO (expected): handle partial successes to achieve durability quorums
+            update(ok.unavailable != null && !ok.unavailable.isEmpty()
+                   ? tracker.recordFailure(from)
+                   : tracker.recordSuccess(from)
+            );
         }
     }
 

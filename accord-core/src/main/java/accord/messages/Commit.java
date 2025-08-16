@@ -17,11 +17,8 @@
  */
 package accord.messages;
 
-import java.util.function.BiPredicate;
 import javax.annotation.Nullable;
 
-import accord.coordinate.ExecuteFlag.CoordinationFlags;
-import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Commands;
 import accord.local.LoadKeys;
 import accord.local.Node;
@@ -50,14 +47,9 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
-import org.agrona.collections.IntHashSet;
 
-import static accord.api.ProtocolModifiers.Toggles.fastReadExecMayResendTxn;
-import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
-import static accord.api.ProtocolModifiers.Toggles.sendOnlyReadStableMessages;
-import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
+import static accord.messages.Commit.Kind.CommitSlowPath;
 import static accord.messages.Commit.Kind.CommitWithTxn;
-import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.messages.MessageType.StandardMessage.COMMIT_INVALIDATE_REQ;
 import static accord.messages.MessageType.StandardMessage.COMMIT_REQ;
 import static accord.primitives.SaveStatus.Committed;
@@ -186,86 +178,12 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         this.route = fullRoute;
     }
 
-    public static void commitMinimalNoRead(SortedArrayList<Id> contact, Node node, SequentialAsyncExecutor executor, Topologies stabilise, Topologies all, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Participants<?> readScope, Timestamp executeAt, Deps unstableDeps, CoordinationFlags flags, Callback<ReadReply> callback)
+    public static void commitMinimalNoRead(SortedArrayList<Id> contact, Node node, SequentialAsyncExecutor executor, Topologies stabilise, Topologies all, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps unstableDeps, Callback<ReadReply> callback)
     {
         Invariants.requireArgument(stabilise.size() == 1, "Invalid coordinate epochs: %s", stabilise);
         // we want to send to everyone, and we want to include all the relevant data, but we stabilise on the coordination epoch replica responses
-        sendTo(contact, null, (i1, i2) -> false, (i1, i2) -> true, node, executor, all, Kind.CommitSlowPath, ballot,
-               txnId, txn, route, readScope, executeAt, unstableDeps, flags, false, false, callback);
-    }
-
-    // TODO (desired, efficiency): do not commit if we're already ready to execute (requires extra info in Accept responses)
-    public static void stableAndRead(Node node, SequentialAsyncExecutor executor, Topologies all, Kind kind, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Participants<?> readScope, Timestamp executeAt, Deps stableDeps, IntHashSet readSet, CoordinationFlags flags, boolean onlyContactOldAndReadSet, Callback<ReadReply> callback)
-    {
-        Invariants.require(all.currentEpoch() == executeAt.epoch());
-
-        SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
-        sendTo(contact, readSet, (set, id) -> set.contains(id.id), (set, id) -> false, node, executor, all, kind, Ballot.ZERO,
-               txnId, txn, route, readScope, executeAt, stableDeps, flags, false, onlyContactOldAndReadSet, callback);
-    }
-
-    private static <P> void sendTo(SortedArrayList<Id> contact, P param, BiPredicate<P, Id> reads, BiPredicate<P, Id> registerCallback,
-                                   Node node, SequentialAsyncExecutor executor, Topologies all, Kind kind, Ballot ballot,
-                                   TxnId txnId, @Nullable Txn txn, FullRoute<?> route, @Nullable Participants<?> readScope, Timestamp executeAt, @Nullable Deps deps,
-                                   CoordinationFlags flags, boolean alreadySentStable, boolean onlyContactOldAndReads, Callback<ReadReply> callback)
-    {
         for (Node.Id to : contact)
-        {
-            boolean isRead = reads.test(param, to);
-            boolean hasCallback = isRead || registerCallback.test(param, to);
-            sendTo(to, isRead, hasCallback, node, executor, all, kind, ballot, txnId, txn, route, readScope, executeAt, deps, callback, flags.get(to), alreadySentStable, onlyContactOldAndReads);
-        }
-    }
-
-    private static void sendTo(Id to, boolean isRead, boolean hasCallback,
-                               Node node, SequentialAsyncExecutor executor, Topologies all, Kind kind, Ballot ballot,
-                               TxnId txnId, @Nullable Txn txn, FullRoute<?> route, @Nullable Participants<?> readScope, Timestamp executeAt, @Nullable Deps deps,
-                               Callback<ReadReply> callback, ExecuteFlags flags, boolean alreadySentStable, boolean onlyContactOldAndCallbacks)
-    {
-        Request send = requestTo(to, isRead, all, kind, ballot, txnId, txn, route, readScope, executeAt, deps, flags, alreadySentStable, onlyContactOldAndCallbacks);
-        if (send != null)
-        {
-            if (isRead | hasCallback) node.send(to, send, executor, callback);
-            else node.send(to, send);
-        }
-    }
-
-    public static Request requestTo(Id to, boolean isRead,
-                                    Topologies all, Kind kind, Ballot ballot,
-                                    TxnId txnId, @Nullable Txn txn, FullRoute<?> route, Participants<?> readScope,
-                                    Timestamp executeAt, @Nullable Deps deps,
-                                    ExecuteFlags flags, boolean alreadySentStable, boolean onlyContactOldAndCallbacks)
-    {
-        if ((all.size() == 1 || all.current().contains(to)))
-        {
-            if (isRead)
-            {
-                Invariants.require(kind.compareTo(StableFastPath) >= 0);
-                if (alreadySentStable || (flags.contains(READY_TO_EXECUTE) && sendOnlyReadStableMessages()))
-                {
-                    Txn sendTxn = null;
-                    Timestamp sendExecuteAt = null;
-                    if (flags.contains(READY_TO_EXECUTE) && fastReadExecMayResendTxn() && fastReadsMayBypassSafeStore(txnId))
-                    {
-                        sendTxn = txn;
-                        sendExecuteAt = executeAt;
-                    }
-                    return new ReadTxnData(to, all, txnId, readScope, sendTxn, sendExecuteAt, executeAt.epoch(), flags);
-                }
-                return new StableThenRead(kind, to, all, txnId, txn, route, executeAt, deps);
-            }
-            if (onlyContactOldAndCallbacks)
-                return null;
-        }
-        Invariants.require(!isRead);
-        return new Commit(kind, to, all, txnId, txn, route, ballot, executeAt, deps);
-    }
-
-    public static void stableMaximal(Node node, Node.Id to, Txn txn, TxnId txnId, Timestamp executeAt, FullRoute<?> route, Deps deps)
-    {
-        // the replica may be missing the original commit, or the additional commit, so send everything
-        Topologies topologies = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
-        node.send(to, new Commit(StableWithTxnAndDeps, to, topologies, txnId, txn, route, Ballot.ZERO, executeAt, deps));
+            node.send(to, new Commit(CommitSlowPath, to, all, txnId, txn, route, ballot, executeAt, unstableDeps), executor, callback);
     }
 
     @Override

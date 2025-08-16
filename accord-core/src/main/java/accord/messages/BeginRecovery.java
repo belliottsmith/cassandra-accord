@@ -71,9 +71,9 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
 {
     public static class SerializationSupport
     {
-        public static BeginRecovery create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch)
+        public static BeginRecovery create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch, boolean isFastPathDecided)
         {
-            return new BeginRecovery(txnId, scope, waitForEpoch, minEpoch, partialTxn, ballot, route, executeAtOrTxnIdEpoch);
+            return new BeginRecovery(txnId, scope, waitForEpoch, minEpoch, partialTxn, ballot, route, executeAtOrTxnIdEpoch, isFastPathDecided);
         }
     }
 
@@ -81,24 +81,27 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     public final Ballot ballot;
     public final FullRoute<?> route;
     public final long executeAtOrTxnIdEpoch;
+    public final boolean isFastPathDecided;
 
-    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, @Nullable Timestamp executeAt, Txn txn, FullRoute<?> route, Ballot ballot)
+    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, @Nullable Timestamp committedExecuteAt, boolean isFastPathDecided, Txn txn, FullRoute<?> route, Ballot ballot)
     {
         super(to, topologies, txnId, route);
         this.partialTxn = txn.intersecting(scope, true);
         this.ballot = ballot;
         this.route = route;
         this.executeAtOrTxnIdEpoch = topologies.currentEpoch();
-        Invariants.require(executeAt == null || executeAt.epoch() == topologies.currentEpoch());
+        this.isFastPathDecided = isFastPathDecided;
+        Invariants.require(committedExecuteAt == null || committedExecuteAt.epoch() == topologies.currentEpoch());
     }
 
-    private BeginRecovery(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch)
+    private BeginRecovery(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch, boolean isFastPathDecided)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
         this.partialTxn = partialTxn;
         this.ballot = ballot;
         this.route = route;
         this.executeAtOrTxnIdEpoch = executeAtOrTxnIdEpoch;
+        this.isFastPathDecided = isFastPathDecided;
     }
 
     @Override
@@ -147,9 +150,9 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
         boolean supersedingRejects;
         Deps earlierNoWait, earlierWait;
         Deps laterCoordRejects;
-        if (command.hasBeen(AcceptedMedium) || txnId.isSyncPoint())
+        if (command.hasBeen(AcceptedMedium) || txnId.isSyncPoint() || isFastPathDecided)
         {
-            supersedingRejects = !command.hasBeen(AcceptedMedium);
+            supersedingRejects = true;
             earlierNoWait = earlierWait = Deps.NONE;
             laterCoordRejects = Deps.NONE;
         }
@@ -231,7 +234,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     @Override
     public LoadKeysFor loadKeysFor()
     {
-        if (txnId.isSyncPoint())
+        if (isFastPathDecided || txnId.isSyncPoint())
             return LoadKeysFor.READ_WRITE;
         return LoadKeysFor.RECOVERY;
     }

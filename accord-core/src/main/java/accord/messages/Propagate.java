@@ -218,14 +218,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         {
             // Already know the outcome, waiting on durability so maybe update with new durability information which can also trigger cleanup
             case Persist:
-                if (tracing != null)
-                    tracing.trace(safeStore.commandStore(), "Already persisted; skipping");
-                return updateDurability(safeStore, safeCommand, participants);
             case Cleanup:
             case Invalidate:
                 if (tracing != null)
-                    tracing.trace(safeStore.commandStore(), "Already invalidated/erased; skipping");
-                return null;
+                    tracing.trace(safeStore.commandStore(), "Already %s; skipping", command.saveStatus());
+                return updateDurability(safeStore, safeCommand, participants);
         }
 
         participants = participants.supplement(command.participants())

@@ -211,7 +211,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     }
 
     final IntHashSet inflight;
-    final List<Id> candidates; // TODO (easy, efficiency): use Agrona's IntArrayList
+    protected final List<Id> candidates; // TODO (easy, efficiency): use Agrona's IntArrayList
     private IntHashSet slow;
     protected int waitingOnData;
 

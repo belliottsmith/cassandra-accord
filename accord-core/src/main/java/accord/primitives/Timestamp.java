@@ -47,10 +47,10 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public interface ValueFactory<T extends Timestamp>
     {
-        T create(long epoch, long hlc, Id id);
+        T create(long epoch, long hlc, int flags, Id id);
     }
 
-    interface Factory<T extends Timestamp>
+    public interface RawFactory<T extends Timestamp>
     {
         T create(long msb, long lsb, Id id);
     }
@@ -227,6 +227,16 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return minEpoch <= epoch() ? this : new Timestamp(minEpoch, hlc(), flags(), node);
     }
 
+    public static <T extends Timestamp> T withEpochAtLeast(long minEpoch, T ts, ValueFactory<T> factory)
+    {
+        return minEpoch <= ts.epoch() ? ts : factory.create(minEpoch, ts.hlc(), ts.flags(), ts.node);
+    }
+
+    public static <T extends Timestamp> T withEpochAtMost(long maxEpoch, T ts, ValueFactory<T> factory)
+    {
+        return maxEpoch >= ts.epoch() ? ts : factory.create(maxEpoch, ts.hlc(), ts.flags(), ts.node);
+    }
+
     public Timestamp withEpoch(long epoch)
     {
         return epoch == epoch() ? this : new Timestamp(epoch, hlc(), flags(), node);
@@ -253,7 +263,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return addFlags(this, merge, Timestamp::new);
     }
 
-    static <T extends Timestamp> T addFlags(T to, T from, Factory<T> factory)
+    static <T extends Timestamp> T addFlags(T to, T from, RawFactory<T> factory)
     {
         long newLsb = to.lsb | (from.lsb & MERGE_FLAGS);
         if (to.lsb == newLsb)
@@ -263,7 +273,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return factory.create(to.msb, newLsb, to.node);
     }
 
-    static <T extends Timestamp> T addFlags(T to, int addFlags, Factory<T> factory)
+    static <T extends Timestamp> T addFlags(T to, int addFlags, RawFactory<T> factory)
     {
         long newLsb = to.lsb | addFlags;
         if (to.lsb == newLsb)
@@ -414,6 +424,17 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
                                                : b.withEpochAtLeast(a.epoch());
     }
 
+    /**
+     * The resulting timestamp will have min(a.hlc,b.hlc) and min(a.epoch, b.epoch)
+     */
+    public static <T extends Timestamp> T mergeMin(T a, T b, ValueFactory<T> factory)
+    {
+        // Note: it is not safe to take the lowest HLC while retaining the current node;
+        //       however, it is safe to take the highest epoch, as the originating node will always advance the hlc()
+        return a.compareToWithoutEpoch(b) <= 0 ? withEpochAtMost(b.epoch(), a, factory)
+                                               : withEpochAtMost(a.epoch(), b, factory);
+    }
+
     public static <T extends Timestamp> T nonNullOrMax(T a, T b)
     {
         return a == null ? b : b == null ? a : max(a, b);
@@ -434,17 +455,17 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return msb >>> 15;
     }
 
-    static long epochMsb(long epoch)
+    public static long epochMsb(long epoch)
     {
         return epoch << 15;
     }
 
-    private static long hlcMsb(long hlc)
+    public static long hlcMsb(long hlc)
     {
         return hlc >>> 48;
     }
 
-    private static long hlcLsb(long hlc)
+    public static long hlcLsb(long hlc)
     {
         return hlc << 16;
     }

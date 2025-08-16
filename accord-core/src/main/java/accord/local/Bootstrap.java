@@ -40,8 +40,6 @@ import accord.utils.ReducingRangeMap;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
-import static accord.local.durability.DurabilityService.SyncRemote.MinorityQuorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
@@ -139,17 +137,6 @@ class Bootstrap
             safeStore = safeStore;
             CommandStore commandStore = safeStore.commandStore();
             CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges)
-                               .flatMap(syncPoint -> {
-                                   // before using the sync point we first make sure it is durable to a majority, since any later durability conditions
-                                   // this node participates in will not guarantee a quorum for preceding transactions
-                                   // we must do this before we mark ourselves bootstrapping, else we may participate in a durability quorum
-                                   // without actually waiting for the durability condition to be reached locally
-                                   // TODO (required): introduce a more robust mechanism when evaluating Durability quorums, esp. since this does not handle markStale
-                                   // TODO (required): configurable timeout?
-                                   // TODO (required): can we do better than minority quorum? still not sufficient for bootstrap replace at rf=2
-                                   return node.durability().sync("Bootstrap " + commitRanges + " for " + commandStore, syncPoint, NoLocal, MinorityQuorum, 1L, TimeUnit.HOURS)
-                                              .map(i -> syncPoint);
-                               })
                                .flatMap(success -> commandStore.build((PreLoadContext.Empty) () -> "Mark Bootstrapping", safeStore0 -> {
                                    // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
                                    store.markBootstrapping(safeStore0, globalSyncId, commitRanges);

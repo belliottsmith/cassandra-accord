@@ -899,7 +899,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         {
             AsyncResult<? extends Outcome> result = coordinating.get(txnId);
             if (result != null)
+            {
+                if (tracing != null)
+                    tracing.trace(null, "Coordination already ongoing; returning existing attempt");
                 return result;
+            }
         }
 
         SequentialAsyncExecutor executor = someSequentialExecutor();

@@ -213,7 +213,7 @@ public class ProtocolModifiers
         private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;
         public static void setSendStableMessages(SendStableMessages newSendStableMessages) { sendStableMessages = newSendStableMessages; }
         public static boolean sendOnlyReadStableMessages() { return sendStableMessages.compareTo(FOR_READS) >= 0; }
-        public static boolean sendNoStableMessagesIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
+        public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
         private static boolean permitLocalExecution = true;
         public static boolean permitLocalExecution() { return permitLocalExecution; }

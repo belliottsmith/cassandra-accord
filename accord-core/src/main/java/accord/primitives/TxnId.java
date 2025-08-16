@@ -509,7 +509,7 @@ public class TxnId extends Timestamp
         return id == null ? MAX : id;
     }
 
-    private static final Pattern PARSE = Pattern.compile("\\[(?<epoch>[0-9]+),(?<hlc>[0-9]+),(?<flags>[0-9]+)\\([KR][REWSXL]\\),(?<node>[0-9]+)]");
+    private static final Pattern PARSE = Pattern.compile("\\[(?<epoch>[0-9]+),(?<hlc>[0-9]+),(?<flags>[0-9]+)\\([KR][REWXV]\\),(?<node>[0-9]+)]");
     public static TxnId parse(String txnIdString)
     {
         Matcher m = PARSE.matcher(txnIdString);

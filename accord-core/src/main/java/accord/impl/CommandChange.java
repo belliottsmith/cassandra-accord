@@ -42,6 +42,7 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
+import accord.utils.ImmutableBitSet;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
@@ -157,6 +158,26 @@ public class CommandChange
         return saveStatus == SaveStatus.Vestigial || predicate.test(erased);
     }
 
+    public static class WaitingOnBitSets
+    {
+        public final ImmutableBitSet waitingOn;
+        public final @Nullable ImmutableBitSet appliedOrInvalidated;
+
+        public WaitingOnBitSets(ImmutableBitSet waitingOn, @Nullable ImmutableBitSet appliedOrInvalidated)
+        {
+            this.waitingOn = waitingOn;
+            this.appliedOrInvalidated = appliedOrInvalidated;
+        }
+
+        public WaitingOn construct(PartialDeps partialDeps, Timestamp executesAtLeast, long uniqueHlc)
+        {
+            WaitingOn result = new WaitingOn(partialDeps.keyDeps.keys(), partialDeps.rangeDeps, waitingOn, appliedOrInvalidated);
+            if (executesAtLeast != null) result = new Command.WaitingOnWithExecuteAt(result, executesAtLeast);
+            if (uniqueHlc != 0) result = new Command.WaitingOnWithMinUniqueHlc(result, uniqueHlc);
+            return result;
+        }
+    }
+
     public static abstract class Builder
     {
         protected final int mask;
@@ -169,13 +190,14 @@ public class CommandChange
         protected Durability durability;
         protected Timestamp executeAt;
 
+        protected PartialTxn partialTxn;
+        protected Object partialDeps;
+
         protected Ballot promised;
         protected Ballot acceptedOrCommitted;
 
-        protected PartialTxn partialTxn;
-        protected PartialDeps partialDeps;
-
-        protected CommandChange.WaitingOnProvider waitingOn;
+        // TODO (desired): we can use a simpler concept; we basically only guarantee to know the bitsets so cannot create the WaitingOn until other data is parsed (notably PartialDeps)
+        protected WaitingOnBitSets waitingOn;
         protected long minUniqueHlc;
         protected Timestamp executesAtLeast;
 
@@ -208,52 +230,46 @@ public class CommandChange
             this(ALL);
         }
 
-        public TxnId txnId()
+        public final TxnId txnId()
         {
             return txnId;
         }
 
-        public SaveStatus saveStatus()
+        public final SaveStatus saveStatus()
         {
             return saveStatus;
         }
 
-        public Durability durability()
+        public final Durability durability()
         {
             return durability;
         }
 
-        public Timestamp executeAt()
+        public final Timestamp executeAt()
         {
             return executeAt;
         }
 
-        public Timestamp executesAtLeast()
+        public final Timestamp executesAtLeast()
         {
             return executesAtLeast;
         }
 
-        public PartialTxn partialTxn()
-        {
-            return partialTxn;
-        }
+        public final PartialTxn partialTxn() { return partialTxn; }
 
-        public PartialDeps partialDeps()
-        {
-            return partialDeps;
-        }
+        public abstract PartialDeps partialDeps();
 
-        public Writes writes()
+        public final Writes writes()
         {
             return writes;
         }
 
-        public Result result()
+        public final Result result()
         {
             return result;
         }
 
-        public StoreParticipants participants()
+        public final StoreParticipants participants()
         {
             return participants;
         }
@@ -279,18 +295,14 @@ public class CommandChange
             }
         }
 
-        public void clear()
+        public void reset()
         {
             flags = 0;
             txnId = null;
 
             participants = null;
             saveStatus = null;
-            durability = null;
             executeAt = null;
-
-            promised = null;
-            acceptedOrCommitted = null;
 
             partialTxn = null;
             partialDeps = null;
@@ -305,21 +317,25 @@ public class CommandChange
 
             hasUpdate = false;
             count = 0;
+            init();
         }
 
-        public void reset(TxnId txnId)
+        private void init()
         {
-            clear();
-            init(txnId);
+            durability = NotDurable;
+            acceptedOrCommitted = promised = Ballot.ZERO;
         }
 
         public void init(TxnId txnId)
         {
+            init();
             this.txnId = txnId;
-            this.durability = NotDurable;
-            this.acceptedOrCommitted = promised = Ballot.ZERO;
-            this.waitingOn = (txn, deps, executeAtLeast, uniqueHlc) -> null;
-            this.result = null;
+        }
+
+        public void reset(TxnId txnId)
+        {
+            reset();
+            this.txnId = txnId;
         }
 
         public boolean isEmpty()
@@ -566,6 +582,11 @@ public class CommandChange
             return new Command.Minimal(txnId, saveStatus, participants, durability, executeAt);
         }
 
+        public Command.MinimalWithDeps asMinimalWithDeps()
+        {
+            return new Command.MinimalWithConcreteDeps(txnId, saveStatus, participants, durability, executeAt, partialDeps());
+        }
+
         public void forceResult(Result newValue)
         {
             this.result = newValue;
@@ -586,7 +607,7 @@ public class CommandChange
 
             WaitingOn waitingOn = null;
             if (this.waitingOn != null)
-                waitingOn = this.waitingOn.provide(txnId, partialDeps, executesAtLeast, minUniqueHlc);
+                waitingOn = this.waitingOn.construct(partialDeps(), executesAtLeast, minUniqueHlc);
 
             if (cleanup != null)
             {
@@ -616,23 +637,23 @@ public class CommandChange
                     return saveStatus == SaveStatus.Uninitialised ? uninitialised(txnId)
                                                                   : notDefined(txnId, saveStatus, durability, participants, promised);
                 case PreAccepted:
-                    return preaccepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps);
+                    return preaccepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps());
                 case AcceptedInvalidate:
                     if (!saveStatus.known.isDefinitionKnown())
-                        return notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps);
+                        return notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps());
                 case AcceptedMedium:
                 case AcceptedSlow:
                 case PreCommitted:
-                    return accepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
+                    return accepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps(), acceptedOrCommitted);
                 case Committed:
                 case Stable:
-                    return committed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
+                    return committed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps(), acceptedOrCommitted, waitingOn);
                 case PreApplied:
                 case Applied:
-                    return executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result);
+                    return executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps(), acceptedOrCommitted, waitingOn, writes, result);
                 case Truncated:
                 case Invalidated:
-                    return truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, executesAtLeast, writes, result);
+                    return truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps(), executesAtLeast, writes, result);
                 default:
                     throw new UnhandledEnum(saveStatus.status);
             }
@@ -723,11 +744,6 @@ public class CommandChange
      * Helpers
      */
 
-    public interface WaitingOnProvider
-    {
-        WaitingOn provide(TxnId txnId, PartialDeps deps, Timestamp executeAtLeast, long uniqueHlc);
-    }
-
     public static long getMinUniqueHlc(Command command)
     {
         WaitingOn waitingOn = command.waitingOn();
@@ -749,8 +765,14 @@ public class CommandChange
     }
 
     private static final int[] LOAD_MASKS = new int[] {0,
-                                                       mask(SAVE_STATUS, PARTICIPANTS, DURABILITY, EXECUTE_AT, WRITES),
-                                                       mask(SAVE_STATUS, PARTICIPANTS, EXECUTE_AT)};
+                                                       mask(SAVE_STATUS, PARTICIPANTS, DURABILITY, EXECUTE_AT),
+                                                       mask(SAVE_STATUS, PARTICIPANTS, DURABILITY, EXECUTE_AT, PARTIAL_DEPS),
+                                                       };
+
+    static
+    {
+        Invariants.require(LOAD_MASKS.length == Load.values().length);
+    }
 
     public static int mask(Load load)
     {

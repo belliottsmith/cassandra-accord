@@ -82,6 +82,16 @@ public class BitUtils
 
     public static long flushBits(long buffer, int bufferCount, long add, int addCount, ByteBuffer out)
     {
+        return flushBits(buffer, bufferCount, add, addCount, out, ByteBuffer::putLong);
+    }
+
+    public interface PutLong<O, T extends Throwable>
+    {
+        void accept(O o, long v) throws T;
+    }
+
+    public static <Out, T extends Throwable> long flushBits(long buffer, int bufferCount, long add, int addCount, Out out, PutLong<Out, T> putLong) throws T
+    {
         Invariants.requireArgument(addCount == 64 || 0 == (add & (-1L << addCount)));
         int total = bufferCount + addCount;
         if (total < 64)
@@ -91,7 +101,7 @@ public class BitUtils
         else
         {
             buffer |= add >>> total - 64;
-            out.putLong(buffer);
+            putLong.accept(out, buffer);
             return total == 64 ? 0 : (add << (128 - total));
         }
     }

@@ -815,6 +815,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     private final Ranges staleRanges, locallyRetiredRanges;
     private final TxnId maxBootstrap, maxShardAppliedBefore, maxGcBefore;
     private final TxnId minShardAndLocallyAppliedBefore, minGcBefore;
+    private final long minGcHlcBefore;
     private final long maxStartEpoch, minLocallyRetiredEpoch;
 
     private RedundantBefore()
@@ -822,6 +823,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         staleRanges = locallyRetiredRanges = Ranges.EMPTY;
         maxBootstrap = maxShardAppliedBefore = maxGcBefore = TxnId.NONE;
         minShardAndLocallyAppliedBefore = minGcBefore = TxnId.MAX;
+        minGcHlcBefore = 0L;
         maxStartEpoch = 0;
         minLocallyRetiredEpoch = Long.MAX_VALUE;
     }
@@ -833,6 +835,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         locallyRetiredRanges = extractRanges(values, Bounds::isLocallyRetired);
         TxnId maxBootstrap = TxnId.NONE, maxGcBefore = TxnId.NONE, maxShardAppliedBefore = TxnId.NONE;
         TxnId minShardAndLocallyRedundantBefore = TxnId.MAX, minGcBefore = TxnId.MAX;
+        long minGcHlcBefore = Long.MAX_VALUE;
         long minLocallyRetiredEpoch = Long.MAX_VALUE, maxStartEpoch = 0;
         boolean hasLocallyRetired = !locallyRetiredRanges.isEmpty();
         for (Bounds bounds : values)
@@ -851,6 +854,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                     maxGcBefore = gcBefore;
                 if (gcBefore.compareTo(minGcBefore) < 0)
                     minGcBefore = gcBefore;
+                minGcHlcBefore = Math.min(gcBefore.hlc(), minGcHlcBefore);
             }
             {
                 TxnId shardAndLocallyRedundantBefore = bounds.shardAndLocallyRedundantBefore();
@@ -870,6 +874,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         this.maxGcBefore = maxGcBefore;
         this.minShardAndLocallyAppliedBefore = minShardAndLocallyRedundantBefore;
         this.minGcBefore = minGcBefore;
+        this.minGcHlcBefore = minGcHlcBefore;
         this.maxStartEpoch = maxStartEpoch;
         this.minLocallyRetiredEpoch = minLocallyRetiredEpoch;
         checkParanoid(starts, values);
@@ -1012,6 +1017,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     public TxnId minGcBefore()
     {
         return minGcBefore;
+    }
+
+    public long minGcHlcBefore()
+    {
+        return minGcHlcBefore;
     }
 
     public TxnId maxGcBefore()

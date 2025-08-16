@@ -63,7 +63,6 @@ import static java.lang.String.format;
  */
 public class RelationMultiMap
 {
-    private static final boolean DEBUG_CHECKS = true;
     public static final int[] NO_INTS = new int[0];
 
     /**
@@ -1105,6 +1104,8 @@ public class RelationMultiMap
             return src;
 
         int[] trg = new int[trgKeyCount + srcLength - srcKeyCount];
+        if (trg.length == 0)
+            return trg;
 
         // first pass, count number of txnId per key
         for (int i = srcKeyCount ; i < srcLength ; ++i)
@@ -1271,9 +1272,6 @@ public class RelationMultiMap
     @Inline
     public static <K, V> void checkValid(K[] keys, V[] values, int[] keysToValues)
     {
-        if (!DEBUG_CHECKS)
-            return;
-
         int k = 0;
         for (int i = keys.length; i < keysToValues.length ; ++i)
         {

@@ -361,11 +361,11 @@ public class Known
 
     public String toString()
     {
-        return Stream.of(route() == FullRoute ? "Route" : null,
-                         definition().isKnown() ? "Definition" : null,
-                         executeAt() == ExecuteAtKnown ? "ExecuteAt" : executeAt() == ApplyAtKnown ? "ApplyAt" : null,
-                         deps().hasDecidedDeps() ? "Deps" : null,
-                         outcome().isDecided() ? outcome().toString() : null
+        return Stream.of(route() == MaybeRoute ? null : route().toString(),
+                         definition() == DefinitionUnknown ? null : definition().toString().replace("Known", ""),
+                         executeAt() == ExecuteAtUnknown ? null : executeAt().toString().replace("Known", ""),
+                         deps() == DepsUnknown ? null : deps().toString().replace("Known", ""),
+                         outcome() == Unknown ? null : outcome().toString()
         ).filter(Objects::nonNull).collect(Collectors.joining(",", "[", "]"));
     }
 

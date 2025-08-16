@@ -46,36 +46,40 @@ import static accord.primitives.RoutingKeys.toRoutingKeys;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.*;
-import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.RelationMultiMap.*;
 import static accord.utils.SortedArrays.Search.FAST;
 
-// TODO (expected): consider which projection we should default to on de/serialise
+// TODO (expected): improve handling of both projections, and cleanup e.g. startOffset logic
 /**
  * A collection of dependencies for a transaction, organised by the key the dependency is adopted via.
  * An inverse map from TxnId to Key may also be constructed and stored in this collection.
  */
 public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRangeDeps
 {
-    public static final KeyDeps NONE = new KeyDeps(RoutingKeys.EMPTY, NO_TXNIDS, NO_INTS);
+    public static final KeyDeps NONE = new KeyDeps(RoutingKeys.EMPTY, NO_TXNIDS, NO_INTS, NO_INTS);
 
     public static class SerializerSupport
     {
         private SerializerSupport() {}
 
-        public static int keysToTxnIdsCount(KeyDeps deps)
+        public static TxnId[] txnIds(KeyDeps deps)
         {
-            return deps.keysToTxnIds.length;
+            return deps.txnIds;
         }
 
-        public static int keysToTxnIds(KeyDeps deps, int idx)
+        public static int[] keysToTxnIds(KeyDeps deps)
         {
-            return deps.keysToTxnIds[idx];
+            return deps.keysToTxnIds();
         }
 
-        public static KeyDeps create(RoutingKeys keys, TxnId[] txnIds, int[] keyToTxnId)
+        public static int[] txnIdsToKeys(KeyDeps deps)
         {
-            return new KeyDeps(keys, txnIds, keyToTxnId);
+            return deps.txnIdsToKeys();
+        }
+
+        public static KeyDeps create(RoutingKeys keys, TxnId[] txnIds, int[] keysToTxnIds, int[] txnIdsToKeys)
+        {
+            return new KeyDeps(keys, txnIds, keysToTxnIds, txnIdsToKeys);
         }
     }
 
@@ -110,7 +114,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         @Override
         protected KeyDeps build(RoutingKey[] keys, TxnId[] txnIds, int[] keysToTxnIds)
         {
-            return new KeyDeps(RoutingKeys.ofSortedUnique(keys), txnIds, keysToTxnIds);
+            return constructKeysToTxnIds(RoutingKeys.ofSortedUnique(keys), txnIds, keysToTxnIds);
         }
     }
 
@@ -136,10 +140,10 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
                 if (deps == null || deps.isEmpty())
                     continue;
 
-                linearMerger.update(deps, deps.keys.keys, deps.txnIds, deps.keysToTxnIds);
+                linearMerger.update(deps, deps.keys.keys, deps.txnIds, deps.keysToTxnIds());
             }
 
-            return linearMerger.get(KeyDeps::new, NONE);
+            return linearMerger.get(KeyDeps::constructKeysToTxnIds, NONE);
         }
     }
 
@@ -149,10 +153,10 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         {
             merge.forEach(deps -> {
                 if (!deps.isEmpty())
-                    linearMerger.update(deps, deps.keys.keys, deps.txnIds, deps.keysToTxnIds);
+                    linearMerger.update(deps, deps.keys.keys, deps.txnIds, deps.keysToTxnIds());
             });
 
-            return linearMerger.get(KeyDeps::new, NONE);
+            return linearMerger.get(KeyDeps::constructKeysToTxnIds, NONE);
         }
     }
 
@@ -179,25 +183,40 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
     int[] keysToTxnIds; // Key -> [TxnId]
     int[] txnIdsToKeys; // TxnId -> [Key]
 
-    KeyDeps(RoutingKey[] keys, TxnId[] txnIds, int[] keysToTxnIds)
+    private static KeyDeps constructKeysToTxnIds(RoutingKey[] keys, TxnId[] txnIds, @Nullable int[] keysToTxnIds)
     {
-        this(RoutingKeys.ofSortedUnique(keys), txnIds, keysToTxnIds);
+        return new KeyDeps(RoutingKeys.of(keys), txnIds, keysToTxnIds, null);
     }
 
-    KeyDeps(RoutingKeys keys, TxnId[] txnIds, int[] keysToTxnIds)
+    private static KeyDeps constructKeysToTxnIds(RoutingKeys keys, TxnId[] txnIds, @Nullable int[] keysToTxnIds)
     {
-        this(keys, txnIds, keysToTxnIds, null);
+        return new KeyDeps(keys, txnIds, keysToTxnIds, null);
     }
 
-    KeyDeps(RoutingKeys keys, TxnId[] txnIds, int[] keysToTxnIds, @Nullable int[] txnIdsToKeys)
+    private static KeyDeps constructTxnIdsToKeys(TxnId[] txnIds, RoutingKey[] keys, @Nullable int[] txnIdsToKeys)
+    {
+        return new KeyDeps(RoutingKeys.of(keys), txnIds, null, txnIdsToKeys);
+    }
+
+    private static KeyDeps constructTxnIdsToKeys(TxnId[] txnIds, RoutingKeys keys, @Nullable int[] txnIdsToKeys)
+    {
+        return new KeyDeps(keys, txnIds, null, txnIdsToKeys);
+    }
+
+    KeyDeps(RoutingKeys keys, TxnId[] txnIds, @Nullable int[] keysToTxnIds, @Nullable int[] txnIdsToKeys)
     {
         this.keys = keys;
         this.txnIds = txnIds;
         this.keysToTxnIds = keysToTxnIds;
         this.txnIdsToKeys = txnIdsToKeys;
-        if (!(keys.isEmpty() || keysToTxnIds[keys.size() - 1] == keysToTxnIds.length))
-            throw illegalArgument(String.format("Last key (%s) in keyToTxnId does not point (%d) to the end of the array (%d);\nkeyToTxnId=%s", keys.get(keys.size() - 1), keysToTxnIds[keys.size() - 1], keysToTxnIds.length, Arrays.toString(keysToTxnIds)));
-        checkValid(keys.keys, txnIds, keysToTxnIds);
+        Invariants.require(keysToTxnIds != null || txnIdsToKeys != null);
+        Invariants.require(keysToTxnIds == null || keys.isEmpty() || keysToTxnIds[keys.size() - 1] == keysToTxnIds.length);
+        Invariants.require(txnIdsToKeys == null || txnIds.length == 0 || txnIdsToKeys[txnIds.length - 1] == txnIdsToKeys.length);
+        if (Invariants.isParanoid())
+        {
+            if (keysToTxnIds != null) checkValid(keys.keys, txnIds, keysToTxnIds);
+            if (txnIdsToKeys != null) checkValid(txnIds, keys.keys, txnIdsToKeys);
+        }
     }
 
     public KeyDeps slice(Ranges ranges)
@@ -221,6 +240,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
 
     public @Nullable TxnId minTxnId(Unseekables<?> participants)
     {
+        keysToTxnIds();
         return Routables.foldl(keys, participants, (rk, min, index) -> {
             int start = index == 0 ? keys.size() : keysToTxnIds[index - 1];
             int end = keysToTxnIds[index];
@@ -232,6 +252,8 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
 
     private KeyDeps select(RoutingKeys select)
     {
+        keysToTxnIds();
+
         // TODO (low priority, efficiency): can slice in parallel with selecting keyToTxnId contents to avoid duplicate merging
         if (select.isEmpty())
             return KeyDeps.NONE;
@@ -271,7 +293,24 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         }
 
         TxnId[] txnIds = trimUnusedValues(select.keys, this.txnIds, trg, TxnId[]::new);
-        return new KeyDeps(select, txnIds, trg);
+        return constructKeysToTxnIds(select, txnIds, trg);
+    }
+
+    private boolean preferByKey(KeyDeps that)
+    {
+        int byKeyScore = (this.keysToTxnIds != null ? 1 : 0) + (that.keysToTxnIds != null ? 1 : 0);
+        int byTxnIdScore = (this.txnIdsToKeys != null ? 1 : 0) + (that.txnIdsToKeys != null ? 1 : 0);
+        return byKeyScore >= byTxnIdScore;
+    }
+
+    public boolean hasByKey()
+    {
+        return keysToTxnIds != null;
+    }
+
+    public boolean hasByTxnId()
+    {
+        return txnIdsToKeys != null;
     }
 
     public KeyDeps with(KeyDeps that)
@@ -279,22 +318,40 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         if (isEmpty() || that.isEmpty())
             return isEmpty() ? that : this;
 
-        return linearUnion(
-                this.keys.keys, this.keys.keys.length, this.txnIds, this.txnIds.length, this.keysToTxnIds, this.keysToTxnIds.length,
-                that.keys.keys, that.keys.keys.length, that.txnIds, that.txnIds.length, that.keysToTxnIds, that.keysToTxnIds.length,
-                RoutingKey::compareTo, TxnId::compareTo, null, TxnId::addFlags,
-                cachedRoutingKeys(), cachedTxnIds(), cachedInts(),
-                (keys, keysLength, txnIds, txnIdsLength, out, outLength) ->
-                        new KeyDeps(RoutingKeys.ofSortedUnique(cachedRoutingKeys().complete(keys, keysLength)),
-                                cachedTxnIds().complete(txnIds, txnIdsLength),
-                                cachedInts().complete(out, outLength))
-                );
+        if (preferByKey(that))
+        {
+            return linearUnion(
+                    this.keys.keys, this.keys.keys.length, this.txnIds, this.txnIds.length, this.keysToTxnIds(), this.keysToTxnIds.length,
+                    that.keys.keys, that.keys.keys.length, that.txnIds, that.txnIds.length, that.keysToTxnIds(), that.keysToTxnIds.length,
+                    RoutingKey::compareTo, TxnId::compareTo, null, TxnId::addFlags,
+                    cachedRoutingKeys(), cachedTxnIds(), cachedInts(),
+                    (keys, keysLength, txnIds, txnIdsLength, out, outLength) ->
+                            constructKeysToTxnIds(RoutingKeys.ofSortedUnique(cachedRoutingKeys().complete(keys, keysLength)),
+                                                  cachedTxnIds().complete(txnIds, txnIdsLength),
+                                                  cachedInts().complete(out, outLength))
+                    );
+        }
+        else
+        {
+            return linearUnion(
+                this.txnIds, this.txnIds.length, this.keys.keys, this.keys.keys.length, this.txnIdsToKeys(), this.txnIdsToKeys.length,
+                that.txnIds, that.txnIds.length, that.keys.keys, that.keys.keys.length, that.txnIdsToKeys(), that.txnIdsToKeys.length,
+                TxnId::compareTo, RoutingKey::compareTo, TxnId::addFlags, null,
+                cachedTxnIds(), cachedRoutingKeys(), cachedInts(),
+                (txnIds, txnIdsLength, keys, keysLength, out, outLength) ->
+                constructTxnIdsToKeys(cachedTxnIds().complete(txnIds, txnIdsLength),
+                                      RoutingKeys.ofSortedUnique(cachedRoutingKeys().complete(keys, keysLength)),
+                                      cachedInts().complete(out, outLength))
+            );
+        }
+
     }
 
     public KeyDeps without(Predicate<TxnId> remove)
     {
-        return remove(this, keys.keys, txnIds, keysToTxnIds, remove,
-                      NONE, TxnId[]::new, keys, KeyDeps::new);
+        // TODO (desired): if we have txnIdsToKeys != null we can do this more cheaply
+        return remove(this, keys.keys, txnIds, keysToTxnIds(), remove,
+                      NONE, TxnId[]::new, keys, KeyDeps::constructKeysToTxnIds);
     }
 
     public KeyDeps without(KeyDeps remove)
@@ -302,8 +359,9 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         if (isEmpty() || remove.isEmpty()) return this;
         try (Builder builder = new Builder())
         {
-            if (!RelationMultiMap.remove(keys.keys, txnIds, keysToTxnIds,
-                                         remove.keys.keys, remove.txnIds, remove.keysToTxnIds,
+            // TODO (desired): if we have keysToTxnIds == null don't need to construct; can build using opposing ordering
+            if (!RelationMultiMap.remove(keys.keys, txnIds, keysToTxnIds(),
+                                         remove.keys.keys, remove.txnIds, remove.keysToTxnIds(),
                                          RoutingKey::compareTo, TxnId::compareTo, builder::add))
             {
                 return this;
@@ -358,7 +416,8 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
     // if the mapping is empty we return false, whether or not we have any keys or txnId by themselves
     public boolean isEmpty()
     {
-        return keysToTxnIds.length == keys.size();
+        if (keysToTxnIds != null) return keysToTxnIds.length == keys.size();
+        else return txnIdsToKeys.length == txnIds.length;
     }
 
     public RoutingKeys participants(TxnId txnId)
@@ -500,6 +559,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
      */
     public TxnId minTxnId(Range range, TxnId orElse)
     {
+        keysToTxnIds();
         int startKeyIndex = keys.indexOf(range.start());
         if (startKeyIndex < 0) startKeyIndex = -1 - startKeyIndex;
         else if (!range.startInclusive()) ++startKeyIndex;
@@ -529,6 +589,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
      */
     public TxnId maxTxnId(Range range, TxnId orElse)
     {
+        keysToTxnIds();
         int startKeyIndex = keys.indexOf(range.start());
         if (startKeyIndex < 0) startKeyIndex = -1 - startKeyIndex;
         else if (!range.startInclusive()) ++startKeyIndex;
@@ -634,7 +695,8 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
 
     public int totalCount()
     {
-        return keysToTxnIds.length - keys.size();
+        if (keysToTxnIds != null) return keysToTxnIds.length - keys.size();
+        else return txnIdsToKeys.length - txnIds.length;
     }
 
     public TxnId txnId(int i)
@@ -753,7 +815,8 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
 
     public boolean equals(KeyDeps that)
     {
-        return testEquality(this.keys.keys, this.txnIds, this.keysToTxnIds, that.keys.keys, that.txnIds, that.keysToTxnIds);
+        if (preferByKey(that)) return testEquality(this.keys.keys, this.txnIds, this.keysToTxnIds(), that.keys.keys, that.txnIds, that.keysToTxnIds());
+        else return testEquality(this.txnIds, this.keys.keys, this.txnIdsToKeys(), that.txnIds, that.keys.keys, that.txnIdsToKeys());
     }
 
     @Override
@@ -765,7 +828,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
     @Override
     public String toString()
     {
-        return toSimpleString(keys.keys, txnIds, keysToTxnIds);
+        return toSimpleString(keys.keys, txnIds, keysToTxnIds());
     }
 
     public String toBriefString()

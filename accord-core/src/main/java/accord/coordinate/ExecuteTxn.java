@@ -18,7 +18,10 @@
 
 package accord.coordinate;
 
+import java.util.List;
 import java.util.function.BiConsumer;
+
+import javax.annotation.Nullable;
 
 import accord.api.Data;
 import accord.api.Result;
@@ -36,6 +39,7 @@ import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.messages.Accept;
+import accord.messages.Callback;
 import accord.messages.Commit;
 import accord.messages.InformDurable;
 import accord.messages.MessageType;
@@ -43,7 +47,7 @@ import accord.messages.ReadData;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
-import accord.messages.Request;
+import accord.messages.ReadTxnData;
 import accord.messages.SafeCallback;
 import accord.messages.StableThenRead;
 import accord.primitives.Ballot;
@@ -58,11 +62,15 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.SortedArrays;
+import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
+import static accord.api.ProtocolModifiers.Toggles.fastReadExecMayResendTxn;
 import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
+import static accord.api.ProtocolModifiers.Toggles.sendNoStableIfFastExec;
 import static accord.api.ProtocolModifiers.Toggles.sendOnlyReadStableMessages;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
@@ -78,12 +86,63 @@ import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Durability.DurablyStable;
 import static accord.primitives.Status.Phase.Execute;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (expected): return Waiting from ReadData if not ready to execute, and do not submit more than one speculative retry in this case
 // TODO (expected): by default, if we can execute locally, never contact a remote replica regardless of local outcome
 public class ExecuteTxn extends ReadCoordinator<ReadReply>
 {
+    class StableTracker extends QuorumIdTracker implements Callback<ReadReply>
+    {
+        private boolean isDone;
+        private boolean informOnSuccess;
+
+        public StableTracker(Topologies topologies)
+        {
+            super(topologies);
+        }
+
+        @Override
+        public void onSuccess(Id from, ReadReply reply)
+        {
+            if ((reply.isOk() || reply == Waiting) && RequestStatus.Success == recordSuccess(from) && informOnSuccess)
+                informStable();
+        }
+
+        @Override
+        public void onFailure(Id from, Throwable failure)
+        {
+        }
+
+        void informStable()
+        {
+            Invariants.require(hasReachedQuorum());
+            isDone = true;
+            InformDurable.informHome(node, topologies, txnId, route, executeAt, DurablyStable);
+        }
+
+        void maybeInformStable()
+        {
+            if (!isDone && stable.hasReachedQuorum())
+                informStable();
+        }
+
+        void setDone()
+        {
+            isDone = true;
+        }
+
+        void informStableOnceQuorum()
+        {
+            if (!isDone)
+            {
+                if (stable.hasReachedQuorum()) informStable();
+                else informOnSuccess = true;
+            }
+        }
+    }
+
     final ExecutePath path;
     final Txn txn;
     final FullRoute<?> route;
@@ -94,14 +153,13 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     final Topologies allTopologies;
     final CoordinationFlags flags;
     final BiConsumer<? super Result, Throwable> callback;
-    private final QuorumIdTracker stable;
+    private final StableTracker stable;
+    private @Nullable SortedListSet<Node.Id> unstableFastReads;
 
     private final Participants<?> readScope;
-    private final boolean sendInitialStable;
     private Data data;
     private long uniqueHlc;
     private boolean isPrivilegedVoteCommitting;
-    private boolean hasInformedDecidedOrSucceeded;
 
     ExecuteTxn(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
@@ -116,9 +174,8 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         this.sendDeps = sendDeps;
         this.flags = flags;
         this.callback = callback;
-        this.stable = new QuorumIdTracker(topologies);
+        this.stable = new StableTracker(topologies.forEpochs(txnId.epoch(), executeAt.epoch()));
         this.readScope = txn == null ? route : route.intersecting(txn.keys());
-        this.sendInitialStable = sendOnlyReadStableMessages() && path != RECOVER;
         Invariants.require(!txnId.awaitsOnlyDeps());
         Invariants.require(!txnId.awaitsPreviouslyOwned());
     }
@@ -131,7 +188,23 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         if (permitLocalExecution() && tryIfUniversal(self))
         {
             isPrivilegedVoteCommitting = true;
-            new LocalExecute(txnId, flags.get(self)).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
+            ExecuteFlags executeFlags = flags.get(self);
+            /*
+              This decides if our local execution may fast execute with the provided flags.
+              LocalExecute is treated specially because the privileged coordinator optimisation requires that
+              the coordinator record STABLE before sending further messages to any other replica.
+              So, if the privileged coordinator optimisation is enabled and we _are_ the privileged coordinator
+              taking the fast path, it is unsafe to perform a fast read (that skips updating the Accord state machine)
+              because it would be unsafe to continue to the next phase until the local coordinator has updated its state machine.
+              It woudl be possible to push this work onto the Persist phase, so that we have an equivalent LocalExecute that
+              ensures PREAPPLIED is recorded at the local coordinator before any other replicas are sent Apply, but
+              for now we simply disable this optimisation in this case.
+             */
+            boolean mayFastExecute = executeFlags.contains(READY_TO_EXECUTE)
+                                     && (!txnId.hasPrivilegedCoordinator() || path != FAST)
+                                     && fastReadsMayBypassSafeStore(txnId);
+
+            new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
         {
@@ -147,13 +220,73 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     }
 
     @Override
-    protected void start(Iterable<Id> to)
+    protected void start(List<Id> readFrom)
     {
         // TODO (desired): migrate to SortedListSet; or introduce a specialised version for integer keys; or introduce a hash equivalent
+        Topologies all = allTopologies;
+        Commit.Kind kind = commitKind();
+        for (int i = 0, size = readFrom.size() ; i < size ; ++i)
+        {
+            Node.Id to = readFrom.get(i);
+            ExecuteFlags flags = this.flags.get(to);
+            Invariants.require(kind.compareTo(StableFastPath) >= 0);
+            boolean sendUnstable = flags.contains(READY_TO_EXECUTE) && sendNoStableIfFastExec() && path != RECOVER;
+            if (sendUnstable) sendUnstableRead(to, flags);
+            else sendStableRead(to, flags, kind);
+        }
+
+        if (sendOnlyReadStableMessages() && (all.size() == 1 || all.current().nodes().containsAll(all.nodes())))
+            return;
+
         IntHashSet readSet = new IntHashSet();
-        to.forEach(i -> readSet.add(i.id));
-        // TODO (desired): if READY_TO_EXECUTE send a simple read (skip setting Stable)
-        Commit.stableAndRead(node, executor, allTopologies, commitKind(), txnId, txn, route, readScope, executeAt, sendDeps, readSet, flags, sendInitialStable, this);
+        readFrom.forEach(i -> readSet.add(i.id));
+        SortedArrays.SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
+        for (Node.Id to : contact)
+        {
+            if (readSet.contains(to.id))
+                continue;
+
+            if (sendOnlyReadStableMessages() && all.current().contains(to))
+                continue;
+
+            sendStableOnly(to, kind);
+        }
+    }
+
+    private void sendStableOnly(Node.Id to, Commit.Kind kind)
+    {
+        Commit send = new Commit(kind, to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
+        boolean addCallback = allTopologies.size() == 1 || stable.nodes().contains(to);
+        if (addCallback) node.send(to, send, executor, stable);
+        else node.send(to, send);
+
+    }
+
+    private void sendUnstableRead(Node.Id to, ExecuteFlags flags)
+    {
+        Txn sendTxn = null;
+        Timestamp sendExecuteAt = null;
+        if (flags.contains(READY_TO_EXECUTE) && fastReadExecMayResendTxn() && fastReadsMayBypassSafeStore(txnId))
+        {
+            sendTxn = txn;
+            sendExecuteAt = executeAt;
+            if (unstableFastReads == null)
+                unstableFastReads = SortedListSet.noneOf(allTopologies.current().nodes());
+            unstableFastReads.add(to);
+        }
+        node.send(to, new ReadTxnData(to, allTopologies, txnId, readScope, sendTxn, sendExecuteAt, executeAt.epoch(), flags), executor, this);
+    }
+
+    private void sendStableRead(Node.Id to, ExecuteFlags flags, Commit.Kind kind)
+    {
+        node.send(to, new StableThenRead(kind, to, allTopologies, txnId, txn, route, executeAt, stableDeps), executor, this);
+    }
+
+    private void sendMaximal(Node.Id to)
+    {
+        Topologies topologies = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
+        Commit send = new Commit(StableWithTxnAndDeps, to, topologies, txnId, txn, route, ballot, executeAt, stableDeps);
+        node.send(to, send, executor, stable);
     }
 
     private Commit.Kind commitKind()
@@ -172,9 +305,9 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     public void contact(Id to)
     {
         ExecuteFlags flags = this.flags.get(to);
-        Request request = Commit.requestTo(to, true, allTopologies, commitKind(), Ballot.ZERO, txnId, txn, route, readScope, executeAt, sendDeps, flags, sendInitialStable, false);
-        // we are always sending to a replica in the latest epoch and requesting a read, so onlyContactOldAndReadSet is a redundant parameter
-        node.send(to, request, executor, this);
+        boolean sendUnstable = !sendOnlyReadStableMessages() || path == RECOVER || flags.contains(READY_TO_EXECUTE);
+        if (sendUnstable) sendUnstableRead(to, flags);
+        else sendStableRead(to, flags, commitKind());
     }
 
     @Override
@@ -184,13 +317,11 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     }
 
     @Override
-    protected void onSuccessAfterDone(Id from, ReadReply reply)
+    public void onSuccess(Id from, ReadReply reply)
     {
-        if (!hasInformedDecidedOrSucceeded && (reply.isOk() || reply == Waiting))
-        {
-            if (RequestStatus.Success == stable.recordSuccess(from))
-                informStable();
-        }
+        super.onSuccess(from, reply);
+        if (!reply.isOk() || unstableFastReads == null || !unstableFastReads.contains(from))
+            stable.onSuccess(from, reply);
     }
 
     @Override
@@ -198,7 +329,6 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     {
         if (reply.isOk())
         {
-            stable.recordSuccess(from);
             ReadOk ok = ((ReadOk) reply);
             Data next = ok.data;
             if (next != null)
@@ -229,7 +359,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
 
             case Insufficient:
                 // the replica may be missing the original commit, or the additional commit, so send everything
-                Commit.stableMaximal(node, from, txn, txnId, executeAt, route, stableDeps);
+                sendMaximal(from);
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 return Action.TryAlternative;
         }
@@ -238,10 +368,9 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     @Override
     protected void onDone(Success success, Throwable failure)
     {
-        // TODO (expected): if we fail on the fast path and we haven't sent any Stable messages, we should send them now to make recovery easier
         if (failure == null)
         {
-            hasInformedDecidedOrSucceeded = true;
+            stable.setDone();
             Timestamp executeAt = this.executeAt;
             if (txnId.is(Txn.Kind.Write) && uniqueHlc != 0)
             {
@@ -258,8 +387,22 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         }
         else
         {
-            if (!hasInformedDecidedOrSucceeded && stable.hasReachedQuorum())
-                informStable();
+            stable.informStableOnceQuorum();
+            if (sendOnlyReadStableMessages())
+            {
+                // send additional stable messages to record the transaction outcome
+                Commit.Kind kind = commitKind();
+                if (!candidates.isEmpty())
+                {
+                    for (int i = 0, size = candidates.size() ; i < size ; ++i)
+                        sendStableOnly(candidates.get(i), kind);
+                }
+                if (unstableFastReads != null)
+                {
+                    for (Node.Id to : unstableFastReads)
+                        sendStableOnly(to, kind);
+                }
+            }
             callback.accept(null, failure);
         }
     }
@@ -268,8 +411,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     public void onSlowResponse(Id from)
     {
         // send stable messages to everyone not yet contacted, and then inform decided, to avoid unnecessary recoveries
-        if (!hasInformedDecidedOrSucceeded && stable.hasReachedQuorum())
-            informStable();
+        stable.maybeInformStable();
         super.onSlowResponse(from);
     }
 
@@ -281,13 +423,6 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             tryFinishOnFailure();
     }
 
-    private void informStable()
-    {
-        Invariants.require(stable.hasReachedQuorum());
-        hasInformedDecidedOrSucceeded = true;
-        InformDurable.informHome(node, topologies, txnId, route, executeAt, DurablyStable);
-    }
-
     protected CoordinationAdapter<Result> adapter()
     {
         return node.coordinationAdapter(txnId, Standard);
@@ -297,37 +432,30 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     public String toString()
     {
         return "ExecuteTxn{" +
-               "txn=" + txn +
+               "txnId=" + txnId +
+               ", txn=" + txn +
                ", route=" + route +
                '}';
     }
 
-    /**
-     * This method is used by LocalExecute to decide if it may fast execute with the provided flags.
-     * LocalExecute is treated specially because the privileged coordinator optimisation requires that
-     * the coordinator record STABLE before sending further messages to any other replica.
-     * So, if the privileged coordinator optimisation is enabled and we _are_ the privileged coordinator
-     * taking the fast path, it is unsafe to perform a fast read (that skips updating the Accord state machine)
-     * because it would be unsafe to continue to the next phase until the local coordinator has updated its state machine.
-     * It woudl be possible to push this work onto the Persist phase, so that we have an equivalent LocalExecute that
-     * ensures PREAPPLIED is recorded at the local coordinator before any other replicas are sent Apply, but
-     * for now we simply disable this optimisation in this case.
-     */
-    boolean mayFastExecute(ExecuteFlags flags)
-    {
-        return flags.contains(READY_TO_EXECUTE) && (!txnId.hasPrivilegedCoordinator() || path != FAST) && fastReadsMayBypassSafeStore(txnId);
-    }
-
     class LocalExecute extends ReadData
     {
+        final boolean mayFastExecute;
         private boolean committed;
         private final SafeCallback<ReadReply> callback;
         private Timeouts.RegisteredTimeout slowTimeout;
 
-        public LocalExecute(TxnId txnId, ExecuteFlags flags)
+        public LocalExecute(TxnId txnId, ExecuteFlags flags, boolean mayFastExecute)
         {
-            super(txnId, route, mayFastExecute(flags) ? txn.intersecting(route, true) : null, ExecuteTxn.this.executeAt, ExecuteTxn.this.executeAt.epoch(), flags);
+            super(txnId, route, mayFastExecute ? txn.intersecting(route, true) : null, ExecuteTxn.this.executeAt, ExecuteTxn.this.executeAt.epoch(), flags);
             this.callback = new SafeCallback<>(executor, ExecuteTxn.this);
+            this.mayFastExecute = mayFastExecute;
+        }
+
+        @Override
+        protected boolean mayFastExecute()
+        {
+            return mayFastExecute;
         }
 
         @Override
@@ -350,7 +478,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         @Override
         public void accept(CommitOrReadNack reply, Throwable failure)
         {
-            if (failure == null && reply == null)
+            if (failure == null && (reply == null || reply == Waiting))
             {
                 committed = true;
                 reply = Waiting;
@@ -379,22 +507,20 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             if (!super.cancel())
                 return;
 
-            if (committed) reply(null, new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
-            else
-            {
-                // TODO (desired): if we fail to commit locally we can submit a slow/medium path request
-                callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly commit to local coordinator"));
-            }
+            slowTimeout = null;
+            if (committed) callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
+            else callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly commit to local coordinator"));
         }
 
         @Override
         protected void reply(ReadReply reply, Throwable fail)
         {
-            if (slowTimeout != null)
+            if (slowTimeout != null && reply != Waiting)
             {
                 slowTimeout.cancel();
                 slowTimeout = null;
             }
+
             // TODO (expected): execute immediately if already on CommandStore
             if (fail == null) callback.success(node.id(), reply);
             else callback.failure(node.id(), fail);

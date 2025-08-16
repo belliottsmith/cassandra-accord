@@ -110,14 +110,14 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return foldl(routables, (v, v2, param1, param2, i, j, k) -> fold.apply(v, v2, param1, param2, i, j), accumulator, p1, p2, terminate);
     }
 
-    public V foldlWithDefault(Routables<?> routables, BiFunction<V, V, V> fold, V defaultValue, V accumulator)
-    {
-        return foldlWithDefault(routables, (a, b, f, ignore) -> f.apply(a, b), defaultValue, accumulator, fold, null, ignore -> false);
-    }
-
     public <V2> V2 foldlWithDefault(Routables<?> routables, BiFunction<? super V, V2, V2> fold, V defaultValue, V2 accumulator, Predicate<V2> terminate)
     {
         return foldlWithDefault(routables, (a, b, f, ignore) -> f.apply(a, b), defaultValue, accumulator, fold, null, terminate);
+    }
+
+    public <V2> V2 foldlWithDefault(Routables<?> routables, BiFunction<? super V, V2, V2> fold, V defaultValue, V2 accumulator)
+    {
+        return foldlWithDefault(routables, (a, b, f, ignore) -> f.apply(a, b), defaultValue, accumulator, fold, null, ignore -> false);
     }
 
     public <V2, P1> V2 foldlWithDefault(Routables<?> routables, TriFunction<V, V2, P1, V2> fold, V defaultValue, V2 accumulator, P1 p1, Predicate<V2> terminate)

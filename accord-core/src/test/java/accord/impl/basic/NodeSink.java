@@ -46,6 +46,8 @@ public class NodeSink implements MessageSink
 
     public interface TimeoutSupplier
     {
+        long slowDelay();
+        long expiresDelay();
         long slowAt();
         long expiresAt();
         long failsAt();
