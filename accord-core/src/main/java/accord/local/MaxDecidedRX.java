@@ -36,6 +36,9 @@ import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 
 public class MaxDecidedRX extends ReducingRangeMap<MaxDecidedRX.DecidedRX>
 {
+    // TODO (desired): do we care about tracking both any and hlcBound? Should often be the same.
+    //  NOTE: if we change this, we should definitely maintain a separate type to avoid mistaken
+    //  usage when mixing with other txnId (which did happen)
     public static final class DecidedRX
     {
         static final DecidedRX NONE = new DecidedRX(TxnId.NONE, TxnId.NONE);

@@ -37,6 +37,7 @@ import org.agrona.collections.Long2ObjectHashMap;
 
 import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_DURABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
@@ -373,14 +374,14 @@ public class Pruning
                     case PREACCEPTED_COORD_NO_FAST_COMMIT:
                     case NOTACCEPTED:
                     case ACCEPTED:
+                    case APPLIED_NOT_DURABLE:
+                    case APPLIED_NOT_EXECUTED:
                         newByIdBuffer[pos - ++retainCount] = txn;
                         if (i == minUndecidedById)
                             minUndecidedByIdDelta = retainCount;
                         break;
 
-                    case APPLIED_NOT_DURABLE:
                     case APPLIED_DURABLE:
-                    case APPLIED_NOT_EXECUTED:
                         long epoch = txn.epoch();
                         if (epoch != activePruneEpoch && epochPrunedBefores != null)
                         {
@@ -453,7 +454,7 @@ public class Pruning
             for (int i = sourcePos - 1; i >= 0 ; --i)
             {
                 TxnInfo txn = committedByExecuteAt[i];
-                if (txn.is(APPLIED))
+                if (txn.is(APPLIED_DURABLE))
                 {
                     long epoch = txn.epoch();
                     if (epoch != activePruneEpoch && epochPrunedBefores != null)

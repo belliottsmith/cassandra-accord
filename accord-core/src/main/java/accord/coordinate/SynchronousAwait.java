@@ -22,19 +22,17 @@ import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
-import accord.api.ProgressLog.BlockedUntil;
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Node;
-import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.Await;
-import accord.messages.Callback;
 import accord.primitives.Participants;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topologies;
-import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
@@ -44,34 +42,45 @@ import accord.utils.async.Cancellable;
  * This may or may not be a condition we expect to reach promptly, but we will wait only until the timeout passes
  * at which point we will report failure.
  */
-public class SynchronousAwait implements Callback<Await.AwaitOk>
+public class SynchronousAwait extends AbstractCoordination<Boolean, Await.AwaitOk, Void>
 {
+    final Participants<?> participants;
     final SimpleTracker<?> tracker;
-    BiConsumer<? super Boolean, Throwable> callback;
-    Throwable failure;
+    final Await.Until until;
+    final boolean notifyProgressLog;
 
-    public SynchronousAwait(SimpleTracker<?> tracker, BiConsumer<? super Boolean, Throwable> callback)
+    public SynchronousAwait(Node node, SequentialAsyncExecutor executor, TxnId txnId, Participants<?> participants, SimpleTracker<?> tracker, Await.Until until, boolean notifyProgressLog, BiConsumer<? super Boolean, Throwable> callback)
     {
-        this.callback = callback;
+        super(node, executor, txnId, tracker.nodes(), callback);
+        this.participants = participants;
+        this.until = until;
+        this.notifyProgressLog = notifyProgressLog;
         this.tracker = tracker;
     }
 
-    public static AsyncChain<Boolean> awaitQuorum(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, BlockedUntil blockedUntil, boolean notifyProgressLog, Participants<?> participants)
+    @Override
+    void start()
+    {
+        super.start();
+        contact(to -> new Await(to, tracker.topologies(), txnId, participants, until, notifyProgressLog));
+    }
+
+    public static AsyncChain<Boolean> awaitQuorum(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Participants<?> participants, Await.Until until, boolean notifyProgressLog)
     {
         // TODO (expected): copy this pattern elsewhere; should also make it easier to share exception handling logic etc
         return new AsyncChains.Head<>()
         {
             protected @Nullable @Override Cancellable start(BiConsumer<? super Boolean, Throwable> callback)
             {
-                SynchronousAwait await = new SynchronousAwait(new QuorumTracker(topologies), callback);
-                node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, participants, blockedUntil, notifyProgressLog), executor, await);
+                SynchronousAwait await = new SynchronousAwait(node, executor, txnId, participants, new QuorumTracker(topologies), until, notifyProgressLog, callback);
+                await.start();
                 return null;
             }
         };
     }
 
     @Override
-    public void onSuccess(Id from, Await.AwaitOk reply)
+    public void onSuccessInternal(Node.Id from, int fromIndex, Await.AwaitOk reply)
     {
         RequestStatus status = tracker.recordSuccess(from);
         if (status != RequestStatus.NoChange)
@@ -79,8 +88,9 @@ public class SynchronousAwait implements Callback<Await.AwaitOk>
     }
 
     @Override
-    public void onFailure(Id from, Throwable failure)
+    public void onFailureInternal(Node.Id from, int fromIndex, Throwable failure)
     {
+        recordFailure(failure);
         RequestStatus status = tracker.recordFailure(from);
         if (status != RequestStatus.NoChange)
             onDone(status);
@@ -88,11 +98,33 @@ public class SynchronousAwait implements Callback<Await.AwaitOk>
 
     private void onDone(RequestStatus status)
     {
-        Invariants.require(callback != null);
-        BiConsumer<? super Boolean, Throwable> callback = this.callback;
-        this.callback = null;
-        if (status == RequestStatus.Success) callback.accept(true, null);
-        else callback.accept(null, this.failure != null ? this.failure : new Timeout(null, null));
+        if (status == RequestStatus.Success) finishWithSuccess(true);
+        else finishOnFailure();
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.SyncAwait;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return participants;
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
+    }
+
+    @Override
+    public String describe()
+    {
+        return "blockedUntil=" + until +
+               ", notifyProgressLog=" + notifyProgressLog;
     }
 }
 

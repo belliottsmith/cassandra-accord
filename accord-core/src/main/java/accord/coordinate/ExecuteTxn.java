@@ -59,6 +59,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TimestampWithUniqueHlc;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
@@ -86,12 +87,11 @@ import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Durability.DurablyStable;
 import static accord.primitives.Status.Phase.Execute;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (expected): return Waiting from ReadData if not ready to execute, and do not submit more than one speculative retry in this case
 // TODO (expected): by default, if we can execute locally, never contact a remote replica regardless of local outcome
-public class ExecuteTxn extends ReadCoordinator<ReadReply>
+public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 {
     class StableTracker extends QuorumIdTracker implements Callback<ReadReply>
     {
@@ -152,7 +152,6 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     final Deps sendDeps;
     final Topologies allTopologies;
     final CoordinationFlags flags;
-    final BiConsumer<? super Result, Throwable> callback;
     private final StableTracker stable;
     private @Nullable SortedListSet<Node.Id> unstableFastReads;
 
@@ -163,7 +162,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
 
     ExecuteTxn(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId);
+        super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId, callback);
         this.path = ballot == Ballot.ZERO ? path : RECOVER;
         this.txn = txn;
         this.route = route;
@@ -173,7 +172,6 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         this.stableDeps = stableDeps;
         this.sendDeps = sendDeps;
         this.flags = flags;
-        this.callback = callback;
         this.stable = new StableTracker(topologies.forEpochs(txnId.epoch(), executeAt.epoch()));
         this.readScope = txn == null ? route : route.intersecting(txn.keys());
         Invariants.require(!txnId.awaitsOnlyDeps());
@@ -204,6 +202,8 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
                                      && (!txnId.hasPrivilegedCoordinator() || path != FAST)
                                      && fastReadsMayBypassSafeStore(txnId);
 
+            if (mayFastExecute)
+                markUnstableFastRead(node.id());
             new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
@@ -211,7 +211,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             // we can't safely take the fast path via PRIVILEGED_COORDINATOR optimisation if we aren't permitted to execute locally,
             // so we take the MEDIUM or SLOW path
             adapter().propose(node, executor, null, route, txnId.hasMediumPath() ? Accept.Kind.MEDIUM : Accept.Kind.SLOW,
-                              Ballot.ZERO, txnId, txn, executeAt, stableDeps, callback);
+                              Ballot.ZERO, txnId, txn, executeAt, stableDeps, takeCallback());
         }
         else
         {
@@ -232,7 +232,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             Invariants.require(kind.compareTo(StableFastPath) >= 0);
             boolean sendUnstable = flags.contains(READY_TO_EXECUTE) && sendNoStableIfFastExec() && path != RECOVER;
             if (sendUnstable) sendUnstableRead(to, flags);
-            else sendStableRead(to, flags, kind);
+            else sendStableRead(to, kind);
         }
 
         if (sendOnlyReadStableMessages() && (all.size() == 1 || all.current().nodes().containsAll(all.nodes())))
@@ -270,22 +270,26 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         {
             sendTxn = txn;
             sendExecuteAt = executeAt;
-            if (unstableFastReads == null)
-                unstableFastReads = SortedListSet.noneOf(allTopologies.current().nodes());
-            unstableFastReads.add(to);
+            markUnstableFastRead(to);
         }
         node.send(to, new ReadTxnData(to, allTopologies, txnId, readScope, sendTxn, sendExecuteAt, executeAt.epoch(), flags), executor, this);
     }
 
-    private void sendStableRead(Node.Id to, ExecuteFlags flags, Commit.Kind kind)
+    private void markUnstableFastRead(Node.Id to)
+    {
+        if (unstableFastReads == null)
+            unstableFastReads = SortedListSet.noneOf(allTopologies.current().nodes());
+        unstableFastReads.add(to);
+    }
+
+    private void sendStableRead(Node.Id to, Commit.Kind kind)
     {
         node.send(to, new StableThenRead(kind, to, allTopologies, txnId, txn, route, executeAt, stableDeps), executor, this);
     }
 
     private void sendMaximal(Node.Id to)
     {
-        Topologies topologies = node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
-        Commit send = new Commit(StableWithTxnAndDeps, to, topologies, txnId, txn, route, ballot, executeAt, stableDeps);
+        Commit send = new Commit(StableWithTxnAndDeps, to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
         node.send(to, send, executor, stable);
     }
 
@@ -307,7 +311,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         ExecuteFlags flags = this.flags.get(to);
         boolean sendUnstable = !sendOnlyReadStableMessages() || path == RECOVER || flags.contains(READY_TO_EXECUTE);
         if (sendUnstable) sendUnstableRead(to, flags);
-        else sendStableRead(to, flags, commitKind());
+        else sendStableRead(to, commitKind());
     }
 
     @Override
@@ -320,6 +324,8 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     public void onSuccess(Id from, ReadReply reply)
     {
         super.onSuccess(from, reply);
+        // we forward all not-oks for consideration, and any stable fast path read oks;
+        // it's up to the stable tracker to decide what to do with them, we're just filtering out unstable Acks
         if (!reply.isOk() || unstableFastReads == null || !unstableFastReads.contains(from))
             stable.onSuccess(from, reply);
     }
@@ -343,18 +349,18 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         }
 
         CommitOrReadNack nack = (CommitOrReadNack) reply;
-        switch (nack)
+        switch (nack.kind)
         {
-            default: throw new UnhandledEnum(nack);
+            default: throw UnhandledEnum.unknown(nack.kind);
+            case InsufficientEpochs: throw UnhandledEnum.invalid(nack.kind);
             case Waiting:
                 if (from.id == node.id().id)
                     isPrivilegedVoteCommitting = false;
-                stable.recordSuccess(from);
                 return Action.None;
 
             case Redundant:
             case Rejected:
-                callback.accept(null, new Preempted(txnId, route.homeKey()));
+                invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 return Action.Aborted;
 
             case Insufficient:
@@ -383,7 +389,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             // just make sure to check the integrations to make sure it won't break anything
             Result result = txn.result(txnId, executeAt, data);
             Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, data) : null;
-            adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, callback);
+            adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
         }
         else
         {
@@ -403,7 +409,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
                         sendStableOnly(to, kind);
                 }
             }
-            callback.accept(null, failure);
+            invokeCallback(null, failure);
         }
     }
 
@@ -478,10 +484,9 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         @Override
         public void accept(CommitOrReadNack reply, Throwable failure)
         {
-            if (failure == null && (reply == null || reply == Waiting))
+            if (reply != null && reply.kind == CommitOrReadNack.Kind.Waiting)
             {
                 committed = true;
-                reply = Waiting;
                 long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
                 slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
                 {
@@ -491,6 +496,10 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
                     }); }
                     @Override public int stripe() { return txnId.hashCode(); }
                 }, slowAt, MICROSECONDS);
+            }
+            else if (failure == null)
+            {
+                committed = reply == null && !mayFastExecute;
             }
             super.accept(reply, failure);
         }
@@ -537,5 +546,29 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         {
             return "Local Execute";
         }
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.Execute;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return route;
+    }
+
+    @Override
+    public String describe()
+    {
+        // TODO (desired): summarise what data replies we have
+        return "path=" + path +
+               ", ballot=" + ballot +
+               ", executeAt=" + executeAt +
+               ", flags=" + flags +
+               ", uniqueHlc=" + uniqueHlc +
+               ", isPrivilegedVoteCommitting=" + isPrivilegedVoteCommitting;
     }
 }

@@ -21,6 +21,7 @@ package accord.messages;
 import javax.annotation.Nullable;
 
 import accord.local.Commands;
+import accord.local.Commands.CommitOutcome;
 import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.SafeCommand;
@@ -39,6 +40,7 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
 import static accord.messages.MessageType.StandardMessage.STABLE_THEN_READ_REQ;
+import static accord.messages.ReadData.CommitOrReadNack.Kind.InsufficientEpochs;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 
 /**
@@ -86,14 +88,20 @@ public class StableThenRead extends ReadData
         Route<?> route = this.route == null ? (Route)scope : this.route;
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        if (Commands.CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, Ballot.ZERO, txnId, route, partialTxn, executeAt, partialDeps, kind))
+        CommitOutcome outcome = Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, Ballot.ZERO, txnId, route, partialTxn, executeAt, partialDeps, kind);
+        if (outcome == CommitOutcome.Rejected)
         {
             cancel();
             return CommitOrReadNack.Rejected;
         }
+
         if (participants.executes().isEmpty())
             return null;
-        return super.apply(safeStore, safeCommand, participants);
+
+        CommitOrReadNack reply = super.apply(safeStore, safeCommand, participants);
+        if (outcome == CommitOutcome.InsufficientEpochs)
+            return new CommitOrReadNack(InsufficientEpochs, Commit.insufficientEpoch(safeStore, safeCommand, txnId, route));
+        return reply;
     }
 
     @Override

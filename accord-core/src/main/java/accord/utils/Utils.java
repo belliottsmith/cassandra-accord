@@ -110,13 +110,13 @@ public class Utils
         return set instanceof ImmutableSet ? new HashSet<>(set) : set;
     }
 
-    public static SimpleBitSet ensureMutable(SimpleBitSet set)
+    public static LargeBitSet ensureMutable(LargeBitSet set)
     {
         if (set == null) return null;
-        return set instanceof ImmutableBitSet ? new SimpleBitSet(set) : set;
+        return set instanceof ImmutableBitSet ? new LargeBitSet(set) : set;
     }
 
-    public static ImmutableBitSet ensureImmutable(SimpleBitSet set)
+    public static ImmutableBitSet ensureImmutable(LargeBitSet set)
     {
         if (set == null) return null;
         return set instanceof ImmutableBitSet ? (ImmutableBitSet) set : new ImmutableBitSet(set, true);

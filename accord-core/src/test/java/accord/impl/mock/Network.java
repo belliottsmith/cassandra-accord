@@ -24,6 +24,7 @@ import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
+import accord.utils.async.Cancellable;
 
 public interface Network
 {
@@ -47,15 +48,16 @@ public interface Network
         return new MessageId(messageId);
     }
 
-    void send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback);
+    Cancellable send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback);
     void reply(Id from, Id replyingToNode, long replyingToMessage, Reply reply);
 
     Network BLACK_HOLE = new Network()
     {
         @Override
-        public void send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback)
+        public Cancellable send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback)
         {
             // TODO (easy, testing): log
+            return null;
         }
 
         @Override

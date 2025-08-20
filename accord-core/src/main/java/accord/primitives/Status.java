@@ -51,6 +51,7 @@ import static accord.primitives.Known.KnownRoute.CoveringRoute;
 import static accord.primitives.Known.KnownRoute.FullRoute;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Known.Outcome.*;
+import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.primitives.Status.Phase.*;
 
 public enum Status
@@ -139,27 +140,67 @@ public enum Status
         public static final int TOTAL_ENCODING_BITS = 6;
         private static final Durability[] lookup = values();
 
-        public static final Durability NotDurable = get(HasPhase.None, HasOutcome.None, HasOutcome.None, false);
-        public static final Durability DurablyCommitted = get(HasPhase.DurablyCommitted, HasOutcome.None, HasOutcome.None, false);
-        public static final Durability DurablyStable = get(HasPhase.DurablyStable, HasOutcome.None, HasOutcome.None, false);
-        public static final Durability ShardUniversal = get(HasPhase.None, HasOutcome.Universal, HasOutcome.None, false);
-        public static final Durability AllQuorums = get(HasPhase.DurablyStable, HasOutcome.Quorum, HasOutcome.Quorum, false);
-        public static final Durability Universal = get(HasPhase.DurablyStable, HasOutcome.Universal, HasOutcome.Universal, false);
-        public static final Durability Invalidated = get(HasPhase.None, HasOutcome.None, HasOutcome.None, true);
-        public static final Durability UniversalOrInvalidated = get(HasPhase.None, HasOutcome.Universal, HasOutcome.Universal, true);
+        public static final Durability NotDurable = get(HasDecision.None, HasOutcome.None, HasOutcome.None, false);
+        public static final Durability DurablyCommitted = get(HasDecision.DurablyCommitted, HasOutcome.None, HasOutcome.None, false);
+        public static final Durability DurablyStable = get(HasDecision.DurablyStable, HasOutcome.None, HasOutcome.None, false);
+        public static final Durability ShardUniversal = get(HasDecision.None, HasOutcome.Universal, HasOutcome.None, false);
+        public static final Durability AllQuorums = get(HasDecision.DurablyStable, Quorum, Quorum, false);
+        public static final Durability Universal = get(HasDecision.DurablyStable, HasOutcome.Universal, HasOutcome.Universal, false);
+        public static final Durability Invalidated = get(HasDecision.None, HasOutcome.None, HasOutcome.None, true);
+        public static final Durability UniversalOrInvalidated = get(HasDecision.None, HasOutcome.Universal, HasOutcome.Universal, true);
 
-        public enum HasPhase
+        public enum HasDecisionOrOutcome
+        {
+            None('N', "None"),
+            FastPathDecided('F', "FastPath"),
+            DurablyCommitted('C', "Committed"),
+            DurablyStable('S', "Stable"),
+            DurablyPreApplied('P', "PreApplied");
+
+            private static final HasDecisionOrOutcome[] lookup = values();
+            final char shortName;
+            final String mediumName;
+
+            HasDecisionOrOutcome(char shortName, String mediumName)
+            {
+                this.shortName = shortName;
+                this.mediumName = mediumName;
+            }
+
+            public static HasDecisionOrOutcome forOrdinal(int ordinal)
+            {
+                return lookup[ordinal];
+            }
+
+            public static int maxEncoded()
+            {
+                return lookup.length - 1;
+            }
+
+            public HasDecision decision()
+            {
+                return this == DurablyPreApplied ? HasDecision.DurablyStable
+                                                 : HasDecision.lookup[ordinal()];
+            }
+
+            public HasOutcome outcome()
+            {
+                return this == DurablyPreApplied ? Quorum : HasOutcome.None;
+            }
+        }
+
+        public enum HasDecision
         {
             None('N', "None"),
             FastPathDecided('F', "FastPath"),
             DurablyCommitted('C', "Committed"),
             DurablyStable('S', "Stable");
 
-            private static final HasPhase[] lookup = values();
+            private static final HasDecision[] lookup = values();
             final char shortName;
             final String mediumName;
 
-            HasPhase(char shortName, String mediumName)
+            HasDecision(char shortName, String mediumName)
             {
                 this.shortName = shortName;
                 this.mediumName = mediumName;
@@ -180,7 +221,6 @@ public enum Status
             private static final HasOutcome[] lookup = values();
             public static HasOutcome forOrdinal(int ordinal) { return lookup[ordinal]; }
             public static HasOutcome max(HasOutcome a, HasOutcome b) { return a.compareTo(b) >= 0 ? a : b; }
-            public static int maxEncoded() { return lookup.length; }
         }
 
         /**
@@ -198,10 +238,9 @@ public enum Status
             private static final HasOutcomeOrInvalidated[] lookup = values();
             public static HasOutcomeOrInvalidated forOrdinal(int ordinal) { return lookup[ordinal]; }
             public static HasOutcomeOrInvalidated max(HasOutcomeOrInvalidated a, HasOutcomeOrInvalidated b) { return a.compareTo(b) >= 0 ? a : b; }
-            public static int maxEncoded() { return lookup.length; }
         }
 
-        private static int encode(HasPhase phase, HasOutcome shardOutcome, HasOutcome allShardsOutcome, boolean isMaybeInvalidated)
+        private static int encode(HasDecision phase, HasOutcome shardOutcome, HasOutcome allShardsOutcome, boolean isMaybeInvalidated)
         {
             return encode(phase.ordinal(), shardOutcome.ordinal(), allShardsOutcome.ordinal(), isMaybeInvalidated ? MAYBE_INVALIDATED_BIT : 0);
         }
@@ -209,7 +248,7 @@ public enum Status
         private static int encode(int phaseOrdinal, int shardOutcome, int allShardsOutcome, int maybeInvalidated)
         {
             Invariants.require(allShardsOutcome <= shardOutcome);
-            Invariants.require(phaseOrdinal < HasPhase.DurablyCommitted.ordinal() || (maybeInvalidated == 0));
+            Invariants.require(phaseOrdinal < HasDecision.DurablyCommitted.ordinal() || (maybeInvalidated == 0));
             int outcome = ((1 << shardOutcome) | allShardsOutcome) << SHARDS_SHIFT;
             return (phaseOrdinal << PHASE_SHIFT) | outcome | maybeInvalidated;
         }
@@ -249,14 +288,14 @@ public enum Status
             return HasOutcomeOrInvalidated.lookup[orInvalidatedOrdinal(hasOutcomeOrdinal, encoded)];
         }
 
-        private static int phaseOrdinal(int encoded)
+        private static int decisionOrdinal(int encoded)
         {
             return (encoded >>> PHASE_SHIFT) & PHASE_MASK;
         }
 
         private static int maxPhaseOrdinal(int a, int b)
         {
-            return Math.max(phaseOrdinal(a), phaseOrdinal(b));
+            return Math.max(decisionOrdinal(a), decisionOrdinal(b));
         }
 
         private static int shardOrdinal(int encoded)
@@ -296,7 +335,7 @@ public enum Status
 
             a = zeroIfInvalidated(a, ami);
             b = zeroIfInvalidated(b, bmi);
-            return maxPhase >= HasPhase.DurablyCommitted.ordinal() || ((a | b) >>> SHARDS_SHIFT) > 1 ?
+            return maxPhase >= HasDecision.DurablyCommitted.ordinal() || ((a | b) >>> SHARDS_SHIFT) > 1 ?
                    0 : MAYBE_INVALIDATED_BIT;
         }
 
@@ -313,14 +352,27 @@ public enum Status
             return encoded;
         }
 
-        public HasPhase phase()
+        public HasDecisionOrOutcome decisionOrOutcome()
         {
-            return phase(encoded);
+            return decisionOrOutcome(encoded);
         }
 
-        private static HasPhase phase(int encoded)
+        private static HasDecisionOrOutcome decisionOrOutcome(int encoded)
         {
-            return HasPhase.lookup[phaseOrdinal(encoded)];
+            int ordinal = decisionOrdinal(encoded);
+            if (ordinal != HasDecision.DurablyStable.ordinal())
+                return HasDecisionOrOutcome.lookup[ordinal];
+            return allShards(encoded).compareTo(Quorum) >= 0 ? HasDecisionOrOutcome.DurablyPreApplied : HasDecisionOrOutcome.DurablyStable;
+        }
+
+        public HasDecision decision()
+        {
+            return decision(encoded);
+        }
+
+        private static HasDecision decision(int encoded)
+        {
+            return HasDecision.lookup[decisionOrdinal(encoded)];
         }
 
         public HasOutcome shard()
@@ -336,6 +388,11 @@ public enum Status
         private static HasOutcome shardUnsafe(int encoded)
         {
             return HasOutcome.lookup[shardOrdinal(encoded)];
+        }
+
+        private static HasOutcomeOrInvalidated shardOrInvalidated(int encoded)
+        {
+            return orInvalidated(shardOrdinal(encoded), encoded);
         }
 
         public HasOutcome allShards()
@@ -365,23 +422,24 @@ public enum Status
 
         public SaveStatus durableSaveStatus()
         {
-            HasPhase phase = phase();
-            switch (phase)
+            HasDecisionOrOutcome decisionOrOutcome = decisionOrOutcome();
+            switch (decisionOrOutcome)
             {
-                default: throw new UnhandledEnum(phase);
+                default: throw new UnhandledEnum(decisionOrOutcome);
                 case None:
-                case FastPathDecided:  return SaveStatus.NotDefined;
-                case DurablyCommitted: return SaveStatus.Committed;
-                case DurablyStable:    return allShards().isDurable() ? SaveStatus.PreApplied : SaveStatus.Stable;
+                case FastPathDecided:   return SaveStatus.NotDefined;
+                case DurablyCommitted:  return SaveStatus.Committed;
+                case DurablyStable:     return SaveStatus.Stable;
+                case DurablyPreApplied: return SaveStatus.PreApplied;
             }
         }
 
         public ProgressLog.BlockedUntil durablyUnblocked()
         {
-            HasPhase phase = phase();
-            switch (phase)
+            HasDecisionOrOutcome decisionOrOutcome = decisionOrOutcome();
+            switch (decisionOrOutcome)
             {
-                default: throw new UnhandledEnum(phase);
+                default: throw new UnhandledEnum(decisionOrOutcome);
                 case None:
                 case FastPathDecided:
                     return NotBlocked;
@@ -392,13 +450,16 @@ public enum Status
                     return HasDecidedExecuteAt;
 
                 case DurablyStable:
-                    return allShards().isDurable() ? CanApply : HasStableDeps;
+                    return HasStableDeps;
+
+                case DurablyPreApplied:
+                    return CanApply;
             }
         }
 
         public boolean isDurable()
         {
-            return zeroIfInvalidated(allShardsOrdinal(encoded), maybeInvalidated(encoded)) >= HasOutcome.Quorum.ordinal();
+            return zeroIfInvalidated(allShardsOrdinal(encoded), maybeInvalidated(encoded)) >= Quorum.ordinal();
         }
 
         public boolean isUniversal()
@@ -418,17 +479,17 @@ public enum Status
 
         public boolean isFastPathDurablyDecided()
         {
-            return phaseOrdinal(encoded) >= HasPhase.FastPathDecided.ordinal();
+            return decisionOrdinal(encoded) >= HasDecision.FastPathDecided.ordinal();
         }
 
         public boolean isDurablyCommitted()
         {
-            return phaseOrdinal(encoded) >= HasPhase.DurablyCommitted.ordinal();
+            return decisionOrdinal(encoded) >= HasDecision.DurablyCommitted.ordinal();
         }
 
         public boolean isDurablyStable()
         {
-            return phaseOrdinal(encoded) >= HasPhase.DurablyStable.ordinal();
+            return decisionOrdinal(encoded) >= HasDecision.DurablyStable.ordinal();
         }
 
         @Override
@@ -439,10 +500,10 @@ public enum Status
 
         private static String toString(int encoded)
         {
-            HasPhase phase = phase(encoded);
-            HasOutcome shard = shardUnsafe(encoded);
-            HasOutcome allShards = allShardsUnsafe(encoded);
-            return phase.mediumName + "/" + shard.name() + "/" + allShards.name();
+            HasDecision decision = decision(encoded);
+            HasOutcomeOrInvalidated shard = shardOrInvalidated(encoded);
+            HasOutcomeOrInvalidated allShards = allShardsOrInvalidated(encoded);
+            return decision.mediumName + '/' + shard.name() + '/' + allShards.name();
         }
 
         public static Durability nonNullOrMergeMax(@Nullable Durability a, @Nullable Durability b)
@@ -454,8 +515,8 @@ public enum Status
 
         public final boolean isAtLeast(Durability that)
         {
-            int phase = phaseOrdinal(this.encoded);
-            return phase >= phaseOrdinal(that.encoded)
+            int phase = decisionOrdinal(this.encoded);
+            return phase >= decisionOrdinal(that.encoded)
                    && shardOrdinal(encoded) >= shardOrdinal(that.encoded)
                    && allShardsOrdinal(encoded) >= allShardsOrdinal(that.encoded)
                    && mergeMaybeInvalidated(encoded, that.encoded, phase) == maybeInvalidated(encoded);
@@ -487,9 +548,9 @@ public enum Status
             return forEncoded(encoded);
         }
 
-        public static Durability get(HasPhase phase, HasOutcome shardOutcome, HasOutcome allShardsOutcome, boolean isMaybeInvalidated)
+        public static Durability get(HasDecision decision, HasOutcome shardOutcome, HasOutcome allShardsOutcome, boolean isMaybeInvalidated)
         {
-            return forEncoded(encode(phase, shardOutcome, allShardsOutcome, isMaybeInvalidated));
+            return forEncoded(encode(decision, shardOutcome, allShardsOutcome, isMaybeInvalidated));
         }
 
         public static Durability forEncoded(int encoded)
@@ -505,7 +566,7 @@ public enum Status
         {
             Invariants.require(HasOutcome.lookup.length <= 4);
             Durability[] result = new Durability[64];
-            for (HasPhase phase : HasPhase.lookup)
+            for (HasDecision phase : HasDecision.lookup)
             {
                 for (HasOutcome shard : HasOutcome.lookup)
                 {
@@ -516,7 +577,7 @@ public enum Status
 
                         for (boolean isMaybeInvalidated : new boolean[] { false, true})
                         {
-                            if (isMaybeInvalidated && phase.compareTo(HasPhase.DurablyCommitted) >= 0)
+                            if (isMaybeInvalidated && phase.compareTo(HasDecision.DurablyCommitted) >= 0)
                                 continue;
 
                             int encoded = encode(phase, shard, allShards, isMaybeInvalidated);

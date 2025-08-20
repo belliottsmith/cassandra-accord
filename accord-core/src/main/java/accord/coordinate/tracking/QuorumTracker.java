@@ -84,6 +84,12 @@ public class QuorumTracker extends SimpleTracker<QuorumTracker.QuorumShardTracke
                    "quorum?: "+hasReachedQuorum()+"," +
                    "shard:"+shard+"}";
         }
+
+        @Override
+        public String summarise()
+        {
+            return "(success=" + successes + ",fail=" + failures + ")/" + shard.rf;
+        }
     }
 
     public QuorumTracker(Topologies topologies)

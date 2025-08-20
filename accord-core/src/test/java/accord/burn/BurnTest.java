@@ -18,6 +18,7 @@
 
 package accord.burn;
 
+import java.io.File;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
@@ -42,6 +43,8 @@ public class BurnTest extends BurnTestBase
         int operations = 1000;
         boolean reconcile = false;
         LongStream seeds = LongStream.generate(ThreadLocalRandom.current()::nextLong);
+        File recordDir = null;
+        File replayDir = null;
         boolean hasSetCount = false;
         for (int i = 0 ; i < args.length ; i += 2)
         {
@@ -63,9 +66,15 @@ public class BurnTest extends BurnTestBase
                 case "-o":
                     operations = Integer.parseInt(args[i + 1]);
                     break;
-                case "-r":
+                case "-reconcile":
                     reconcile = true;
                     --i;
+                    break;
+                case "-record":
+                    recordDir = new File(args[i + 1]);
+                    break;
+                case "-replay":
+                    replayDir = new File(args[i + 1]);
                     break;
                 case "--loop-seed":
                     seeds = LongStream.generate(new DefaultRandom(Long.parseLong(args[i + 1]))::nextLong);
@@ -76,6 +85,17 @@ public class BurnTest extends BurnTestBase
             seeds = seeds.limit(count);
 
         int opCount = operations;
-        seeds.forEach(reconcile ? seed -> reconcile(seed, opCount) : seed -> run(seed, opCount));
+        if (recordDir != null)
+        {
+            File dir = recordDir;
+            seeds.forEach(seed -> record(seed, opCount, dir));
+        }
+        else if (replayDir != null)
+        {
+            File dir = replayDir;
+            seeds.forEach(seed -> replay(seed, opCount, dir));
+        }
+        else if (reconcile) seeds.forEach(seed -> reconcile(seed, opCount));
+        else seeds.forEach(seed -> run(seed, opCount));
     }
 }

@@ -18,6 +18,15 @@
 
 package accord.burn;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -71,7 +80,6 @@ import accord.impl.basic.Packet;
 import accord.impl.basic.PendingQueue;
 import accord.impl.basic.PendingRunnable;
 import accord.impl.basic.RandomDelayQueue;
-import accord.impl.basic.RandomDelayQueue.Factory;
 import accord.impl.basic.SimulatedDelayedExecutorService;
 import accord.impl.list.ListAgent;
 import accord.impl.list.ListQuery;
@@ -99,6 +107,7 @@ import accord.topology.Topology;
 import accord.utils.DefaultRandom;
 import accord.utils.Gen;
 import accord.utils.Gens;
+import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
@@ -197,13 +206,14 @@ public class BurnTestBase
         RandomSource txnIdRandom = random.fork();
         BiFunction<Node, Txn, TxnId> txnIdGenerator = (node, txn) -> node.nextTxnId(txn, txnIdRandom.pick(fastPaths), txnIdRandom.pick(mediumPaths));
 
+        float rangeRatio = 0.05f + (random.nextFloat() * 0.25f);
         for (int count = 0 ; count < operations ; ++count)
         {
             int finalCount = count;
             Id client = clients.get(random.nextInt(clients.size()));
             Id node = nodes.get(random.nextInt(nodes.size()));
 
-            boolean isRangeQuery = random.nextBoolean();
+            boolean isRangeQuery = random.decide(rangeRatio);
             String description;
             Function<Node, Txn> txnGenerator;
             if (isRangeQuery)
@@ -358,21 +368,51 @@ public class BurnTestBase
     @SuppressWarnings("unused")
     static void reconcile(long seed, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency) throws ExecutionException, InterruptedException
     {
-        RandomSource random1 = new DefaultRandom(), random2 = new DefaultRandom();
-
-        random1.setSeed(seed);
-        random2.setSeed(seed);
         ExecutorService exec = Executors.newFixedThreadPool(2);
-        RandomDelayQueue.ReconcilingQueueFactory factory = new RandomDelayQueue.ReconcilingQueueFactory(seed);
-        Future<?> f1 = exec.submit(() -> burn(random1, topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, factory.get(true), InMemoryJournal::new));
-        Future<?> f2 = exec.submit(() -> burn(random2, topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, factory.get(false), InMemoryJournal::new));
+        RandomDelayQueue.ReconcilingQueueFactory factory = new RandomDelayQueue.ReconcilingQueueFactory();
+        Future<?> f1 = exec.submit(() -> burn(new DefaultRandom(seed), topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, random -> factory.get(true, random), InMemoryJournal::new));
+        Future<?> f2 = exec.submit(() -> burn(new DefaultRandom(seed), topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, random -> factory.get(false, random), InMemoryJournal::new));
         exec.shutdown();
         f1.get();
         f2.get();
     }
 
-    public static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency, PendingQueue pendingQueue, BiFunction<Node.Id, RandomSource, Journal> journalFactory)
+    static void replay(File dir, long seed, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency) throws ExecutionException, InterruptedException
     {
+        DataInputStream eventsIn, randomIn;
+        try
+        {
+            eventsIn = new DataInputStream(new BufferedInputStream(new FileInputStream(new File(dir, Long.toHexString(seed) + ".events"))));
+            randomIn = new DataInputStream(new BufferedInputStream(new FileInputStream(new File(dir, Long.toHexString(seed) + ".rng"))));
+        }
+        catch (FileNotFoundException e) { throw new RuntimeException(e); }
+        ReplayRandom random = new ReplayRandom(randomIn, new DefaultRandom(seed));
+        burn(random, topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, rnd -> new RandomDelayQueue.ReplayQueue(eventsIn, rnd), InMemoryJournal::new);
+    }
+
+    static void record(File dir, long seed, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency) throws ExecutionException, InterruptedException
+    {
+        DataOutputStream eventsOut, randomOut;
+        try
+        {
+            eventsOut = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(new File(dir, Long.toHexString(seed) + ".events"))));
+            randomOut = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(new File(dir, Long.toHexString(seed) + ".rng"))));
+        }
+        catch (FileNotFoundException e) { throw new RuntimeException(e); }
+        RecordingRandom random = new RecordingRandom(randomOut, new DefaultRandom(seed));
+        burn(random, topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, rnd -> new RandomDelayQueue.RecordingQueue(eventsOut, rnd), InMemoryJournal::new);
+        try { eventsOut.flush(); randomOut.flush(); }
+        catch (IOException e) { throw new RuntimeException(e); }
+    }
+
+    public static void burn(long seed, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency)
+    {
+        burn(new DefaultRandom(seed), topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency, RandomDelayQueue::new, InMemoryJournal::new);
+    }
+
+    public static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency, Function<RandomSource, PendingQueue> queueFactory, BiFunction<Node.Id, RandomSource, Journal> journalFactory)
+    {
+        PendingQueue pendingQueue = queueFactory.apply(random.fork());
         List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
         Thread.currentThread().setUncaughtExceptionHandler((th, fail) -> {
             failures.add(fail);
@@ -623,43 +663,39 @@ public class BurnTestBase
         }
     }
 
+    interface RunInvoker
+    {
+        void run(long seed, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency) throws Throwable;
+    }
+
     protected static void run(long seed, int operations)
     {
-        logger.info("Seed: {}", seed);
-        Cluster.trace.trace("Seed: {}", seed);
-        RandomSource random = new DefaultRandom(seed);
-        try
-        {
-            List<Id> clients = generateIds(true, 1 + random.nextInt(4));
-            int rf;
-            float chance = random.nextFloat();
-            if (chance < 0.2f)      { rf = random.nextInt(2, 9); }
-            else if (chance < 0.4f) { rf = 3; }
-            else if (chance < 0.7f) { rf = 5; }
-            else if (chance < 0.8f) { rf = 7; }
-            else                    { rf = 9; }
-
-            List<Id> nodes = generateIds(false, random.nextInt(rf, rf * 3));
-
-            burn(random, new TopologyFactory(rf, ranges(0, HASH_RANGE_START, HASH_RANGE_END, random.nextInt(Math.max(nodes.size() + 1, rf), nodes.size() * 3))),
-                 clients,
-                 nodes,
-                 5 + random.nextInt(15),
-                 5 + random.nextInt(15),
-                 operations,
-                 10 + random.nextInt(30),
-                 new Factory(random).get(),
-                 InMemoryJournal::new);
-        }
-        catch (Throwable t)
-        {
-            logger.error("Exception running burn test for seed {}:", seed, t);
-            throw SimulationException.wrap(seed, t);
-        }
+        run(seed, operations, BurnTest::burn);
     }
 
     protected static void reconcile(long seed, int operations)
     {
+        run(seed, operations, BurnTestBase::reconcile);
+    }
+
+    protected static void record(long seed, int operations, File recordDir)
+    {
+        if (!recordDir.exists())
+            recordDir.mkdirs();
+        run(seed, operations, (long s, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int ops, int concurrency) -> {
+            record(recordDir, s, topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency);
+        });
+    }
+
+    protected static void replay(long seed, int operations, File replayDir)
+    {
+        run(seed, operations, (long s, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int ops, int concurrency) -> {
+            replay(replayDir, s, topologyFactory, clients, nodes, keyCount, prefixCount, operations, concurrency);
+        });
+    }
+
+    protected static void run(long seed, int operations, RunInvoker invoker)
+    {
         logger.info("Seed: {}", seed);
         Cluster.trace.trace("Seed: {}", seed);
         RandomSource random = new DefaultRandom(seed);
@@ -676,7 +712,7 @@ public class BurnTestBase
 
             List<Id> nodes = generateIds(false, random.nextInt(rf, rf * 3));
 
-            reconcile(seed, new TopologyFactory(rf, ranges(0, HASH_RANGE_START, HASH_RANGE_END, random.nextInt(Math.max(nodes.size() + 1, rf), nodes.size() * 3))),
+            invoker.run(seed, new TopologyFactory(rf, ranges(0, HASH_RANGE_START, HASH_RANGE_END, random.nextInt(Math.max(nodes.size() + 1, rf), nodes.size() * 3))),
                       clients,
                       nodes,
                       5 + random.nextInt(15),
@@ -707,5 +743,132 @@ public class BurnTestBase
     private static int prefix(Key key)
     {
         return ((PrefixedIntHashKey) key).prefix;
+    }
+
+
+    public static abstract class ValidatingRandom implements RandomSource
+    {
+        final DefaultRandom delegate;
+
+        public ValidatingRandom(DefaultRandom delegate)
+        {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void nextBytes(byte[] bytes)
+        {
+            validate("nextBytes", bytes.length);
+            delegate.nextBytes(bytes);
+        }
+
+        @Override
+        public int nextInt()
+        {
+            return validate("nextInt", delegate.nextInt());
+        }
+
+        @Override
+        public boolean nextBoolean()
+        {
+            return validate("nextBoolean", delegate.nextBoolean());
+        }
+
+        @Override
+        public int nextInt(int maxExclusive)
+        {
+            return validate("nextInt(max)", delegate.nextInt(maxExclusive));
+        }
+
+        @Override
+        public long nextLong()
+        {
+            return validate("nextLong", delegate.nextLong());
+        }
+
+        @Override
+        public float nextFloat()
+        {
+            return validate("nextFloat", delegate.nextFloat());
+        }
+
+        @Override
+        public double nextDouble()
+        {
+            return validate("nextDouble", delegate.nextDouble());
+        }
+
+        @Override
+        public double nextGaussian()
+        {
+            return validate("nextGaussian", delegate.nextGaussian());
+        }
+
+        @Override
+        public void setSeed(long seed)
+        {
+            validate("setSeed", seed);
+            delegate.setSeed(seed);
+        }
+
+        abstract <T> T validate(String expect, T result);
+    }
+
+    public static class RecordingRandom extends ValidatingRandom
+    {
+        final DataOutputStream out;
+
+        public RecordingRandom(DataOutputStream out, DefaultRandom delegate)
+        {
+            super(delegate);
+            this.out = out;
+        }
+
+        <T> T validate(String expect, T result)
+        {
+            try { out.writeUTF(expect + ":" + result); }
+            catch (IOException e) { throw new RuntimeException(e); }
+            return result;
+        }
+
+        @Override
+        public RandomSource fork()
+        {
+            validate("fork", "");
+            return new RecordingRandom(out, delegate.fork());
+        }
+    }
+
+    public static class ReplayRandom extends ValidatingRandom
+    {
+        final DataInputStream in;
+
+        public ReplayRandom(DataInputStream in, DefaultRandom delegate)
+        {
+            super(delegate);
+            this.in = in;
+        }
+
+        <T> T validate(String expect, T result)
+        {
+            String test;
+            try
+            {
+                test = in.readUTF();
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+            Invariants.require(test.equals(expect + ":" + result));
+            return result;
+        }
+
+        @Override
+        public RandomSource fork()
+        {
+            validate("fork", "");
+            return new ReplayRandom(in, delegate.fork());
+        }
     }
 }

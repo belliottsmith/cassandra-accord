@@ -66,6 +66,7 @@ import accord.utils.EpochFunction;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.ThreadPoolScheduler;
+import accord.utils.async.Cancellable;
 
 import static accord.Utils.id;
 import static accord.Utils.idList;
@@ -181,13 +182,13 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
     }
 
     @Override
-    public void send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback)
+    public Cancellable send(Id from, Id to, Request request, AsyncExecutor executor, Callback callback)
     {
         Node node = nodes.get(to);
         if (node == null)
         {
             logger.info("dropping message to unknown node {}: {} from {}", to, request, from);
-            return;
+            return () -> {};
         }
 
         if (networkFilter.shouldDiscard(from, to, request))
@@ -196,7 +197,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
             if (callback != null)
                 new SafeCallback(executor, callback).timeout(to);
             logger.info("discarding filtered message from {} to {}: {}", from, to, request);
-            return;
+            return () -> {};
         }
 
         long messageId = nextMessageId();
@@ -212,6 +213,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
 
         logger.info("processing message[{}] from {} to {}: {}", messageId, from, to, request);
         node.receive(request, from, Network.replyCtxFor(messageId));
+        return () -> callbacks.remove(messageId);
     }
 
     @Override

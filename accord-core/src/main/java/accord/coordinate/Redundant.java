@@ -28,7 +28,7 @@ import accord.utils.Invariants;
 /**
  * Thrown when a coordinator encounters a phase that is ahead of the one it is attempting to progress.
  */
-public class Redundant extends Preempted
+public class Redundant extends CoordinationFailed
 {
     public final Timestamp committedExecuteAt;
     public Redundant(TxnId txnId, @Nullable RoutingKey homeKey, Timestamp committedExecuteAt)

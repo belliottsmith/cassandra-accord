@@ -107,9 +107,9 @@ class CoordinateSyncPointTest
                                                {
                                                    CommandStore store = node.commandStores().forId(0);
                                                    return store.build(() -> {
-                                                       ExecuteSyncPoint execute = new ExecuteSyncPoint(node, syncPoint, emptySet(), store, 1);
+                                                       ExecuteSyncPoint execute = new ExecuteSyncPoint(node, syncPoint, emptySet(), store, 1, new ExecuteSyncPoint.DurabilityResults());
                                                        execute.start();
-                                                       return execute;
+                                                       return execute.onDone();
                                                    });
                                                }
                                                ).flatMap(Function.identity()).beginAsResult();

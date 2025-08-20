@@ -32,7 +32,6 @@ import javax.annotation.Nullable;
 
 public class Writes
 {
-    public static final AsyncChain<Void> SUCCESS = AsyncChains.success(null);
     public final TxnId txnId;
     public final Timestamp executeAt;
     public final Seekables<?, ?> keys;
@@ -84,13 +83,13 @@ public class Writes
     public <W extends Write, P> AsyncChain<Void> apply(ApplyWrite<W, P> f, P param, Participants<?> executes, PartialTxn txn)
     {
         if (write == null || executes.isEmpty())
-            return SUCCESS;
+            return AsyncChains.success(null);
 
         Seekables<?, ?> keys = this.keys.intersecting(executes);
         int count = keys.size();
         switch (count)
         {
-            case 0: return SUCCESS;
+            case 0: return AsyncChains.success(null);
             case 1: return f.apply((W)write, param, keys.get(0), txnId, executeAt, txn);
             default:
             {

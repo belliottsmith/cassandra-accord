@@ -76,7 +76,7 @@ public interface SortedList<T extends Comparable<? super T>> extends List<T>, Se
         return indexOf(o);
     }
 
-    default <V> List<V> select(V[] selectFrom, List<T> select)
+    default <V> List<V> lazySelect(V[] selectFrom, List<T> select)
     {
         return new AbstractList<>()
         {
@@ -87,4 +87,14 @@ public interface SortedList<T extends Comparable<? super T>> extends List<T>, Se
         };
     }
 
+    default <V> List<V> lazySelect(List<V> selectFrom, List<T> select)
+    {
+        return new AbstractList<>()
+        {
+            @Override
+            public V get(int index) { return selectFrom.get(find(select.get(index))); }
+            @Override
+            public int size() { return select.size(); }
+        };
+    }
 }

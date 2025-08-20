@@ -84,6 +84,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     final TxnId txnId;
     final Route<?> route;
     final Known target;
+    @Nullable final Known foundAtLeast; // the minimum we found for the keys we queried
     final InvalidIf invalidIf;
 
     // TODO (desired): remove dependency on these two SaveStatus
@@ -109,7 +110,9 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     Propagate(
     Node node, TxnId txnId,
     Route<?> route,
-    Known target, InvalidIf invalidIf,
+    Known target,
+    @Nullable Known foundAtLeast,
+    InvalidIf invalidIf,
     SaveStatus maxKnowledgeSaveStatus,
     SaveStatus maxSaveStatus, Ballot promised,
     Ballot acceptedOrCommitted,
@@ -127,6 +130,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         this.txnId = txnId;
         this.route = route;
         this.target = target;
+        this.foundAtLeast = foundAtLeast;
         this.invalidIf = invalidIf;
         this.maxKnowledgeSaveStatus = maxKnowledgeSaveStatus;
         this.maxSaveStatus = maxSaveStatus;
@@ -151,7 +155,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         {
             if (tracing != null)
                 tracing.trace(null, "Found nothing");
-            callback.accept(new FetchResult(Nothing, queried.slice(0, 0)), null);
+            callback.accept(new FetchResult(Nothing, queried.slice(0, 0), Nothing), null);
             return;
         }
 
@@ -166,8 +170,9 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             tracing.trace(null, "Found %s", full.map);
 
         Timestamp committedExecuteAt = full.executeAtIfKnown();
+        Known foundAtLeast = full.map.foldl(queried, (minMax, min) -> Known.nonNullOrMin(min, minMax.minOwned), null);
         Propagate propagate =
-            new Propagate(node, txnId, route, target, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, committedExecuteAt, full.writes, full.result, callback, tracing);
+            new Propagate(node, txnId, route, target, foundAtLeast, full.invalidIf, full.maxKnowledgeSaveStatus, full.maxSaveStatus, full.maxPromised, full.acceptedOrCommitted, full.durability, full.homeKey, full.map, withQuorum, full.partialTxn, full.stableDeps, committedExecuteAt, full.writes, full.result, callback, tracing);
 
         long untilEpoch = txnId.epoch();
         if (committedExecuteAt != null)
@@ -234,11 +239,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             currentlyKnown = currentlyKnown.with(FullRoute);
 
         PartialTxn partialTxn = null;
-        if (found.hasDefinition())
+        if (found.hasDefinition() && !participants.stillOwns().isEmpty())
             partialTxn = this.partialTxn.intersecting(participants.stillOwns(), true).reconstitutePartial(participants.stillOwns());
 
         PartialDeps stableDeps = null;
-        if (found.hasDecidedDeps())
+        if (found.hasDecidedDeps() && !participants.stillTouches().isEmpty())
             stableDeps = this.stableDeps.intersecting(participants.stillTouches()).reconstitutePartial(participants.stillTouches());
 
         // TODO (required): hasAnyFullyTruncated could hit edge cases where two replicas are behind and cannot catch up and each participate in the others' result set
@@ -353,13 +358,14 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                 break;
         }
 
-        updateFetchResult(found.propagates(), participants.owns());
+        updateFetchResult(found, participants.owns());
         return updateDurability(safeStore, safeCommand, participants);
     }
 
-    private void updateFetchResult(Known achieved, Participants<?> owns)
+    private void updateFetchResult(Known found, Participants<?> owns)
     {
-        achieved = achieved.propagates();
+        Known achieved = found.propagates();
+        found = found.atLeast(foundAtLeast);
         Unseekables<?> achievedTarget = owns;
         if (target != null && !target.isSatisfiedBy(achieved))
             achievedTarget = owns.slice(0, 0);
@@ -367,8 +373,8 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         while (true)
         {
             FetchResult current = fetchResult;
-            FetchResult next = current == null ? new FetchResult(target, achievedTarget)
-                               : new FetchResult(target, achievedTarget.with((Unseekables)current.achievedTarget));
+            FetchResult next = current == null ? new FetchResult(target, achievedTarget, found)
+                               : new FetchResult(target, achievedTarget.with((Unseekables)current.achievedTarget), found.reduce(current.foundAtLeast));
 
             if (fetchResultUpdater.compareAndSet(this, current, next))
                 return;
@@ -379,7 +385,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     {
         FetchResult current = fetchResult;
         if (current == null)
-            return new FetchResult(target, route.slice(0, 0));
+            return new FetchResult(target, route.slice(0, 0), foundAtLeast);
 
         return current;
     }
@@ -542,7 +548,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             case Success:
             case RaceWithRecovery:
                 return;
-            case Insufficient: throw illegalState("Should have enough information");
+            case InsufficientEpochs:
+                // TODO (expected): do we definitely guarantee we have enough here?
+                //  but may anyway not be safe to continue if we haven't
+            case Insufficient:
+                throw illegalState("Should have enough information");
         }
     }
 

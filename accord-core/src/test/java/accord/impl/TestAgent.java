@@ -159,6 +159,12 @@ public class TestAgent implements Agent
     }
 
     @Override
+    public boolean isSlowCoordinator(long elapsed, TimeUnit units, TxnId txnId, int attempt)
+    {
+        return units.toSeconds(elapsed) > 1;
+    }
+
+    @Override
     public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(1L, SECONDS);

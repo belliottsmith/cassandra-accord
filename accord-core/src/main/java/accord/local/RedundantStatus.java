@@ -119,13 +119,13 @@ public class RedundantStatus
          * We have fully executed until across all a majority of replicas for the range in question,
          * but not necessarily ourselves.
          */
-        QUORUM_APPLIED(false, true, LE),
+        QUORUM_APPLIED                     (false,  true,  LE),
 
         /**
          * We have fully executed until across all healthy non-bootstrapping replicas for the range in question,
          * but not necessarily ourselves.
          */
-        SHARD_APPLIED                      (false, true, LE, QUORUM_APPLIED),
+        SHARD_APPLIED                      (false,  true,  LE, QUORUM_APPLIED),
 
         TRUNCATE_BEFORE                    (false,  true,  LT, SHARD_APPLIED, LOCALLY_SYNCED),
         // TODO (desired): separate GC_BEFORE with HLC_BOUND and without

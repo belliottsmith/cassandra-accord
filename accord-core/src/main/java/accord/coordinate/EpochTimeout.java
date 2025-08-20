@@ -18,13 +18,20 @@
 
 package accord.coordinate;
 
+import accord.api.Agent;
 import accord.utils.Invariants;
 
 public class EpochTimeout extends Timeout
 {
     public final long epoch;
 
-    public EpochTimeout(long epoch)
+    public static EpochTimeout timeout(long epoch, Agent agent)
+    {
+        agent.coordinatorEvents().onEpochTimeout(epoch);
+        return new EpochTimeout(epoch);
+    }
+
+    EpochTimeout(long epoch)
     {
         super(null, null, "Timeout waiting for epoch " + epoch);
         this.epoch = epoch;

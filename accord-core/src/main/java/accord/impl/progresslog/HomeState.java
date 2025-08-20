@@ -31,12 +31,12 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.ProgressToken;
 import accord.primitives.Route;
+import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
-import static accord.api.ProgressLog.BlockedUntil.CanCoordinateExecution;
 import static accord.api.TraceEventType.HOME_PROGRESS;
 import static accord.impl.progresslog.CallbackInvoker.invokeHomeCallback;
 import static accord.impl.progresslog.CoordinatePhase.Done;
@@ -81,7 +81,7 @@ abstract class HomeState extends WaitingState
 
         if (newProgress == NoneExpected)
             instance.clearProgressToken(txnId);
-        updateScheduling(safeStore, instance, Home, CanCoordinateExecution, newProgress);
+        updateScheduling(safeStore, instance, Home, null, newProgress);
     }
 
     @Nonnull CoordinatePhase phase()
@@ -145,10 +145,15 @@ abstract class HomeState extends WaitingState
         Command command = safeCommand.current();
         // note: we may truncate locally based on shard-specific criteria, but this doesn't mean we're globally persisted
 
-        Invariants.require(command.durability() != null);
+        if (command.saveStatus() == SaveStatus.Erased // TODO (expected): improve progressLog.clear() so we can expect these to be cleared from the progress log
+            || !Invariants.expect(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog"))
+        {
+            setHomeDone(instance);
+            return;
+        }
+
         // TODO (expected): when invalidated, safer to maintain HomeState until known to be globally invalidated
         // TODO (expected): validate that we clear HomeState when we receive a Durable reply, to replace the token check logic
-        Invariants.expect(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog");
         if (Route.isFullRoute(command.route()))
         {
             HasOutcome min = safeStore.durableBefore().min(txnId, command.route());

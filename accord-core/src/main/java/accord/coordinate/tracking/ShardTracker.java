@@ -28,4 +28,6 @@ public abstract class ShardTracker
     {
         this.shard = shard;
     }
+
+    public abstract String summarise();
 }

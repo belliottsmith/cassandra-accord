@@ -21,8 +21,6 @@ package accord.coordinate;
 import java.util.List;
 import java.util.function.BiConsumer;
 
-import javax.annotation.Nullable;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +32,6 @@ import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.Accept;
 import accord.messages.Apply;
-import accord.messages.Callback;
 import accord.messages.PreAccept.PreAcceptOk;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -42,7 +39,6 @@ import accord.primitives.FullRoute;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
-import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
@@ -53,9 +49,9 @@ import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.AsyncResults.SettableByCallback;
 
+import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;
 import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.messages.Apply.Kind.Maximal;
-import static accord.messages.Apply.participates;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
@@ -106,14 +102,14 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain(), cardinality(keysOrRanges));
         return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, keysOrRanges, adapter)).beginAsResult();
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnId(kind, route.domain(), cardinality(route));
@@ -148,6 +144,13 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     }
 
     @Override
+    void start()
+    {
+        super.start();
+        contact(null, false);
+    }
+
+    @Override
     long executeAtEpoch()
     {
         return txnId.epoch();
@@ -159,7 +162,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         if (executeAt.is(REJECTED))
         {
             node.agent().coordinatorEvents().onRejected(txnId);
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, finishAndTakeCallback());
         }
         else
         {
@@ -170,9 +173,9 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             node.agent().coordinatorEvents().onPreAccepted(txnId);
             if (tracker.hasMediumPathAccepted() && txnId.hasMediumPath())
-                adapter.propose(node, executor, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, callback);
+                adapter.propose(node, executor, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, finishAndTakeCallback());
             else
-                adapter.propose(node, executor, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
+                adapter.propose(node, executor, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, finishAndTakeCallback());
         }
     }
 
@@ -180,17 +183,20 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     {
         // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
-        sendApply(node, to, syncPoint, participates(node, syncPoint.route, syncPoint.syncId, syncPoint.executeAt));
+        Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route(), SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+        sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
     }
 
-    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates)
+    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, long minEpoch, long maxEpoch)
     {
-        sendApply(node, null, to, syncPoint, participates, Ballot.ZERO, null);
+        // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
+        //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
+        Topologies topologies = node.topology().preciseEpochs(syncPoint.route(), minEpoch, maxEpoch, SHARE);
+        sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
     }
 
-    public static void sendApply(Node node, SequentialAsyncExecutor executor, Node.Id to, SyncPoint<?> syncPoint, Topologies participates, Ballot ballot, @Nullable Callback<Apply.ApplyReply> callback)
+    private static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates, Ballot ballot)
     {
-        Invariants.require(executor != null || callback == null);
         TxnId txnId = syncPoint.syncId;
         Timestamp executeAt = syncPoint.executeAt;
         Txn txn = node.agent().emptySystemTxn(txnId.kind(), txnId.domain());
@@ -198,7 +204,6 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         FullRoute<?> route = syncPoint.route;
         Result result = txn.result(txnId, executeAt, null);
         Apply apply = Apply.FACTORY.create(Maximal, to, participates, txnId, ballot, route, txn, executeAt, deps, null, result, route, ExecuteFlags.none());
-        if (callback == null) node.send(to, apply);
-        else node.send(to, apply, executor, callback);
+        node.send(to, apply);
     }
 }

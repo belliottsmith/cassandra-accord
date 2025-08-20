@@ -156,6 +156,12 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
         {
             return shard.rejectsFastPath(fastQuorumSize, fastPathFailures);
         }
+
+        @Override
+        public String summarise()
+        {
+            return "(slow=" + successes + ",fast=" + fastPathAccepts + ",fail=" + failures + ")/" + shard.rf;
+        }
     }
 
     public static final class PriorFastPathShardTracker extends FastPathShardTracker

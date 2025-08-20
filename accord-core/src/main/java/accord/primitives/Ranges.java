@@ -189,7 +189,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
     public Ranges without(Unseekables<?> keysOrRanges)
     {
         if (keysOrRanges.domain() == Routable.Domain.Key)
-            keysOrRanges = ((AbstractUnseekableKeys)keysOrRanges).toRanges();
+            keysOrRanges = keysOrRanges.toRanges();
         return ofSortedAndDeoverlappedUnchecked(withoutInternal((AbstractRanges) keysOrRanges));
     }
 

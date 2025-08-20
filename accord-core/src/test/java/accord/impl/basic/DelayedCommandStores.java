@@ -208,6 +208,11 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             {
                 return callable;
             }
+
+            public String toString()
+            {
+                return callable.toString();
+            }
         }
 
         private final SimulatedDelayedExecutorService executor;

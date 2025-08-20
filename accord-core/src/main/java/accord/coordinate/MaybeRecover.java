@@ -42,22 +42,20 @@ import static accord.primitives.WithQuorum.HasQuorum;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public class MaybeRecover extends CheckShards<Route<?>>
+public class MaybeRecover extends CheckShards<Outcome, Route<?>>
 {
     final ProgressToken prevProgress;
-    final BiConsumer<Outcome, Throwable> callback;
     final LatentStoreSelector reportTo;
 
-    MaybeRecover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    MaybeRecover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
         // we only want to enquire with the home shard, but we prefer maximal route information for running Invalidation against, if necessary
-        super(node, executor, txnId, someRoute.withHomeKey(), IncludeInfo.Route, null, invalidIf, node.agent().trace(txnId, RECOVER));
+        super(node, executor, txnId, someRoute.withHomeKey(), IncludeInfo.Route, null, invalidIf, callback, node.agent().trace(txnId, RECOVER));
         this.prevProgress = prevProgress;
-        this.callback = callback;
         this.reportTo = reportTo;
     }
 
-    public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
         MaybeRecover maybeRecover = new MaybeRecover(node, node.someSequentialExecutor(), txnId, invalidIf, someRoute, prevProgress, reportTo, callback);
         maybeRecover.start();
@@ -86,7 +84,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
         {
             if (tracing != null)
                 tracing.trace(null, "MaybeRecover failed: " + Tracing.format(fail));
-            callback.accept(null, fail);
+            invokeCallback(null, fail);
         }
         else
         {
@@ -119,7 +117,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
 
                         // for correctness reasons, we have not necessarily preempted the initial pre-accept round and
                         // may have raced with it, so we must attempt to recover anything we see pre-accepted.
-                        Invalidate.invalidate(node, txnId, someRoute, callback);
+                        Invalidate.invalidate(node, txnId, someRoute, takeCallback());
                         break;
                     }
                     if (tracing != null)
@@ -133,7 +131,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                         ProgressToken progressToken = full.toProgressToken();
                         if (tracing != null)
                             tracing.trace(null, "MaybeRecover found %s which need not be recovered; reporting %s", known.outcome(), progressToken);
-                        callback.accept(progressToken, null);
+                        invokeCallback(progressToken, null);
                         break;
                     }
                 }
@@ -147,14 +145,14 @@ public class MaybeRecover extends CheckShards<Route<?>>
                             tracing.trace(null, "MaybeRecover found %s; reporting progress token %s", hasMadeProgress(full) ? "progress" : "no route", progressToken);
                         if (full.durability.isDurable())
                             InformDurable.informDefault(node, topologies, txnId, query, bumpBallot, full.executeAtIfKnown(), full.durability);
-                        callback.accept(full.toProgressToken(), null);
+                        invokeCallback(full.toProgressToken(), null);
                     }
                     else
                     {
                         Invariants.expect(!full.durability.isDurableOrInvalidated());
                         if (tracing != null)
                             tracing.trace(null, "MaybeRecover invoking RecoverWithRoute");
-                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportTo, tracing).begin(callback);
+                        node.recover(txnId, full.invalidIf, Route.castToFullRoute(someRoute), reportTo, tracing).begin(takeCallback());
                     }
                     break;
                 }
@@ -164,7 +162,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     {
                         if (previouslyKnownToBeInvalidIf != full.invalidIf)
                         {
-                            MaybeRecover.maybeRecover(node, txnId, full.invalidIf, someRoute, full.toProgressToken(), reportTo, callback);
+                            MaybeRecover.maybeRecover(node, txnId, full.invalidIf, someRoute, full.toProgressToken(), reportTo, takeCallback());
                             break;
                         }
                         else Invariants.expect(false, "Expect home shard to know outcome before completing recovery");
@@ -172,7 +170,7 @@ public class MaybeRecover extends CheckShards<Route<?>>
                     ProgressToken progressToken = full.toProgressToken();
                     if (tracing != null)
                         tracing.trace(null, "MaybeRecover found %s which cannot be recovered; reporting %s", known.outcome(), progressToken);
-                    callback.accept(progressToken, null);
+                    invokeCallback(progressToken, null);
                     break;
                 }
                 case Abort:
@@ -181,10 +179,22 @@ public class MaybeRecover extends CheckShards<Route<?>>
                         tracing.trace(null, "MaybeRecover found Abort; invalidating locally", known.outcome());
 
                     commitInvalidate(node, txnId, Route.merge(full.route, (Route) query), txnId.epoch());
-                    locallyInvalidateAndCallback(node, txnId, txnId.epoch(), txnId.epoch(), someRoute, full.toProgressToken(), callback, null);
+                    locallyInvalidateAndCallback(node, txnId, txnId.epoch(), txnId.epoch(), someRoute, full.toProgressToken(), takeCallback(), null);
                     break;
                 }
             }
         }
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.MaybeRecover;
+    }
+
+    @Override
+    public String describe()
+    {
+        return super.describe() + ", prevProgress=" + prevProgress;
     }
 }

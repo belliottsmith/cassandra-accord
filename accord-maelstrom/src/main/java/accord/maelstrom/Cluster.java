@@ -76,6 +76,7 @@ import accord.utils.PersistentField;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
+import accord.utils.async.Cancellable;
 
 import static accord.local.TimeService.elapsedWrapperFromNonMonotonicSource;
 import static java.util.stream.Collectors.toList;
@@ -121,7 +122,7 @@ public class Cluster implements Scheduler
         }
 
         @Override
-        public void send(Id to, Request send, int attempt, AsyncExecutor executor, Callback callback)
+        public Cancellable send(Id to, Request send, int attempt, AsyncExecutor executor, Callback callback)
         {
             long messageId = nextMessageId++;
             SafeCallback sc = new SafeCallback(executor, callback);
@@ -131,6 +132,7 @@ public class Cluster implements Scheduler
                 if (sc == callbacks.remove(messageId))
                     sc.timeout(to);
             }, 1000 + random.nextInt(10000), TimeUnit.MILLISECONDS);
+            return () -> callbacks.remove(messageId);
         }
 
         @Override

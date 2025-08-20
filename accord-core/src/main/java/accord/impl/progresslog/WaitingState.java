@@ -34,6 +34,8 @@ import accord.local.CommandStores.RangesForEpoch;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.messages.Await;
+import accord.primitives.Known;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
@@ -47,6 +49,7 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
+import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
 import static accord.api.ProgressLog.BlockedUntil.Query.HOME;
 import static accord.api.ProgressLog.BlockedUntil.Query.SHARD;
 import static accord.api.TraceEventType.WAIT_PROGRESS;
@@ -68,6 +71,7 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitHome;
 import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitSlice;
 import static accord.impl.progresslog.WaitingState.CallbackKind.Fetch;
+import static accord.primitives.Known.KnownExecuteAt.ExecuteAtErased;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
@@ -87,22 +91,34 @@ abstract class WaitingState extends BaseTxnState
     private static final int PROGRESS_SHIFT = 0;
     private static final long PROGRESS_MASK = 0x3;
     private static final int BLOCKED_UNTIL_SHIFT = 2;
-    private static final long BLOCKED_UNTIL_MASK = 0x7;
-    private static final int HOME_SATISFIES_SHIFT = 5;
-    private static final long HOME_SATISFIES_MASK = 0x7;
-    private static final int AWAIT_STARTED_SHIFT = 8;
+    private static final long BLOCKED_UNTIL_MASK = 0x3;
+    private static final int QUERYING_SHIFT = 4;
+    private static final long QUERYING_MASK = 0x3;
+    private static final int HOME_SATISFIES_SHIFT = 6;
+    private static final long HOME_SATISFIES_MASK = 0x3;
+    private static final int QUERY_SHARDS_NOT_HOME_SHIFT = HOME_SATISFIES_SHIFT + Long.bitCount(HOME_SATISFIES_MASK);
+    private static final long QUERY_SHARDS_NOT_HOME_BIT = 1L << QUERY_SHARDS_NOT_HOME_SHIFT;
+    private static final int AWAIT_STARTED_SHIFT = QUERY_SHARDS_NOT_HOME_SHIFT + 1;
     private static final int AWAIT_STARTED_BIT = 1 << AWAIT_STARTED_SHIFT;
     private static final int AWAIT_SHIFT = AWAIT_STARTED_SHIFT + 1;
-    private static final int AWAIT_BITS = 27;
+    private static final int AWAIT_BITS = 26;
     private static final long AWAIT_MASK = (1L << AWAIT_BITS) - 1;
     private static final int AWAIT_EPOCH_SHIFT = AWAIT_SHIFT + AWAIT_BITS;
     private static final int AWAIT_EPOCH_BITS = 4;
-    private static final long SET_MASK = ~((PROGRESS_MASK << PROGRESS_SHIFT) | (BLOCKED_UNTIL_MASK << BLOCKED_UNTIL_SHIFT));
+    private static final long SET_MASK = ~((PROGRESS_MASK << PROGRESS_SHIFT) | (QUERYING_MASK << QUERYING_SHIFT));
     private static final long INITIALISED_MASK = (PROGRESS_MASK << PROGRESS_SHIFT) | (BLOCKED_UNTIL_MASK << BLOCKED_UNTIL_SHIFT) | (HOME_SATISFIES_MASK << HOME_SATISFIES_SHIFT);
 
     private static final int RETRY_COUNTER_SHIFT = AWAIT_EPOCH_SHIFT + AWAIT_EPOCH_BITS;
     private static final long RETRY_COUNTER_MASK = 0x7;
     static final int WAITING_STATE_END_SHIFT = RETRY_COUNTER_SHIFT + 3;
+    static
+    {
+        Invariants.require(BLOCKED_UNTIL_SHIFT == PROGRESS_SHIFT + Long.bitCount(PROGRESS_MASK));
+        Invariants.require(QUERYING_SHIFT == BLOCKED_UNTIL_SHIFT + Long.bitCount(BLOCKED_UNTIL_MASK));
+        Invariants.require(HOME_SATISFIES_SHIFT == QUERYING_SHIFT + Long.bitCount(QUERYING_MASK));
+        Invariants.require(QUERY_SHARDS_NOT_HOME_SHIFT == HOME_SATISFIES_SHIFT + Long.bitCount(HOME_SATISFIES_MASK));
+        Invariants.require(AWAIT_STARTED_SHIFT == 1 + QUERY_SHARDS_NOT_HOME_SHIFT);
+    }
 
     // when awaiting shards we register callbacks numbered by the keys we're processing;
     // we want to special-case the home key callback and its easiest to pick the highest integer
@@ -114,11 +130,17 @@ abstract class WaitingState extends BaseTxnState
         super(txnId);
     }
 
-    private void set(@Nullable SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil newBlockedUntil, Progress newProgress)
+    private void set(@Nullable SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil newQuerying, Progress newProgress)
     {
         encodedState &= SET_MASK;
-        encodedState |= ((long) newBlockedUntil.ordinal() << BLOCKED_UNTIL_SHIFT) | ((long) newProgress.ordinal() << PROGRESS_SHIFT);
-        updateScheduling(safeStore, owner, Waiting, newBlockedUntil, newProgress);
+        encodedState |= ((long) newQuerying.ordinal() << QUERYING_SHIFT) | ((long) newProgress.ordinal() << PROGRESS_SHIFT);
+        updateScheduling(safeStore, owner, Waiting, newQuerying, newProgress);
+    }
+
+    private void setBlockedUntil(BlockedUntil blockedUntil)
+    {
+        encodedState &= ~(BLOCKED_UNTIL_MASK << BLOCKED_UNTIL_SHIFT);
+        encodedState |= (long) blockedUntil.ordinal() << BLOCKED_UNTIL_SHIFT;
     }
 
     private void setHomeSatisfies(BlockedUntil homeStatus)
@@ -135,6 +157,11 @@ abstract class WaitingState extends BaseTxnState
     @Nonnull BlockedUntil blockedUntil()
     {
         return blockedUntil(encodedState);
+    }
+
+    @Nonnull BlockedUntil querying()
+    {
+        return querying(encodedState);
     }
 
     @Nonnull BlockedUntil homeSatisfies()
@@ -155,6 +182,11 @@ abstract class WaitingState extends BaseTxnState
     private static @Nonnull BlockedUntil blockedUntil(long encodedState)
     {
         return BlockedUntil.forOrdinal((int) ((encodedState >>> BLOCKED_UNTIL_SHIFT) & BLOCKED_UNTIL_MASK));
+    }
+
+    private static @Nonnull BlockedUntil querying(long encodedState)
+    {
+        return BlockedUntil.forOrdinal((int) ((encodedState >>> QUERYING_SHIFT) & QUERYING_MASK));
     }
 
     private static @Nonnull BlockedUntil homeSatisfies(long encodedState)
@@ -249,6 +281,17 @@ abstract class WaitingState extends BaseTxnState
         return node.agent().selectPreferred(node.id(), topologies);
     }
 
+    boolean queryShardsNotHome()
+    {
+        return 0 != (encodedState & QUERY_SHARDS_NOT_HOME_BIT);
+    }
+
+    void markHomeShardErased()
+    {
+        setHomeSatisfies(CanApply);
+        encodedState |= QUERY_SHARDS_NOT_HOME_BIT;
+    }
+
     /*
      * Ranges may have moved between command stores locally so extend to a later epoch to invoke those command stores
      */
@@ -337,45 +380,47 @@ abstract class WaitingState extends BaseTxnState
         return prevOffset != newOffset;
     }
 
-    private static Route<?> slicedRoute(SafeCommandStore safeStore, TxnId txnId, Route<?> route, long fromLocalEpoch, long toLocalEpoch)
+    private Route<?> slicedRoute(SafeCommandStore safeStore, TxnId txnId, Route<?> route, long fromLocalEpoch, long toLocalEpoch)
     {
         Route<?> result = StoreParticipants.touches(safeStore, fromLocalEpoch, txnId, toLocalEpoch, route);
-        if (result.isEmpty())
-            result = result.homeKeyOnlyRoute();
+        if (result.isEmpty()) // if home shard is erased and we don't touch anything for the epochs, just contact everyone
+            result = queryShardsNotHome() ? route : result.homeKeyOnlyRoute();
         return result;
     }
 
-    private static Route<?> awaitRoute(Route<?> slicedRoute, BlockedUntil blockedUntil)
+    private Route<?> awaitRoute(Route<?> slicedRoute, BlockedUntil blockedUntil)
     {
-        return blockedUntil.waitsOn == HOME ? slicedRoute.homeKeyOnlyRoute() : slicedRoute;
+        return blockedUntil.waitsOn == HOME && !queryShardsNotHome() ? slicedRoute.homeKeyOnlyRoute() : slicedRoute;
     }
 
-    private static Route<?> fetchRoute(Route<?> slicedRoute, Route<?> awaitRoute, BlockedUntil blockedUntil, SafeCommandStore safeStore, long lowEpoch, TxnId txnId, long highEpoch, Route<?> route)
+    private Route<?> fetchRoute(Route<?> slicedRoute, Route<?> awaitRoute, BlockedUntil blockedUntil, SafeCommandStore safeStore, long lowEpoch, TxnId txnId, long highEpoch, Route<?> route)
     {
         if (lowEpoch < txnId.epoch())
             return StoreParticipants.touches(safeStore, lowEpoch, txnId, highEpoch, route);
-        if (blockedUntil.waitsOn == blockedUntil.fetchFrom)
+        if (blockedUntil.waitsOn == blockedUntil.fetchFrom || queryShardsNotHome())
             return awaitRoute;
         return slicedRoute;
     }
 
     void setWaitingDone(DefaultProgressLog owner)
     {
+        setBlockedUntil(CanApply);
         set(null, owner, CanApply, NoneExpected);
         owner.clearPendingAndActive(Waiting, txnId);
         clearWaitingRunCounter();
     }
 
-    void setBlockedUntil(SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil blockedUntil)
+    void setBlockedUntil(SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil newBlockedUntil)
     {
         BlockedUntil currentlyBlockedUntil = blockedUntil();
-        if (blockedUntil.compareTo(currentlyBlockedUntil) > 0 || isUninitialised())
-        {
-            clearAwaitState();
-            clearWaitingRunCounter();
-            owner.clearPendingAndActive(Waiting, txnId);
-            set(safeStore, owner, blockedUntil, Queued);
-        }
+        BlockedUntil currentlyQuerying = querying();
+        if (newBlockedUntil.compareTo(currentlyBlockedUntil) <= 0)
+            return;
+
+        setBlockedUntil(newBlockedUntil);
+        // no point clearing any in progress work to reach a lower status, since we advance sequentially anyway
+        if (waitingProgress() == NoneExpected)
+            set(safeStore, owner, currentlyQuerying, Queued);
     }
 
     void record(DefaultProgressLog owner, SaveStatus newSaveStatus)
@@ -384,10 +429,16 @@ abstract class WaitingState extends BaseTxnState
         if (currentlyBlockedUntil.unblockedFrom.compareTo(newSaveStatus) <= 0)
         {
             boolean isDone = newSaveStatus.hasBeen(Status.PreApplied);
-            set(null, owner, isDone ? CanApply : currentlyBlockedUntil, NoneExpected);
             if (isDone)
+            {
+                setWaitingDone(owner);
                 maybeRemove(owner);
-            owner.clearPendingAndActive(Waiting, txnId);
+            }
+            else
+            {
+                set(null, owner, currentlyBlockedUntil, NoneExpected);
+                owner.clearPendingAndActive(Waiting, txnId);
+            }
         }
     }
 
@@ -398,13 +449,17 @@ abstract class WaitingState extends BaseTxnState
 
     private void runInternal(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, @Nullable Tracing tracing)
     {
+        Invariants.require(!owner.hasPending(Waiting, txnId));
         incrementWaitingRunCounter();
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
-        Invariants.require(!owner.hasPending(Waiting, txnId));
-        Invariants.require(command.saveStatus().compareTo(blockedUntil.unblockedFrom) < 0,
-                           "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.unblockedFrom, command);
-        set(safeStore, owner, blockedUntil, Querying);
+        if (command.saveStatus().compareTo(SaveStatus.Erased) >= 0 // TODO (expected): improve progress log clearing to guarantee we don't encounter this status
+            || !Invariants.expect(command.saveStatus().compareTo(blockedUntil.unblockedFrom) < 0,
+                           "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.unblockedFrom, command))
+        {
+            setWaitingDone(owner);
+            return;
+        }
         TxnId txnId = safeCommand.txnId();
         // first make sure we have enough information to obtain the command locally
         Timestamp executeAt = command.executeAtIfKnown();
@@ -414,50 +469,49 @@ abstract class WaitingState extends BaseTxnState
         {
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Blocked until %s. Fetching route from %s", blockedUntil, maxContactable);
+            set(safeStore, owner, HasDecidedExecuteAt, Querying);
             // TODO (required): pass in InvalidIf
-            fetchRoute(owner, blockedUntil, txnId, maxContactable);
+            fetchRoute(owner, HasDecidedExecuteAt, txnId, maxContactable);
             return;
         }
-
         Route<?> route = Route.castToRoute(maxContactable);
-        if (homeSatisfies().compareTo(blockedUntil) < 0)
+
+        BlockedUntil satisfied = BlockedUntil.forSaveStatus(command.saveStatus());
+        BlockedUntil next = Invariants.nonNull(satisfied.next());
+        if (homeSatisfies().compareTo(satisfied) <= 0)
         {
+            // TODO (expected): we should wait until Durability indicates a Quorum on all shards for the relevant status
             // first wait until the homeKey has progressed to a point where it can answer our query; we don't expect our shards to know until then anyway
             if (tracing != null)
-                tracing.trace(owner.commandStore, "Blocked until %s. Waiting for home key %s to satisfy.", blockedUntil, route.homeKey());
-            awaitHomeKey(owner, blockedUntil, txnId, executeAt, route);
+                tracing.trace(owner.commandStore, "Blocked until %s. Waiting for home key %s to satisfy %s.", blockedUntil, route.homeKey(), next);
+            clearAwaitState();
+            set(safeStore, owner, next, Querying);
+            awaitHomeKey(owner, next, txnId, executeAt, route);
             return;
         }
 
+        BlockedUntil querying = command.hasBeen(Status.PreCommitted) ? homeSatisfies() : HasDecidedExecuteAt;
+        set(safeStore, owner, querying, Querying);
         long prevLowEpoch = readLowEpoch(safeStore, txnId, route);
         long prevHighEpoch = readHighEpoch(safeStore, txnId, route);
         long lowEpoch = updateLowEpoch(safeStore, txnId, command);
-        long highEpoch = updateHighEpoch(safeStore, txnId, blockedUntil, command, executeAt);
+        long highEpoch = updateHighEpoch(safeStore, txnId, querying, command, executeAt);
         // TODO (expected): split into txn and deps sources
         Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, lowEpoch, highEpoch);
         Invariants.require(!slicedRoute.isEmpty());
-        if (!command.hasBeen(Status.PreCommitted))
-        {
-            // we know it has been decided one way or the other by the home shard at least, so we attempt a fetch
-            // including the home shard to get us to at least PreCommitted where we can safely wait on individual shards
-            if (tracing != null)
-                tracing.trace(owner.commandStore, "Blocked until %s; not currently decided. Fetching from %s for epochs [%d..%d].", blockedUntil, slicedRoute, lowEpoch, highEpoch);
-            fetch(owner, blockedUntil, txnId, invalidIf(), executeAt, slicedRoute, slicedRoute.withHomeKey(), route);
-            return;
-        }
 
         // the awaitRoute may be only the home shard, if that is sufficient to indicate the fetchRoute will be able to answer our query;
         // the fetchRoute may also be only the home shard, if that is sufficient to answer our query (e.g. for executeAt)
         // TODO (expected): this handles range transactions very poorly, as a range may be split amongst multiple shards but we cannot wait for them async independently
         //   we probably want to deterministically split ranges into shards on the epochs we care about and treat them separately
-        Route<?> awaitRoute = awaitRoute(slicedRoute, blockedUntil);
-        Route<?> fetchRoute = fetchRoute(slicedRoute, awaitRoute, blockedUntil, safeStore, lowEpoch, txnId, highEpoch, route);
+        Route<?> awaitRoute = awaitRoute(slicedRoute, querying);
+        Route<?> fetchRoute = fetchRoute(slicedRoute, awaitRoute, querying, safeStore, lowEpoch, txnId, highEpoch, route);
         if (awaitRoute.isHomeKeyOnlyRoute())
         {
             // at this point we can switch to polling as we know someone has the relevant state
             if (tracing != null)
-                tracing.trace(owner.commandStore, "Blocked until %s. Fetching %s%s for epochs [%d..%d].", blockedUntil, slicedRoute, slicedRoute == fetchRoute ? "" : " from " + fetchRoute, lowEpoch, highEpoch);
-            fetch(owner, blockedUntil, txnId, invalidIf(), executeAt, slicedRoute, fetchRoute, route);
+                tracing.trace(owner.commandStore, "Blocked until %s. Fetching %s%s for epochs [%d..%d].", querying, slicedRoute, slicedRoute == fetchRoute ? "" : " from " + fetchRoute, lowEpoch, highEpoch);
+            fetch(owner, querying, txnId, invalidIf(), executeAt, slicedRoute, fetchRoute, route);
             return;
         }
 
@@ -469,7 +523,7 @@ abstract class WaitingState extends BaseTxnState
 
             // update round counters because we have changed the epochs involved
             Route<?> prevSlicedRoute = slicedRoute(safeStore, txnId, route, prevLowEpoch, prevHighEpoch);
-            Route<?> prevAwaitRoute = awaitRoute(prevSlicedRoute, blockedUntil);
+            Route<?> prevAwaitRoute = awaitRoute(prevSlicedRoute, querying);
             int prevRoundSize = awaitRoundSize(prevAwaitRoute);
             int prevRoundIndex = awaitRoundIndex(prevRoundSize);
             int prevRoundStart = prevRoundIndex * prevRoundSize;
@@ -486,11 +540,11 @@ abstract class WaitingState extends BaseTxnState
         if (roundStart >= awaitRoute.size())
         {
             if (tracing != null)
-                tracing.trace(owner.commandStore, "Blocked until %s. Fetching %s%s for epochs [%d..%d].", blockedUntil, slicedRoute, slicedRoute == fetchRoute ? "" : " from " + fetchRoute, lowEpoch, highEpoch);
+                tracing.trace(owner.commandStore, "Blocked until %s, querying %s%s for %s in epochs [%d..%d].", blockedUntil, slicedRoute, slicedRoute == fetchRoute ? "" : " from " + fetchRoute, querying, lowEpoch, highEpoch);
 
             // all of the shards we are awaiting have been processed and found at least one replica that has the state needed to answer our query
             // at this point we can switch to polling as we know someone has the relevant state
-            fetch(owner, blockedUntil, txnId, invalidIf(), executeAt, slicedRoute, fetchRoute, route);
+            fetch(owner, querying, txnId, invalidIf(), executeAt, slicedRoute, fetchRoute, route);
             return;
         }
 
@@ -499,19 +553,19 @@ abstract class WaitingState extends BaseTxnState
         // TODO (desired): use some mechanism (e.g. random chance or another counter)
         //   to either periodically fetch the whole remaining route or gradually increase the slice length
         if (tracing != null)
-            tracing.trace(owner.commandStore, "Blocked until %s. Waiting for %s to satisfy; round %d of %d.", blockedUntil, awaitRoute, roundIndex, (awaitRoute.size() + (roundSize - 1))/roundSize);
+            tracing.trace(owner.commandStore, "Blocked until %s. Waiting for %s to satisfy %s; round %d of %d.", blockedUntil, awaitRoute, querying, roundIndex, (awaitRoute.size() + (roundSize - 1))/roundSize);
         setAwaitStarted();
-        awaitSlice(owner, blockedUntil, txnId, executeAt, awaitRoute, (roundIndex << 1) | 1);
+        awaitSlice(owner, querying, txnId, executeAt, awaitRoute, (roundIndex << 1) | 1);
     }
 
     // note that ready and notReady may include keys not requested by this progressLog
-    static void awaitOrFetchCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, Unseekables<?> ready, @Nullable BlockedUntil upgrade, Throwable fail)
+    static void awaitOrFetchCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil querying, Unseekables<?> ready, @Nullable BlockedUntil upgrade, @Nullable Known foundAtLeast, Throwable fail)
     {
         WaitingState state = owner.get(txnId);
         Invariants.require(state != null, "State has been cleared but callback was not cancelled");
 
         Invariants.require(state.waitingProgress() == Querying);
-        Invariants.require(state.blockedUntil() == blockedUntil);
+        Invariants.require(state.querying() == querying);
 
         Command command = safeCommand.current();
         Route<?> route = command.route();
@@ -525,15 +579,15 @@ abstract class WaitingState extends BaseTxnState
                     tracing.trace(owner.commandStore, "Callback success, but route not found.");
                 Invariants.require(kind == CallbackKind.FetchRoute);
                 Invariants.require(ready == null);
-                state.retry(safeStore, safeCommand, owner, blockedUntil, tracing);
+                state.retry(safeStore, safeCommand, owner, querying, tracing);
                 return;
             }
 
-            if (ready.contains(route.homeKey()) && blockedUntil.compareTo(state.homeSatisfies()) > 0)
+            if (ready.contains(route.homeKey()) && querying.compareTo(state.homeSatisfies()) > 0)
             {
                 // TODO (expected): we can introduce an additional home state check that waits until DURABLE for execution;
                 //  at this point it would even be redundant to wait for each separate shard for the WaitingState? Freeing up bits and simplifying.
-                BlockedUntil newHomeSatisfies = blockedUntil;
+                BlockedUntil newHomeSatisfies = querying;
                 if (upgrade != null && upgrade.compareTo(newHomeSatisfies) > 0)
                     newHomeSatisfies = upgrade;
                 state.setHomeSatisfies(newHomeSatisfies);
@@ -541,8 +595,11 @@ abstract class WaitingState extends BaseTxnState
 
             long fromLocalEpoch = state.readLowEpoch(safeStore, txnId, route);
             long toLocalEpoch = state.readHighEpoch(safeStore, txnId, route);
-            Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, fromLocalEpoch, toLocalEpoch); // the actual local keys we care about
-            Route<?> awaitRoute = awaitRoute(slicedRoute, blockedUntil); // either slicedRoute or just the home key
+            Route<?> slicedRoute = state.slicedRoute(safeStore, txnId, route, fromLocalEpoch, toLocalEpoch); // the actual local keys we care about
+            Route<?> awaitRoute = state.awaitRoute(slicedRoute, querying); // either slicedRoute or just the home key
+            // TODO (expected): expand conditions under which we escalate to querying shards directly
+            if (foundAtLeast != null && foundAtLeast.is(ExecuteAtErased) && awaitRoute != slicedRoute)
+                state.markHomeShardErased();
 
             int roundSize = awaitRoundSize(awaitRoute);
             int roundIndex = state.awaitRoundIndex(roundSize);
@@ -568,7 +625,7 @@ abstract class WaitingState extends BaseTxnState
                         if (tracing != null)
                             tracing.trace(owner.commandStore, "Callback success. Home key not ready; waiting async.");
                         // the home shard is not ready to answer our query, but we have registered our remote callback so can wait for it to contact us
-                        state.set(safeStore, owner, blockedUntil, Awaiting);
+                        state.set(safeStore, owner, querying, Awaiting);
                     }
                     break;
 
@@ -595,13 +652,13 @@ abstract class WaitingState extends BaseTxnState
                             // TODO (desired): would be nice to validate this is 0 in cases where we are starting a fresh round
                             //  but have to be careful as cannot zero when we restart as we may have an async callback arrive while we're waiting that then advances state machine
                             state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
-                            state.set(safeStore, owner, blockedUntil, Awaiting);
+                            state.set(safeStore, owner, querying, Awaiting);
                         }
                         break;
                     }
 
                 case FetchRoute:
-                    if (state.homeSatisfies().compareTo(blockedUntil) < 0)
+                    if (state.homeSatisfies().compareTo(querying) < 0)
                     {
                         if (tracing != null)
                             tracing.trace(owner.commandStore, "Successfully fetched route; invoking runInternal");
@@ -615,12 +672,25 @@ abstract class WaitingState extends BaseTxnState
                     if (!awaitRoute.equals(slicedRoute))
                     {
                         Invariants.expect(awaitRoute.isHomeKeyOnlyRoute());
-                        Invariants.expect(state.homeSatisfies().compareTo(blockedUntil) >= 0);
+                        Invariants.expect(state.homeSatisfies().compareTo(querying) >= 0);
                         // nothing to do, fall through and retry
+                    }
+                    else if (notReady.isEmpty())
+                    {
+                        if (tracing != null)
+                            tracing.trace(owner.commandStore, "BlockedUntil %s, achieved %s; continuing.", state.blockedUntil(), querying);
+                        Invariants.expect(state.blockedUntil() != querying, "Fetch %s was successful for all keys, but the WaitingState has not been cleared", querying);
+                        BlockedUntil satisfies = BlockedUntil.forSaveStatus(command.saveStatus());
+                        if (Invariants.expect(satisfies.compareTo(querying) >= 0, "Fetch %s was successful for all keys, but the Command %s does not reflect the expected state", querying, command))
+                        {
+                            state.setAwaitDone(roundSize);
+                            state.runInternal(safeStore, safeCommand, owner, tracing);
+                            return;
+                        }
+                        // otherwise fall through to delayed retry
                     }
                     else
                     {
-                        Invariants.expect(!notReady.isEmpty(), "Fetch was successful for all keys, but the WaitingState has not been cleared");
                         if (roundStart < slicedRoute.size())
                         {
                             int nextIndex;
@@ -655,7 +725,7 @@ abstract class WaitingState extends BaseTxnState
                     // we don't think we have anything to wait for, but we have encountered some notReady responses; queue up a retry
                     state.setAwaitDone(roundSize);
                     state.incrementWaitingRunCounter();
-                    state.set(safeStore, owner, blockedUntil, Queued);
+                    state.set(safeStore, owner, querying, Queued);
                 }
             }
         }
@@ -664,7 +734,7 @@ abstract class WaitingState extends BaseTxnState
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Fai");
             safeStore.agent().onCaughtException(fail, "Failed fetching data for " + state);
-            state.retry(safeStore, safeCommand, owner, blockedUntil, tracing);
+            state.retry(safeStore, safeCommand, owner, querying, tracing);
         }
     }
 
@@ -673,20 +743,21 @@ abstract class WaitingState extends BaseTxnState
         if (found == null)
             found = safeCommand.current().route();
         Participants<?> ready = found != null ? found.slice(0, 0) : null;
-        awaitOrFetchCallback(CallbackKind.FetchRoute, safeStore, safeCommand, owner, txnId, blockedUntil, ready, null, fail);
+        awaitOrFetchCallback(CallbackKind.FetchRoute, safeStore, safeCommand, owner, txnId, blockedUntil, ready, null, null, fail);
     }
 
-    static void fetchCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, FetchData.FetchResult fetchResult, Throwable fail)
+    static void fetchCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil querying, FetchData.FetchResult fetchResult, Throwable fail)
     {
-        fetchCallback(Fetch, safeStore, safeCommand, owner, txnId, blockedUntil, fetchResult, fail);
+        fetchCallback(Fetch, safeStore, safeCommand, owner, txnId, querying, fetchResult, fail);
     }
 
-    static void fetchCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, FetchData.FetchResult fetchResult, Throwable fail)
+    static void fetchCallback(CallbackKind kind, SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil querying, FetchData.FetchResult fetchResult, Throwable fail)
     {
         Invariants.require(fetchResult != null || fail != null);
         Unseekables<?> ready = fetchResult == null ? null : fetchResult.achievedTarget;
         BlockedUntil upgrade = fetchResult == null ? null : BlockedUntil.forSaveStatus(safeCommand.current().saveStatus());
-        awaitOrFetchCallback(kind, safeStore, safeCommand, owner, txnId, blockedUntil, ready, upgrade, fail);
+        Known foundAtLeast = fetchResult == null ? null : fetchResult.foundAtLeast;
+        awaitOrFetchCallback(kind, safeStore, safeCommand, owner, txnId, querying, ready, upgrade, foundAtLeast, fail);
     }
 
     static void synchronousAwaitHomeCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, BlockedUntil blockedUntil, AsynchronousAwait.SynchronousResult awaitResult, Throwable fail)
@@ -703,7 +774,7 @@ abstract class WaitingState extends BaseTxnState
     {
         Unseekables<?> ready = awaitResult == null ? null : awaitResult.ready;
         // TODO (desired): extract "upgrade" info from AsynchronousAwait
-        awaitOrFetchCallback(kind, safeStore, safeCommand, owner, txnId, blockedUntil, ready, null, fail);
+        awaitOrFetchCallback(kind, safeStore, safeCommand, owner, txnId, blockedUntil, ready, null, null, fail);
     }
     
     void asynchronousAwaitCallback(DefaultProgressLog owner, SafeCommandStore safeStore, SaveStatus newStatus, Node.Id from, int callbackId)
@@ -712,7 +783,7 @@ abstract class WaitingState extends BaseTxnState
             return;
 
         Tracing tracing = owner.node.agent().trace(txnId, WAIT_PROGRESS);
-        BlockedUntil blockedUntil = blockedUntil();
+        BlockedUntil querying = querying();
         if (callbackId == AWAITING_HOME_KEY_CALLBACKID)
         {
             // homeKey reply
@@ -728,10 +799,10 @@ abstract class WaitingState extends BaseTxnState
                 return;
             }
 
-            if (newHomeStatus.compareTo(blockedUntil) < 0 || currentHomeStatus.compareTo(blockedUntil) >= 0)
+            if (newHomeStatus.compareTo(querying) < 0 || currentHomeStatus.compareTo(querying) >= 0)
             {
                 if (tracing != null)
-                    tracing.trace(owner.commandStore, "Received redundant async home key callback %d. Blocked until %s, home key now %s (previously %s)", callbackId, blockedUntil, newHomeStatus, currentHomeStatus);
+                    tracing.trace(owner.commandStore, "Received redundant async home key callback %d. Blocked until %s, querying %s, home key now %s (previously %s)", callbackId, blockedUntil(), querying, newHomeStatus, currentHomeStatus);
                 return;
             }
 
@@ -739,7 +810,7 @@ abstract class WaitingState extends BaseTxnState
             if (safeCommand != null)
             {
                 if (tracing != null)
-                    tracing.trace(owner.commandStore, "Received async home key callback %d. Blocked until %s, home key now %s.", callbackId, blockedUntil, newHomeStatus);
+                    tracing.trace(owner.commandStore, "Received async home key callback %d. Blocked until %s, querying %s, home key now %s.", callbackId, blockedUntil(), querying, newHomeStatus);
                 runInternal(safeStore, safeCommand, owner, tracing);
             }
         }
@@ -752,10 +823,10 @@ abstract class WaitingState extends BaseTxnState
                 return;
             }
 
-            if (newStatus.compareTo(blockedUntil.unblockedFrom) < 0)
+            if (newStatus.compareTo(querying.unblockedFrom) < 0)
             {
                 if (tracing != null)
-                    tracing.trace(owner.commandStore, "Received async callback %d with %s, insufficient for %s", callbackId, newStatus, blockedUntil);
+                    tracing.trace(owner.commandStore, "Received async callback %d with %s, insufficient for %s", callbackId, newStatus, querying);
                 return;
             }
 
@@ -763,7 +834,7 @@ abstract class WaitingState extends BaseTxnState
             SafeCommand safeCommand = Invariants.nonNull(safeStore.unsafeGet(txnId));
             Route<?> route = Route.castToRoute(safeCommand.current().maxContactable());
             long lowEpoch = readLowEpoch(safeStore, txnId, route);
-            long highEpoch = readLowEpoch(safeStore, txnId, route);
+            long highEpoch = readHighEpoch(safeStore, txnId, route);
             Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, lowEpoch, highEpoch);
 
             int roundSize = awaitRoundSize(slicedRoute);
@@ -772,7 +843,7 @@ abstract class WaitingState extends BaseTxnState
             if (updateBitSet == 0)
             {
                 if (tracing != null)
-                    tracing.trace(owner.commandStore, "Received async callback %d for already ready keys.", callbackId, blockedUntil);
+                    tracing.trace(owner.commandStore, "Received async callback %d for already ready keys.", callbackId, querying);
                 return;
             }
 
@@ -783,20 +854,20 @@ abstract class WaitingState extends BaseTxnState
             if (bitSet == 0)
             {
                 if (tracing != null)
-                    tracing.trace(owner.commandStore, "Blocked until %s. Received async callback %d for waiting keys. Round complete.", blockedUntil, callbackId);
+                    tracing.trace(owner.commandStore, "Blocked until %s. Received async callback %d for waiting keys. Round complete.", querying, callbackId);
 
                 runInternal(safeStore, safeCommand, owner, tracing);
             }
             else
             {
                 if (tracing != null)
-                    tracing.trace(owner.commandStore, "Blocked until %s. Received async callback %d for waiting keys. %d keys still waiting this round.", blockedUntil, callbackId, Integer.bitCount(bitSet));
+                    tracing.trace(owner.commandStore, "Blocked until %s. Received async callback %d for waiting keys. %d keys still waiting this round.", querying, callbackId, Integer.bitCount(bitSet));
             }
         }
     }
 
     // TODO (expected): use back-off counter here
-    private void retry(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, BlockedUntil blockedUntil, @Nullable Tracing tracing)
+    private void retry(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, BlockedUntil querying, @Nullable Tracing tracing)
     {
         if (!contactEveryone())
         {
@@ -811,7 +882,7 @@ abstract class WaitingState extends BaseTxnState
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Retry queued for later.");
             incrementWaitingRunCounter();
-            set(safeStore, owner, blockedUntil, Queued);
+            set(safeStore, owner, querying, Queued);
         }
     }
 
@@ -823,12 +894,12 @@ abstract class WaitingState extends BaseTxnState
         owner.start(invoker, FetchRoute.fetchRoute(owner.node(), txnId, contactable, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker));
     }
 
-    static void fetch(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Infer.InvalidIf invalidIf, Timestamp executeAt, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
+    static void fetch(DefaultProgressLog owner, BlockedUntil querying, TxnId txnId, Infer.InvalidIf invalidIf, Timestamp executeAt, Route<?> slicedRoute, Route<?> fetchRoute, Route<?> maxRoute)
     {
         Invariants.require(!slicedRoute.isEmpty());
         // we MUSt allocate before calling withEpoch to register cancellation, as async
-        CallbackInvoker<BlockedUntil, FetchData.FetchResult> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
-        owner.start(invoker, FetchData.fetchSpecific(blockedUntil.unblockedFrom.known, owner.node(), txnId, invalidIf, executeAt, fetchRoute, maxRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker));
+        CallbackInvoker<BlockedUntil, FetchData.FetchResult> invoker = invokeWaitingCallback(owner, txnId, querying, WaitingState::fetchCallback);
+        owner.start(invoker, FetchData.fetchSpecific(querying.unblockedFrom.known, owner.node(), txnId, invalidIf, executeAt, fetchRoute, maxRoute, new IncludingSpecificStoreSelector(owner.commandStore.id()), invoker));
     }
 
     void awaitHomeKey(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route)
@@ -847,15 +918,17 @@ abstract class WaitingState extends BaseTxnState
     void await(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route, int callbackId, Callback<BlockedUntil, AsynchronousAwait.SynchronousResult> callback)
     {
         long epoch = blockedUntil.fetchEpoch(txnId, executeAt);
+        Await.Until awaitUntil = blockedUntil.toAwait();
         // we MUST allocate the invoker before invoking withEpoch as this may be asynchronous and we must first register our callback for cancellation
         CallbackInvoker<BlockedUntil, AsynchronousAwait.SynchronousResult> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, callback);
         owner.start(invoker, owner.node().withEpochAtLeast(epoch, (Executor)null, invoker, () -> {
-            AsynchronousAwait.awaitAny(owner.node(), contact(owner, route, epoch), txnId, route, blockedUntil, callbackId, invoker);
+            AsynchronousAwait.awaitAny(owner.node(), contact(owner, route, epoch), txnId, route, awaitUntil, callbackId, invoker);
         }));
     }
 
     String toStateString()
     {
+        BlockedUntil querying = querying();
         BlockedUntil blockedUntil = blockedUntil();
         Progress progress = waitingProgress();
         switch (progress)
@@ -865,11 +938,11 @@ abstract class WaitingState extends BaseTxnState
             case NoneExpected:
                 return blockedUntil == CanApply ? "Done" : "NotWaiting";
             case Queued:
-                return "Queued(" + blockedUntil + ")";
+                return "Queued(" + querying + "/" + blockedUntil + ")";
             case Querying:
-                return "Querying(" + blockedUntil + ")";
+                return "Querying(" + querying + "/" + blockedUntil + ")";
             case Awaiting:
-                return "Awaiting(" + blockedUntil + ")";
+                return "Awaiting(" + querying + "/" + blockedUntil + ")";
         }
     }
 

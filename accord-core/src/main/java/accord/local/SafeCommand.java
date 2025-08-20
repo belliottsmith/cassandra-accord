@@ -172,7 +172,7 @@ public abstract class SafeCommand
 
     public Command.Executed applied(SafeCommandStore safeStore)
     {
-        return update(safeStore, Command.applied(current().asExecuted()));
+        return applied(safeStore, false);
     }
 
     public Command.Executed applied(SafeCommandStore safeStore, boolean forceUpdate)
