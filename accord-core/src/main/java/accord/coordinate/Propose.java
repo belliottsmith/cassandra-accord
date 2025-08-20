@@ -18,12 +18,12 @@
 
 package accord.coordinate;
 
-import java.util.Map;
 import java.util.function.BiConsumer;
 
 import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Commands.AcceptOutcome;
@@ -32,7 +32,6 @@ import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.Accept;
 import accord.messages.Accept.AcceptReply;
-import accord.messages.Accept.Kind;
 import accord.messages.Callback;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -43,6 +42,7 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
@@ -50,7 +50,6 @@ import accord.utils.SortedListMap;
 import accord.utils.WrappableException;
 
 import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
-import static accord.coordinate.ExecutePath.MEDIUM;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
@@ -58,67 +57,58 @@ import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedInvalidate;
 import static accord.primitives.TxnId.MediumPath.TrackStable;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
-import static accord.utils.Invariants.debug;
 
-abstract class Propose<R> implements Callback<AcceptReply>
+abstract class Propose<R> extends AbstractCoordination<R, AcceptReply, AcceptReply>
 {
-    final Node node;
-    final SequentialAsyncExecutor executor;
-    final Kind kind;
+    final Accept.Kind kind;
     final Ballot ballot;
-    final TxnId txnId;
     final Txn txn;
     final FullRoute<?> route;
     final Route<?> require;
     final Deps deps;
 
-    final SortedListMap<Id, AcceptReply> acceptOks;
     final Timestamp executeAt;
-    final QuorumTracker acceptTracker;
-    final BiConsumer<? super R, Throwable> callback;
+    final QuorumTracker tracker;
 
-    private Throwable failure;
-    private boolean isDone;
-
-    Propose(Node node, SequentialAsyncExecutor executor, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, Txn txn, Route<?> require, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
+    Propose(Node node, SequentialAsyncExecutor executor, Topologies topologies, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Route<?> require, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
-        this.node = node;
-        this.executor = executor;
+        super(node, executor, txnId, topologies.nodes(), callback);
         this.kind = kind;
         this.ballot = ballot;
-        this.txnId = txnId;
         this.txn = txn;
         this.require = require;
         this.route = route;
         this.deps = deps;
         this.executeAt = executeAt;
-        this.callback = callback;
-        this.acceptOks = new SortedListMap<>(topologies.nodes(), AcceptReply[]::new);
-        this.acceptTracker = new QuorumTracker(topologies);
+        this.tracker = new QuorumTracker(topologies);
         Invariants.require(txnId.isSyncPoint() || deps.maxTxnId(txnId).compareTo(executeAt) <= 0,
                            "Attempted to propose %s with an earlier executeAt than a conflicting transaction it witnessed: %s vs executeAt: %s", txnId, deps, executeAt);
         Invariants.require(topologies.currentEpoch() == executeAt.epoch());
     }
 
+    @Override
     void start()
     {
-        SortedArrays.SortedArrayList<Node.Id> contact = acceptTracker.filterAndRecordFaulty();
-        if (contact == null) callback.accept(null, new Timeout(null, null));
-        else node.send(contact, to -> new Accept(to, acceptTracker.topologies(), kind, ballot, txnId, route, executeAt, deps, require != route), executor, this);
+        SortedArrays.SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
+        if (contact == null)
+        {
+            finishOnExaustion();
+        }
+        else
+        {
+            super.start();
+            contact(to -> new Accept(to, tracker.topologies(), kind, ballot, txnId, route, executeAt, deps, require != route));
+        }
     }
 
     @Override
-    public void onSuccess(Id from, AcceptReply reply)
+    public void onSuccessInternal(Id from, int fromIndex, AcceptReply reply)
     {
-        if (isDone)
-            return;
-
         switch (reply.outcome)
         {
             default: throw new AssertionError("Unhandled AcceptOutcome: " + reply.outcome());
             case RejectedBallot:
-                isDone = true;
-                callback.accept(null, new Preempted(txnId, route.homeKey()));
+                finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 break;
 
             case Truncated:
@@ -129,65 +119,34 @@ abstract class Propose<R> implements Callback<AcceptReply>
                     if (reply.outcome == AcceptOutcome.Truncated)
                         failNow = new Truncated(txnId, route.homeKey());
                     else if (reply.supersededBy != null || ballot.equals(Ballot.ZERO))
-                        failNow = new Preempted(txnId, route.homeKey());
+                        failNow = Preempted.preempted(node.agent(), txnId, route.homeKey());
 
                     if (failNow != null)
-                    {
-                        isDone = true;
-                        callback.accept(null, failNow);
-                    }
+                        finishWithFailureOverride(failNow);
                     else
-                    {
-                        onFailure(from, reply.committedExecuteAt == null ? null : new Redundant(txnId, route.homeKey(), reply.committedExecuteAt));
-                    }
+                        onFailureInternal(from, fromIndex, reply.committedExecuteAt == null ? null : new Redundant(txnId, route.homeKey(), reply.committedExecuteAt));
                     break;
                 }
 
             case Retired:
             case Success:
-                acceptOks.put(from, reply);
-                if (acceptTracker.recordSuccess(from) == Success)
-                {
-                    isDone = true;
+                recordOk(fromIndex, reply);
+                if (tracker.recordSuccess(from) == Success)
                     onAccepted();
-                }
         }
     }
 
     private boolean isSufficientPartialReply(AcceptReply reply, Id from)
     {
-        return reply.successful != null && reply.successful.containsAll(require.slice(acceptTracker.topologies().computeRangesForNode(from), Minimal));
+        return reply.successful != null && reply.successful.containsAll(require.slice(tracker.topologies().computeRangesForNode(from), Minimal));
     }
 
     @Override
-    public void onFailure(Id from, Throwable failure)
+    public void onFailureInternal(Id from, int fromIndex, Throwable failure)
     {
-        // TODO (required): verify we are consistent in our error handling;
-        // TODO (desired): find a way to more fully share this common pattern
-        if (isDone)
-            return;
-
-        if (failure != null)
-            this.failure = FailureAccumulator.append(this.failure, failure);
-
-        if (acceptTracker.recordFailure(from) == Failed)
-        {
-            isDone = true;
-            if (this.failure == null)
-                this.failure = new Exhausted(txnId, route.homeKey(), null);
-            callback.accept(null, this.failure);
-        }
-    }
-
-    @Override
-    public boolean onCallbackFailure(Id from, Throwable failure)
-    {
-        if (isDone)
-            return false;
-
-        isDone = true;
-        callback.accept(null, failure);
-        return true;
+        recordFailure(failure);
+        if (tracker.recordFailure(from) == Failed)
+            finishOnFailure();
     }
 
     void onAccepted()
@@ -199,9 +158,8 @@ abstract class Propose<R> implements Callback<AcceptReply>
         Deps newDeps = mergeNewDeps();
         Deps deps = mergeDeps(newDeps);
         node.agent().coordinatorEvents().onAccepted(txnId, ballot);
-        if (kind == Kind.MEDIUM) adapter().execute(node, executor, acceptTracker.topologies(), route, ballot, MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, callback);
-        else adapter().stabilise(node, executor, acceptTracker.topologies(), route, ballot, txnId, txn, executeAt, deps, callback);
-        if (!Invariants.debug()) acceptOks.clear();
+        if (kind == Accept.Kind.MEDIUM) adapter().execute(node, executor, tracker.topologies(), route, ballot, ExecutePath.MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, finishAndTakeCallback());
+        else adapter().stabilise(node, executor, tracker.topologies(), route, ballot, txnId, txn, executeAt, deps, finishAndTakeCallback());
     }
 
     Deps mergeDeps()
@@ -216,7 +174,8 @@ abstract class Propose<R> implements Callback<AcceptReply>
 
     Deps mergeNewDeps()
     {
-        Deps deps = Deps.merge(acceptOks, acceptOks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
+        SortedListMap<Node.Id, AcceptReply> oks = finishOks();
+        Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
         if (Faults.discardPreAcceptDeps(txnId))
             return deps;
 
@@ -234,30 +193,62 @@ abstract class Propose<R> implements Callback<AcceptReply>
 
     abstract CoordinationAdapter<R> adapter();
 
-    // A special version for proposing the invalidation of a transaction; only needs to succeed on one shard
-    static class NotAccept implements Callback<AcceptReply>
+
+    @Override
+    public CoordinationKind kind()
     {
-        final Node node;
+        return CoordinationKind.Propose;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return route;
+    }
+
+    @Override
+    public Ballot ballot()
+    {
+        return ballot;
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
+    }
+
+    @Override
+    public String describe()
+    {
+        return "ballot=" + ballot + ", executeAt=" + executeAt;
+    }
+
+    // A special version for proposing the invalidation of a transaction; only needs to succeed on one shard
+    static class NotAccept extends AbstractCoordination<Void, AcceptReply, Void> implements Callback<AcceptReply>
+    {
         final Status status;
         final Ballot ballot;
         final TxnId txnId;
         final Participants<?> someParticipants;
-        final BiConsumer<Void, Throwable> callback;
-        final Map<Id, AcceptReply> debug;
 
-        private final SimpleTracker<?> acceptTracker;
-        private boolean isDone;
+        private final SimpleTracker<?> tracker;
 
-        NotAccept(Node node, Status status, Topologies topologies, Ballot ballot, TxnId txnId, Participants<?> someParticipants, BiConsumer<Void, Throwable> callback)
+        NotAccept(Node node, SequentialAsyncExecutor executor, Status status, Topologies topologies, Ballot ballot, TxnId txnId, Participants<?> someParticipants, BiConsumer<Void, Throwable> callback)
         {
-            this.node = node;
+            super(node, executor, txnId, topologies.nodes(), callback);
             this.status = status;
-            this.acceptTracker = new QuorumTracker(topologies);
+            this.tracker = new QuorumTracker(topologies);
             this.ballot = ballot;
             this.txnId = txnId;
             this.someParticipants = someParticipants;
-            this.callback = callback;
-            this.debug = debug() ? new SortedListMap<>(topologies.nodes(), AcceptReply[]::new) : null;
+        }
+
+        @Override
+        void start()
+        {
+            super.start();
+            contact(to -> new Accept.NotAccept(status, ballot, txnId, someParticipants));
         }
 
         public static void proposeInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, BiConsumer<Void, Throwable> callback)
@@ -271,8 +262,8 @@ abstract class Propose<R> implements Callback<AcceptReply>
             {
                 Participants<?> participants = Participants.singleton(txnId.domain(), participatingKey);
                 Topologies topologies = node.topology().forEpoch(participants, txnId.epoch(), SHARE);
-                NotAccept notAccept = new NotAccept(node, status, topologies, ballot, txnId, participants, callback);
-                node.send(topologies.nodes(), to -> new Accept.NotAccept(status, ballot, txnId, participants), executor, notAccept);
+                NotAccept notAccept = new NotAccept(node, executor, status, topologies, ballot, txnId, participants, callback);
+                notAccept.start();
             }
             catch (Throwable t)
             {
@@ -292,55 +283,61 @@ abstract class Propose<R> implements Callback<AcceptReply>
                     node.agent().coordinatorEvents().onInvalidated(txnId);
                     node.withEpochExact(invalidateUntil.epoch(), executor, callback, t -> WrappableException.wrap(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
-                        callback.accept(null, new Invalidated(txnId, invalidateWithParticipant));
+                        callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
                     });
                 }
             });
         }
 
         @Override
-        public void onSuccess(Id from, AcceptReply reply)
+        public void onSuccessInternal(Id from, int fromIndex, AcceptReply reply)
         {
-            if (isDone)
-                return;
-
-            if (debug != null) debug.put(from, reply);
-
             if (!reply.isOk())
             {
-                isDone = true;
-                callback.accept(null, new Preempted(txnId, null));
+                finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, null));
                 return;
             }
 
-            if (acceptTracker.recordSuccess(from) == Success)
-            {
-                isDone = true;
-                callback.accept(null, null);
-            }
+            if (tracker.recordSuccess(from) == Success)
+                finishWithSuccess(null);
         }
 
         @Override
-        public void onFailure(Id from, Throwable failure)
+        public void onFailureInternal(Id from, int fromIndex, Throwable failure)
         {
-            if (isDone)
-                return;
-
-            if (acceptTracker.recordFailure(from) == Failed)
-            {
-                isDone = true;
-                callback.accept(null, new Timeout(txnId, null));
-            }
+            recordFailure(failure);
+            if (tracker.recordFailure(from) == Failed)
+                finishOnFailure();
         }
 
         @Override
-        public boolean onCallbackFailure(Id from, Throwable failure)
+        public CoordinationKind kind()
         {
-            if (isDone) return false;
+            return CoordinationKind.ProposeInvalidate;
+        }
 
-            isDone = true;
-            callback.accept(null, failure);
-            return true;
+        @Override
+        public Unseekables<?> scope()
+        {
+            return someParticipants;
+        }
+
+        @Override
+        public Ballot ballot()
+        {
+            return ballot;
+        }
+
+        @Override
+        public AbstractTracker<?> tracker()
+        {
+            return tracker;
+        }
+
+        @Override
+        public String describe()
+        {
+            return "ballot=" + ballot;
         }
     }
 }

@@ -64,9 +64,9 @@ public interface Agent extends UncaughtExceptionListener
         return CoordinatorEventListener.NOOP;
     }
 
-    default LocalEventListener localEvents()
+    default ReplicaEventListener replicaEvents()
     {
-        return LocalEventListener.NOOP;
+        return ReplicaEventListener.NOOP;
     }
 
     @Override
@@ -133,6 +133,12 @@ public interface Agent extends UncaughtExceptionListener
     long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt);
 
     /**
+     *  This method permits implementations to configure the time at which a local home shard will consider
+     *  ITS OWN coordination slow for purposes of permitting other coordinators to attempt to take over recovery
+     */
+    boolean isSlowCoordinator(long elapsed, TimeUnit units, TxnId txnId, int attempt);
+
+    /**
      *  This method permits implementations to configure a delay for waiting to attempt to progress the local
      *  state machine for a transaction by querying its remote peers.
      *
@@ -147,7 +153,7 @@ public interface Agent extends UncaughtExceptionListener
      * This method configures a retry timeout on the node querying its peer to renew any callback registrations
      * and re-query the local state.
      */
-    long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil retrying, TimeUnit units);
+    long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, @Nullable BlockedUntil retrying, TimeUnit units);
     long retrySyncPointDelay(Node node, int attempt, TimeUnit units);
     long retryDurabilityDelay(Node node, int attempt, TimeUnit units);
     long expireEpochWait(TimeUnit units);

@@ -79,7 +79,7 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
         }
 
         @Override
-        void setAll()
+        void addAll()
         {
             size = list.size();
             if (size == 0) bits = 0;
@@ -95,12 +95,12 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
 
     public static class LargeSortedListSet<K extends Comparable<? super K>> extends SortedListSet<K>
     {
-        final SimpleBitSet bits;
+        final LargeBitSet bits;
 
         protected LargeSortedListSet(SortedList<K> list)
         {
             super(list);
-            this.bits = new SimpleBitSet(list.size());
+            this.bits = new LargeBitSet(list.size());
         }
 
         @Override
@@ -116,7 +116,7 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
         }
 
         @Override
-        void setAll()
+        void addAll()
         {
             bits.setRange(0, list.size());
         }
@@ -148,7 +148,7 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
     public static <K extends Comparable<? super K>> SortedListSet<K> allOf(SortedList<K> list)
     {
         SortedListSet<K> result = empty(list);
-        result.setAll();
+        result.addAll();
         return result;
     }
 
@@ -171,7 +171,7 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
 
     abstract boolean contains(int index);
     abstract boolean set(int index);
-    abstract void setAll();
+    abstract void addAll();
     abstract boolean unset(int index);
     abstract int nextSet(int index);
 
@@ -191,6 +191,11 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
         return set(i);
     }
 
+    public boolean addIndex(int index)
+    {
+        return set(index);
+    }
+
     @Override
     public boolean remove(Object key)
     {
@@ -205,10 +210,26 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
         {
             if (size() == list.size())
                 return false;
-            setAll();
+            addAll();
             return true;
         }
         return super.addAll(c);
+    }
+
+    public void addAll(SortedList<K> set)
+    {
+        if (list == set) addAll();
+        else
+        {
+            int i = 0, j = 0;
+            while (i < list.size() && j < set.size())
+            {
+                i = list.findNext(i, set.get(j));
+                if (i < 0) i = -1 -i;
+                else set(i++);
+                j++;
+            }
+        }
     }
 
     @Override

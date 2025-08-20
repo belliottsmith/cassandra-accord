@@ -18,6 +18,8 @@
 
 package accord.messages;
 
+import javax.annotation.Nullable;
+
 import accord.local.Node.Id;
 
 /**
@@ -27,7 +29,8 @@ public interface Callback<T>
 {
     void onSuccess(Id from, T reply);
     default void onSlowResponse(Id from) {}
-    void onFailure(Id from, Throwable failure);
+    // null to be interpreted as Timeout
+    void onFailure(Id from, @Nullable Throwable failure);
     // return true if the failure was handled/propagated
     default boolean onCallbackFailure(Id from, Throwable failure) { return false; }
 }

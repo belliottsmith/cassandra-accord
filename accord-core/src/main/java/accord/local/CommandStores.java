@@ -69,7 +69,7 @@ import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
 import accord.utils.Reduce;
 import accord.utils.SearchableRangeList;
-import accord.utils.SimpleBitSet;
+import accord.utils.LargeBitSet;
 import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
@@ -150,7 +150,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     }
 
     // TODO (required): as we get more tables this will become expensive to allocate; we need to index first by prefix
-    public static class StoreFinder extends SimpleBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
+    public static class StoreFinder extends LargeBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
     {
         final int[] indexMap;
 

@@ -48,7 +48,7 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.Reduce;
-import accord.utils.SimpleBitSet;
+import accord.utils.LargeBitSet;
 import accord.utils.SortedList;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -433,7 +433,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             RedundantBefore redundantBefore = safeStore.redundantBefore();
             KeyDeps deps = next.partialDeps().keyDeps;
             keys = deps.keys();
-            SimpleBitSet select = new SimpleBitSet(keys.size());
+            LargeBitSet select = new LargeBitSet(keys.size());
             for (int i = 0 ; i < keys.size() ; ++i)
             {
                 if (waitingOn.isWaitingOnKey(i))

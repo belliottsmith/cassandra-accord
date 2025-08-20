@@ -25,18 +25,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FailureAccumulatorTest
 {
     @Test
-    public void allTimeout()
-    {
-        Throwable accum = null;
-        for (int i = 0; i < 3; i++)
-            accum = FailureAccumulator.append(accum, new Timeout(null, null));
-        assertThat(accum).isInstanceOf(Timeout.class);
-        assertThat(accum.getSuppressed()).hasSize(2);
-        for (Throwable t : accum.getSuppressed())
-            assertThat(t).isInstanceOf(Timeout.class);
-    }
-
-    @Test
     public void firstTimeout()
     {
         testNonTimeout(true);
@@ -50,14 +38,12 @@ class FailureAccumulatorTest
 
     private static void testNonTimeout(boolean firstTimeout)
     {
-        Throwable accum = firstTimeout ? new Timeout(null, null) : new IllegalStateException();
+        Throwable accum = firstTimeout ? null : new IllegalStateException();
         accum = FailureAccumulator.append(accum, new IllegalStateException());
-        accum = FailureAccumulator.append(accum, new Timeout(null, null));
+        accum = FailureAccumulator.append(accum, null);
 
         assertThat(accum).isInstanceOf(IllegalStateException.class);
-        assertThat(accum.getSuppressed()).hasSize(2);
         Throwable[] sup = accum.getSuppressed();
-        assertThat(sup[0]).isInstanceOf(firstTimeout ? Timeout.class : IllegalStateException.class);
-        assertThat(sup[1]).isInstanceOf(Timeout.class);
+        if (!firstTimeout) assertThat(sup[0]).isInstanceOf(IllegalStateException.class);
     }
 }

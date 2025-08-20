@@ -315,13 +315,13 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     }
 
     @Inline
-    public final void forEach(Ranges rs, Consumer<? super K> forEach)
+    public final void forEach(AbstractRanges rs, Consumer<? super K> forEach)
     {
         Routables.foldl(this, rs, (k, consumer, i) -> { consumer.accept(k); return consumer; }, forEach);
     }
 
     @Inline
-    public final <P1> void forEach(Ranges rs, IndexedBiConsumer<P1, ? super K> forEach, P1 p1)
+    public final <P1> void forEach(AbstractRanges rs, IndexedBiConsumer<P1, ? super K> forEach, P1 p1)
     {
         Routables.foldl(this, rs, (p, ignore, k, consumer, i) -> {
             consumer.accept(p, k, i);
@@ -330,7 +330,16 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     }
 
     @Inline
-    public final long foldl(Ranges rs, IndexedFoldToLong<? super K> fold, long param, long initialValue, long terminalValue)
+    public final <P1> void forEach(AbstractKeys<K> rs, IndexedBiConsumer<P1, ? super K> forEach, P1 p1)
+    {
+        Routables.foldl(this, rs, (p, ignore, k, consumer, i) -> {
+            consumer.accept(p, k, i);
+            return consumer;
+        }, p1, null, forEach, i -> false);
+    }
+
+    @Inline
+    public final long foldl(AbstractRanges rs, IndexedFoldToLong<? super K> fold, long param, long initialValue, long terminalValue)
     {
         return Routables.foldl(this, rs, fold, param, initialValue, terminalValue);
     }

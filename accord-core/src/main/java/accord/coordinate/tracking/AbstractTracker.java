@@ -250,4 +250,27 @@ public abstract class AbstractTracker<ST extends ShardTracker>
         System.arraycopy(buffer, 0, newIds, 0, bufferCount);
         return SortedArrayList.ofSorted(newIds);
     }
+
+    public String summariseTracker()
+    {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0 ; i < topologies.size() ; ++i)
+        {
+            Topology topology = topologies.get(i);
+            if (sb.length() > 0)
+                sb.append(", ");
+            sb.append("[epoch=");
+            sb.append(topology.epoch());
+            for (int j = 0 ; j < topology.size() ; ++j)
+            {
+                ShardTracker tracker = trackers[topologyOffset(i) + j];
+                if (tracker == null)
+                    break;
+                sb.append(", ");
+                sb.append(tracker.summarise());
+            }
+            sb.append("]");
+        }
+        return sb.toString();
+    }
 }

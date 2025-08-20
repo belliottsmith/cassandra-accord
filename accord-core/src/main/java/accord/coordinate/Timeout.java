@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import javax.annotation.Nullable;
 
+import accord.api.Agent;
 import accord.api.RoutingKey;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -29,12 +30,23 @@ import accord.utils.Invariants;
  */
 public class Timeout extends CoordinationFailed
 {
-    public Timeout(@Nullable TxnId txnId, @Nullable RoutingKey homeKey)
+    public static Timeout timeout(Agent agent, @Nullable TxnId txnId, @Nullable RoutingKey homeKey)
+    {
+        agent.coordinatorEvents().onTimeout(txnId);
+        return new Timeout(txnId, homeKey);
+    }
+
+    public static Timeout unsafeTimeout(@Nullable TxnId txnId, @Nullable RoutingKey homeKey)
+    {
+        return new Timeout(txnId, homeKey);
+    }
+
+    private Timeout(@Nullable TxnId txnId, @Nullable RoutingKey homeKey)
     {
         super(txnId, homeKey);
     }
 
-    public Timeout(@Nullable TxnId txnId, @Nullable RoutingKey homeKey, Throwable cause)
+    protected Timeout(@Nullable TxnId txnId, @Nullable RoutingKey homeKey, Throwable cause)
     {
         super(txnId, homeKey, cause);
     }

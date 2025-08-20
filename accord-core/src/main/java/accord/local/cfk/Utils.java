@@ -22,6 +22,7 @@ import java.util.Arrays;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.local.RedundantBefore.QuickBounds;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -30,7 +31,6 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
-import static accord.local.cfk.CommandsForKey.InternalStatus.ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
 import static accord.local.cfk.CommandsForKey.manages;
@@ -143,7 +143,7 @@ class Utils
             if (txn.getClass() == TxnInfo.class) continue;
             if (!txn.hasDeps()) continue;
             if (!txn.witnesses(removeTxnId)) continue;
-            if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
+            if (txn.isCommittedAndExecutes()) continue;
 
             TxnId[] missing = txn.missing();
             TxnId[] newMissing = removeOneMissing(missing, removeTxnId);
@@ -171,10 +171,10 @@ class Utils
         {
             TxnInfo txn = byId[i];
             if (txn == newInfo) continue;
-            if (txn.mayExecute()) continue;
             if (!txn.hasDeps()) continue;
-            if (txn.executeAt == txn) continue;
+            if (txn.isCommittedAndExecutes()) continue;
             if (!txn.witnesses(insertTxnId)) continue;
+            if (txn.executeAt == txn) continue;
             if (txn.depsKnownBefore().compareTo(newInfo) < 0) continue;
 
             TxnId[] missing = txn.missing();
@@ -196,13 +196,9 @@ class Utils
                 {
                     if (txn.executeAt == txn)
                     {
-                        int j = SortedArrays.exponentialSearch(doNotInsert, 0, doNotInsert.length, txn);
-                        if (j >= 0)
-                        {
-                            minDoNotInsertSearchIndex = j;
-                            continue;
-                        }
-                        minDoNotInsertSearchIndex = -1 -j;
+                        minDoNotInsertSearchIndex = linearScan(doNotInsert, minDoNotInsertSearchIndex, txn);
+                        if (minDoNotInsertSearchIndex >= 0) continue;
+                        minDoNotInsertSearchIndex = -1 - minDoNotInsertSearchIndex;
                     }
                     else
                     {
@@ -218,17 +214,20 @@ class Utils
                 newMinSearchIndex = updateInfoArraysByExecuteAt(i, txn, txn.withMissing(missing), minByIdSearchIndex, byId, committedByExecuteAt);
             }
 
+            if (newMinSearchIndex == minByIdSearchIndex) continue;
             for (; minByIdSearchIndex < newMinSearchIndex ; ++minByIdSearchIndex)
             {
                 TxnInfo txn = byId[minByIdSearchIndex];
                 if (txn == newInfo) continue;
+                // TODO (expected): we can perform these three checks in parallel with bit masks
                 if (!txn.hasDeps()) continue;
+                if (txn.isCommittedAndExecutes()) continue;
                 if (!txn.witnesses(insertTxnId)) continue;
-                if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
-                if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
+                if (doNotInsert != NO_TXNIDS)
                 {
-                    ++minDoNotInsertSearchIndex;
-                    continue;
+                    minDoNotInsertSearchIndex = linearScan(doNotInsert, minDoNotInsertSearchIndex, txn);
+                    if (minDoNotInsertSearchIndex >= 0) continue;
+                    minDoNotInsertSearchIndex = -1 - minDoNotInsertSearchIndex;
                 }
 
                 TxnId[] missing = txn.missing();
@@ -242,14 +241,14 @@ class Utils
         {
             TxnInfo txn = byId[minByIdSearchIndex];
             if (txn == newInfo) continue;
-            // TODO (expected): optimise this with flag bits
             if (!txn.hasDeps()) continue;
             if (!txn.witnesses(insertTxnId)) continue;
-            if (txn.compareTo(ACCEPTED) > 0 && txn.mayExecute()) continue;
-            if (minDoNotInsertSearchIndex < doNotInsert.length && doNotInsert[minDoNotInsertSearchIndex].equals(txn))
+            if (txn.isCommittedAndExecutes()) continue;
+            if (doNotInsert != NO_TXNIDS)
             {
-                ++minDoNotInsertSearchIndex;
-                continue;
+                minDoNotInsertSearchIndex = linearScan(doNotInsert, minDoNotInsertSearchIndex, txn);
+                if (minDoNotInsertSearchIndex >= 0) continue;
+                minDoNotInsertSearchIndex = -1 - minDoNotInsertSearchIndex;
             }
 
             TxnId[] missing = txn.missing();
@@ -257,6 +256,18 @@ class Utils
             else missing = SortedArrays.insert(missing, insertTxnId, TxnId[]::new);
             byId[minByIdSearchIndex] = txn.withMissing(missing);
         }
+    }
+
+    private static int linearScan(TxnId[] array, int from, TxnId find)
+    {
+        while (from < array.length)
+        {
+            int c = find.compareTo(array[from]);
+            if (c > 0) from++;
+            else if (c == 0) return from;
+            else break;
+        }
+        return -1 - from;
     }
 
     /**

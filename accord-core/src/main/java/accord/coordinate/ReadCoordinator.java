@@ -19,31 +19,37 @@
 package accord.coordinate;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
+import java.util.function.BiConsumer;
 
-import com.google.common.collect.Lists;
-
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.ReadTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
+import accord.primitives.Route;
 import accord.primitives.WithQuorum;
 import accord.primitives.Ranges;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.utils.DebugMap;
 import accord.utils.Invariants;
-import accord.utils.SortedListMap;
+import accord.utils.SortedArrays.SortedArrayList;
+import accord.utils.SortedList;
 import accord.utils.UnhandledEnum;
+import accord.utils.WrappableException;
+import org.agrona.collections.IntHashSet;
 
 import static accord.primitives.WithQuorum.HasQuorum;
 import static accord.primitives.WithQuorum.NoQuorum;
 import static accord.utils.Invariants.debug;
+import static accord.utils.Invariants.illegalState;
 
 // TODO (expected): configure the number of initial requests we send
-public abstract class ReadCoordinator<Reply extends accord.messages.Reply> extends ReadTracker implements Callback<Reply>
+public abstract class ReadCoordinator<Result, Reply extends accord.messages.Reply> extends ReadTracker implements Callback<Reply>, Coordination
 {
     public enum Action
     {
@@ -99,20 +105,24 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         }
     }
 
+    private final long coordinationId;
     protected final Node node;
     protected final SequentialAsyncExecutor executor;
     protected final TxnId txnId;
+    private BiConsumer<? super Result, Throwable> callback;
     private boolean isDone;
     private Throwable failure;
-    final Map<Id, Object> debug;
+    final DebugMap debug;
 
-    protected ReadCoordinator(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId)
+    protected ReadCoordinator(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, BiConsumer<? super Result, Throwable> callback)
     {
         super(topologies);
+        this.coordinationId = node.nextCoordinationId();
         this.node = node;
         this.executor = executor;
         this.txnId = txnId;
-        this.debug = debug() ? new SortedListMap<>(topologies.nodes(), Object[]::new) : null;
+        this.callback = callback;
+        this.debug = debug() ? new DebugMap(topologies.nodes()) : null;
     }
 
     protected abstract Action process(Id from, Reply reply);
@@ -125,18 +135,18 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
     @Override
     public void onSuccess(Id from, Reply reply)
     {
-        if (debug != null)
-            debug.merge(from, reply, (a, b) -> a instanceof List<?> ? ((List<Object>) a).add(b) : Lists.newArrayList(a, b));
-
         if (isDone)
             return;
+
+        if (debug != null)
+            debug.debug(from, reply);
 
         Action action = process(from, reply);
         switch (action)
         {
             default: throw new UnhandledEnum(action);
             case Aborted:
-                isDone = true;
+                setDone();
 
             case None:
                 break;
@@ -167,21 +177,20 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
     @Override
     public void onSlowResponse(Id from)
     {
-        handle(recordSlowResponse(from));
+        if (!isDone)
+            handle(recordSlowResponse(from));
     }
 
     @Override
     public void onFailure(Id from, Throwable failure)
     {
-        if (debug != null)
-            debug.merge(from, failure, (a, b) -> a instanceof List<?> ? ((List<Object>) a).add(b) : Lists.newArrayList(a, b));
-
         if (isDone)
             return;
 
-        if (this.failure == null) this.failure = failure;
-        else this.failure.addSuppressed(failure);
+        if (debug != null)
+            debug.debug(from, failure);
 
+        this.failure = FailureAccumulator.append(this.failure, failure);
         handle(recordFailure(from));
     }
 
@@ -190,66 +199,62 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
     {
         if (isDone) return false;
 
-        if (this.failure != null)
-            failure.addSuppressed(this.failure);
-        this.failure = failure;
-        finishOnFailure();
+        finishWithFailureOverride(failure);
         return true;
     }
 
-    protected void finishOnFailure(Throwable failure, boolean overrideExistingFailure)
+    protected void finishWithFailureOverride(Throwable failure)
     {
         Invariants.require(!isDone);
-        if (overrideExistingFailure)
-        {
-            if (this.failure != null)
-                failure.addSuppressed(this.failure);
-            this.failure = failure;
-        }
-        else
-        {
-            if (this.failure != null) this.failure.addSuppressed(failure);
-            else this.failure = failure;
-        }
+        this.failure = FailureAccumulator.append(failure, this.failure);
+        finishOnFailure();
+    }
+
+    protected void finishWithFailure(Throwable failure)
+    {
+        Invariants.require(!isDone);
+        this.failure = FailureAccumulator.append(this.failure, failure);
         finishOnFailure();
     }
 
     protected void tryFinishOnFailure()
     {
         if (!isDone)
+        {
+            failure = FailureAccumulator.fail(node.agent(), failure, txnId);
             finishOnFailure();
+        }
     }
 
     protected void finishOnFailure()
     {
         Invariants.require(!isDone);
         Invariants.require(failure != null);
-        isDone = true;
+        setDone();
         onDone(null, failure);
     }
 
     protected void finishOnExhaustion()
     {
         Invariants.require(!isDone);
-        if (failure == null)
+        Ranges unavailable = Ranges.EMPTY;
+        for (ReadShardTracker tracker : trackers)
         {
-            Ranges unavailable = Ranges.EMPTY;
-            for (ReadShardTracker tracker : trackers)
-            {
-                if (tracker == null || tracker.hasSucceeded())
-                    continue;
+            if (tracker == null || tracker.hasSucceeded())
+                continue;
 
-                if (tracker.unavailable() != null)
-                {
-                    if (tracker.unavailable() != null)
-                        unavailable = unavailable.with(tracker.unavailable());
-                }
-                else unavailable = unavailable.with(Ranges.of(tracker.shard.range));
-            }
-
-            failure = new Exhausted(txnId, null, unavailable);
+            if (tracker.unavailable() != null) unavailable = unavailable.with(tracker.unavailable());
+            else unavailable = unavailable.with(Ranges.of(tracker.shard.range));
         }
+        failure = FailureAccumulator.fail(node.agent(), failure, txnId, null, unavailable);
         finishOnFailure();
+    }
+
+    void setDone()
+    {
+        Invariants.require(!isDone);
+        isDone = true;
+        node.unregister(this);
     }
 
     private void handle(RequestStatus result)
@@ -258,12 +263,13 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         {
             default: throw new AssertionError();
             case NoChange:
+                Invariants.require(!inflight.isEmpty());
                 break;
             case Success:
                 Invariants.require(!isDone);
                 onDone(waitingOnData == 0 ? Success.Success : Success.Quorum, null);
                 // isDone = true needs to be last or exceptions thrown by onDone are ignored and this never finishes
-                isDone = true;
+                setDone();
                 break;
             case Failed:
                 finishOnExhaustion();
@@ -277,6 +283,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
 
     public final void start()
     {
+        node.register(this);
         if (initialise()) startOnceInitialised();
         else finishOnExhaustion();
     }
@@ -285,7 +292,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
     {
         List<Id> contact = new ArrayList<>(maxShardsPerEpoch());
         if (trySendMore(List::add, contact) != RequestStatus.NoChange)
-            throw new IllegalStateException();
+            throw illegalState();
         start(contact);
     }
 
@@ -300,5 +307,84 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         RequestStatus status = trySendMore(List::add, contact);
         contact.forEach(this::contact);
         return status;
+    }
+
+    @Override
+    public SortedList<Id> inflight()
+    {
+        Node.Id[] ids = new Node.Id[inflight.size()];
+        int count = 0;
+        IntHashSet.IntIterator iter = inflight.iterator();
+        while (iter.hasNext())
+            ids[count++] = new Node.Id(iter.nextValue());
+        Arrays.sort(ids);
+        return SortedArrayList.ofSorted(ids);
+    }
+
+    @Override
+    public SortedList<Id> contacted()
+    {
+        return nodes().without(SortedArrayList.copyUnsorted(candidates, Node.Id[]::new));
+    }
+
+    @Override
+    public long coordinationId()
+    {
+        return coordinationId;
+    }
+
+    @Override
+    public final TxnId txnId()
+    {
+        return txnId;
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return this;
+    }
+
+    @Override
+    public SequentialAsyncExecutor executor()
+    {
+        return executor;
+    }
+
+    @Override
+    public boolean abort()
+    {
+        if (isDone)
+            return false;
+
+        finishWithFailureOverride(Aborted.aborted(txnId, Route.tryCastToRoute(scope())));
+        return true;
+    }
+
+    // this is a little clunky, and could easily be misused
+    // TODO (desired): try to rework ReadCoordinator to match some of the improved properties of AbstractCoordination
+    Action retryWithEpochExact(long epoch, Runnable runnable)
+    {
+        node.withEpochExact(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), WrappableException::wrap, runnable);
+        return Action.Aborted;
+    }
+
+    void invokeCallback(Result success, Throwable failure)
+    {
+        takeCallback().accept(success, failure);
+    }
+
+    protected BiConsumer<? super Result, Throwable> takeCallback()
+    {
+        BiConsumer<? super Result, Throwable> callback = this.callback;
+        this.callback = null;
+        Invariants.require(callback != null);
+        return callback;
+    }
+
+    @Override
+    public String toString()
+    {
+        return getClass() + ":" + txnId;
     }
 }

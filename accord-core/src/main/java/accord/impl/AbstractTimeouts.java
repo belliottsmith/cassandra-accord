@@ -19,6 +19,7 @@
 package accord.impl;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.IntFunction;
@@ -27,6 +28,7 @@ import accord.api.Timeouts;
 import accord.local.TimeService;
 import accord.utils.ArrayBuffers.BufferList;
 import accord.utils.LogGroupTimers;
+import accord.utils.async.Cancellable;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -40,13 +42,17 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
         void onExpire(long nowMicros);
     }
 
+    private static final AtomicReferenceFieldUpdater<Stripe.Registered, Timeout> timeoutUpdater = AtomicReferenceFieldUpdater.newUpdater(Stripe.Registered.class, Timeout.class, "timeout");
     protected static class Stripe implements Runnable, Function<Stripe.AbstractRegistered, Runnable>
     {
-        protected abstract class AbstractRegistered extends LogGroupTimers.Timer implements RegisteredTimeout, Expiring
+        protected abstract class AbstractRegistered extends LogGroupTimers.Timer implements RegisteredTimeout, Expiring, Cancellable
         {
             @Override
             public void cancel()
             {
+                if (!isInHeap())
+                    return;
+
                 lock.lock();
                 try
                 {
@@ -58,22 +64,46 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
                     lock.unlock();
                 }
             }
+
+            protected void tryCancel()
+            {
+                if (lock.tryLock())
+                {
+                    try
+                    {
+                        if (isInHeap())
+                            timeouts.remove(this);
+                    }
+                    finally
+                    {
+                        lock.unlock();
+                    }
+                }
+            }
         }
 
         protected class Registered extends AbstractRegistered
         {
-            final Timeout timeout;
+            volatile Timeout timeout;
 
             Registered(Timeout timeout)
             {
                 this.timeout = timeout;
             }
 
+            @Override
+            public void cancel()
+            {
+                if (timeoutUpdater.getAndSet(this, null) != null)
+                    tryCancel();
+            }
 
             @Override
             public void onExpire(long nowMicros)
             {
-                timeout.timeout();
+                Timeout timeout = timeoutUpdater.getAndSet(this, null);
+                if (timeout != null)
+                    timeout.timeout();
             }
 
             @Override

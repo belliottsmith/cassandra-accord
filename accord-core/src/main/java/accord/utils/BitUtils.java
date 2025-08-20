@@ -167,6 +167,7 @@ public class BitUtils
         }
     }
 
+    // TODO (expected): explore unsafe versions of this method? to skip the duplicate bounds check overheads
     public static long readLeastSignificantBytes(int bytes, ByteBuffer in)
     {
         if (bytes == 0)

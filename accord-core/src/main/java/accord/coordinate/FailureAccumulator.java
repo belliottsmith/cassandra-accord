@@ -19,59 +19,53 @@
 package accord.coordinate;
 
 import java.util.Collection;
-import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
+import accord.api.Agent;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.primitives.Ranges;
+import accord.primitives.Route;
 import accord.primitives.TxnId;
 
 public class FailureAccumulator
 {
     private FailureAccumulator() {}
 
-    public static Throwable append(@Nullable Throwable current, Throwable next)
-    {
-        return append(current, next, FailureAccumulator::isTimeout);
-    }
-
-    public static Throwable append(@Nullable Throwable current, Throwable next, Predicate<Throwable> isTimeout)
+    public static Throwable append(@Nullable Throwable current, @Nullable Throwable next)
     {
         if (current == null) return next;
-        // when a non-timeout is seen make sure it shows up in current rather than timeout
-        // this is so checking if the cause is a timeout is able to do a single check rather
-        // than walk the whole chain
-        if (isTimeout.test(current) && !(isTimeout.test(next)))
-        {
-            Throwable tmp = current;
-            current = next;
-            next = tmp;
-        }
+        if (next == null) return current;
         current.addSuppressed(next);
         return current;
     }
 
-    public static boolean isTimeout(@Nullable Throwable current)
+    public static Throwable fail(Agent agent, @Nullable Throwable current, TxnId txnId)
     {
-        return current instanceof Timeout;
+        return fail(agent, current, txnId, (RoutingKey) null);
     }
 
-    public static CoordinationFailed createFailure(@Nullable Throwable current, TxnId txnId, @Nullable RoutingKey homeKey)
+    public static Throwable fail(Agent agent, @Nullable Throwable current, TxnId txnId, @Nullable Route<?> route)
     {
-        return createFailure(current, txnId, homeKey, null);
+        RoutingKey homeKey = route == null ? null : route.homeKey();
+        return fail(agent, current, txnId, homeKey, null);
     }
 
-    public static CoordinationFailed createFailure(@Nullable Throwable current, TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges unavailable)
+    public static Throwable fail(Agent agent, @Nullable Throwable current, TxnId txnId, @Nullable RoutingKey homeKey)
     {
-        return createFailure(current, txnId, homeKey, unavailable, null);
+        return fail(agent, current, txnId, homeKey, null);
     }
-    public static CoordinationFailed createFailure(@Nullable Throwable current, TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges unavailable, @Nullable Collection<Node.Id> failed)
+
+    public static Throwable fail(Agent agent, @Nullable Throwable current, TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges unavailable)
     {
-        if (current == null) return new Exhausted(txnId, homeKey, unavailable, failed);
-        if (isTimeout(current)) return new Timeout(txnId, homeKey);
-        Exhausted e = new Exhausted(txnId, homeKey, unavailable, failed);
-        e.initCause(current);
-        return e;
+        return fail(agent, current, txnId, homeKey, unavailable, null);
+    }
+    public static Throwable fail(Agent agent, @Nullable Throwable current, TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges unavailable, @Nullable Collection<Node.Id> failed)
+    {
+        if (current == null && unavailable == null && failed == null)
+            return Timeout.timeout(agent, txnId, homeKey);
+        if (current == null)
+            return Exhausted.exhausted(agent, txnId, homeKey, unavailable, failed);
+        return current;
     }
 }

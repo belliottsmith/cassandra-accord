@@ -208,9 +208,19 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
         {
             return unavailable;
         }
+
+        @Override
+        public String summarise()
+        {
+            if (hasData)
+                return "done";
+            if (quorum > 0)
+                return "(quorum=" + quorum + ",inflight=" + inflight + ")/" + shard.rf;
+            return "(inflight=" + inflight + ")/" + shard.rf;
+        }
     }
 
-    final IntHashSet inflight;
+    protected final IntHashSet inflight; // TODO (expected): SortedArraySet (or create an equivalent hash variant)
     protected final List<Id> candidates; // TODO (easy, efficiency): use Agrona's IntArrayList
     private IntHashSet slow;
     protected int waitingOnData;
@@ -252,7 +262,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     /**
      * Record a response that immediately satisfies the criteria for the shards the node participates in
      */
-    protected RequestStatus recordSlowResponse(Id from)
+    public RequestStatus recordSlowResponse(Id from)
     {
         if (!inflight.contains(from.id))
             return RequestStatus.NoChange;
@@ -269,7 +279,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     /**
      * Record a response that immediately satisfies the criteria for the shards the node participates in
      */
-    protected RequestStatus recordReadSuccess(Id from)
+    public RequestStatus recordReadSuccess(Id from)
     {
         return recordResponse(from, ReadShardTracker::recordReadSuccess);
     }
@@ -277,7 +287,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     /**
      * Record a response that immediately satisfies the criteria for the shards the node participates in
      */
-    protected RequestStatus recordPartialReadSuccess(Id from, Ranges unavailable)
+    public RequestStatus recordPartialReadSuccess(Id from, Ranges unavailable)
     {
         boolean isSlow = receiveResponseIsSlow(from);
         return recordResponse(this, from, ReadShardTracker::recordPartialReadSuccess, new PartialReadSuccess(isSlow, unavailable));
@@ -286,7 +296,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     /**
      * Record a response that contributes to a potential quorum decision (i.e. accept once we have such a quorum)
      */
-    protected RequestStatus recordQuorumReadSuccess(Id from)
+    public RequestStatus recordQuorumReadSuccess(Id from)
     {
         return recordResponse(from, ReadShardTracker::recordQuorumReadSuccess);
     }

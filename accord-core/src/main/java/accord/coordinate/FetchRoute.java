@@ -47,16 +47,14 @@ import static accord.primitives.WithQuorum.HasQuorum;
 /**
  * Find some Route for a txnId using some known participants
  */
-public class FetchRoute extends CheckShards<Participants<?>>
+public class FetchRoute extends CheckShards<Route<?>, Participants<?>>
 {
     final LatentStoreSelector reportTo;
-    final BiConsumer<Route<?>, Throwable> callback;
 
     FetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback, @Nullable Tracing tracing)
     {
-        super(node, node.someSequentialExecutor(), txnId, contactable, txnId.epoch(), IncludeInfo.Route, null, invalidIf, tracing);
+        super(node, node.someSequentialExecutor(), txnId, contactable, txnId.epoch(), IncludeInfo.Route, null, invalidIf, callback, tracing);
         this.reportTo = reportTo;
-        this.callback = callback;
     }
 
     public static Object fetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> unseekables, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback, Tracing tracing)
@@ -87,7 +85,7 @@ public class FetchRoute extends CheckShards<Participants<?>>
     @Override
     protected void onDone(Success success, Throwable failure)
     {
-        if (failure != null) callback.accept(null, failure);
+        if (failure != null) invokeCallback(null, failure);
         else
         {
             final Route<?> route = merged == null ? null : merged.route;
@@ -96,7 +94,7 @@ public class FetchRoute extends CheckShards<Participants<?>>
                 Known known = Nothing;
                 if (merged != null)
                     known = merged.finish(query, query, query, success.withQuorum, previouslyKnownToBeInvalidIf).knownFor(txnId, query, query);
-                reportRouteNotFound(node, success.withQuorum, known, txnId, query, reportTo, callback, tracing);
+                reportRouteNotFound(node, success.withQuorum, known, txnId, query, reportTo, takeCallback(), tracing);
             }
             else
             {
@@ -106,7 +104,7 @@ public class FetchRoute extends CheckShards<Participants<?>>
                     @Override
                     public void accept(Object result, Throwable failure)
                     {
-                        callback.accept(route, null);
+                        invokeCallback(route, null);
                     }
 
                     @Override
@@ -128,7 +126,7 @@ public class FetchRoute extends CheckShards<Participants<?>>
         }
     }
 
-    private static void reportRouteNotFound(Node node, WithQuorum withQuorum, Known found, TxnId txnId, Participants<?> participants, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback, @Nullable Tracing tracing)
+    private static void reportRouteNotFound(Node node, WithQuorum withQuorum, Known found, TxnId txnId, Participants<?> participants, LatentStoreSelector reportTo, BiConsumer<? super Route<?>, Throwable> callback, @Nullable Tracing tracing)
     {
         switch (found.outcome())
         {
@@ -157,4 +155,9 @@ public class FetchRoute extends CheckShards<Participants<?>>
         }
     }
 
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.FetchRoute;
+    }
 }

@@ -41,5 +41,11 @@ public interface Reply extends Message
         {
             return FAILURE_RSP;
         }
+
+        @Override
+        public String toString()
+        {
+            return failure.toString();
+        }
     }
 }

@@ -261,6 +261,8 @@ public enum Cleanup
 
     private static boolean expunge(TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
+        // TODO (required): improve expungeability of data when we know all participating shards are durable,
+        //  by e.g. emitting a special erase record that retains the participants, permitting us to expunge everything else independently
         // since we cannot guarantee to witness participants for all records, we must use the global durableBefore bounds
         if (txnId.is(Any) && !durableBefore.min(txnId).isDurable())
             return false;

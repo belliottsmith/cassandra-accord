@@ -25,10 +25,12 @@ import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.VisibleForImplementation;
 import accord.local.Node;
 import accord.local.TimeService;
 import accord.messages.Callback;
 import accord.utils.Invariants;
+import accord.utils.async.Cancellable;
 import org.agrona.collections.Long2ObjectHashMap;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -39,6 +41,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
 
     public interface CallbackEntry
     {
+        @VisibleForImplementation
         long registeredAt(TimeUnit units);
     }
 
@@ -110,7 +113,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             @Override
             public void onExpire(long nowMicros)
             {
-                safeInvoke(RegisteredCallback::unsafeOnFailure, new accord.coordinate.Timeout(null, null));
+                safeInvoke(RegisteredCallback::unsafeOnFailure, (Throwable)null);
             }
 
             private void unsafeOnSuccess(T reply)
@@ -244,25 +247,12 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
         super(time, stripeCount, CallbackStripe[]::new, CallbackStripe::new);
     }
 
-    public <T> void registerWithDelay(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long failDelay, TimeUnit units)
+    public <T> Cancellable registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportFailAt, TimeUnit units)
     {
-        registerWithDelay(callbackId, executor, callback, to, Long.MAX_VALUE, failDelay, units);
+        return registerAt(callbackId, executor, callback, to, now, Long.MAX_VALUE, reportFailAt, units);
     }
 
-    public <T> void registerWithDelay(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long slowDelay, long failDelay, TimeUnit units)
-    {
-        long now = time.elapsed(MICROSECONDS);
-        long reportFailAt = now + units.toMicros(failDelay);
-        long reportSlowAt = slowDelay >= failDelay ? Long.MAX_VALUE : now + units.toMicros(slowDelay);
-        stripes[(int)callbackId & (stripes.length - 1)].register(callbackId, executor, callback, to, now, reportSlowAt, reportFailAt);
-    }
-
-    public <T> void registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportFailAt, TimeUnit units)
-    {
-        registerAt(callbackId, executor, callback, to, now, Long.MAX_VALUE, reportFailAt, units);
-    }
-
-    public <T> void registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt, TimeUnit units)
+    public <T> Cancellable registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt, TimeUnit units)
     {
         if (units != MICROSECONDS)
         {
@@ -270,7 +260,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             reportSlowAt = reportSlowAt >= reportFailAt ? Long.MAX_VALUE : units.toMicros(reportSlowAt);
             reportFailAt = units.toMicros(reportFailAt);
         }
-        stripes[(int)callbackId & (stripes.length - 1)].register(callbackId, executor, callback, to, now, reportSlowAt, reportFailAt);
+        return stripes[(int)callbackId & (stripes.length - 1)].register(callbackId, executor, callback, to, now, reportSlowAt, reportFailAt);
     }
 
     public <T> CallbackEntry onSuccess(long callbackId, Node.Id from, T reply, boolean remove)

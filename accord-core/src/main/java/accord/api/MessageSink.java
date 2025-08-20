@@ -23,15 +23,16 @@ import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
+import accord.utils.async.Cancellable;
 
 public interface MessageSink
 {
     void send(Id to, Request request);
-    default void send(Id to, Request request, AsyncExecutor executor, Callback<?> callback)
+    default Cancellable send(Id to, Request request, AsyncExecutor executor, Callback<?> callback)
     {
-        send(to, request, 1, executor, callback);
+        return send(to, request, 1, executor, callback);
     }
-    void send(Id to, Request request, int attempt, AsyncExecutor executor, Callback<?> callback);
+    Cancellable send(Id to, Request request, int attempt, AsyncExecutor executor, Callback<?> callback);
     void reply(Id replyingToNode, ReplyContext replyContext, Reply reply);
     void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure);
 }

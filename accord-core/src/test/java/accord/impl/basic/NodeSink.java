@@ -37,6 +37,7 @@ import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
+import accord.utils.async.Cancellable;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -78,7 +79,7 @@ public class NodeSink implements MessageSink
     }
 
     @Override
-    public void send(Id to, Request send, int attempt, @Nonnull AsyncExecutor executor, Callback callback)
+    public Cancellable send(Id to, Request send, int attempt, @Nonnull AsyncExecutor executor, Callback callback)
     {
         long messageId = nextMessageId++;
         SafeCallback sc = new SafeCallback(executor, callback);
@@ -98,6 +99,7 @@ public class NodeSink implements MessageSink
                     sc.timeout(to);
             }), expiresAt - now, units);
         }
+        return () -> callbacks.remove(messageId);
     }
 
     @Override

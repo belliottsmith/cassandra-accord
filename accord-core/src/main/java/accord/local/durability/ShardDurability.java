@@ -630,7 +630,7 @@ public class ShardDurability
         }
     }
 
-    DurabilityQueue queue()
+    public DurabilityQueue queue()
     {
         return durabilityQueue;
     }

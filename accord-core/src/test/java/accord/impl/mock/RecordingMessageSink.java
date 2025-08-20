@@ -24,6 +24,7 @@ import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
+import accord.utils.async.Cancellable;
 
 import org.junit.jupiter.api.Assertions;
 
@@ -63,10 +64,10 @@ public class RecordingMessageSink extends SimpleMessageSink
     }
 
     @Override
-    public void send(Node.Id to, Request request, int attempt, AsyncExecutor executor, Callback callback)
+    public Cancellable send(Node.Id to, Request request, int attempt, AsyncExecutor executor, Callback callback)
     {
         requests.add(new Envelope<>(to, request, callback));
-        super.send(to, request, executor, callback);
+        return super.send(to, request, executor, callback);
     }
 
     @Override

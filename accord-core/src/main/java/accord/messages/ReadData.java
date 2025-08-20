@@ -66,9 +66,7 @@ import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.messages.MessageType.StandardMessage.READ_RSP;
-import static accord.messages.ReadData.CommitOrReadNack.Insufficient;
-import static accord.messages.ReadData.CommitOrReadNack.Redundant;
-import static accord.messages.ReadData.CommitOrReadNack.Waiting;
+import static accord.messages.ReadData.CommitOrReadNack.Kind.InsufficientEpochs;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.EphemeralRead;
@@ -275,11 +273,15 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     }
 
     @Override
-    public CommitOrReadNack reduce(CommitOrReadNack r1, CommitOrReadNack r2)
+    public CommitOrReadNack reduce(CommitOrReadNack a, CommitOrReadNack b)
     {
-        return r1 == null || r2 == null
-               ? r1 == null ? r2 : r1
-               : r1.compareTo(r2) >= 0 ? r1 : r2;
+        if (a == null || b == null)
+            return a != null ? a : b;
+
+        int c = a.kind.compareTo(b.kind);
+        if (c > 0 || (c == 0 && a.kind != InsufficientEpochs)) return a;
+        else if (c < 0) return b;
+        else return a.minEpoch <= b.minEpoch ? a : b;
     }
 
     @Override
@@ -315,12 +317,12 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
                     int c = status.compareTo(SaveStatus.Stable);
                     if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, null, participants);
                     else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, scope, null);
-                    node.agent().localEvents().onReadWaiting(safeStore, command);
-                    return status.compareTo(SaveStatus.Stable) >= 0 ? Waiting : Insufficient;
+                    node.agent().replicaEvents().onReadWaiting(safeStore, command);
+                    return status.compareTo(SaveStatus.Stable) >= 0 ? CommitOrReadNack.Waiting : CommitOrReadNack.Insufficient;
 
                 case OBSOLETE:
                     state = State.PENDING_OBSOLETE;
-                    return Redundant;
+                    return CommitOrReadNack.Redundant;
 
                 case EXECUTE:
                     if (requiresListenersDuringExecution)
@@ -423,7 +425,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
         else
         {
-            onFailure(Redundant, null);
+            onFailure(CommitOrReadNack.Redundant, null);
             return false;
         }
     }
@@ -523,7 +525,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         else if (txnId.awaitsOnlyDeps()) this.executeAt = Timestamp.max(this.executeAt, executeAt);
         else Invariants.require(executeAt.equals(this.executeAt));
 
-        node.agent().localEvents().onReadStarted(safeStore, command);
+        node.agent().replicaEvents().onReadStarted(safeStore, command);
         if (executes.isEmpty()) readComplete(unsafeStore, null, unavailable);
         else beginRead(safeStore, executeAt, command.partialTxn(), executes)
              .begin(readCallback(unsafeStore, unavailable));
@@ -540,7 +542,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
             }
             else if (success == null)
             {
-                onFailure(Redundant, null);
+                onFailure(CommitOrReadNack.Redundant, null);
             }
             else
             {
@@ -723,7 +725,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        if (data != null && !data.validateReply(txnId, executeAt, !requiresListenersDuringExecution)) reply(Redundant, null);
+        if (data != null && !data.validateReply(txnId, executeAt, !requiresListenersDuringExecution)) reply(CommitOrReadNack.Redundant, null);
         else reply(new ReadOk(unavailable, data, uniqueHlc), null);
     }
 
@@ -745,39 +747,81 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         boolean isOk();
     }
 
-    public enum CommitOrReadNack implements ReadData.ReadReply
+    public static class CommitOrReadNack implements ReadData.ReadReply
     {
-        /**
-         * Either not committed, or not stable
-         */
-        Insufficient("CommitInsufficient", false),
-
-        /**
-         * Committed/PreApplied successfully, but the request is blocking so waiting to reply
-         */
-        Waiting("ReadOrApplyWaiting", false),
-
-        Redundant("CommitOrReadRedundant", true),
-
-        /**
-         * The commit has been rejected due to stale ballot.
-         */
-        Rejected("CommitRejected", true),
-        ;
-
-        final String fullname;
-        final boolean isFinal;
-
-        CommitOrReadNack(String fullname, boolean isFinal)
+        public enum Kind
         {
-            this.fullname = fullname;
-            this.isFinal = isFinal;
+            /**
+             * Committed/PreApplied successfully, but the request is blocking so waiting to reply
+             */
+            Waiting("ReadOrApplyWaiting", false),
+
+            Redundant("CommitOrReadRedundant", true),
+
+            /**
+             * Either not committed, or not stable
+             */
+            Insufficient("CommitInsufficient", false),
+
+            /**
+             * Either not committed, or not stable due to insufficient epochs
+             */
+            InsufficientEpochs("CommitInsufficientEpochs", false),
+
+            /**
+             * The commit has been rejected due to stale ballot.
+             */
+            Rejected("CommitRejected", true),
+            ;
+
+            private static final Kind[] kinds = values();
+
+            final String fullname;
+            final boolean isFinal;
+
+            Kind(String fullname, boolean isFinal)
+            {
+                this.fullname = fullname;
+                this.isFinal = isFinal;
+            }
+
+            @Override
+            public String toString()
+            {
+                return fullname;
+            }
+
+            public static Kind lookupByOrdinal(int ordinal)
+            {
+                return kinds[ordinal];
+            }
         }
 
-        @Override
-        public String toString()
+        public static final CommitOrReadNack Insufficient = new CommitOrReadNack(Kind.Insufficient);
+        public static final CommitOrReadNack Waiting = new CommitOrReadNack(Kind.Waiting);
+        public static final CommitOrReadNack Redundant = new CommitOrReadNack(Kind.Redundant);
+        public static final CommitOrReadNack Rejected = new CommitOrReadNack(Kind.Rejected);
+        private static final CommitOrReadNack[] byKind = new CommitOrReadNack[] { Waiting, Redundant, Insufficient, null, Rejected };
+        public static CommitOrReadNack lookupByKind(CommitOrReadNack.Kind kind) { return lookupByKindOrdinal(kind.ordinal()); }
+        public static CommitOrReadNack lookupByKindOrdinal(int kindOrdinal) { return byKind[kindOrdinal]; }
+
+        static
         {
-            return fullname;
+            for (CommitOrReadNack.Kind kind : CommitOrReadNack.Kind.values())
+                Invariants.require(byKind[kind.ordinal()] == null || byKind[kind.ordinal()].kind == kind);
+        }
+
+        public final Kind kind;
+        private final long minEpoch;
+        public CommitOrReadNack(Kind kind)
+        {
+            this(kind, 0);
+        }
+
+        public CommitOrReadNack(Kind kind, long minEpoch)
+        {
+            this.kind = kind;
+            this.minEpoch = minEpoch;
         }
 
         @Override
@@ -793,9 +837,21 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         }
 
         @Override
+        public String toString()
+        {
+            return kind.fullname;
+        }
+
+        @Override
         public boolean isFinal()
         {
-            return isFinal;
+            return kind.isFinal;
+        }
+
+        public final long minEpoch()
+        {
+            Invariants.require(kind == InsufficientEpochs);
+            return minEpoch;
         }
     }
 

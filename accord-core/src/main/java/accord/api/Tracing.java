@@ -17,7 +17,6 @@
  */
 package accord.api;
 
-import java.util.Arrays;
 import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
@@ -30,17 +29,47 @@ public interface Tracing
 
     default void trace(CommandStore store, String fmt, Object ... args)
     {
-        String message;
-        try { message = String.format(fmt, args); }
-        catch (Throwable t) { message = "Could not format \"" + fmt + "\" with " + Arrays.toString(args) + " (" + t.getLocalizedMessage() + ")"; }
-        trace(store, message);
+        trace(store, safeFormat(fmt, args));
+    }
+
+    static String safeFormat(String fmt, Object ... args)
+    {
+        try
+        {
+            return String.format(fmt, args);
+        }
+        catch (Throwable t)
+        {
+            try
+            {
+                String thrown = format(t);
+                StringBuilder argsStr = new StringBuilder();
+                if (args == null) argsStr.append("null");
+                else
+                {
+                    argsStr.append('[');
+                    for (int i = 0 ; i < args.length ; i++)
+                    {
+                        if (i > 0) argsStr.append(',');
+                        try { argsStr.append(args[i]); }
+                        catch (Throwable t2) { argsStr.append("<Could not invoke toString(): ").append(format(t2)).append('>'); }
+                    }
+                    argsStr.append(']');
+                }
+                return "<Could not invoke String.format(\"" + fmt + "\", " + argsStr + "): " + thrown + '>';
+            }
+            catch (Throwable t2)
+            {
+                return "<Could not format string or failure info>";
+            }
+        }
     }
 
     static String format(Throwable failure)
     {
         StackTraceElement[] ste = failure.getStackTrace();
-        return failure.getClass().getSimpleName() + ":" + failure.getLocalizedMessage()
-               + (ste.length > 0 ? " (@" + ste[0].getClassName() + "." + ste[0].getMethodName() + ":" + ste[0].getLineNumber() + ")" : "");
+        return failure.getClass().getSimpleName() + ':' + failure.getLocalizedMessage()
+               + (ste.length > 0 ? " (@" + ste[0].getClassName() + '.' + ste[0].getMethodName() + ':' + ste[0].getLineNumber() + ')' : "");
     }
 
     static <V> BiConsumer<V, Throwable> wrap(BiConsumer<V, Throwable> wrap, String context, @Nullable Tracing tracing)

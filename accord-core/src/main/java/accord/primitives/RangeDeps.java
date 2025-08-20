@@ -46,7 +46,7 @@ import accord.utils.Invariants;
 import accord.utils.RelationMultiMap;
 import accord.utils.RelationMultiMap.MergeAdapter;
 import accord.utils.SearchableRangeList;
-import accord.utils.SimpleBitSet;
+import accord.utils.LargeBitSet;
 import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SymmetricComparator;
@@ -506,7 +506,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
     public Ranges participants(Predicate<TxnId> select)
     {
         int[] txnIdsToRanges = txnIdsToRanges();
-        SimpleBitSet bitSet = new SimpleBitSet(ranges.length, cachedLongs());
+        LargeBitSet bitSet = new LargeBitSet(ranges.length, cachedLongs());
         for (int idIdx = 0 ; idIdx < txnIds.length ; ++idIdx)
         {
             if (!select.test(txnIds[idIdx]))
@@ -963,7 +963,7 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
 
     public boolean equals(RangeDeps that)
     {
-        if (!Objects.equals(covering, that.covering))
+        if (covering != null && that.covering != null && !covering.equals(that.covering))
             return false;
         if (preferByRange(that)) return testEquality(this.ranges, this.txnIds, this.rangesToTxnIds(), that.ranges, that.txnIds, that.rangesToTxnIds());
         else return testEquality(this.txnIds, this.ranges, this.txnIdsToRanges(), that.txnIds, that.ranges, that.txnIdsToRanges());

@@ -32,33 +32,11 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
-import accord.utils.SortedArrays;
 
 public class PersistSyncPoint extends Persist
 {
-    public PersistSyncPoint(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, FullRoute<?> route)
+    public PersistSyncPoint(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, FullRoute<?> route, Apply.Kind applyKind)
     {
-        super(node, executor, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, CoordinationFlags.none(), informDurableOnDone, Apply.FACTORY);
-    }
-
-    @Override
-    public void start(Apply.Kind kind, Topologies all, Writes writes, Result result)
-    {
-        SortedArrays.SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
-        if (contact == null)
-        {
-            // TODO (expected): we should report this somewhere?
-        }
-        else
-        {
-            for (Node.Id to : contact)
-            {
-                Apply apply = factory.create(kind, to, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags.get(to));
-                if (apply == null)
-                    tracker.recordSuccess(to);
-                else
-                    node.send(to, apply, executor, this);
-            }
-        }
+        super(node, executor, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, CoordinationFlags.none(), informDurableOnDone, Apply.FACTORY, applyKind);
     }
 }

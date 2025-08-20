@@ -21,11 +21,10 @@ package accord.local;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.NavigableSet;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
@@ -37,9 +36,6 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableMap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
@@ -59,11 +55,13 @@ import accord.api.TopologySorter;
 import accord.api.Tracing;
 import accord.coordinate.CoordinateEphemeralRead;
 import accord.coordinate.CoordinateTransaction;
+import accord.coordinate.Coordination;
 import accord.coordinate.CoordinationAdapter;
 import accord.coordinate.CoordinationAdapter.Factory.Kind;
+import accord.coordinate.Coordinations;
 import accord.coordinate.Infer.InvalidIf;
 import accord.coordinate.Outcome;
-import accord.coordinate.RecoverWithRoute;
+import accord.coordinate.PrepareRecovery;
 import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.CommandStores.StoreSelector;
 import accord.local.durability.DurabilityService;
@@ -106,6 +104,7 @@ import net.nicoulaj.compilecommand.annotations.Inline;
 import static accord.api.ProtocolModifiers.Toggles.defaultMediumPath;
 import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
 import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
+import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Txn.Kind.Read;
@@ -114,12 +113,11 @@ import static accord.primitives.TxnId.Cardinality.Any;
 import static accord.primitives.TxnId.Cardinality.cardinality;
 import static accord.primitives.TxnId.FastPath.Unoptimised;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class Node implements ConfigurationService.Listener, NodeCommandStoreService
 {
-    private static final Logger logger = LoggerFactory.getLogger(Node.class);
-
     public static class Id implements Comparable<Id>
     {
         public static final Id NONE = new Id(0);
@@ -162,12 +160,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public boolean isCoordinating(TxnId txnId, Ballot promised)
-    {
-        // TODO (required): on a prod system expire coordination ownership by time for safety
-        return promised.node.equals(id) && coordinating.containsKey(txnId);
-    }
-
     private final Id id;
     private final MessageSink messageSink;
     private final ConfigurationService configService;
@@ -185,12 +177,13 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private final Scheduler scheduler;
     private final DurabilityService durabilityService;
 
-    // TODO (expected, liveness): monitor the contents of this collection for stalled coordination, and excise them
-    private final Map<TxnId, AsyncResult<? extends Outcome>> coordinating = new ConcurrentHashMap<>();
     private volatile DurableBefore durableBefore = DurableBefore.EMPTY;
     private DurableBefore minDurableBefore = DurableBefore.EMPTY;
     private final ReentrantLock durableBeforeLock = new ReentrantLock();
     private final PersistentField<DurableBefore, DurableBefore> persistDurableBefore;
+
+    private final Coordinations coordinations = new Coordinations();
+    private final AtomicLong nextCoordinationId = new AtomicLong();
 
     /**
      * Used to guard some operations that should normally operate on consistent information, but in rare cases may need to repeat work.
@@ -235,11 +228,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         scheduler.recurring(() -> commandStores.forEachCommandStore(store -> store.progressLog.maybeNotify()), 1, SECONDS);
         scheduler.recurring(timeouts::maybeNotify, 100, MILLISECONDS);
         configService.registerListener(this);
-    }
-
-    public Map<TxnId, AsyncResult<? extends Outcome>> coordinating()
-    {
-        return ImmutableMap.copyOf(coordinating);
     }
 
     public void load()
@@ -672,9 +660,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     // send to a specific node
-    public <T> void send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
+    public <T> Cancellable send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
     {
-        messageSink.send(to, send, executor, callback);
+        return messageSink.send(to, send, executor, callback);
     }
 
     // send to a specific node
@@ -841,10 +829,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     // TODO (required): plumb deadlineNanos in (perhaps on integration side, but maybe introduce some context we can pass through for the MessageSink)
     public AsyncResult<Result> coordinate(TxnId txnId, Txn txn, long minEpoch, long deadlineNanos)
     {
-        AsyncResult<Result> result = withEpochExact(Math.max(txnId.epoch(), minEpoch), (Executor) null, () -> initiateCoordination(txnId, txn)).beginAsResult();
-        coordinating.putIfAbsent(txnId, result);
-        result.invoke((success, fail) -> coordinating.remove(txnId, result));
-        return result;
+        return withEpochExact(Math.max(txnId.epoch(), minEpoch), (Executor) null, () -> initiateCoordination(txnId, txn)).beginAsResult();
     }
 
     private AsyncResult<Result> initiateCoordination(TxnId txnId, Txn txn)
@@ -896,25 +881,12 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, LatentStoreSelector reportTo, @Nullable Tracing tracing)
     {
-        {
-            AsyncResult<? extends Outcome> result = coordinating.get(txnId);
-            if (result != null)
-            {
-                if (tracing != null)
-                    tracing.trace(null, "Coordination already ongoing; returning existing attempt");
-                return result;
-            }
-        }
-
         SequentialAsyncExecutor executor = someSequentialExecutor();
-        AsyncResult<Outcome> result = withEpochExact(txnId.epoch(), executor, () -> {
+        return withEpochExact(txnId.epoch(), executor, () -> {
             RecoverFuture<Outcome> future = new RecoverFuture<>();
-            RecoverWithRoute.recover(this, executor, txnId, invalidIf, route, null, reportTo, future, tracing);
+            PrepareRecovery.recover(this, executor, txnId, invalidIf, route, null, reportTo, future, tracing);
             return future;
         }).beginAsResult();
-        coordinating.putIfAbsent(txnId, result);
-        result.invoke((success, fail) -> coordinating.remove(txnId, result));
-        return result;
     }
 
     public void receive(Request request, Id from, ReplyContext replyContext)
@@ -996,6 +968,39 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public final long currentStamp()
     {
         return stamp;
+    }
+
+    public long nextCoordinationId()
+    {
+        long startedAtNanos = time.elapsed(NANOSECONDS);
+        long nextId = nextCoordinationId.get();
+        if (startedAtNanos >= nextId && nextCoordinationId.compareAndSet(nextId, startedAtNanos))
+            return startedAtNanos;
+        return nextCoordinationId.incrementAndGet();
+    }
+
+    public void register(Coordination coordination)
+    {
+        coordinations.register(coordination);
+    }
+
+    public void unregister(Coordination coordination)
+    {
+        coordinations.unregister(coordination);
+    }
+
+    public Coordinations coordinations()
+    {
+        return coordinations;
+    }
+
+    public boolean isCoordinatingWithBallot(TxnId txnId, Ballot ballot)
+    {
+        long mostRecent = coordinations.mostRecent(txnId, COORDINATES_STATE_MACHINE, ballot);
+        if (mostRecent < 0)
+            return false;
+        long ageNanos = Math.max(elapsed(NANOSECONDS) - mostRecent, 0);
+        return !agent.isSlowCoordinator(ageNanos, NANOSECONDS, txnId, 1);
     }
 
     public void updateStamp()

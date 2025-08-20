@@ -340,7 +340,7 @@ class SortedArraysTest
 
     private static void testSerde(SortedArrayList<Integer> expected, SortedArrayList<Integer> subset)
     {
-        var serialize = SortedArrays.toSimpleBitSet(expected, subset);
+        var serialize = SortedArrays.toLargeBitSet(expected, subset);
         Assertions.assertEquals(subset.size(), serialize.getSetBitCount());
         SortedArrayList<Integer> read = SortedArrays.fromSimpleBitSet(expected, serialize, Integer[]::new);
         Assertions.assertEquals(subset, read);

@@ -18,28 +18,28 @@
 
 package accord.coordinate;
 
-import java.util.Collection;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
+import javax.annotation.Nullable;
+
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.PreAcceptTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
-import accord.messages.Callback;
 import accord.messages.PreAccept;
 import accord.messages.PreAccept.PreAcceptOk;
 import accord.messages.PreAccept.PreAcceptReply;
 import accord.primitives.Ballot;
+import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
-import accord.utils.Invariants;
 import accord.utils.SortedListMap;
-import accord.utils.WrappableException;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
@@ -53,10 +53,9 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
  *
  * TODO (desired, testing): dedicated burn test to validate outcomes
  */
-abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, PreAcceptReply>
+abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, PreAcceptReply, PreAcceptOk>
 {
     final PreAcceptTracker<?> tracker;
-    private final SortedListMap<Id, PreAcceptOk> oks;
     final Txn txn;
     boolean fastPathEnabled = true;
 
@@ -74,31 +73,36 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     {
         super(node, executor, route, txnId, topologies, callback);
         this.tracker = trackerFactory.apply(topologies, txnId);
-        this.oks = new SortedListMap<>(topologies.nodes(), PreAcceptOk[]::new);
         this.txn = txn;
     }
 
-    void contact(Collection<Id> nodes, Topologies topologies, Callback<PreAcceptReply> callback)
+    void contact(@Nullable Deps deps, boolean hasCoordinatorVote)
     {
-        node.send(nodes, to -> new PreAccept(to, topologies, txnId, txn, null, false, route), executor, callback);
+        contact(to -> new PreAccept(to, topologies, txnId, txn, deps, hasCoordinatorVote, route));
+    }
+
+    void contactNotSelf(@Nullable Deps deps, boolean hasCoordinatorVote)
+    {
+        contact(to -> new PreAccept(to, topologies, txnId, txn, deps, hasCoordinatorVote, route), id -> !id.equals(node.id()));
     }
 
     @Override
     long executeAtEpoch()
     {
-        return oks.foldlNonNullValues((ok, prev) -> ok.witnessedAt.epoch() > prev.epoch() ? ok.witnessedAt : prev, Timestamp.NONE).epoch();
+        return foldlOks((ok, prev) -> ok.witnessedAt.epoch() > prev.epoch() ? ok.witnessedAt : prev, Timestamp.NONE).epoch();
     }
 
     @Override
-    public void onFailureInternal(Id from, Throwable failure)
+    public void onFailureInternal(Id from, int fromIndex, Throwable failure)
     {
+        recordFailure(failure);
         switch (tracker.recordFailure(from))
         {
             default: throw new AssertionError();
             case NoChange:
                 break;
             case Failed:
-                setFailure(new Timeout(txnId, route.homeKey()));
+                finishOnFailure();
                 break;
             case Success:
                 onPreAcceptedOrNewEpoch();
@@ -106,17 +110,17 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     }
 
     @Override
-    public void onSuccessInternal(Id from, PreAcceptReply reply)
+    public void onSuccessInternal(Id from, int fromIndex, PreAcceptReply reply)
     {
         if (!reply.isOk())
         {
             // we've been preempted by a recovery coordinator; defer to it, and wait to hear any result
-            setFailure(new Preempted(txnId, route.homeKey()));
+            finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, route.homeKey()));
         }
         else
         {
             PreAcceptOk ok = (PreAcceptOk) reply;
-            oks.put(from, ok);
+            recordOk(fromIndex, ok);
 
             boolean fastPath = ok.witnessedAt.compareTo(txnId) == 0 && fastPathEnabled;
             if (tracker.recordSuccess(from, fastPath) == Success)
@@ -138,6 +142,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
          * We cannot execute the transaction because the execution epoch's topology no longer contains all of the
          * participating keys/ranges, so we propose that the transaction is invalidated in its coordination epoch
          */
+        BiConsumer<? super T, Throwable> callback = finishAndTakeCallback();
         proposeInvalidate(node, executor, node.uniqueTimestamp(Ballot::fromValues), txnId, route.homeKey(), (outcome, failure) -> {
             if (failure != null)
                 mismatch.addSuppressed(failure);
@@ -148,12 +153,15 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     @Override
     void onPreAccepted(Topologies topologies)
     {
+        SortedListMap<Node.Id, PreAcceptOk> oks = finishOks();
         Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
-        node.withEpochExact(executeAt.epoch(), executor, callback, t -> WrappableException.wrap(t), () -> {
-            onPreAccepted(topologies, executeAt, oks);
-            if (!Invariants.debug()) oks.clear();
-        });
+        onPreAccepted(topologies, executeAt, oks);
     }
 
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
+    }
     abstract void onPreAccepted(Topologies topologies, Timestamp executeAt, SortedListMap<Id, PreAcceptOk> oks);
 }

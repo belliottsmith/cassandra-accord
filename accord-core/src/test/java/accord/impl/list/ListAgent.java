@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -155,7 +156,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
         onStale.accept(staleSince, ranges);
     }
 
-    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class, Snapshotter.SnapshotAborted.class));
+    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class, Snapshotter.SnapshotAborted.class, TimeoutException.class));
     @Override
     public void onUncaughtException(Throwable t)
     {
@@ -213,7 +214,13 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt)
     {
         // TODO (required): meta randomise
-        return units.convert(rnd.nextInt(100, 1000) * attempt, MILLISECONDS);
+        return units.convert(rnd.nextLong(100, 1000) * attempt, MILLISECONDS);
+    }
+
+    @Override
+    public boolean isSlowCoordinator(long elapsed, TimeUnit units, TxnId txnId, int attempt)
+    {
+        return false;
     }
 
     @Override

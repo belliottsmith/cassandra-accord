@@ -28,9 +28,8 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Tracing;
 import net.nicoulaj.compilecommand.annotations.Inline;
-
-import static java.lang.String.format;
 
 public class Invariants
 {
@@ -80,6 +79,11 @@ public class Invariants
     public static IllegalStateException illegalState(String msg)
     {
          throw createIllegalState(msg);
+    }
+
+    private static String format(String fmt, Object ... args)
+    {
+        return Tracing.safeFormat(fmt, args);
     }
 
     public static IllegalStateException illegalState(String fmt, Object... args)
@@ -139,52 +143,60 @@ public class Invariants
         return condition;
     }
 
-    public static void expect(boolean condition, String msg)
+    public static boolean expect(boolean condition, String msg)
     {
         if (!condition)
             onUnexpected.accept(createIllegalState(msg));
+        return condition;
     }
 
-    public static void expect(boolean condition, String fmt, int p1)
+    public static boolean expect(boolean condition, String fmt, int p1)
     {
         if (!condition)
             onUnexpected.accept(createIllegalState(format(fmt, p1)));
+        return condition;
     }
 
-    public static void expect(boolean condition, String fmt, int p1, int p2)
+    public static boolean expect(boolean condition, String fmt, int p1, int p2)
     {
         if (!condition)
             onUnexpected.accept(createIllegalState(format(fmt, p1, p2)));
+        return condition;
     }
 
-    public static void expect(boolean condition, String fmt, long p1)
+    public static boolean expect(boolean condition, String fmt, long p1)
     {
         if (!condition)
             onUnexpected.accept(createIllegalState(format(fmt, p1)));
+        return condition;
     }
 
-    public static void expect(boolean condition, String fmt, long p1, long p2)
+    public static boolean expect(boolean condition, String fmt, long p1, long p2)
     {
         if (!condition)
             onUnexpected.accept(createIllegalState(format(fmt, p1, p2)));
+        return condition;
     }
 
-    public static void expect(boolean condition, String fmt, @Nullable Object p1)
+    public static boolean expect(boolean condition, String fmt, @Nullable Object p1)
     {
         if (!condition)
             onUnexpected.accept(createIllegalState(format(fmt, p1)));
+        return condition;
     }
 
-    public static <P> void expect(boolean condition, String fmt, @Nullable P p1, Function<? super P, ?> transformP)
+    public static <P> boolean expect(boolean condition, String fmt, @Nullable P p1, Function<? super P, ?> transformP)
     {
         if (!condition)
             onUnexpected.accept(createIllegalState(format(fmt, transformP.apply(p1))));
+        return condition;
     }
 
-    public static void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
+    public static boolean expect(boolean condition, String fmt, @Nullable Object p1, @Nullable Object p2)
     {
         if (!condition)
             onUnexpected.accept(createIllegalState(format(fmt, p1, p2)));
+        return condition;
     }
 
     public static <P> void expect(boolean condition, String fmt, @Nullable Object p1, @Nullable P p2, Function<? super P, ?> transformP2)

@@ -27,6 +27,8 @@ import javax.annotation.Nullable;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
+import accord.primitives.AbstractRanges;
+import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.Known;
@@ -51,7 +53,7 @@ import accord.utils.ImmutableBitSet;
 import accord.utils.IndexedQuadConsumer;
 import accord.utils.IndexedTriConsumer;
 import accord.utils.Invariants;
-import accord.utils.SimpleBitSet;
+import accord.utils.LargeBitSet;
 import accord.utils.UnhandledEnum;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -1062,8 +1064,8 @@ public abstract class Command implements ICommand
         {
             final RoutingKeys keys;
             final RangeDeps directRangeDeps;
-            private SimpleBitSet waitingOn;
-            private @Nullable SimpleBitSet appliedOrInvalidated;
+            private LargeBitSet waitingOn;
+            private @Nullable LargeBitSet appliedOrInvalidated;
             private Timestamp executeAtLeast;
             private long uniqueHlc;
             private boolean executeAtLeastOrUniqueHlcUpdated;
@@ -1089,47 +1091,44 @@ public abstract class Command implements ICommand
             {
                 this.keys = keys;
                 this.directRangeDeps = directRangeDeps;
-                this.waitingOn = new SimpleBitSet(txnIdCount() + keys.size(), false);
-                this.appliedOrInvalidated = txnId.is(Key) ? null : new SimpleBitSet(txnIdCount(), false);
+                this.waitingOn = new LargeBitSet(txnIdCount() + keys.size(), false);
+                this.appliedOrInvalidated = txnId.is(Key) ? null : new LargeBitSet(txnIdCount(), false);
             }
 
             public static Initialise initialise(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, StoreParticipants participants, PartialDeps deps)
             {
                 Initialise initialise = new Initialise(txnId, participants, executeAt, deps);
+                Participants<?> stillWaitsOn = participants.stillWaitsOn();
+                // TODO (expected): refactor this to operate only on participants, not ranges
+                if (stillWaitsOn.domain() == Range) deps.keyDeps.keys().forEach((AbstractRanges)stillWaitsOn, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
+                else deps.keyDeps.keys().forEach((AbstractUnseekableKeys)stillWaitsOn, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
+                deps.rangeDeps.forEach(stillWaitsOn, initialise, Update::initialise);
                 if (txnId.isSyncPoint())
                 {
-                    CommandStores.RangesForEpoch rangesForEpoch = safeStore.ranges();
-                    long prevEpoch = Long.MAX_VALUE;
-                    for (int i = rangesForEpoch.ranges.length - 1 ; i >= 0 ; --i)
+                    // sync points wait on ranges we have lost but not closed, but the sync point may have dependencies
+                    // that were started after we lost the ranges; we do not need to wait for these, so remove them
+                    CommandStores.RangesForEpoch ranges = safeStore.ranges();
+                    RangeDeps rDeps = deps.rangeDeps;
+                    int txnIdx = rDeps.txnIdCount() - 1;
+                    int latest = ranges.floorIndex(txnId.epoch());
+                    Ranges all = ranges.all();
+                    for (int i = latest ; txnIdx >= 0 && i >= 1 ; i--)
                     {
-                        long maxEpoch = prevEpoch;
-                        long epoch = rangesForEpoch.epochs[i];
-                        Ranges ranges = rangesForEpoch.ranges[i];
-                        ranges = safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
-                        if (!ranges.isEmpty())
+                        long epoch = ranges.epochAtIndex(i);
+                        Ranges removed = all.without(ranges.rangesAtIndex(i));
+                        while (txnIdx >= 0 && rDeps.txnId(txnIdx).epoch() >= epoch)
                         {
-                            deps.rangeDeps.forEach(participants.stillWaitsOn().slice(ranges, Slice.Minimal), initialise, (upd, idx) -> {
-                                TxnId id = upd.txnId(idx);
-                                // because we use RX as RedundantBefore bounds, we must not let an RX on a closing range
-                                // get ahead of one that isn't closed but has overlapping transactions (else we may erroneously treat as redundant)
-                                if (id.epoch() >= epoch && (id.isSyncPoint() || id.epoch() < maxEpoch))
-                                    initialise.initialise(idx);
-                            });
-                            int lbound = deps.rangeDeps.txnIdCount();
-                            deps.keyDeps.keys().forEach(ranges, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
+                            if (!rDeps.txnId(txnIdx).isSyncPoint() && initialise.isWaitingOnDirectRangeTxnIdx(txnIdx))
+                            {
+                                Ranges rs = rDeps.ranges(txnIdx).slice(all, Slice.Minimal);
+                                if (removed.containsAll(rs))
+                                    initialise.removeWaitingOnDirectRangeTxnId(txnIdx);
+                            }
+                            --txnIdx;
                         }
-                        prevEpoch = epoch;
                     }
-                    return initialise;
                 }
-                else
-                {
-                    Ranges executeRanges = participants.executeRanges(safeStore, txnId, executeAt);
-                    // TODO (expected): refactor this to operate only on participants, not ranges
-                    deps.rangeDeps.forEach(participants.stillWaitsOn(), initialise, Update::initialise);
-                    deps.keyDeps.keys().forEach(executeRanges, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
-                    return initialise;
-                }
+                return initialise;
             }
 
             @VisibleForTesting

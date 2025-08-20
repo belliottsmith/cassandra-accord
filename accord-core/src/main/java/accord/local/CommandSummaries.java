@@ -271,7 +271,10 @@ public interface CommandSummaries
 
         public final Summary ifRelevant(Command.MinimalWithDeps cmd)
         {
-            return this.ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants.touches(), cmd, (c, find, intersecting) -> isDep(c.partialDeps(), find, intersecting));
+            if (cmd.participants == null)
+                return null;
+
+            return ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants.touches(), cmd, (c, find, intersecting) -> isDep(c.partialDeps(), find, intersecting));
         }
 
         public final boolean isMaybeRelevant(TxnId txnId)

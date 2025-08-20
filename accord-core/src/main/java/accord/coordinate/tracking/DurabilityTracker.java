@@ -127,6 +127,15 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
         {
             return waitingOn == 0 && !hasSucceeded();
         }
+
+        @Override
+        public String summarise()
+        {
+            if (excludeSuccess == null)
+                return successes.size() + "/" + shard.rf;
+
+            return successes.size() + "/" + (shard.rf - excludeSuccess.size()) + '(' + shard.rf + ')';
+        }
     }
 
     final SortedListSet<Node.Id> failures;

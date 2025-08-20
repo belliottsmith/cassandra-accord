@@ -1299,6 +1299,42 @@ public class SortedArrays
         return found >= 0 ? found : -1 - to;
     }
 
+    public static int binarySearch(long[] in, int from, int to, long find, Search op)
+    {
+        int found = -1;
+        while (from < to)
+        {
+            int i = (from + to) >>> 1;
+            int c = Long.compare(find, in[i]);
+            if (c < 0)
+            {
+                to = i;
+            }
+            else if (c > 0)
+            {
+                from = i + 1;
+            }
+            else
+            {
+                switch (op)
+                {
+                    default: throw new IllegalStateException();
+                    case FAST:
+                        return i;
+
+                    case CEIL:
+                        to = found = i;
+                        break;
+
+                    case FLOOR:
+                        found = i;
+                        from = i + 1;
+                }
+            }
+        }
+        return found >= 0 ? found : -1 - to;
+    }
+
     public interface IndirectComparator<T1, T2>
     {
         int compare(T1 t1, T2 t2, int t2Index);
@@ -1794,10 +1830,10 @@ public class SortedArrays
         values[j] = t;
     }
 
-    public static <T extends Comparable<? super T>> SimpleBitSet toSimpleBitSet(SortedArrays.SortedArrayList<T> superset,
-                                                                                SortedArrays.SortedArrayList<T> subset)
+    public static <T extends Comparable<? super T>> LargeBitSet toLargeBitSet(SortedArrays.SortedArrayList<T> superset,
+                                                                              SortedArrays.SortedArrayList<T> subset)
     {
-        SimpleBitSet bitSet = new SimpleBitSet(superset.size());
+        LargeBitSet bitSet = new LargeBitSet(superset.size());
         int subsetIndex = 0;
         for (int i = 0; i < superset.size(); i++)
         {
@@ -1814,7 +1850,7 @@ public class SortedArrays
     }
 
     public static <T extends Comparable<? super T>> SortedArrays.SortedArrayList<T> fromSimpleBitSet(SortedArrays.SortedArrayList<T> superset,
-                                                                                                     SimpleBitSet bitSet,
+                                                                                                     LargeBitSet bitSet,
                                                                                                      IntFunction<T[]> alloc)
     {
         SortedArrays.SortedArrayList.Builder<T> builder = new SortedArrays.SortedArrayList.Builder<>(alloc.apply(bitSet.getSetBitCount()));

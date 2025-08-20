@@ -18,10 +18,10 @@
 
 package accord.coordinate;
 
-import java.util.Map;
 import java.util.function.BiConsumer;
 
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
@@ -37,96 +37,87 @@ import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.SortedArrays.SortedArrayList;
-import accord.utils.SortedListMap;
 import accord.utils.UnhandledEnum;
 
 import static accord.coordinate.ExecutePath.SLOW;
 import static accord.coordinate.tracking.RequestStatus.Failed;
+import static accord.messages.Commit.Kind.CommitSlowPath;
 import static accord.messages.Commit.Kind.CommitWithTxn;
-import static accord.utils.Invariants.debug;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
-public abstract class Stabilise<R> implements Callback<ReadReply>
+public abstract class Stabilise<R> extends AbstractCoordination<R, ReadReply, Void> implements Callback<ReadReply>
 {
-    final Node node;
-    final SequentialAsyncExecutor executor;
     final Txn txn;
     final FullRoute<?> route;
     final Route<?> sendTo;
-    final TxnId txnId;
     final Ballot ballot;
     final Timestamp executeAt;
     final Deps stabiliseDeps;
 
-    final QuorumTracker stableTracker;
+    final QuorumTracker tracker;
     final Topologies allTopologies;
-    private final Map<Node.Id, Object> debug;
-    final BiConsumer<? super R, Throwable> callback;
-    private boolean isDone;
 
     public Stabilise(Node node, SequentialAsyncExecutor executor, Topologies coordinates, Topologies allTopologies, Route<?> sendTo, FullRoute<?> route, TxnId txnId, Ballot ballot, Txn txn, Timestamp executeAt, Deps stabiliseDeps, BiConsumer<? super R, Throwable> callback)
     {
-        this.node = node;
-        this.executor = executor;
+        super(node, executor, txnId, coordinates.nodes(), callback);
         this.txn = txn;
         this.sendTo = sendTo;
         this.route = route;
-        this.txnId = txnId;
         this.ballot = ballot;
         this.executeAt = executeAt;
         this.stabiliseDeps = stabiliseDeps;
         // we only care about coordination epoch for stability, as it is a recovery condition
-        this.stableTracker = new QuorumTracker(coordinates);
+        this.tracker = new QuorumTracker(coordinates);
         this.allTopologies = allTopologies;
-        this.debug = debug() ? new SortedListMap<>(allTopologies.nodes(), Object[]::new) : null;
-        this.callback = callback;
-    }
-
-    void start()
-    {
-        SortedArrayList<Node.Id> contact = stableTracker.filterAndRecordFaulty();
-        if (allTopologies.size() > 1)
-            contact = contact.with(allTopologies.nodes().without(stableTracker.nodes()).without(allTopologies::isFaulty));
-
-        if (contact == null) callback.accept(null, new Exhausted(txnId, route.homeKey(), null));
-        else Commit.commitMinimalNoRead(contact, node, executor, stableTracker.topologies(), allTopologies, ballot, txnId, txn, route, executeAt, stabiliseDeps, this);
     }
 
     @Override
-    public void onSuccess(Node.Id from, ReadReply reply)
+    void start()
     {
-        if (isDone)
-            return;
+        SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
+        if (allTopologies.size() > 1)
+            contact = contact.with(allTopologies.nodes().without(tracker.nodes()).without(allTopologies::isFaulty));
 
-        if (debug != null) debug.put(from, reply);
-
-        if (reply.isOk())
+        if (contact == null)
         {
-            if (stableTracker.recordSuccess(from) == RequestStatus.Success)
-            {
-                isDone = true;
-                onStabilised();
-            }
+            finishOnExaustion();
         }
         else
         {
-            switch ((CommitOrReadNack)reply)
+            super.start();
+            contact(to -> new Commit(CommitSlowPath, to, allTopologies, txnId, txn, route, ballot, executeAt, stabiliseDeps));
+        }
+    }
+
+    @Override
+    public void onSuccessInternal(Node.Id from, int fromIndex, ReadReply reply)
+    {
+        if (reply.isOk())
+        {
+            if (tracker.recordSuccess(from) == RequestStatus.Success)
+                onStabilised();
+        }
+        else
+        {
+            CommitOrReadNack nack = (CommitOrReadNack) reply;
+            switch (nack.kind)
             {
-                default: throw new UnhandledEnum((CommitOrReadNack)reply);
+                default: throw new UnhandledEnum(nack.kind);
                 case Redundant:
-                    isDone = true;
-                    callback.accept(null, new Redundant(txnId, route.homeKey(), executeAt));
+                    finishWithFailureOverride(new Redundant(txnId, route.homeKey(), executeAt));
                     break;
                 case Rejected:
-                    if (stableTracker.recordFailure(from) == Failed)
-                    {
-                        isDone = true;
-                        callback.accept(null, new Preempted(txnId, route.homeKey()));
-                    }
+                    recordFailure(from, Preempted.preempted(node.agent(), txnId, route.homeKey()));
                     break;
                 case Insufficient:
                     node.send(from, new Commit(CommitWithTxn, from, allTopologies,
+                                               txnId, txn, route, ballot, executeAt, stabiliseDeps));
+                    break;
+                case InsufficientEpochs:
+                    node.send(from, new Commit(CommitWithTxn, from, node.topology().preciseEpochs(route, Math.min(allTopologies.oldestEpoch(), nack.minEpoch()), allTopologies.currentEpoch(), SHARE),
                                                txnId, txn, route, ballot, executeAt, stabiliseDeps));
                     break;
             }
@@ -134,33 +125,51 @@ public abstract class Stabilise<R> implements Callback<ReadReply>
     }
 
     @Override
-    public void onFailure(Node.Id from, Throwable failure)
+    public void onFailureInternal(Node.Id from, int fromIndex, Throwable failure)
     {
-        if (isDone)
-            return;
-
-        if (debug != null) debug.put(from, failure);
-
-        if (stableTracker.recordFailure(from) == Failed)
-        {
-            isDone = true;
-            callback.accept(null, new Timeout(txnId, route.homeKey()));
-        }
+        recordFailure(from, failure);
     }
 
-    @Override
-    public boolean onCallbackFailure(Node.Id from, Throwable failure)
+    private void recordFailure(Node.Id from, Throwable failure)
     {
-        if (isDone) return false;
-
-        isDone = true;
-        callback.accept(null, failure);
-        return true;
+        recordFailure(failure);
+        if (tracker.recordFailure(from) == Failed)
+            finishOnFailure();
     }
 
     protected void onStabilised()
     {
-        adapter().execute(node, executor, allTopologies, route, ballot, SLOW, CoordinationFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, callback);
+        adapter().execute(node, executor, allTopologies, route, ballot, SLOW, CoordinationFlags.none(), txnId, txn, executeAt, stabiliseDeps, stabiliseDeps, finishAndTakeCallback());
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.Stabilise;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return route;
+    }
+
+    @Override
+    public Ballot ballot()
+    {
+        return ballot;
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
+    }
+
+    @Override
+    public String describe()
+    {
+        return "ballot=" + ballot + ", executeAt=" + executeAt;
     }
 
     protected abstract CoordinationAdapter<R> adapter();

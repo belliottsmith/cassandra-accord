@@ -501,17 +501,6 @@ public class StoreParticipants
         return new FilteredStoreParticipants(route, owns, executes, waitsOn, touches(), hasTouched(), stillOwns(), stillExecutes, stillWaitsOn, stillTouches());
     }
 
-    // TODO (required): retire this method, merge with executes()
-    public Ranges executeRanges(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt)
-    {
-        Ranges ranges = txnId.isSyncPoint()
-                        ? safeStore.ranges().all()
-                        : safeStore.ranges().allAt(executeAt.epoch());
-
-        // TODO (required): otherwise, remove stale?
-        return safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
-    }
-
     // TODO (required): synchronise with latest standard logic
     public static Route<?> touches(SafeCommandStore safeStore, long fromEpoch, TxnId txnId, long toEpoch, Route<?> route)
     {

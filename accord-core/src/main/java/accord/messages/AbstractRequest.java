@@ -201,7 +201,6 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
             cancel.cancel();
     }
 
-
     @Override
     public String reason()
     {

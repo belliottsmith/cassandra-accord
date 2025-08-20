@@ -67,6 +67,11 @@ public class DurabilityService implements ConfigurationService.Listener
         this.global = new GlobalDurability(node);
     }
 
+    public DurabilityQueue queue()
+    {
+        return shards.queue();
+    }
+
     public ShardDurability shards()
     {
         return shards;

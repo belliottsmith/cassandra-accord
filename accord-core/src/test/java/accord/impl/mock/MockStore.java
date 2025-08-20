@@ -36,7 +36,6 @@ import accord.primitives.Seekable;
 import accord.primitives.Seekables;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
-import accord.primitives.Writes;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
@@ -59,7 +58,7 @@ public class MockStore implements DataStore
 
     public static final Result RESULT = new Result() {};
     public static final Query QUERY = (txnId, executeAt, keys, data, read, update) -> RESULT;
-    public static final Write WRITE = (commandStore, key, txnId, executeAt, command) -> Writes.SUCCESS;
+    public static final Write WRITE = (commandStore, key, txnId, executeAt, command) -> AsyncChains.success(null);
 
     public static Read read(Seekables<?, ?> keys)
     {

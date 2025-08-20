@@ -47,7 +47,7 @@ import accord.utils.IndexedBiFunction;
 import accord.utils.IndexedConsumer;
 import accord.utils.IndexedIntFunction;
 import accord.utils.IndexedTriFunction;
-import accord.utils.SimpleBitSet;
+import accord.utils.LargeBitSet;
 import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.Utils;
@@ -339,7 +339,7 @@ public class Topology
             return this;
 
         Int2ObjectHashMap<NodeInfo> nodeLookup = new Int2ObjectHashMap<>(keepIds.size(), 0.8f);
-        SimpleBitSet shards = new SimpleBitSet(supersetIndexes.length);
+        LargeBitSet shards = new LargeBitSet(supersetIndexes.length);
         for (Id id : keepIds)
         {
             NodeInfo info = this.nodeLookup.get(id.id);
@@ -377,7 +377,7 @@ public class Topology
             return this;
 
         boolean reselectNodeOwnership = selectNodeOwnership == SLICE;
-        SimpleBitSet nodes = new SimpleBitSet(nodeIds.size());
+        LargeBitSet nodes = new LargeBitSet(nodeIds.size());
         Int2ObjectHashMap<NodeInfo> nodeLookup = reselectNodeOwnership ? new Int2ObjectHashMap<>(nodes.size(), 0.8f) : this.nodeLookup;
         for (int shardIndex : newSubset)
         {

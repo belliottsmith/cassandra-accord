@@ -18,7 +18,7 @@
 
 package accord.utils;
 
-public class ImmutableBitSet extends SimpleBitSet
+public class ImmutableBitSet extends LargeBitSet
 {
     public static class SerializationSupport
     {
@@ -45,12 +45,12 @@ public class ImmutableBitSet extends SimpleBitSet
         super(size, set);
     }
 
-    public ImmutableBitSet(SimpleBitSet copy)
+    public ImmutableBitSet(LargeBitSet copy)
     {
         super(copy);
     }
 
-    public ImmutableBitSet(SimpleBitSet copy, boolean share)
+    public ImmutableBitSet(LargeBitSet copy, boolean share)
     {
         super(copy, share);
     }
