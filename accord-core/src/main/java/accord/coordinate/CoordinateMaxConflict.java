@@ -18,19 +18,19 @@
 
 package accord.coordinate;
 
-import java.util.Collection;
 import java.util.function.BiConsumer;
 
 import accord.api.VisibleForImplementation;
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
-import accord.messages.Callback;
 import accord.messages.GetMaxConflict;
 import accord.messages.GetMaxConflict.GetMaxConflictOk;
 import accord.primitives.FullRoute;
 import accord.primitives.Routables;
 import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
@@ -43,7 +43,7 @@ import static accord.coordinate.tracking.RequestStatus.Success;
  * Calculate the maximum TxnId that could have been agreed before this operation started
  */
 @VisibleForImplementation
-public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp, GetMaxConflictOk>
+public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp, GetMaxConflictOk, Void>
 {
     final QuorumTracker tracker;
     Timestamp maxConflict;
@@ -56,7 +56,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
 
     private CoordinateMaxConflict(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, long executionEpoch, Topologies topologies, BiConsumer<Timestamp, Throwable> callback)
     {
-        super(node, executor, route, null, topologies, callback);
+        super(node, executor, route, TxnId.NONE, topologies, callback);
         this.maxConflict = Timestamp.NONE;
         this.executionEpoch = executionEpoch;
         this.tracker = new QuorumTracker(topologies);
@@ -84,13 +84,14 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     }
 
     @Override
-    void contact(Collection<Node.Id> nodes, Topologies topologies, Callback<GetMaxConflictOk> callback)
+    void start()
     {
-        node.send(nodes, to -> new GetMaxConflict(to, topologies, route, executionEpoch), executor, callback);
+        super.start();
+        contact(to -> new GetMaxConflict(to, topologies, route, executionEpoch));
     }
 
     @Override
-    void onSuccessInternal(Node.Id from, GetMaxConflictOk reply)
+    void onSuccessInternal(Node.Id from, int fromIndex, GetMaxConflictOk reply)
     {
         maxConflict = Timestamp.max(reply.maxConflict, maxConflict);
         executionEpoch = Math.max(executionEpoch, reply.latestEpoch);
@@ -100,16 +101,17 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     }
 
     @Override
-    void onFailureInternal(Node.Id from, Throwable failure)
+    void onFailureInternal(Node.Id from, int fromIndex, Throwable failure)
     {
+        recordFailure(failure);
         if (tracker.recordFailure(from) == Failed)
-            setFailure(failure);
+            finishOnFailure();
     }
 
     @Override
     void onNewEpochTopologyMismatch(TopologyMismatch mismatch)
     {
-        setFailure(mismatch);
+        finishWithFailureOverride(mismatch);
     }
 
     @Override
@@ -121,6 +123,12 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onPreAccepted(Topologies topologies)
     {
-        callback.accept(maxConflict, null);
+        finishAndInvokeCallback(maxConflict, null);
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
     }
 }

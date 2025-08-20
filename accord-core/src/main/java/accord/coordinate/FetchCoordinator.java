@@ -19,9 +19,7 @@
 package accord.coordinate;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import accord.api.DataStore.StartingRangeFetch;
 import accord.api.DataStore.FetchRanges;
@@ -29,8 +27,11 @@ import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
+import accord.primitives.Unseekables;
 import accord.topology.Topology;
 import accord.utils.Invariants;
+import accord.utils.SortedList;
+import accord.utils.SortedListMap;
 
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -42,7 +43,7 @@ import static accord.utils.Invariants.illegalState;
  * This coordinates both the fetching of data, and the point-in-time that data will be safe to read,
  * i.e. some point-in-time known to occur after any entry in the data that was fetched.
  */
-public abstract class FetchCoordinator
+public abstract class FetchCoordinator extends AbstractSimpleCoordination
 {
     /**
      * For each node, maintain what ranges have been requested, successfully retrieved or not, and whether we are
@@ -129,16 +130,13 @@ public abstract class FetchCoordinator
         }
     }
 
-    protected final Node node;
-    protected final SequentialAsyncExecutor executor;
     protected final Ranges ranges;
     protected final SyncPoint syncPoint;
     // provided to us, and manages the safe-to-read state
     private final FetchRanges fetchRanges;
-    private boolean isDone;
     private Throwable failures = null;
 
-    final Map<Node.Id, State> stateMap = new HashMap<>();
+    final SortedListMap<Node.Id, State> stateMap;
     final List<State> states = new ArrayList<>();
 
     private Ranges success = Ranges.EMPTY;
@@ -147,18 +145,21 @@ public abstract class FetchCoordinator
 
     protected FetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, FetchRanges fetchRanges)
     {
-        this.node = node;
-        this.executor = executor;
+        super(node, executor, syncPoint.syncId);
         this.ranges = ranges;
         this.syncPoint = syncPoint;
         this.fetchRanges = fetchRanges;
         // TODO (expected): prioritise nodes that were members in the "prior" epoch also
         //  (by prior, we mean the prior epoch affecting ownership of this shard, not the prior numerical epoch)
         Topology topology = node.topology().forEpoch(ranges, syncPoint.syncId.epoch(), SHARE).get(0);
-        for (Node.Id id : topology.nodes())
+        this.stateMap = new SortedListMap<>(topology.nodes(), State[]::new);
+        for (int i = 0 ; i < stateMap.domainSize() ; ++i)
         {
-            if (!id.equals(node.id()))
-                stateMap.put(id, new State(id, topology.rangesForNode(id), ranges));
+            Node.Id id = stateMap.getKey(i);
+            if (id.equals(node.id()))
+                continue;
+
+            stateMap.putAtIndex(i, new State(id, topology.rangesForNode(id), ranges));
         }
         states.addAll(stateMap.values());
         needed = ranges;
@@ -190,8 +191,10 @@ public abstract class FetchCoordinator
      */
     protected abstract void onDone(Ranges success, Throwable failure);
 
+    @Override
     protected void start()
     {
+        super.start();
         trySendMore();
     }
 
@@ -206,21 +209,21 @@ public abstract class FetchCoordinator
             return;
 
         // some portion of the range is completely unavailable
-        isDone = true;
-        failures = FailureAccumulator.createFailure(failures, syncPoint.syncId, null, needed);
+        setDone();
+        failures = FailureAccumulator.fail(node.agent(), failures, syncPoint.syncId, null, needed);
         onDone(success, failures);
     }
 
     protected void exhausted(Ranges exhausted)
     {
-        fetchRanges.fail(exhausted, new Exhausted(syncPoint.syncId, null, exhausted));
+        fetchRanges.fail(exhausted, Exhausted.exhausted(node.agent(), syncPoint.syncId, null, exhausted));
     }
 
     // this method can be completely overridden by an implementing class, which may simply call contact()
     // it must only ensure needed.isEmpty() (if possible)
     protected Ranges trySendMore(List<State> states, Ranges needed)
     {
-        // TODO (soon, required) : need to correctly handle the cluster having fewer nodes than replication factor
+        // TODO (required) : need to correctly handle the cluster having fewer nodes than replication factor
         for (State state : states)
         {
             Ranges contact = state.uncontacted.slice(needed, Minimal);
@@ -245,7 +248,7 @@ public abstract class FetchCoordinator
      */
     protected StartingRangeFetch starting(Node.Id to, Ranges ranges)
     {
-        if (isDone)
+        if (isDone())
             throw illegalState();
 
         // TODO (expected): should we cancel those we have superseded?
@@ -254,7 +257,7 @@ public abstract class FetchCoordinator
 
     protected void success(Node.Id to, Ranges ranges)
     {
-        if (isDone)
+        if (isDone())
             return;
 
         State state = stateMap.get(to);
@@ -269,14 +272,14 @@ public abstract class FetchCoordinator
         success = success.with(ranges);
         if (success.containsAll(this.ranges))
         {
-            isDone = true;
+            setDone();
             onDone(success, null);
         }
     }
 
     protected void slow(Node.Id to, Ranges ranges)
     {
-        if (isDone)
+        if (isDone())
             return;
 
         State state = stateMap.get(to);
@@ -290,7 +293,7 @@ public abstract class FetchCoordinator
 
     protected void unavailable(Node.Id to, Ranges ranges)
     {
-        if (isDone)
+        if (isDone())
             return;
 
         State state = stateMap.get(to);
@@ -308,7 +311,7 @@ public abstract class FetchCoordinator
 
     protected void fail(Node.Id to, Ranges ranges, Throwable failure)
     {
-        if (isDone)
+        if (isDone())
             return;
 
         failures = FailureAccumulator.append(failures, failure);
@@ -317,7 +320,7 @@ public abstract class FetchCoordinator
     }
     protected void fail(Node.Id to, Throwable failure)
     {
-        if (isDone)
+        if (isDone())
             return;
 
         failures = FailureAccumulator.append(failures, failure);
@@ -331,5 +334,28 @@ public abstract class FetchCoordinator
         // TODO (desired): we don't need to fail all requests to this node, just the one we have a failure response for
         state.fail();
         trySendMore();
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return syncPoint.route;
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.Bootstrap;
+    }
+
+    @Override
+    public SortedList<Node.Id> nodes()
+    {
+        return stateMap.keySet();
+    }
+    @Override
+    public SortedListMap<Node.Id, ?> replies()
+    {
+        return stateMap;
     }
 }

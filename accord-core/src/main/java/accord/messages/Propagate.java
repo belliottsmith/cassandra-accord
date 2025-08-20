@@ -234,11 +234,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             currentlyKnown = currentlyKnown.with(FullRoute);
 
         PartialTxn partialTxn = null;
-        if (found.hasDefinition())
+        if (found.hasDefinition() && !participants.stillOwns().isEmpty())
             partialTxn = this.partialTxn.intersecting(participants.stillOwns(), true).reconstitutePartial(participants.stillOwns());
 
         PartialDeps stableDeps = null;
-        if (found.hasDecidedDeps())
+        if (found.hasDecidedDeps() && !participants.stillTouches().isEmpty())
             stableDeps = this.stableDeps.intersecting(participants.stillTouches()).reconstitutePartial(participants.stillTouches());
 
         // TODO (required): hasAnyFullyTruncated could hit edge cases where two replicas are behind and cannot catch up and each participate in the others' result set
@@ -542,7 +542,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             case Success:
             case RaceWithRecovery:
                 return;
-            case Insufficient: throw illegalState("Should have enough information");
+            case InsufficientEpochs:
+                // TODO (expected): do we definitely guarantee we have enough here?
+                //  but may anyway not be safe to continue if we haven't
+            case Insufficient:
+                throw illegalState("Should have enough information");
         }
     }
 

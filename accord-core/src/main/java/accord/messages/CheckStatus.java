@@ -25,7 +25,6 @@ import accord.api.RoutingKey;
 import accord.coordinate.Infer.InvalidIf;
 import accord.local.Command;
 import accord.local.Commands;
-import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
@@ -36,8 +35,8 @@ import accord.primitives.Status;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
 import accord.primitives.KnownMap;
+import accord.primitives.Status.Durability.HasDecision;
 import accord.primitives.Status.Durability.HasOutcome;
-import accord.primitives.Status.Durability.HasPhase;
 import accord.primitives.WithQuorum;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
@@ -75,9 +74,9 @@ import accord.utils.async.Cancellable;
 import static accord.primitives.Status.Durability.HasOutcome.None;
 import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.primitives.Status.NotDefined;
-import static accord.primitives.Status.Durability.HasPhase.DurablyCommitted;
-import static accord.primitives.Status.Durability.HasPhase.DurablyStable;
-import static accord.primitives.Status.Durability.HasPhase.FastPathDecided;
+import static accord.primitives.Status.Durability.HasDecision.DurablyCommitted;
+import static accord.primitives.Status.Durability.HasDecision.DurablyStable;
+import static accord.primitives.Status.Durability.HasDecision.FastPathDecided;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
 import static accord.messages.TxnRequest.computeScope;
@@ -160,7 +159,9 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         if (bumpBallot != null && bumpBallot.compareTo(command.promised()) > 0)
             safeCommand.updatePromised(bumpBallot);
 
-        boolean isCoordinating = isCoordinating(node, command);
+        // for the moment we use this flag only to report that the initial coordinator is still active since we cannot infer progress by ballot;
+        // for all future attempts we rely on witnessing a new ballot and using its age to decide when we should attempt to take over
+        boolean isCoordinating = txnId.node.equals(node.id()) && command.promised().equals(Ballot.ZERO) && node.isCoordinatingWithBallot(txnId, Ballot.ZERO);
         Durability durability = command.durability();
         // unsafe to augment durability using DurableBefore, as DurableBefore can in theory get ahead of RedundantBefore
         Route<?> route = command.route();
@@ -228,11 +229,6 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         else if (saveStatus == SaveStatus.Erased && !participants.owns().isEmpty())
             invalidIf = IfUncommitted;
         return invalidIf;
-    }
-
-    private static boolean isCoordinating(Node node, Command command)
-    {
-        return node.isCoordinating(command.txnId(), command.promised());
     }
 
     @Override
@@ -356,15 +352,15 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
                     HasOutcome addShard = HasOutcome.max(minKnown.outcome().isOrWasApply() ? Quorum : None, finished.durability.shard());
                     boolean upgradeAll = Route.isFullRoute(finished.route) && queried.containsAll(finished.route);
                     HasOutcome addAllShards = None;
-                    HasPhase addPhase = HasPhase.None;
+                    HasDecision addDecision = HasDecision.None;
                     if (upgradeAll)
                     {
                         addAllShards = addShard;
-                        if (minKnown.is(DepsKnown)) addPhase = DurablyStable;
-                        else if (minKnown.is(ExecuteAtKnown)) addPhase = DurablyCommitted;
-                        else if (minKnown.is(ExecuteAtProposed)) addPhase = FastPathDecided;
+                        if (minKnown.is(DepsKnown)) addDecision = DurablyStable;
+                        else if (minKnown.is(ExecuteAtKnown)) addDecision = DurablyCommitted;
+                        else if (minKnown.is(ExecuteAtProposed)) addDecision = FastPathDecided;
                     }
-                    finished = finished.merge((Durability.get(addPhase, addShard, addAllShards, minKnown.isInvalidated())));
+                    finished = finished.merge((Durability.get(addDecision, addShard, addAllShards, minKnown.isInvalidated())));
                 }
                 // TODO (required): should we require that we contacted the coordination epoch?
                 if (invalidIf == IfUncommitted || previouslyKnownToBeInvalidIf == IfUncommitted)

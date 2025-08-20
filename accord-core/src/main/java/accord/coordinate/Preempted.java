@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import javax.annotation.Nullable;
 
+import accord.api.Agent;
 import accord.api.RoutingKey;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -30,12 +31,18 @@ import accord.utils.Invariants;
  */
 public class Preempted extends CoordinationFailed
 {
-    public Preempted(TxnId txnId, @Nullable RoutingKey homeKey)
+    public static Preempted preempted(Agent agent, TxnId txnId, @Nullable RoutingKey homeKey)
+    {
+        agent.coordinatorEvents().onPreempted(txnId);
+        return new Preempted(txnId, homeKey);
+    }
+
+    private Preempted(TxnId txnId, @Nullable RoutingKey homeKey)
     {
         super(txnId, homeKey);
     }
 
-    Preempted(TxnId txnId, @Nullable RoutingKey homeKey, Preempted cause)
+    private Preempted(TxnId txnId, @Nullable RoutingKey homeKey, Preempted cause)
     {
         super(txnId, homeKey, cause);
     }

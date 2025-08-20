@@ -152,6 +152,12 @@ public class InvalidationTracker extends AbstractTracker<InvalidationTracker.Inv
 
             return NoChange;
         }
+
+        @Override
+        public String summarise()
+        {
+            return promisesOrPartPromises + "/" + shard.rf;
+        }
     }
 
     private int promisedShard = -1;

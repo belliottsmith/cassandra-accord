@@ -196,13 +196,13 @@ public class Cluster
         @Override
         public Scheduled recurring(Runnable run, long delay, TimeUnit units)
         {
-            return recurring(run, () -> delay, units);
+            return recurring(run, constant(delay), units);
         }
 
         @Override
         public Scheduled once(Runnable run, long delay, TimeUnit units)
         {
-            RecurringPendingRunnable result = new RecurringPendingRunnable(source, null, run, () -> delay, units, false);
+            RecurringPendingRunnable result = new RecurringPendingRunnable(source, null, run, constant(delay), units, false);
             pending.add(result, delay, units);
             return result;
         }
@@ -210,7 +210,7 @@ public class Cluster
         @Override
         public Scheduled selfRecurring(Runnable run, long delay, TimeUnit units)
         {
-            RecurringPendingRunnable result = new RecurringPendingRunnable(source, null, run, () -> delay, units, true);
+            RecurringPendingRunnable result = new RecurringPendingRunnable(source, null, run, constant(delay), units, true);
             pending.add(result, delay, units);
             return result;
         }
@@ -226,6 +226,7 @@ public class Cluster
         {
             Cluster.this.onDone(run);
         }
+
     }
 
     final Map<MessageType, Stats> statsMap = new HashMap<>();
@@ -1285,6 +1286,7 @@ public class Cluster
 
     public List<BlockingTransaction> findTransitivelyBlocking(boolean onlyIfOwned, TxnId txnId)
     {
+        Set<TxnId> detectLoop = new HashSet<>();
         BlockingTransaction txn = find(onlyIfOwned, txnId, null, null);
         if (txn == null)
             return null;
@@ -1292,23 +1294,21 @@ public class Cluster
         List<BlockingTransaction> result = new ArrayList<>();
         while (true)
         {
-            result.add(txn);
-            if (txn.command.saveStatus().compareTo(SaveStatus.Stable) < 0)
-                return result;
-
-            if (txn.blockedOn == null)
+            if (txn.blockedOn == null || txn.command.saveStatus().compareTo(SaveStatus.Stable) < 0)
             {
                 // look for another copy that is still blocked, and continue from there
-                txn = find(txn.txnId, null, null);
-                if (txn.blockedOn == null)
-                    return result;
+                BlockingTransaction alt = find(txn.txnId, SaveStatus.Stable, null);
+                if (alt != null)
+                    txn = alt;
             }
+
+            result.add(txn);
+            if (!detectLoop.add(txn.txnId) || txn.blockedOn == null || txn.command.saveStatus().compareTo(SaveStatus.Stable) < 0)
+                return result;
 
             Command blockedOn = txn.blockedOn;
             GlobalCommand command = txn.commandStore.unsafeCommands().get(blockedOn.txnId());
-            if (command == null)
-                return result;
-            else if (command.value().saveStatus().compareTo(SaveStatus.Applied) < 0)
+            if (command != null && command.value().saveStatus().compareTo(SaveStatus.Applied) < 0)
                 txn = toBlocking(command.value(), txn.commandStore);
             else
                 txn = find(txn.blockedOn.txnId(), null, null);
@@ -1323,7 +1323,7 @@ public class Cluster
     public BlockingTransaction findMin(boolean onlyIfOwned, @Nullable SaveStatus minSaveStatus, @Nullable SaveStatus maxSaveStatus, Predicate<TxnId> testTxnId)
     {
         return find(onlyIfOwned, minSaveStatus, maxSaveStatus, testTxnId, (min, test) -> {
-            int c = -1;
+            int c;
             if (min == null || (c = test.txnId.compareTo(min.txnId)) <= 0 && (c < 0 || test.command.saveStatus().compareTo(min.command.saveStatus()) < 0))
                 min = test;
             return min;
@@ -1411,4 +1411,29 @@ public class Cluster
         return new BlockingTransaction(command.txnId(), command, store, blockedOn, blockedVia);
     }
 
+    public static class ConstantLongSupplier implements LongSupplier
+    {
+        final long v;
+
+        public ConstantLongSupplier(long v)
+        {
+            this.v = v;
+        }
+
+        @Override
+        public long getAsLong()
+        {
+            return v;
+        }
+
+        @Override
+        public String toString()
+        {
+            return "" + v;
+        }
+    }
+    private LongSupplier constant(long delay)
+    {
+        return new ConstantLongSupplier(delay);
+    }
 }

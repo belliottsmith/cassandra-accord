@@ -18,6 +18,7 @@
 
 package accord.coordinate;
 
+import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
 import accord.api.Tracing;
@@ -39,7 +40,7 @@ import static accord.utils.Invariants.illegalState;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public abstract class CheckShards<U extends Participants<?>> extends ReadCoordinator<CheckStatusReply>
+public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoordinator<R, CheckStatusReply> implements Coordination
 {
     final U query;
 
@@ -57,24 +58,24 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     protected boolean truncated;
 
     // srcEpoch is either txnId.epoch() or executeAt.epoch()
-    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, BiConsumer<? super R, Throwable> callback)
     {
-        this(node, executor, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf);
+        this(node, executor, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf, callback);
     }
 
-    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, @Nullable Tracing tracing)
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, BiConsumer<? super R, Throwable> callback, @Nullable Tracing tracing)
     {
-        this(node, executor, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf, tracing);
+        this(node, executor, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf, callback, tracing);
     }
 
-    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf)
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, BiConsumer<? super R, Throwable> callback)
     {
-        this(node, executor, txnId, query, srcEpoch, includeInfo, bumpBallot, previouslyKnownToBeInvalidIf, null);
+        this(node, executor, txnId, query, srcEpoch, includeInfo, bumpBallot, previouslyKnownToBeInvalidIf, callback, null);
     }
 
-    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, @Nullable Tracing tracing)
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, BiConsumer<? super R, Throwable> callback, @Nullable Tracing tracing)
     {
-        super(node, executor, topologyFor(node, txnId, query, srcEpoch), txnId);
+        super(node, executor, topologyFor(node, txnId, query, srcEpoch), txnId, callback);
         this.sourceEpoch = srcEpoch;
         this.query = query;
         this.includeInfo = includeInfo;
@@ -129,7 +130,7 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
             {
                 default: throw new AssertionError(String.format("Unexpected status: %s", reply));
                 case NotOwned:
-                    finishOnFailure(illegalState("Submitted command to a replica that did not own the range"), true);
+                    finishWithFailureOverride(illegalState("Submitted command to a replica that did not own the range"));
                     return Action.Aborted;
             }
         }
@@ -138,7 +139,28 @@ public abstract class CheckShards<U extends Participants<?>> extends ReadCoordin
     @Override
     protected void finishOnExhaustion()
     {
-        if (merged != null && merged.map.hasFullyTruncated(query)) finishOnFailure(new Truncated(txnId, null), false);
+        if (merged != null && merged.map.hasFullyTruncated(query)) finishWithFailure(new Truncated(txnId, null));
         else super.finishOnExhaustion();
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return query;
+    }
+
+    @Override
+    public @Nullable Ballot ballot()
+    {
+        return bumpBallot;
+    }
+
+    @Override
+    public String describe()
+    {
+        return "sourceEpoch=" + sourceEpoch +
+               ", include=" + includeInfo +
+               ", ballot=" + bumpBallot +
+               ", previouslyKnownToBeInvalidIf=" + previouslyKnownToBeInvalidIf;
     }
 }

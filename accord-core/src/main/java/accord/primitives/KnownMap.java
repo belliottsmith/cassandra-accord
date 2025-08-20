@@ -27,6 +27,10 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.utils.ReducingRangeMap;
 
+import static accord.primitives.Known.Definition.DefinitionErased;
+import static accord.primitives.Known.Definition.DefinitionKnown;
+import static accord.primitives.Known.KnownDeps.DepsErased;
+import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.utils.SortedArrays.Search.FAST;
 
 public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
@@ -238,8 +242,23 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
 
     public Known knownFor(Routables<?> owns, Routables<?> touches)
     {
-        Known known = owns.isEmpty() ? knownForAny() : validForAll.atLeast(foldlWithDefault(owns, KnownMap::reduceKnownFor, MinAndMaxKnown.Nothing, null, i -> false));
-        if (owns != touches && !touches.isEmpty())
+        Known known;
+        if (owns.isEmpty())
+        {
+            known = knownForAny();
+            if (known.is(DefinitionErased))
+                known = known.with(DefinitionKnown);
+        }
+        else
+        {
+             known = validForAll.atLeast(foldlWithDefault(owns, KnownMap::reduceKnownFor, MinAndMaxKnown.Nothing, null, i -> false));
+        }
+        if (touches.isEmpty())
+        {
+            if (known.is(DepsErased))
+                known = known.with(DepsKnown);
+        }
+        else if (owns != touches)
         {
             Known knownDeps = validForAll.atLeast(foldlWithDefault(touches, KnownMap::reduceKnownFor, MinAndMaxKnown.Nothing, null, i -> false));
             known = known.with(knownDeps.deps());

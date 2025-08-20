@@ -18,6 +18,9 @@
 
 package accord.impl.basic;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -30,7 +33,7 @@ import java.util.function.Supplier;
 
 import accord.burn.random.FrequentLargeRange;
 import accord.impl.basic.DelayedCommandStores.DelayedCommandStore.DelayedTask;
-import accord.utils.DefaultRandom;
+import accord.utils.Invariants;
 import accord.utils.RandomSource;
 
 import static accord.impl.basic.RecurringPendingRunnable.isRecurring;
@@ -241,16 +244,15 @@ public class RandomDelayQueue implements PendingQueue
     {
         final Pending[] pendings = new Pending[2];
         final long[] delays = new long[2];
-        final long seed;
         int waiting = 0;
 
         class ReconcilingQueue extends MonitoringQueue
         {
             final int id;
 
-            public ReconcilingQueue(long seed, int id)
+            public ReconcilingQueue(RandomSource random, int id)
             {
-                super(new DefaultRandom(seed));
+                super(random);
                 this.id = id;
             }
 
@@ -307,14 +309,75 @@ public class RandomDelayQueue implements PendingQueue
             }
         }
 
-        public ReconcilingQueue get(boolean first)
+        public ReconcilingQueue get(boolean first, RandomSource random)
         {
-            return new ReconcilingQueue(seed, first ? 0 : 1);
+            return new ReconcilingQueue(random, first ? 0 : 1);
         }
 
-        public ReconcilingQueueFactory(long seed)
+        public ReconcilingQueueFactory()
         {
-            this.seed = seed;
         }
+    }
+
+    public static class RecordingQueue extends MonitoringQueue
+    {
+        final DataOutputStream out;
+
+        synchronized public void added(Pending item, long delay)
+        {
+            try
+            {
+                out.writeLong(delay);
+                out.writeUTF(print(item));
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public RecordingQueue(DataOutputStream out, RandomSource random)
+        {
+            super(random);
+            this.out = out;
+        }
+    }
+
+    public static class ReplayQueue extends MonitoringQueue
+    {
+        final DataInputStream in;
+
+        synchronized public void added(Pending item, long delay)
+        {
+            try
+            {
+                long testDelay = in.readLong();
+                String testString = in.readUTF();
+                Invariants.require(testDelay == delay);
+                Invariants.require(testString.equals(print(item)));
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public ReplayQueue(DataInputStream in, RandomSource random)
+        {
+            super(random);
+            this.in = in;
+        }
+    }
+
+
+    private static String print(Pending pending)
+    {
+        if (pending instanceof Packet)
+            return pending.toString();
+        if (pending instanceof DelayedTask)
+            return ((DelayedTask<?>) pending).owner().toString();
+        if (pending instanceof RecurringPendingRunnable && ((RecurringPendingRunnable) pending).delay instanceof Cluster.ConstantLongSupplier)
+            return ((RecurringPendingRunnable) pending).delay.toString();
+        return "";
     }
 }

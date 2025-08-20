@@ -83,6 +83,12 @@ public class AwaitTracker extends AbstractTracker<AwaitTracker.AwaitShardTracker
         {
             return inFlight == 0 && notReady == 0;
         }
+
+        @Override
+        public String summarise()
+        {
+            return "(ready=" + ready + ",notReady=" + notReady + ",inFlight=" + inFlight + ")/" + shard.rf;
+        }
     }
 
     public AwaitTracker(Topologies topologies)

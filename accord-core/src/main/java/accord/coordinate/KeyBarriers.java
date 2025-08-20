@@ -44,7 +44,6 @@ import accord.utils.async.AsyncResults;
 
 import javax.annotation.Nullable;
 
-import static accord.api.ProgressLog.BlockedUntil.IsApplied;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
 import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
@@ -54,6 +53,7 @@ import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
 import static accord.local.durability.DurabilityService.SyncLocal.Self;
 import static accord.local.durability.DurabilityService.SyncRemote.NoRemote;
 import static accord.local.durability.DurabilityService.SyncRemote.Quorum;
+import static accord.messages.Await.Until.IsApplied;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Txn.Kind.Ws;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -189,6 +189,6 @@ public class KeyBarriers
     {
         RoutingKeys keys = RoutingKeys.of(key);
         Topologies topologies = node.topology().forEpoch(keys, txnId.epoch(), SHARE);
-        return SynchronousAwait.awaitQuorum(node, executor, topologies, txnId, IsApplied, true, keys);
+        return SynchronousAwait.awaitQuorum(node, executor, topologies, txnId, keys, IsApplied, true);
     }
 }

@@ -620,7 +620,7 @@ public class AccordGens
             Deps deps = depsGen.next(rs);
             if (deps.isEmpty()) return Command.WaitingOn.empty(Domain.Key);
             int size = deps.rangeDeps.txnIdCount() + deps.keyDeps.keys().size();
-            SimpleBitSet set = new SimpleBitSet(size);
+            LargeBitSet set = new LargeBitSet(size);
             int keyOffset = deps.rangeDeps.txnIdCount();
             for (int i = 0; i < size; i++)
             {

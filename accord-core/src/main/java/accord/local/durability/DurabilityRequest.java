@@ -28,7 +28,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Timeouts;
-import accord.coordinate.ExecuteSyncPoint;
 import accord.local.Node;
 import accord.local.durability.DurabilityService.SyncLocal;
 import accord.local.durability.DurabilityService.SyncRemote;
@@ -39,7 +38,6 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.utils.Invariants;
 import accord.utils.async.AsyncResults;
 
 import static accord.local.durability.DurabilityService.SyncRemote.All;
@@ -55,7 +53,6 @@ public class DurabilityRequest
     {
         final long requestedAt;
         long lastAttemptAt;
-        ExecuteSyncPoint lastAttempt;
         long durableAt;
         int attempts;
 
@@ -94,11 +91,9 @@ public class DurabilityRequest
         this.timeoutAt = timeoutAt;
     }
 
-    public synchronized void reportAttempt(TxnId txnId, long now, ExecuteSyncPoint attempt)
+    public synchronized void reportAttempt(TxnId txnId, long now)
     {
         DurableEvents e = events.get(txnId);
-        if (Invariants.debug())
-            e.lastAttempt = attempt;
         e.lastAttemptAt = now;
         e.attempts++;
     }

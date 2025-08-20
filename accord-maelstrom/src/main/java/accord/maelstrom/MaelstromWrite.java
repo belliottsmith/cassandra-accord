@@ -25,9 +25,9 @@ import accord.primitives.PartialTxn;
 import accord.primitives.Seekable;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.primitives.Writes;
 import accord.utils.Timestamped;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 
 import java.util.TreeMap;
 
@@ -39,6 +39,6 @@ public class MaelstromWrite extends TreeMap<Key, Value> implements Write
         MaelstromStore dataStore = (MaelstromStore) safeStore.dataStore();
         if (containsKey(key))
             dataStore.data.merge((Key)key, new Timestamped<>(executeAt, get(key), Value::toString), Timestamped::merge);
-        return Writes.SUCCESS;
+        return AsyncChains.success(null);
     }
 }

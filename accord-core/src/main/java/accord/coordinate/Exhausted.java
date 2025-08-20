@@ -21,6 +21,7 @@ package accord.coordinate;
 import java.util.Collection;
 import javax.annotation.Nullable;
 
+import accord.api.Agent;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.primitives.Ranges;
@@ -35,12 +36,18 @@ public class Exhausted extends CoordinationFailed
     final @Nullable Ranges failedRanges;
     final @Nullable Collection<Node.Id> failedNodes;
 
-    public Exhausted(TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges failedRanges)
+    public static Exhausted exhausted(Agent agent, @Nullable TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges failedRanges)
     {
-        this(txnId, homeKey, failedRanges, null);
+        return exhausted(agent, txnId, homeKey, failedRanges, null);
     }
 
-    public Exhausted(TxnId txnId, @Nullable RoutingKey homeKey, Ranges failedRanges, @Nullable Collection<Node.Id> failedNodes)
+    public static Exhausted exhausted(Agent agent, @Nullable TxnId txnId, @Nullable RoutingKey homeKey, @Nullable Ranges failedRanges, @Nullable Collection<Node.Id> failedNodes)
+    {
+        agent.coordinatorEvents().onExhausted(txnId);
+        return new Exhausted(txnId, homeKey, failedRanges, failedNodes);
+    }
+
+    private Exhausted(TxnId txnId, @Nullable RoutingKey homeKey, Ranges failedRanges, @Nullable Collection<Node.Id> failedNodes)
     {
         super(txnId, homeKey, getMessage(txnId, failedRanges, failedNodes));
         this.failedRanges = failedRanges;

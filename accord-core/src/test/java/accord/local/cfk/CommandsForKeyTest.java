@@ -1095,6 +1095,12 @@ public class CommandsForKeyTest
         }
 
         @Override
+        public boolean isSlowCoordinator(long elapsed, TimeUnit units, TxnId txnId, int attempt)
+        {
+            return false;
+        }
+
+        @Override
         public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil blockedUntil, TimeUnit units)
         {
             return 0;

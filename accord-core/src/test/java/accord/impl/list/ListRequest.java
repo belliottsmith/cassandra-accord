@@ -37,6 +37,7 @@ import accord.impl.basic.Packet;
 import accord.impl.basic.SimulatedFault;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -84,14 +85,12 @@ public class ListRequest implements Request
         }
     }
 
-    static class CheckOnResult extends CheckShards
+    static class CheckOnResult extends CheckShards<Outcome, Participants<?>>
     {
-        final BiConsumer<Outcome, Throwable> callback;
         int count = 0;
         protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback)
         {
-            super(node, node.someSequentialExecutor(), txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All, null, NotKnownToBeInvalid);
-            this.callback = callback;
+            super(node, node.someSequentialExecutor(), txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All, null, NotKnownToBeInvalid, callback);
         }
 
         static void checkOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback)
@@ -121,6 +120,7 @@ public class ListRequest implements Request
         @Override
         protected void onDone(CheckShards.Success done, Throwable failure)
         {
+            BiConsumer<? super Outcome, Throwable> callback = takeCallback();
             if (failure instanceof Exhausted) callback.accept(Outcome.Lost, null);
             else if (failure != null) callback.accept(null, failure);
             else if (merged.maxKnowledgeSaveStatus.is(Status.Invalidated)) callback.accept(Outcome.Invalidated, null);
@@ -135,6 +135,12 @@ public class ListRequest implements Request
         protected boolean isSufficient(CheckStatusOk ok)
         {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CoordinationKind kind()
+        {
+            return CoordinationKind.Other;
         }
     }
 

@@ -1414,6 +1414,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
         visitor.visitMaxAppliedHlc(maxUniqueHlc);
 
         int end = insertPos(startedBefore);
+        // TODO (expected): revisit this behaviour to allow us to improve performance by skipping to minUndecidedId when
+        //  we have a durablyDecidedId
         // We only filter durable transactions less than BOTH the txnId and executeAt of our max preceding write.
         // This is to avoid the following pre-bootstrap edge case, so this filtering can be made stricter in future:
         // A replica is bootstrapping so that includes all transactions before the bootstrap point, but our latest
@@ -1423,6 +1425,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
         // the range is marked as durable. If now the replica then witnesses one of these transactions it will
         // consider that they must be invalidated, as it had not witnessed them, they were not pre-bootstrap and
         // they were pre-RX.
+        // NOTE: One approach we could adopt for BOOTSTRAP ONLY would be to treat pre-bootstrap within a period
+        //       the replica was participating in consensus differently to the period for which they weren't.
+        //       That is, pre-bootstrap-or-stale becomes no-consensus-log, and pre-bootstrap only means no-data
+        //       (and really can be represented entirely by safeToRead).
+        // HOWEVER: this would not help solve the actual stale+rebootstrap case, though perhaps this could be handled
+        //       differently with its own special casing.
         TxnInfo maxCommittedWriteBefore = NO_INFO;
         TxnInfo maxCommittedWriteForEpoch = NO_INFO;
         {

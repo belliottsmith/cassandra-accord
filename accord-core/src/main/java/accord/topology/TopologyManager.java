@@ -417,6 +417,9 @@ public class TopologyManager
          */
         public Ranges epochClosed(Ranges ranges, long epoch)
         {
+            if (epochs.length == 0)
+                return ranges;
+
             Invariants.requireArgument(epoch > 0);
             int i;
             if (epoch > currentEpoch)
@@ -448,6 +451,9 @@ public class TopologyManager
          */
         public Ranges epochRetired(Ranges ranges, long epoch)
         {
+            if (epochs.length == 0)
+                return ranges;
+
             Invariants.requireArgument(epoch > 0);
             int retiredIdx;
             if (epoch > currentEpoch)
@@ -568,7 +574,7 @@ public class TopologyManager
                 long nowMicros = manager.time.elapsed(MICROSECONDS);
                 WaitingForEpoch next;
                 while (null != (next = waiting.peek()) && (nextDeadlineMicros = next.deadlineMicros) <= nowMicros)
-                    waiting.poll().tryFailure(new EpochTimeout(epoch));
+                    waiting.poll().tryFailure(EpochTimeout.timeout(epoch, manager.agent));
             }
             if (nextDeadlineMicros > 0)
                 timeout = manager.timeouts.registerAt(this, nextDeadlineMicros, MICROSECONDS);

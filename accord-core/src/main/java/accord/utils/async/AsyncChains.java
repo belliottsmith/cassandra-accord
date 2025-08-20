@@ -52,100 +52,28 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 {
     private static final Logger logger = LoggerFactory.getLogger(AsyncChains.class);
 
-    static class Immediate<V> implements AsyncChain<V>
+    static class ImmediateSuccess<V> extends AsyncChains.Head<V>
     {
-        static class FailureHolder
-        {
-            final Throwable cause;
-            FailureHolder(Throwable cause)
-            {
-                this.cause = cause;
-            }
-        }
-
-        final private Object value;
-        private Immediate(V success) { this.value = success; }
-        private Immediate(Throwable failure) { this.value = new FailureHolder(failure); }
+        final private V success;
+        private ImmediateSuccess(V success) { this.success = success; }
 
         @Override
-        public <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper)
+        protected Cancellable start(BiConsumer<? super V, Throwable> callback)
         {
-            if (isFailed())
-                return (AsyncChain<T>) this;
-            try
-            {
-                return new Immediate<>(mapper.apply((V) value));
-            }
-            catch (Throwable t)
-            {
-                return new Immediate<>(t);
-            }
+            callback.accept(success, null);
+            return null;
         }
+    }
+
+    static class ImmediateFailure<V> extends AsyncChains.Head<V>
+    {
+        final private Throwable failure;
+        private ImmediateFailure(Throwable failure) { this.failure = failure; }
 
         @Override
-        public <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper)
+        protected Cancellable start(BiConsumer<? super V, Throwable> callback)
         {
-            if (isFailed())
-                return (AsyncChain<T>) this;
-            try
-            {
-                return mapper.apply((V) value);
-            }
-            catch (Throwable t)
-            {
-                return new Immediate<>(t);
-            }
-        }
-
-        @Override
-        public AsyncChain<V> recover(Function<? super Throwable, ? extends AsyncChain<V>> mapper)
-        {
-            if (!isFailed())
-                return this;
-
-            Throwable cause = ((FailureHolder) value).cause;
-            try
-            {
-                AsyncChain<V> recover = mapper.apply(cause);
-                return recover == null ? this : recover;
-            }
-            catch (Throwable t)
-            {
-                try
-                {
-                    cause.addSuppressed(t);
-                }
-                catch (Error rethrow)
-                {
-                    throw rethrow;
-                }
-                catch (Throwable ignore)
-                {
-                    // can't add as suppressed...
-                }
-                return new Immediate<>(cause);
-            }
-        }
-
-        private boolean isFailed()
-        {
-            return value != null && value.getClass() == FailureHolder.class;
-        }
-
-        @Override
-        public AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback)
-        {
-            if (value == null || value.getClass() != FailureHolder.class)
-                callback.accept((V) value, null);
-            else
-                callback.accept(null, ((FailureHolder)value).cause);
-            return this;
-        }
-
-        @Override
-        public Cancellable begin(BiConsumer<? super V, Throwable> callback)
-        {
-            invoke(callback);
+            callback.accept(null, failure);
             return null;
         }
     }
@@ -359,8 +287,8 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         @Override
         public void accept(I i, Throwable throwable)
         {
-            super.accept(i, throwable);
             callback.accept(i, throwable);
+            super.accept(i, throwable);
         }
     }
 
@@ -587,12 +515,12 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
 
     public static <V> AsyncChain<V> success(V success)
     {
-        return new Immediate<>(success);
+        return new ImmediateSuccess<>(success);
     }
 
     public static <V> AsyncChain<V> failure(Throwable failure)
     {
-        return new Immediate<>(failure);
+        return new ImmediateFailure<>(failure);
     }
 
     public static <V, T> AsyncChain<T> map(AsyncChain<V> chain, Function<? super V, ? extends T> mapper, Executor executor)

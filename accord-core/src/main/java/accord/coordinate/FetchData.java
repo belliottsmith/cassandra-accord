@@ -48,7 +48,7 @@ import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
  *
  * TODO (expected): avoid multiple command stores performing duplicate queries to other shards
  */
-public class FetchData extends CheckShards<Route<?>>
+public class FetchData extends CheckShards<FetchData.FetchResult, Route<?>>
 {
     public static class FetchResult
     {
@@ -128,7 +128,6 @@ public class FetchData extends CheckShards<Route<?>>
         return fetchData(node, query, maxRoute, request);
     }
 
-    final BiConsumer<? super FetchResult, Throwable> callback;
     /**
      * The epoch until which we want to persist any response for locally
      */
@@ -147,12 +146,11 @@ public class FetchData extends CheckShards<Route<?>>
     private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing tracing)
     {
         // TODO (desired, efficiency): restore behaviour of only collecting info if e.g. Committed or Executed
-        super(node, node.someSequentialExecutor(), txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf, tracing);
+        super(node, node.someSequentialExecutor(), txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf, callback, tracing);
         this.reportTo = reportTo;
         this.maxRoute = maxRoute;
         Invariants.requireArgument(routeWithHomeKey.contains(route.homeKey()), "route %s does not contain %s", routeWithHomeKey, route.homeKey());
         this.target = target;
-        this.callback = callback;
     }
 
     private static FetchData fetchData(Node node, Route<?> route, Route<?> maxRoute, FetchRequest req)
@@ -202,7 +200,7 @@ public class FetchData extends CheckShards<Route<?>>
         {
             if (tracing != null)
                 tracing.trace(null, "%s completed with failure %s", getClass().getSimpleName(), Tracing.format(failure));
-            callback.accept(null, failure);
+            invokeCallback(null, failure);
         }
         else
         {
@@ -210,7 +208,19 @@ public class FetchData extends CheckShards<Route<?>>
                 Invariants.require(isSufficient(merged), "Status %s is not sufficient", merged);
 
             // TODO (expected): should we automatically trigger a new fetch if we find executeAt but did not request enough information? would be more robust
-            Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query(), maxRoute, reportTo, target, (CheckStatusOkFull) merged, callback, tracing);
+            Propagate.propagate(node, txnId, previouslyKnownToBeInvalidIf, sourceEpoch, success.withQuorum, query(), maxRoute, reportTo, target, (CheckStatusOkFull) merged, takeCallback(), tracing);
         }
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.Fetch;
+    }
+
+    @Override
+    public String describe()
+    {
+        return super.describe() + ", target=" + target;
     }
 }

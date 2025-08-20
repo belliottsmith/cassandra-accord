@@ -35,7 +35,6 @@ import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.coordinate.CoordinationAdapter;
-import accord.coordinate.Timeout;
 import accord.impl.DefaultTimeouts;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.DefaultLocalListeners;
@@ -57,6 +56,7 @@ import accord.messages.Request;
 import accord.topology.Topology;
 import accord.utils.DefaultRandom;
 import accord.utils.ThreadPoolScheduler;
+import accord.utils.async.Cancellable;
 
 import static accord.utils.async.AsyncChains.awaitUninterruptibly;
 
@@ -99,7 +99,7 @@ public class Main
                 long now = nowSupplier.getAsLong();
                 callbacks.forEach((messageId, info) -> {
                     if (info.timeout < now && callbacks.remove(messageId, info))
-                        info.callback.onFailure(info.to, new Timeout(null, null));
+                        info.callback.onFailure(info.to, null);
                 });
             }, 1L, TimeUnit.SECONDS);
         }
@@ -124,12 +124,13 @@ public class Main
         }
 
         @Override
-        public void send(Id to, Request send, int attempt, AsyncExecutor ignored, Callback callback)
+        public Cancellable send(Id to, Request send, int attempt, AsyncExecutor ignored, Callback callback)
         {
             // Executor is ignored due to the fact callbacks are applied in a single thread already
             long messageId = nextMessageId.incrementAndGet();
             callbacks.put(messageId, new CallbackInfo(callback, to, nowSupplier.getAsLong() + 1000L));
             send(new Packet(self, to, messageId, send));
+            return () -> callbacks.remove(messageId);
         }
 
         @Override

@@ -21,7 +21,6 @@ package accord.messages;
 import java.util.Objects;
 
 import accord.api.AsyncExecutor;
-import accord.coordinate.Timeout;
 import accord.local.Node;
 
 public class SafeCallback<T extends Reply>
@@ -35,29 +34,29 @@ public class SafeCallback<T extends Reply>
         this.callback = Objects.requireNonNull(callback, "callback");
     }
 
-    public void success(Node.Id src, T reply)
+    public void success(Node.Id from, T reply)
     {
-        safeCall(src, reply, Callback::onSuccess);
+        safeCall(from, reply, Callback::onSuccess);
     }
 
-    public void slowResponse(Node.Id src)
+    public void slowResponse(Node.Id from)
     {
-        safeCall(src, null, (callback, id, ignore) -> callback.onSlowResponse(id));
+        safeCall(from, null, (callback, id, ignore) -> callback.onSlowResponse(id));
     }
 
-    public void failure(Node.Id to, Throwable t)
+    public void failure(Node.Id from, Throwable t)
     {
-        safeCall(to, t, Callback::onFailure);
+        safeCall(from, t, Callback::onFailure);
     }
 
-    public void timeout(Node.Id to)
+    public void timeout(Node.Id from)
     {
-        failure(to, new Timeout(null, null));
+        failure(from, null);
     }
 
-    public void onCallbackFailure(Node.Id to, Throwable t)
+    public void onCallbackFailure(Node.Id from, Throwable t)
     {
-        safeCall(to, t, Callback::onCallbackFailure);
+        safeCall(from, t, Callback::onCallbackFailure);
     }
 
     private interface SafeCall<T, P>
@@ -65,19 +64,19 @@ public class SafeCallback<T extends Reply>
         void accept(Callback<T> callback, Node.Id id, P param);
     }
 
-    private <P> void safeCall(Node.Id src, P param, SafeCall<T, P> call)
+    private <P> void safeCall(Node.Id from, P param, SafeCall<T, P> call)
     {
         // TODO (low priority, correctness): if the executor is shutdown this propgates the exception to the network stack
         executor.maybeExecuteImmediately(() -> {
             try
             {
-                call.accept(callback, src, param);
+                call.accept(callback, from, param);
             }
             catch (Throwable t)
             {
                 try
                 {
-                    if (callback.onCallbackFailure(src, t))
+                    if (callback.onCallbackFailure(from, t))
                         return;
                 }
                 catch (Throwable t2)

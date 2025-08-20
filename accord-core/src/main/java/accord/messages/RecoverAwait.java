@@ -20,7 +20,6 @@ package accord.messages;
 
 import java.util.EnumMap;
 
-import accord.api.ProgressLog;
 import accord.coordinate.Recover.InferredFastPath;
 import accord.local.Command;
 import accord.local.Node;
@@ -32,7 +31,7 @@ import accord.primitives.Participants;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
-import static accord.api.ProgressLog.BlockedUntil.CommittedOrNotFastPathCommit;
+import static accord.messages.Await.Until.CommittedOrNotFastPathCommit;
 import static accord.messages.MessageType.StandardMessage.RECOVER_AWAIT_REQ;
 import static accord.messages.MessageType.StandardMessage.RECOVER_AWAIT_RSP;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -42,9 +41,9 @@ public class RecoverAwait extends Await
 {
     public static class SerializerSupport
     {
-        public static RecoverAwait create(TxnId txnId, Participants<?> scope, ProgressLog.BlockedUntil blockedUntil, boolean notifyProgressLog, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, TxnId recoverId)
+        public static RecoverAwait create(TxnId txnId, Participants<?> scope, Await.Until until, boolean notifyProgressLog, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, TxnId recoverId)
         {
-            return new RecoverAwait(txnId, scope, blockedUntil, minAwaitEpoch, maxAwaitEpoch, callbackId, notifyProgressLog, recoverId);
+            return new RecoverAwait(txnId, scope, until, minAwaitEpoch, maxAwaitEpoch, callbackId, notifyProgressLog, recoverId);
         }
     }
 
@@ -52,15 +51,15 @@ public class RecoverAwait extends Await
     private transient boolean rejects;
     private transient boolean cannotAccept;
 
-    public RecoverAwait(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> participants, ProgressLog.BlockedUntil blockedUntil, boolean notifyProgressLog, TxnId recoverId)
+    public RecoverAwait(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> participants, Await.Until until, boolean notifyProgressLog, TxnId recoverId)
     {
-        super(to, topologies, txnId, participants, blockedUntil, notifyProgressLog);
+        super(to, topologies, txnId, participants, until, notifyProgressLog);
         this.recoverId = recoverId;
     }
 
-    RecoverAwait(TxnId txnId, Participants<?> scope, ProgressLog.BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog, TxnId recoverId)
+    RecoverAwait(TxnId txnId, Participants<?> scope, Await.Until until, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog, TxnId recoverId)
     {
-        super(txnId, scope, blockedUntil, minAwaitEpoch, maxAwaitEpoch, callbackId, notifyProgressLog);
+        super(txnId, scope, until, minAwaitEpoch, maxAwaitEpoch, callbackId, notifyProgressLog);
         this.recoverId = recoverId;
     }
 
@@ -73,7 +72,7 @@ public class RecoverAwait extends Await
         KnownDeps knownDeps = command.known().deps();
         if (!knownDeps.hasProposedOrDecidedDeps())
         {
-            if (blockedUntil == CommittedOrNotFastPathCommit && node.id().equals(txnId.node) && command.promised().equals(Ballot.ZERO))
+            if (until == CommittedOrNotFastPathCommit && node.id().equals(txnId.node) && command.promised().equals(Ballot.ZERO))
                 cannotAccept = true;
             return;
         }

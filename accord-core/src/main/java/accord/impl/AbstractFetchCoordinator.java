@@ -164,7 +164,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                     }
                     else if (reply != Waiting)
                     {
-                        throw new UnhandledEnum((CommitOrReadNack)reply);
+                        throw new UnhandledEnum(((CommitOrReadNack)reply).kind);
                     }
                     return;
                 }

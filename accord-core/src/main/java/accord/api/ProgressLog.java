@@ -28,6 +28,7 @@ import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
+import accord.messages.Await;
 import accord.primitives.SaveStatus;
 import accord.primitives.Participants;
 import accord.primitives.Route;
@@ -35,6 +36,7 @@ import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.SortedArrays;
+import accord.utils.UnhandledEnum;
 
 import static accord.api.ProgressLog.BlockedUntil.Query.HOME;
 import static accord.api.ProgressLog.BlockedUntil.Query.SHARD;
@@ -86,46 +88,16 @@ public interface ProgressLog
         HasDecidedExecuteAt(HOME, HOME, SaveStatus.PreCommitted, None),
 
         /**
-         * Wait for the transaction to be Committed, or guaranteed not to fast-path commit.
-         * This essentially means that the coordinator can reply as soon as the promised ballot is non-zero,
-         * but any other replica must wait until Committed.
-         *
-         * This is used for transactions that may have used the coordinator optimisation.
-         */
-        CommittedOrNotFastPathCommit(SHARD, SHARD, SaveStatus.Committed, None, null),
-
-        /**
-         * Wait for the transaction to be Committed.
-         *
-         * Note that we only set Committed during coordination, we do not propagate Committed directly between replicas,
-         * so for local progress it only makes sense to request HasStableDeps.
-         *
-         * This BlockedUntil is useful for remote listeners performing recovery that are waiting for transactions in
-         * the Accept phase that need to reach Committed to advance the recovery machine.
-         */
-        HasCommittedDeps(SHARD, SHARD, SaveStatus.Committed, None),
-
-        /**
          * Wait for the transaction's dependencies to stabilise. This provides enough information
          * to locally execute a transaction (if all the dependencies have applied).
          */
         HasStableDeps(SHARD, SHARD, SaveStatus.Stable, None),
 
         /**
-         * Wait for all shards to be ReadyToExecute so that a recovery coordinator may make progress
-         */
-        CanCoordinateExecution(SHARD, SHARD, SaveStatus.ReadyToExecute, None),
-
-        /**
          * Wait for the transaction to have enough information to apply.
          * It does not need to be ready to apply yet.
          */
-        CanApply(HOME, SHARD, SaveStatus.PreApplied, Quorum),
-
-        /**
-         * Wait for the transaction to be applied.
-         */
-        IsApplied(SHARD, SHARD, SaveStatus.Applied, None);
+        CanApply(HOME, SHARD, SaveStatus.PreApplied, Quorum);
 
         public enum Query { HOME, SHARD }
 
@@ -173,6 +145,24 @@ public interface ProgressLog
             int i = SortedArrays.binarySearch(searchByUnblockedFrom, 0, searchByUnblockedFrom.length, saveStatus, (s, w) -> s.compareTo(w.unblockedFrom), FAST);
             if (i < 0) i = Math.max(0, -2 - i);
             return searchByUnblockedFrom[i];
+        }
+
+        public BlockedUntil next()
+        {
+            int i = ordinal() + 1;
+            return i == lookupByOrdinal.length ? null : lookupByOrdinal[i];
+        }
+
+        public Await.Until toAwait()
+        {
+            switch (this)
+            {
+                default: throw new UnhandledEnum(this);
+                case NotBlocked: return Await.Until.NotBlocked;
+                case HasDecidedExecuteAt: return Await.Until.HasDecidedExecuteAt;
+                case HasStableDeps: return Await.Until.HasStableDeps;
+                case CanApply: return Await.Until.CanApply;
+            }
         }
     }
 
@@ -237,7 +227,6 @@ public interface ProgressLog
     class NoOpProgressLog implements ProgressLog
     {
         @Override public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force) {}
-
         @Override public void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from) {}
         @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants, StoreParticipants participants) {}
         @Override public void invalidIfUncommitted(TxnId txnId) {}

@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import javax.annotation.Nullable;
 
@@ -42,15 +43,20 @@ import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.primitives.Participants;
 import accord.primitives.Route;
+import accord.primitives.Status.Durability;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
+import accord.utils.UnhandledEnum;
 
 import static accord.messages.MessageType.StandardMessage.ASYNC_AWAIT_COMPLETE_REQ;
 import static accord.messages.MessageType.StandardMessage.AWAIT_REQ;
 import static accord.messages.MessageType.StandardMessage.AWAIT_RSP;
 import static accord.messages.TxnRequest.computeScope;
+import static accord.primitives.Status.Durability.HasDecisionOrOutcome.None;
+import static accord.primitives.Status.Durability.HasDecisionOrOutcome.DurablyStable;
+import static accord.primitives.Status.Durability.HasDecisionOrOutcome.DurablyPreApplied;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 /**
@@ -65,15 +71,126 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 {
     public static class SerializerSupport
     {
-        public static Await create(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, boolean notifyProgressLog, long minAwaitEpoch, long maxAwaitEpoch, int callbackId)
+        public static Await create(TxnId txnId, Participants<?> scope, Until until, boolean notifyProgressLog, long minAwaitEpoch, long maxAwaitEpoch, int callbackId)
         {
-            return new Await(txnId, scope, blockedUntil, minAwaitEpoch, maxAwaitEpoch, callbackId, notifyProgressLog);
+            return new Await(txnId, scope, until, minAwaitEpoch, maxAwaitEpoch, callbackId, notifyProgressLog);
+        }
+    }
+
+    public enum Until
+    {
+        NotBlocked(SaveStatus.NotDefined, None),
+
+        /**
+         * Wait for the transaction to decide its executeAt (or else decide to be invalidated).
+         *
+         * This also waits for a FullRoute to be known.
+         */
+        HasDecidedExecuteAt(SaveStatus.PreCommitted, None),
+
+        /**
+         * Wait for the transaction to be Committed, or guaranteed not to fast-path commit.
+         * This essentially means that the coordinator can reply as soon as the promised ballot is non-zero,
+         * but any other replica must wait until Committed.
+         *
+         * This is used for transactions that may have used the coordinator optimisation.
+         * TODO (expected): why is additionallyUnblockedBy not set?
+         */
+        CommittedOrNotFastPathCommit(SaveStatus.Committed, None, null),
+
+        /**
+         * Wait for the transaction to be Committed.
+         *
+         * Note that we only set Committed during coordination, we do not propagate Committed directly between replicas,
+         * so for local progress it only makes sense to request HasStableDeps.
+         *
+         * This BlockedUntil is useful for remote listeners performing recovery that are waiting for transactions in
+         * the Accept phase that need to reach Committed to advance the recovery machine.
+         */
+        HasCommittedDeps(SaveStatus.Committed, None),
+
+        /**
+         * Wait for the transaction's dependencies to stabilise. This provides enough information
+         * to locally execute a transaction (if all the dependencies have applied).
+         */
+        HasStableDeps(SaveStatus.Stable, None),
+
+        /**
+         * Wait for the transaction's dependencies to stabilise. This provides enough information
+         * to locally execute a transaction (if all the dependencies have applied).
+         */
+        HasStableDepsAtAllShards(SaveStatus.Stable, DurablyStable),
+
+        /**
+         * Wait for all shards to be ReadyToExecute so that a recovery coordinator may make progress
+         */
+        CanCoordinateExecution(SaveStatus.ReadyToExecute, None),
+
+        /**
+         * Wait for the transaction to have enough information to apply.
+         * It does not need to be ready to apply yet.
+         */
+        CanApply(SaveStatus.PreApplied, None),
+
+        /**
+         * Wait for the transaction to have enough information to apply.
+         * It does not need to be ready to apply yet.
+         */
+        CanApplyAtAllShards(SaveStatus.PreApplied, DurablyPreApplied),
+
+        /**
+         * Wait for the transaction to be applied.
+         */
+        IsApplied(SaveStatus.Applied, None);
+
+        private static final Until[] lookupByOrdinal = values();
+        public final SaveStatus requiredSaveStatus;
+        public final Durability.HasDecisionOrOutcome requiredDurability;
+        public final @Nullable Predicate<SaveStatus> additionallyUnblockedBy;
+
+        Until(SaveStatus requiredSaveStatus, Durability.HasDecisionOrOutcome requiredDurability)
+        {
+            this(requiredSaveStatus, requiredDurability, null);
+        }
+
+        Until(SaveStatus requiredSaveStatus, Durability.HasDecisionOrOutcome requiredDurability, @Nullable Predicate<SaveStatus> additionallyUnblockedBy)
+        {
+            this.requiredSaveStatus = requiredSaveStatus;
+            this.requiredDurability = requiredDurability;
+            this.additionallyUnblockedBy = additionallyUnblockedBy;
+        }
+
+        public static Until forOrdinal(int ordinal)
+        {
+            if (ordinal < 0 || ordinal > lookupByOrdinal.length)
+                throw new IndexOutOfBoundsException(ordinal);
+            return lookupByOrdinal[ordinal];
+        }
+
+        public BlockedUntil toBlockedUntil()
+        {
+            switch (this)
+            {
+                default: throw new UnhandledEnum(this);
+                case NotBlocked:
+                    return BlockedUntil.NotBlocked;
+                case HasDecidedExecuteAt:
+                    return BlockedUntil.HasDecidedExecuteAt;
+                case CommittedOrNotFastPathCommit:
+                case HasCommittedDeps:
+                case CanCoordinateExecution:
+                case HasStableDeps:
+                    return BlockedUntil.HasStableDeps;
+                case CanApply:
+                case IsApplied:
+                    return BlockedUntil.CanApply;
+            }
         }
     }
 
     public final TxnId txnId;
     public final Participants<?> scope;
-    public final BlockedUntil blockedUntil;
+    public final Until until;
     public final long minAwaitEpoch, maxAwaitEpoch;
     public final int callbackId; // < 0 means synchronous await
     public final boolean notifyProgressLog;
@@ -96,28 +213,28 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     private static final int SYNCHRONOUS_CALLBACKID = -1;
     protected boolean unavailable;
 
-    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, int callbackId, boolean notifyProgressLog)
+    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, Until until, int callbackId, boolean notifyProgressLog)
     {
         this.txnId = txnId;
         this.callbackId = callbackId;
         this.notifyProgressLog = notifyProgressLog;
         this.scope = computeScope(to, topologies, participants);
-        this.blockedUntil = blockedUntil;
+        this.until = until;
         this.maxAwaitEpoch = topologies.currentEpoch();
         this.minAwaitEpoch = topologies.oldestEpoch();
         Invariants.require(minAwaitEpoch >= txnId.epoch());
     }
 
-    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, boolean notifyProgressLog)
+    public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, Until until, boolean notifyProgressLog)
     {
-        this(to, topologies, txnId, participants, blockedUntil, SYNCHRONOUS_CALLBACKID, notifyProgressLog);
+        this(to, topologies, txnId, participants, until, SYNCHRONOUS_CALLBACKID, notifyProgressLog);
     }
 
-    public Await(TxnId txnId, Participants<?> scope, BlockedUntil blockedUntil, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
+    public Await(TxnId txnId, Participants<?> scope, Until until, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
     {
         this.txnId = txnId;
         this.scope = scope;
-        this.blockedUntil = blockedUntil;
+        this.until = until;
         this.minAwaitEpoch = minAwaitEpoch;
         this.maxAwaitEpoch = maxAwaitEpoch;
         this.callbackId = callbackId;
@@ -141,7 +258,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
         Invariants.require(minAwaitEpoch >= txnId.epoch());
-        if (command.saveStatus().compareTo(blockedUntil.unblockedFrom) >= 0)
+        if (command.saveStatus().compareTo(until.requiredSaveStatus) >= 0)
         {
             onNotWaiting(safeStore, safeCommand);
             return null;
@@ -161,7 +278,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             RemoteListeners.Registration registered = asyncRegistration;
             if (registered == null)
             {
-                registered = node.remoteListeners().register(txnId, blockedUntil.unblockedFrom, blockedUntil.remoteOutcomeDurability, replyTo, callbackId);
+                registered = node.remoteListeners().register(txnId, until.requiredSaveStatus, until.requiredDurability, replyTo, callbackId);
                 if (!registrationUpdater.compareAndSet(this, null, registered))
                     registered = asyncRegistration;
             }
@@ -176,7 +293,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         }
 
         if (notifyProgressLog)
-            safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, null, participants);
+            safeStore.progressLog().waiting(until.toBlockedUntil(), safeStore, safeCommand, null, null, participants);
         return null;
     }
 
@@ -258,7 +375,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     @Override
     public String reason()
     {
-        return "AwaitComplete{" + blockedUntil + ',' + txnId + '}';
+        return "AwaitComplete{" + until + ',' + txnId + '}';
     }
 
     @Override
@@ -306,8 +423,8 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     {
         Command command = safeCommand.current();
         SaveStatus saveStatus = command.saveStatus();
-        return saveStatus.compareTo(blockedUntil.unblockedFrom) >= 0
-               || (blockedUntil.additionallyUnblockedBy != null && blockedUntil.additionallyUnblockedBy.test(saveStatus));
+        return saveStatus.compareTo(until.requiredSaveStatus) >= 0
+               || (until.additionallyUnblockedBy != null && until.additionallyUnblockedBy.test(saveStatus));
     }
 
     protected void onUnavailable()
@@ -376,5 +493,31 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             Commands.updateRoute(safeStore, safeCommand, route);
             safeStore.progressLog().remoteCallback(safeStore, safeCommand, newStatus, callbackId, from);
         }
+
+        @Override
+        public String toString()
+        {
+            return "AsyncAwaitComplete{" +
+                   "txnId=" + txnId +
+                   ", route=" + route +
+                   ", newStatus=" + newStatus +
+                   ", callbackId=" + callbackId +
+                   ", from=" + from +
+                   '}';
+        }
+    }
+
+    @Override
+    public String toString()
+    {
+        return "Await{" +
+               "txnId=" + txnId +
+               ", scope=" + scope +
+               ", until=" + until +
+               ", minAwaitEpoch=" + minAwaitEpoch +
+               ", maxAwaitEpoch=" + maxAwaitEpoch +
+               ", callbackId=" + callbackId +
+               ", notifyProgressLog=" + notifyProgressLog +
+               '}';
     }
 }

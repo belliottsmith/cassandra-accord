@@ -93,12 +93,20 @@ class RecurringPendingRunnable implements PendingRunnable, Scheduled
         if (run == null)
             return "Done/Cancelled";
 
-        return run + " with " + delay + " " + units + " delay";
+        return run.getClass().getSimpleName() + " with " + delay + " " + units + " delay";
     }
 
     public static boolean isRecurring(Pending pending)
     {
         Pending origin = pending.origin();
         return origin instanceof RecurringPendingRunnable && ((RecurringPendingRunnable) origin).isRecurring;
+    }
+
+    private static String print(Runnable run)
+    {
+        Class<?> clazz = run.getClass();
+        while (clazz.isAnonymousClass())
+            clazz = clazz.getDeclaringClass();
+        return clazz.getSimpleName();
     }
 }

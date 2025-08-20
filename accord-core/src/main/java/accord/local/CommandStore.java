@@ -817,6 +817,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
                 if (!newBootstrapRanges.isEmpty())
                     safeStore.setBootstrapBeganAt(bootstrap(TxnId.NONE, newBootstrapRanges, bootstrapBeganAt));
                 safeStore.setSafeToRead(purgeAndInsert(safeToRead, TxnId.NONE, ranges));
+                markExclusiveSyncPointDecided(safeStore, TxnId.NONE, ranges);
             });
 
             return new EpochReady(epoch, done, done, done, done);

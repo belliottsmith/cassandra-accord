@@ -74,6 +74,7 @@ import static accord.primitives.Status.PreCommitted;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 // TODO (expected): for transactions that span multiple progress logs (notably: sync points) we need to coordinate *fetching* to avoid redundant work
 // TODO (expected): report transactions not making progress
@@ -98,7 +99,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     public static class Config
     {
         public int concurrency = 8;
-        public Duration maxActiveRunTime = Duration.ofMinutes(1);
+        public Duration maxActiveRunTime = Duration.ofMinutes(5);
     }
 
     private static final Logger logger = LoggerFactory.getLogger(DefaultProgressLog.class);
@@ -140,7 +141,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private volatile boolean stopped;
     private Config config = new Config();
 
-    private long nextCallbackId;
+    private long prevCallbackId;
 
     protected DefaultProgressLog(Node node, CommandStore commandStore)
     {
@@ -781,7 +782,10 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     long nextCallbackId()
     {
-        return ++nextCallbackId;
+        long id = node.elapsed(NANOSECONDS);
+        if (id > prevCallbackId) prevCallbackId = id;
+        else id = ++prevCallbackId;
+        return id;
     }
 
     Object2ObjectHashMap<TxnId, PendingTask> pending(TxnStateKind kind)
@@ -903,23 +907,35 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     public ImmutableView immutableView()
     {
-        return new ImmutableView(commandStore.id(), stateMap);
+        return new ImmutableView(commandStore.id(), stateMap, active.size());
     }
 
     public static class ImmutableView
     {
         private final int commandStoreId;
         private final Object[] snapshot;
+        private final int activeCount;
 
-        ImmutableView(int commandStoreId, Object[] snapshot)
+        ImmutableView(int commandStoreId, Object[] snapshot, int activeCount)
         {
             this.commandStoreId = commandStoreId;
             this.snapshot = snapshot;
+            this.activeCount = activeCount;
         }
 
         public boolean isEmpty()
         {
             return BTree.isEmpty(snapshot);
+        }
+
+        public int activeCount()
+        {
+            return activeCount;
+        }
+
+        public int size()
+        {
+            return BTree.size(snapshot);
         }
 
         private Iterator<TxnState> iterator = null;

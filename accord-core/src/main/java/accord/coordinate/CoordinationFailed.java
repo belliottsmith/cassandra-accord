@@ -53,15 +53,6 @@ public abstract class CoordinationFailed extends RuntimeException implements Wra
         this.homeKey = homeKey;
     }
 
-    void set(TxnId txnId, RoutingKey homeKey)
-    {
-        if (this.txnId == null && txnId != null)
-            this.txnId = txnId;
-
-        if (this.homeKey == null && homeKey != null)
-            this.homeKey = homeKey;
-    }
-
     public @Nullable TxnId txnId()
     {
         return txnId;

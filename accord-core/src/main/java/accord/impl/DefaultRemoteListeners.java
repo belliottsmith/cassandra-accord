@@ -32,7 +32,7 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.messages.Await.AsyncAwaitComplete;
 import accord.primitives.Route;
-import accord.primitives.Status.Durability.HasOutcome;
+import accord.primitives.Status.Durability.HasDecisionOrOutcome;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
@@ -84,9 +84,9 @@ public class DefaultRemoteListeners implements RemoteListeners
         long[] listeners;
         int listenerCount;
 
-        StatusListeners(SaveStatus awaitSaveStatus, HasOutcome awaitOutcomeDurability, int[] waitingOn, int waitingOnCount, int listenerNodeId, int listenerCallbackId)
+        StatusListeners(SaveStatus awaitSaveStatus, HasDecisionOrOutcome awaitDurability, int[] waitingOn, int waitingOnCount, int listenerNodeId, int listenerCallbackId)
         {
-            this.await = encodeAwait(awaitSaveStatus, awaitOutcomeDurability);
+            this.await = encodeAwait(awaitSaveStatus, awaitDurability);
             this.waitingOn = waitingOn;
             this.waitingOnCount = this.waitingOnSize = waitingOnCount;
             this.listeners = new long[] { encodeListener(listenerNodeId, listenerCallbackId) };
@@ -344,14 +344,14 @@ public class DefaultRemoteListeners implements RemoteListeners
     {
         final TxnId txnId;
         final SaveStatus awaitSaveStatus;
-        final HasOutcome awaitDurability;
+        final HasDecisionOrOutcome awaitDurability;
         final Node.Id listeningNodeId;
         final int callbackId;
 
         int[] waitingOn = new int[4];
         int count = 0;
 
-        Register(TxnId txnId, SaveStatus awaitSaveStatus, HasOutcome awaitDurability, Node.Id listeningNodeId, int callbackId)
+        Register(TxnId txnId, SaveStatus awaitSaveStatus, HasDecisionOrOutcome awaitDurability, Node.Id listeningNodeId, int callbackId)
         {
             this.txnId = txnId;
             this.awaitSaveStatus = awaitSaveStatus;
@@ -419,7 +419,7 @@ public class DefaultRemoteListeners implements RemoteListeners
     }
 
     @Override
-    public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, HasOutcome awaitDurability, Node.Id listener, int callbackId)
+    public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, HasDecisionOrOutcome awaitDurability, Node.Id listener, int callbackId)
     {
         Invariants.requireArgument(callbackId >= 0);
         return new Register(txnId, awaitSaveStatus, awaitDurability, listener, callbackId);
@@ -445,7 +445,7 @@ public class DefaultRemoteListeners implements RemoteListeners
             if (awaitSaveStatus(listener.await).compareTo(newStatus) > 0)
                 return;
 
-            if (awaitDurability(listener.await).compareTo(newDurability.allShards()) > 0)
+            if (awaitDurability(listener.await).compareTo(newDurability.decisionOrOutcome()) > 0)
                 continue;
 
             listener.removeWaitingOn(storeId);
@@ -486,7 +486,7 @@ public class DefaultRemoteListeners implements RemoteListeners
 
     static
     {
-        Invariants.require(HasOutcome.maxEncoded() < 16);
+        Invariants.require(HasDecisionOrOutcome.maxEncoded() < 16);
     }
 
     private static SaveStatus awaitSaveStatus(int encodedAwait)
@@ -494,12 +494,12 @@ public class DefaultRemoteListeners implements RemoteListeners
         return SaveStatus.forOrdinal(encodedAwait >>> 4);
     }
 
-    private static HasOutcome awaitDurability(int encodedAwait)
+    private static HasDecisionOrOutcome awaitDurability(int encodedAwait)
     {
-        return HasOutcome.forOrdinal(encodedAwait & 0xf);
+        return HasDecisionOrOutcome.forOrdinal(encodedAwait & 0xf);
     }
 
-    private static int encodeAwait(SaveStatus awaitSaveStatus, HasOutcome awaitDurability)
+    private static int encodeAwait(SaveStatus awaitSaveStatus, HasDecisionOrOutcome awaitDurability)
     {
         return (awaitSaveStatus.ordinal() << 4) | awaitDurability.ordinal();
     }

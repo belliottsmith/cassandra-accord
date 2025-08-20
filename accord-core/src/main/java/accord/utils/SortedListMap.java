@@ -35,7 +35,7 @@ import java.util.stream.Stream;
 public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractMap<K, V>
 {
     final SortedList<K> list;
-    final V[] values;
+    final Object[] values;
     int size;
 
     public SortedListMap(SortedList<K> list, IntFunction<V[]> allocator)
@@ -44,18 +44,26 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         this.values = allocator.apply(list.size());
     }
 
+    public SortedListMap(SortedList<K> list, Object[] values, int size)
+    {
+        Invariants.require(values.length == list.size());
+        this.list = list;
+        this.values = values;
+        this.size = size;
+    }
+
     @Override
     public V get(Object key)
     {
         int i = list.find((K)key);
         if (i < 0) return null;
-        return values[i];
+        return (V)values[i];
     }
 
     @Override
     public boolean containsValue(Object value)
     {
-        for (V v : values)
+        for (Object v : values)
         {
             if (v == value) return true;
         }
@@ -69,6 +77,15 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         return index >= 0 && values[index] != null;
     }
 
+    public V putAtIndex(int index, V value)
+    {
+        V prev = (V)values[index];
+        values[index] = value;
+        if (prev == null)
+            ++size;
+        return prev;
+    }
+
     @Override
     public V put(K key, V value)
     {
@@ -76,11 +93,7 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         int i = list.find(key);
         if (i < 0)
             throw new IllegalArgumentException(key + " is not in the SortedList of keys");
-        V prev = values[i];
-        values[i] = value;
-        if (prev == null)
-            ++size;
-        return prev;
+        return putAtIndex(i, value);
     }
 
     @Override
@@ -88,35 +101,15 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
     {
         int i = list.find((K)key);
         if (i < 0) return null;
-        V prev = values[i];
+        V prev = (V) values[i];
         values[i] = null;
         return prev;
     }
 
     @Override
-    public Set<K> keySet()
+    public SortedList<K> keySet()
     {
-        return new SetView<K>()
-        {
-            @Override
-            public boolean contains(Object o)
-            {
-                return get(o) != null;
-            }
-
-            @Override
-            public Iterator<K> iterator()
-            {
-                return new Iter<K>()
-                {
-                    @Override
-                    K get(K key, V value)
-                    {
-                        return key;
-                    }
-                };
-            }
-        };
+        return list;
     }
 
     @Override
@@ -140,7 +133,7 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
             @Override
             public Stream<V> stream()
             {
-                return Arrays.stream(values).filter(Objects::nonNull);
+                return (Stream<V>) Arrays.stream(values).filter(Objects::nonNull);
             }
         };
     }
@@ -216,7 +209,7 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         @Override
         public T next()
         {
-            T result = get(list.get(next), values[next]);
+            T result = get(list.get(next), (V)values[next]);
             next = -1;
             return result;
         }
@@ -224,12 +217,12 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
 
     public List<V> valuesAsNullableList()
     {
-        return Arrays.asList(values);
+        return (List<V>)Arrays.asList(values);
     }
 
     public Stream<V> valuesAsNullableStream()
     {
-        return Stream.of(values);
+        return (Stream<V>)Stream.of(values);
     }
 
     public int domainSize()
@@ -249,38 +242,27 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
 
     public V getValue(int keyIndex)
     {
-        return values[keyIndex];
+        return (V) values[keyIndex];
     }
 
-    public List<V> select(List<K> select)
+    public List<V> lazySelect(List<K> select)
     {
-        return list.select(values, select);
-    }
-
-    public V[] unsafeValuesBackingArray()
-    {
-        return values;
+        return (List<V>)list.lazySelect(values, select);
     }
 
     public <O> O foldlValues(BiFunction<V, O, O> foldl, O zero)
     {
-        return Functions.foldl(values, foldl, zero);
+        return foldl((f, k, v, cur) -> f.apply(v, cur), foldl, zero);
     }
 
     public <O> O foldlNonNullValues(BiFunction<V, O, O> foldl, O zero)
     {
-        return Functions.foldlNonNull(values, foldl, zero);
+        return foldlNonNull((f, k, v, cur) -> f.apply(v, cur), foldl, zero);
     }
 
     public <O> O foldlNonNull(TriFunction<K, V, O, O> foldl, O zero)
     {
-        O result = zero;
-        for (int i = 0 ; i < values.length ; ++i)
-        {
-            if (values[i] != null)
-                result = foldl.apply(list.get(i), values[i], result);
-        }
-        return result;
+        return foldlNonNull(TriFunction::apply, foldl, zero);
     }
 
     public <O, P1> O foldlNonNull(QuadFunction<P1, K, V, O, O> foldl, P1 p1, O zero)
@@ -289,8 +271,16 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         for (int i = 0 ; i < values.length ; ++i)
         {
             if (values[i] != null)
-                result = foldl.apply(p1, list.get(i), values[i], result);
+                result = foldl.apply(p1, list.get(i), (V)values[i], result);
         }
+        return result;
+    }
+
+    public <O, P1> O foldl(QuadFunction<P1, K, V, O, O> foldl, P1 p1, O zero)
+    {
+        O result = zero;
+        for (int i = 0 ; i < values.length ; ++i)
+            result = foldl.apply(p1, list.get(i), (V)values[i], result);
         return result;
     }
 }

@@ -28,7 +28,7 @@ import accord.utils.SortedList;
 import accord.utils.async.Cancellable;
 
 import javax.annotation.Nullable;
-import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 import static accord.messages.MessageType.StandardMessage.BEGIN_INVALIDATE_REQ;
@@ -221,7 +221,7 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
             return BEGIN_INVALIDATE_RSP;
         }
 
-        public static FullRoute<?> findRoute(InvalidateReply[] invalidateOks)
+        public static FullRoute<?> findRoute(List<InvalidateReply> invalidateOks)
         {
             for (InvalidateReply ok : invalidateOks)
             {
@@ -231,24 +231,24 @@ public class BeginInvalidation extends AbstractRequest<BeginInvalidation.Invalid
             return null;
         }
 
-        public static Route<?> mergeRoutes(InvalidateReply[] invalidateOks)
+        public static Route<?> mergeRoutes(List<InvalidateReply> invalidateOks)
         {
             return mapReduceNonNull(ok -> (Route)ok.route, Route::with, invalidateOks);
         }
 
-        public static InvalidateReply max(InvalidateReply[] invalidateReplies, Shard shard, SortedList<Id> nodeIds)
+        public static InvalidateReply max(List<InvalidateReply> invalidateReplies, Shard shard, SortedList<Id> nodeIds)
         {
-            return SaveStatus.maxOfList(nodeIds.select(invalidateReplies, shard.nodes), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
+            return SaveStatus.maxOfList(nodeIds.lazySelect(invalidateReplies, shard.nodes), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
         }
 
-        public static InvalidateReply max(InvalidateReply[] invalidateReplies)
+        public static InvalidateReply max(List<InvalidateReply> invalidateReplies)
         {
-            return SaveStatus.maxOfList(Arrays.asList(invalidateReplies), r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
+            return SaveStatus.maxOfList(invalidateReplies, r -> r.maxStatus, r -> r.accepted, Objects::nonNull);
         }
 
-        public static InvalidateReply maxNotTruncated(InvalidateReply[] invalidateReplies)
+        public static InvalidateReply maxNotTruncated(List<InvalidateReply> invalidateReplies)
         {
-            return SaveStatus.maxOfList(Arrays.asList(invalidateReplies), r -> r.maxKnowledgeStatus, r -> r.accepted, r -> r != null && !r.maxKnowledgeStatus.is(Status.Truncated));
+            return SaveStatus.maxOfList(invalidateReplies, r -> r.maxKnowledgeStatus, r -> r.accepted, r -> r != null && !r.maxKnowledgeStatus.is(Status.Truncated));
         }
     }
 }

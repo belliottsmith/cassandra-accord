@@ -36,7 +36,6 @@ import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
-import static accord.api.ProgressLog.BlockedUntil.CanCoordinateExecution;
 import static accord.api.TraceEventType.HOME_PROGRESS;
 import static accord.impl.progresslog.CallbackInvoker.invokeHomeCallback;
 import static accord.impl.progresslog.CoordinatePhase.Done;
@@ -81,7 +80,7 @@ abstract class HomeState extends WaitingState
 
         if (newProgress == NoneExpected)
             instance.clearProgressToken(txnId);
-        updateScheduling(safeStore, instance, Home, CanCoordinateExecution, newProgress);
+        updateScheduling(safeStore, instance, Home, null, newProgress);
     }
 
     @Nonnull CoordinatePhase phase()

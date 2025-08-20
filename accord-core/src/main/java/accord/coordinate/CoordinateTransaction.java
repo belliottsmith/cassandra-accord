@@ -39,7 +39,6 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
-import accord.messages.PreAccept;
 import accord.messages.PreAccept.PreAcceptNack;
 import accord.messages.PreAccept.PreAcceptReply;
 import accord.primitives.Status;
@@ -109,8 +108,11 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     @Override
     void start()
     {
-        if (txnId != null && txnId.hasPrivilegedCoordinator()) new LocalExecute().start();
-        else super.start();
+        super.start();
+        if (txnId != null && txnId.hasPrivilegedCoordinator())
+            new LocalExecute().start();
+        else
+            contact(null, false);
     }
 
     @Override
@@ -130,7 +132,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                 // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
                 // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
                 node.agent().coordinatorEvents().onPreAccepted(txnId);
-                executeAdapter().execute(node, executor, topologies, route, Ballot.ZERO, FAST, flags, txnId, txn, txnId, deps, deps, callback);
+                executeAdapter().execute(node, executor, topologies, route, Ballot.ZERO, FAST, flags, txnId, txn, txnId, deps, deps, finishAndTakeCallback());
                 return;
             }
         }
@@ -140,20 +142,20 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             if (deps != null)
             {
                 node.agent().coordinatorEvents().onPreAccepted(txnId);
-                proposeAdapter().propose(node, executor, topologies, route, MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, callback);
+                proposeAdapter().propose(node, executor, topologies, route, MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, finishAndTakeCallback());
                 return;
             }
         }
         else if (executeAt.is(REJECTED))
         {
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, finishAndTakeCallback());
             node.agent().coordinatorEvents().onRejected(txnId);
             return;
         }
 
         Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
         node.agent().coordinatorEvents().onPreAccepted(txnId);
-        proposeAdapter().propose(node, executor, topologies, route, SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
+        proposeAdapter().propose(node, executor, topologies, route, SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, finishAndTakeCallback());
     }
 
     private Deps mergeFastOrMediumDeps(SortedListMap<?, PreAcceptOk> oks)
@@ -194,6 +196,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
 
         void start()
         {
+            markSelfContacted();
             Cancellable cancel = node.mapReduceConsumeLocal(this, route, topologies.oldestEpoch(), topologies.currentEpoch(), this);
             long expiresAt = node.agent().selfExpiresAt(txnId, Status.Phase.PreAccept, MICROSECONDS);
             RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
@@ -223,7 +226,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             success();
             if (failure != null)
             {
-                setFailure(failure);
+                finishWithFailureOverride(failure);
             }
             else
             {
@@ -234,16 +237,12 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                     boolean hasCoordinatorVote = txnId.equals(ok.witnessedAt);
                     if (!hasCoordinatorVote) fastPathEnabled = false;
                     Deps deps = hasCoordinatorVote && txnId.is(PrivilegedCoordinatorWithDeps) ? ok.deps : null;
+                    contactNotSelf(deps, hasCoordinatorVote);
                     onSuccess(node.id(), ok);
-                    for (Node.Id id : topologies.nodes())
-                    {
-                        if (id.equals(node.id())) continue;
-                        node.send(id, new PreAccept(id, topologies, txnId, txn, deps, hasCoordinatorVote, route), executor, CoordinateTransaction.this);
-                    }
                 }
                 else
                 {
-                    setFailure(new Preempted(txnId, route.homeKey()));
+                    finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 }
             }
         }

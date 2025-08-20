@@ -27,7 +27,6 @@ import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.Commands;
 import accord.local.LoadKeys;
-import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -49,17 +48,18 @@ import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
 import static accord.api.ProtocolModifiers.Toggles.fastWritesMayBypassCommandsForKey;
 import static accord.api.ProtocolModifiers.Toggles.fastWritesMayBypassSafeStore;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
+import static accord.messages.Apply.ApplyReply.Kind.InsufficientEpochs;
 import static accord.messages.MessageType.StandardMessage.APPLY_REQ;
 import static accord.messages.MessageType.StandardMessage.APPLY_RSP;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.PreApplied;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class Apply extends TxnRequest<ApplyReply>
 {
@@ -113,16 +113,6 @@ public class Apply extends TxnRequest<ApplyReply>
         this.maxEpoch = participates.currentEpoch();
     }
 
-    public static Topologies participates(Node node, Unseekables<?> route, TxnId txnId, Timestamp executeAt, Topologies executes)
-    {
-        return txnId.epoch() == executeAt.epoch() ? executes : participates(node, route, txnId, executeAt);
-    }
-
-    public static Topologies participates(Node node, Unseekables<?> route, TxnId txnId, Timestamp executeAt)
-    {
-        return node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch(), SHARE);
-    }
-
     protected Apply(Kind kind, TxnId txnId, Ballot ballot, Route<?> route, long minEpoch, long waitForEpoch, long maxEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result, ExecuteFlags flags)
     {
         super(txnId, route, waitForEpoch);
@@ -142,7 +132,7 @@ public class Apply extends TxnRequest<ApplyReply>
     @Override
     public Cancellable submit()
     {
-        if (flags.contains(READY_TO_EXECUTE) && fastWritesMayBypassSafeStore() && kind == Kind.Maximal)
+        if (flags.contains(READY_TO_EXECUTE) && fastWritesMayBypassSafeStore() && kind == Kind.Maximal && !txnId.isSyncPoint())
             return node.mapReduceConsumeLocal(scope, minEpoch, maxEpoch, this::applyDirect, this, this);
 
         return node.mapReduceConsumeLocal(this, minEpoch, maxEpoch, this);
@@ -173,7 +163,7 @@ public class Apply extends TxnRequest<ApplyReply>
         CommandStores.RangesForEpoch storeRanges = commandStore.unsafeGetRangesForEpoch();
         Route<?> route = bestRoute();
         StoreParticipants participants = StoreParticipants.execute(storeRanges, route, minEpoch, txnId, maxEpoch);
-        AsyncChain<Void> written = writes == null ? Writes.SUCCESS
+        AsyncChain<Void> written = writes == null ? AsyncChains.success(null)
                                                   : writes.applyDirect(commandStore, participants.executes(), txn);
 
         return written.flatMap(ignore -> commandStore.build(this, safeStore -> {
@@ -230,8 +220,10 @@ public class Apply extends TxnRequest<ApplyReply>
             default:
             case Success: return ApplyReply.Applied;
             case Redundant: return ApplyReply.Redundant;
-            case Insufficient: return ApplyReply.Insufficient;
             case RaceWithRecovery: return ApplyReply.RaceWithRecovery;
+            case Insufficient: return ApplyReply.Insufficient;
+            case InsufficientEpochs:
+                return new ApplyReply(InsufficientEpochs, Commit.insufficientEpoch(safeStore, safeCommand, txnId, route));
         }
     }
 
@@ -246,7 +238,10 @@ public class Apply extends TxnRequest<ApplyReply>
     @Override
     public ApplyReply reduce(ApplyReply a, ApplyReply b)
     {
-        return a.compareTo(b) >= 0 ? a : b;
+        int c = a.kind.compareTo(b.kind);
+        if (c > 0 || (c == 0 && a.kind != InsufficientEpochs)) return a;
+        else if (c < 0) return b;
+        else return a.minEpoch <= b.minEpoch ? a : b;
     }
 
     @Override
@@ -262,9 +257,32 @@ public class Apply extends TxnRequest<ApplyReply>
         return APPLY_REQ;
     }
 
-    public enum ApplyReply implements Reply
+    public static class ApplyReply implements Reply
     {
-        Applied, Redundant, Insufficient, RaceWithRecovery;
+        public enum Kind { Applied, Redundant, Insufficient, InsufficientEpochs, RaceWithRecovery }
+        public static final ApplyReply Applied = new ApplyReply(Kind.Applied);
+        public static final ApplyReply Redundant = new ApplyReply(Kind.Redundant);
+        public static final ApplyReply Insufficient = new ApplyReply(Kind.Insufficient);
+        public static final ApplyReply RaceWithRecovery = new ApplyReply(Kind.RaceWithRecovery);
+        private static final ApplyReply[] byKind = new ApplyReply[] { Applied, Redundant, Insufficient, null, RaceWithRecovery };
+        public static ApplyReply lookupByKind(Kind kind)
+        {
+            return byKind[kind.ordinal()];
+        }
+
+        public final ApplyReply.Kind kind;
+        public final long minEpoch;
+        public ApplyReply(ApplyReply.Kind kind)
+        {
+            this(kind, 0);
+        }
+
+        public ApplyReply(ApplyReply.Kind kind, long minEpoch)
+        {
+            this.kind = kind;
+            this.minEpoch = minEpoch;
+            Invariants.requireArgument(minEpoch == 0 || kind == InsufficientEpochs);
+        }
 
         @Override
         public MessageType type()
@@ -275,13 +293,19 @@ public class Apply extends TxnRequest<ApplyReply>
         @Override
         public String toString()
         {
-            return "Apply" + name();
+            return "Apply" + kind.name();
         }
 
         @Override
         public boolean isFinal()
         {
             return this != Insufficient;
+        }
+
+        public final long minEpoch()
+        {
+            Invariants.require(kind == InsufficientEpochs);
+            return minEpoch;
         }
     }
 

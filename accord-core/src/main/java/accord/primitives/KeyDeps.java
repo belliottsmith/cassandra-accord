@@ -27,7 +27,7 @@ import accord.utils.IndexedFunction;
 import accord.utils.IndexedTriConsumer;
 import accord.utils.Invariants;
 import accord.utils.RelationMultiMap;
-import accord.utils.SimpleBitSet;
+import accord.utils.LargeBitSet;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SymmetricComparator;
 import accord.utils.TriFunction;
@@ -447,7 +447,7 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
     public RoutingKeys participants(Predicate<TxnId> select)
     {
         txnIdsToKeys();
-        SimpleBitSet bitSet = new SimpleBitSet(keys.size(), cachedLongs());
+        LargeBitSet bitSet = new LargeBitSet(keys.size(), cachedLongs());
         for (int idIdx = 0 ; idIdx < txnIds.length ; ++idIdx)
         {
             if (!select.test(txnIds[idIdx]))

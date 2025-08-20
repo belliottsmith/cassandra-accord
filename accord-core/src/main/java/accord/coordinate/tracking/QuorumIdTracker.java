@@ -81,6 +81,12 @@ public class QuorumIdTracker extends SimpleTracker<QuorumIdTracker.QuorumIdShard
                    "quorum?: "+hasReachedQuorum()+"," +
                    "shard:"+shard+"}";
         }
+
+        @Override
+        public String summarise()
+        {
+            return successes.size() + "/" + shard.rf;
+        }
     }
 
     public QuorumIdTracker(Topologies topologies)

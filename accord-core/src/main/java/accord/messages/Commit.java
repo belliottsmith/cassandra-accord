@@ -24,6 +24,7 @@ import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
@@ -52,6 +53,7 @@ import static accord.messages.Commit.Kind.CommitSlowPath;
 import static accord.messages.Commit.Kind.CommitWithTxn;
 import static accord.messages.MessageType.StandardMessage.COMMIT_INVALIDATE_REQ;
 import static accord.messages.MessageType.StandardMessage.COMMIT_REQ;
+import static accord.messages.ReadData.CommitOrReadNack.Kind.InsufficientEpochs;
 import static accord.primitives.SaveStatus.Committed;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
 import static accord.messages.Commit.WithDeps.HasDeps;
@@ -212,12 +214,26 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
             case Success:
             case Redundant:
                 return null;
+            case InsufficientEpochs:
+                return new CommitOrReadNack(InsufficientEpochs, insufficientEpoch(safeStore, safeCommand, txnId, route));
             case Insufficient:
                 Invariants.require(kind != StableWithTxnAndDeps && kind != CommitWithTxn);
                 return CommitOrReadNack.Insufficient;
             case Rejected:
                 return CommitOrReadNack.Rejected;
         }
+    }
+
+    static long insufficientEpoch(SafeCommandStore safeStore, SafeCommand safeCommand, TxnId txnId, Route<?> route)
+    {
+        FullRoute<?> fullRoute = Route.tryCastToFullRoute(route);
+        if (route == null) fullRoute = Route.tryCastToFullRoute(safeCommand.current().route());
+        Invariants.require(route != null);
+        return safeStore.redundantBefore().foldl(fullRoute, (RedundantBefore.Bounds b, Long v, TxnId id) -> {
+            if (b.endEpoch < Long.MAX_VALUE && b.endEpoch <= v && !b.isLocallyRetiredOrPreBootstrap(id))
+                return b.endEpoch - 1;
+            return v;
+        }, Long.MAX_VALUE, txnId);
     }
 
     @Override

@@ -119,11 +119,12 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
 
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch(), txnId, executeAtEpoch);
         ApplyReply applyReply = Apply.apply(safeStore, participants, Ballot.ZERO, txn, txnId, executeAt, deps, route, writes, result);
-        switch (applyReply)
+        switch (applyReply.kind)
         {
             default:
                 throw illegalState("Unexpected ApplyReply");
             case Insufficient:
+            case InsufficientEpochs:
                 // Ignore here, the read in super.apply will return the CommitOrReadNack.Insufficient response we need to get the maximal apply
                 break;
             case Redundant:

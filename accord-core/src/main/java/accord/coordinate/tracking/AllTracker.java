@@ -66,6 +66,12 @@ public class AllTracker extends SimpleTracker<AllTracker.AllShardTracker> implem
         {
             return waitingOn < 0;
         }
+
+        @Override
+        public String summarise()
+        {
+            return (shard.rf - waitingOn) + "/" + shard.rf;
+        }
     }
 
     public AllTracker(Topologies topologies)

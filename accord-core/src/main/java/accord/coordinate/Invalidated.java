@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import javax.annotation.Nullable;
 
+import accord.api.Agent;
 import accord.api.RoutingKey;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -29,7 +30,13 @@ import accord.utils.Invariants;
  */
 public class Invalidated extends CoordinationFailed
 {
-    public Invalidated(TxnId txnId, @Nullable RoutingKey homeKey)
+    public static Invalidated invalidated(Agent agent, TxnId txnId, @Nullable RoutingKey homeKey)
+    {
+        agent.coordinatorEvents().onInvalidated(txnId);
+        return new Invalidated(txnId, homeKey);
+    }
+
+    private Invalidated(TxnId txnId, @Nullable RoutingKey homeKey)
     {
         super(txnId, homeKey);
     }

@@ -29,29 +29,12 @@ import accord.primitives.TxnId;
 
 public interface CoordinatorEventListener
 {
-    default void onPreAccepted(TxnId txnId)
-    {
-    }
-
-    default void onAccepted(TxnId txnId, Ballot ballot)
-    {
-    }
-
-    default void onExecuting(TxnId txnId, @Nullable Ballot ballot, Deps deps, @Nullable ExecutePath path)
-    {
-    }
-
-    default void onExecuted(TxnId txnId, Ballot ballot)
-    {
-    }
-
-    default void onDurable(Durability durability, @Nullable Ballot ballot, TxnId txnId)
-    {
-    }
-
-    default void onRecoveryStarted(TxnId txnId, Ballot ballot)
-    {
-    }
+    default void onPreAccepted(TxnId txnId) {}
+    default void onAccepted(TxnId txnId, Ballot ballot) {}
+    default void onExecuting(TxnId txnId, @Nullable Ballot ballot, Deps deps, @Nullable ExecutePath path) {}
+    default void onExecuted(TxnId txnId, Ballot ballot) {}
+    default void onDurable(Durability durability, @Nullable Ballot ballot, TxnId txnId) {}
+    default void onRecoveryStarted(TxnId txnId, Ballot ballot) {}
 
     /**
      * For use by implementations to decide what to do about successfully recovered transactions.
@@ -60,17 +43,14 @@ public interface CoordinatorEventListener
      *
      * Note: may be invoked multiple times in different places
      */
-    default void onRecoveryStopped(Node node, TxnId txnId, Ballot ballot, Result success, Throwable fail)
-    {
-    }
+    default void onRecoveryStopped(Node node, TxnId txnId, Ballot ballot, Result success, Throwable fail) {}
 
-    default void onInvalidated(TxnId txnId)
-    {
-    }
-
-    default void onRejected(TxnId txnId)
-    {
-    }
+    default void onInvalidated(TxnId txnId) {}
+    default void onRejected(TxnId txnId) {}
+    default void onEpochTimeout(long epoch) {}
+    default void onExhausted(@Nullable TxnId txnId) {}
+    default void onPreempted(@Nullable TxnId txnId) {}
+    default void onTimeout(@Nullable TxnId txnId) {}
 
     CoordinatorEventListener NOOP = new CoordinatorEventListener()
     {

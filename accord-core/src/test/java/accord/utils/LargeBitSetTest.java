@@ -30,17 +30,17 @@ import org.junit.jupiter.api.Test;
 import static accord.utils.Property.qt;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-public class SimpleBitSetTest
+public class LargeBitSetTest
 {
     private static final int NOT_FOUND = Integer.MAX_VALUE;
 
     private static class Check
     {
-        final SimpleBitSet test;
+        final LargeBitSet test;
         final BitSet canon;
         final int size;
 
-        private Check(SimpleBitSet test, BitSet canon, int size)
+        private Check(LargeBitSet test, BitSet canon, int size)
         {
             this.test = test;
             this.canon = canon;
@@ -103,7 +103,7 @@ public class SimpleBitSetTest
             int size = random.nextInt(maxSize);
             runLength = Math.min(size, runLength);
             BitSet canon = new BitSet(size);
-            SimpleBitSet test = new SimpleBitSet(size);
+            LargeBitSet test = new LargeBitSet(size);
             if (size > 0)
             {
                 while (modCount-- > 0)
@@ -153,7 +153,7 @@ public class SimpleBitSetTest
     @Test
     public void testRandomBitSets()
     {
-        qt().withExamples(100000).forAll(Gens.random()).check(SimpleBitSetTest::testRandomBitSet);
+        qt().withExamples(100000).forAll(Gens.random()).check(LargeBitSetTest::testRandomBitSet);
     }
     
     private static void testRandomBitSet(RandomSource random)

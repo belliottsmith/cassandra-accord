@@ -27,6 +27,7 @@ import accord.messages.Reply;
 import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
+import accord.utils.async.Cancellable;
 
 public class SimpleMessageSink implements MessageSink
 {
@@ -46,9 +47,9 @@ public class SimpleMessageSink implements MessageSink
     }
 
     @Override
-    public void send(Node.Id to, Request request, int attempt, AsyncExecutor executor, Callback callback)
+    public Cancellable send(Node.Id to, Request request, int attempt, AsyncExecutor executor, Callback callback)
     {
-        network.send(node, to, request, executor, callback);
+        return network.send(node, to, request, executor, callback);
     }
 
     @Override

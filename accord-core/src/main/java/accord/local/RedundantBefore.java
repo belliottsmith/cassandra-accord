@@ -759,14 +759,19 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return lb.epoch() >= endEpoch;
         }
 
-        private boolean isRetired()
+        public boolean isRetired()
         {
             return endEpoch <= maxBoundBoth(SHARD_APPLIED, LOCALLY_SYNCED).epoch();
         }
 
-        private boolean isLocallyRetired()
+        public boolean isLocallyRetired()
         {
             return endEpoch <= maxBound(LOCALLY_SYNCED).epoch();
+        }
+
+        public boolean isLocallyRetiredOrPreBootstrap(TxnId txnId)
+        {
+            return isLocallyRetired() || is(txnId, PRE_BOOTSTRAP_OR_STALE);
         }
 
         private boolean outOfBounds(Timestamp lb)
