@@ -28,9 +28,8 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Tracing;
 import net.nicoulaj.compilecommand.annotations.Inline;
-
-import static java.lang.String.format;
 
 public class Invariants
 {
@@ -80,6 +79,11 @@ public class Invariants
     public static IllegalStateException illegalState(String msg)
     {
          throw createIllegalState(msg);
+    }
+
+    private static String format(String fmt, Object ... args)
+    {
+        return Tracing.safeFormat(fmt, args);
     }
 
     public static IllegalStateException illegalState(String fmt, Object... args)

@@ -18,13 +18,16 @@
 
 package accord.coordinate;
 
+import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.coordinate.tracking.AbstractTracker;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
@@ -68,14 +71,14 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
 
     void recordOk(int fromIndex, Ok ok)
     {
-        Invariants.require(replyState[fromIndex] == null);
+        Invariants.require(replyState[fromIndex] == null, "%s", this);
         replyState[fromIndex] = ok;
         replyCount++;
     }
 
     SortedListMap<Node.Id, Ok> finishOks()
     {
-        Invariants.require(replyState != null);
+        Invariants.require(replyState != null, "%s", this);
         setDoneWithReplies();
         for (int i = expectingReply.nextSetBit(0) ; i >= 0 ; i = expectingReply.nextSetBit(i + 1))
         {
@@ -128,7 +131,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
         setFinishing();
         node.withEpochExact(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), WrappableException::wrap, () -> {
             runnable.run();
-            Invariants.require(isDone());
+            Invariants.require(isDone(), "%s", this);
         });
     }
 
@@ -137,7 +140,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
         setFinishing();
         node.withEpochAtLeast(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), WrappableException::wrap, () -> {
             runnable.run();
-            Invariants.require(isDone());
+            Invariants.require(isDone(), "%s", this);
         });
     }
 
@@ -146,7 +149,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
         setFinishing();
         await.begin((success, fail) -> {
             if (fail != null) finishWithFailureOverride(fail);
-            else Invariants.require(isDone());
+            else Invariants.require(isDone(), "%s", this);
         });
     }
 
@@ -181,7 +184,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
             return;
 
         onSuccessInternal(from, fromIndex, reply);
-        Invariants.require(!expectingReply.isEmpty() || isFinishing() || isDone());
+        Invariants.require(!expectingReply.isEmpty() || isFinishing() || isDone(), "%s", this);
     }
 
     @Override
@@ -199,7 +202,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
             return;
 
         onFailureInternal(from, fromIndex, failure);
-        Invariants.require(!expectingReply.isEmpty() || isFinishing() || isDone());
+        Invariants.require(!expectingReply.isEmpty() || isFinishing() || isDone(), "%s", this);
     }
 
     private int onReply(Node.Id from, Object reply, boolean isFinal)
@@ -218,13 +221,13 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
         if (isFinal)
         {
             boolean expecting = expectingReply.unset(fromIndex);
-            Invariants.require(expecting);
+            Invariants.require(expecting, "%s", this);
             replyState[fromIndex] = null;
         }
         else
         {
             boolean expecting = expectingReply.get(fromIndex);
-            Invariants.require(expecting);
+            Invariants.require(expecting, "%s", this);
         }
         return fromIndex;
     }
@@ -257,7 +260,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
     {
         BiConsumer<? super Result, Throwable> callback = this.callback;
         this.callback = null;
-        Invariants.require(callback != null);
+        Invariants.require(callback != null, "%s", this);
         return callback;
     }
 
@@ -279,7 +282,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
     }
 
     @Override
-    public SortedListMap<Node.Id, ?> replies()
+    public final SortedListMap<Node.Id, ?> replies()
     {
         Object[] replyState = this.replyState;
         if (replyState == null)
@@ -298,7 +301,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
     public SortedList<Node.Id> inflight()
     {
         SortedListSet<Node.Id> build = SortedListSet.noneOf(nodes);
-        for (int i = expectingReply.nextSetBit(0) ; i < nodes.size() ; i = expectingReply.nextSetBit(i + 1))
+        for (int i = expectingReply.nextSetBit(0) ; i >= 0 ; i = expectingReply.nextSetBit(i + 1))
             build.addIndex(i);
         return SortedArrayList.copySorted(build, Node.Id[]::new);
     }
@@ -307,6 +310,34 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
     public String toString()
     {
         String describe = describe();
-        return getClass().getSimpleName() + ":" + txnId + (describe.isEmpty() ? "" : ": " + describe);
+        AbstractTracker<?> tracker = tracker();
+        SortedListMap<Node.Id, ?> replies = replies();
+        return kind().name() + ':' + txnId
+               + "scope=" + scope()
+               + " inflight=" + inflight()
+               + (tracker == null ? "" : "tracker=" + tracker.summariseTracker())
+               + (describe.isEmpty() ? "" : ' ' + describe)
+               + (replies == null ? "" : " replies=" + summariseReplies(replies, 60));
+    }
+
+    public static String summariseReplies(@Nonnull SortedListMap<Node.Id, ?> replies, int maxReplyLength)
+    {
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (int i = 0 ; i < replies.domainSize() ; ++i)
+        {
+            Object value = replies.getValue(i);
+            if (value == null) continue;
+            Node.Id key = replies.getKey(i);
+            if (first) first = false;
+            else sb.append('\n');
+            sb.append(key);
+            sb.append('=');
+            String v = Objects.toString(value);
+            if (v.length() > maxReplyLength)
+                v = v.substring(0, maxReplyLength) + "...";
+            sb.append(v);
+        }
+        return sb.toString();
     }
 }

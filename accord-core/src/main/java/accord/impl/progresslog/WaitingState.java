@@ -809,7 +809,7 @@ abstract class WaitingState extends BaseTxnState
             SafeCommand safeCommand = Invariants.nonNull(safeStore.unsafeGet(txnId));
             Route<?> route = Route.castToRoute(safeCommand.current().maxContactable());
             long lowEpoch = readLowEpoch(safeStore, txnId, route);
-            long highEpoch = readLowEpoch(safeStore, txnId, route);
+            long highEpoch = readHighEpoch(safeStore, txnId, route);
             Route<?> slicedRoute = slicedRoute(safeStore, txnId, route, lowEpoch, highEpoch);
 
             int roundSize = awaitRoundSize(slicedRoute);
