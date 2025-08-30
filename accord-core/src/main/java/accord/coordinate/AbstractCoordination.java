@@ -313,11 +313,11 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
         AbstractTracker<?> tracker = tracker();
         SortedListMap<Node.Id, ?> replies = replies();
         return kind().name() + ':' + txnId
-               + "scope=" + scope()
-               + " inflight=" + inflight()
-               + (tracker == null ? "" : "tracker=" + tracker.summariseTracker())
+               + "scope:" + scope()
+               + " inflight:" + inflight()
+               + (tracker == null ? "" : " tracker:" + tracker.summariseTracker())
                + (describe.isEmpty() ? "" : ' ' + describe)
-               + (replies == null ? "" : " replies=" + summariseReplies(replies, 60));
+               + (replies == null ? "" : " replies:" + summariseReplies(replies, 60));
     }
 
     public static String summariseReplies(@Nonnull SortedListMap<Node.Id, ?> replies, int maxReplyLength)
