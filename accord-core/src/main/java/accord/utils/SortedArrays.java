@@ -1830,8 +1830,8 @@ public class SortedArrays
         values[j] = t;
     }
 
-    public static <T extends Comparable<? super T>> LargeBitSet toSimpleBitSet(SortedArrays.SortedArrayList<T> superset,
-                                                                               SortedArrays.SortedArrayList<T> subset)
+    public static <T extends Comparable<? super T>> LargeBitSet toLargeBitSet(SortedArrays.SortedArrayList<T> superset,
+                                                                              SortedArrays.SortedArrayList<T> subset)
     {
         LargeBitSet bitSet = new LargeBitSet(superset.size());
         int subsetIndex = 0;
