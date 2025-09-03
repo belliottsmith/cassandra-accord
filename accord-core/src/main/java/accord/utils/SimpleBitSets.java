@@ -22,79 +22,16 @@ public final class SimpleBitSets
 {
     private SimpleBitSets() {}
 
-    public static AllSetSimpleBitSet allSet()
+    public static SimpleBitSet allSet(int bits)
     {
-        return AllSetSimpleBitSet.instance;
+        SimpleBitSet set = SimpleBitSet.allocate(bits);
+        for (int i = 0; i < bits; i++)
+            set.set(i);
+        return set;
     }
 
-    public static AllUnsetSimpleBitSet allUnset()
+    public static SimpleBitSet allUnset(int bits)
     {
-        return AllUnsetSimpleBitSet.instance;
-    }
-
-    private static class AbstractAllSimpleBitSet implements SimpleBitSet
-    {
-        private final boolean set;
-
-        private AbstractAllSimpleBitSet(boolean set)
-        {
-            this.set = set;
-        }
-
-        @Override
-        public boolean get(int i)
-        {
-            return set;
-        }
-
-        @Override
-        public boolean set(int i)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public boolean unset(int i)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void clear()
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public boolean isEmpty()
-        {
-            return !set;
-        }
-
-        @Override
-        public int nextSetBit(int fromIndex)
-        {
-            return set ? fromIndex : -1;
-        }
-    }
-
-    public static class AllSetSimpleBitSet extends AbstractAllSimpleBitSet
-    {
-        public static final AllSetSimpleBitSet instance = new AllSetSimpleBitSet();
-
-        private AllSetSimpleBitSet()
-        {
-            super(true);
-        }
-    }
-
-    public static class AllUnsetSimpleBitSet extends AbstractAllSimpleBitSet
-    {
-        public static final AllUnsetSimpleBitSet instance = new AllUnsetSimpleBitSet();
-
-        private AllUnsetSimpleBitSet()
-        {
-            super(false);
-        }
+        return SimpleBitSet.allocate(bits);
     }
 }
