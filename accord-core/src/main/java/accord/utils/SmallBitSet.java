@@ -26,6 +26,20 @@ public class SmallBitSet implements SimpleBitSet
 {
     private long bits;
 
+    public SmallBitSet()
+    {
+    }
+
+    public SmallBitSet(long bits)
+    {
+        this.bits = bits;
+    }
+
+    public long bits()
+    {
+        return bits;
+    }
+
     public boolean set(int i)
     {
         long bit = bit(i);
