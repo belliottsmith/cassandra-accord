@@ -140,7 +140,7 @@ public class TopologyManager
             this.self = node;
             this.global = Invariants.requireArgument(global, !global.isSubset());
             this.local = global.forNode(node).trim();
-            Invariants.requireArgument(!global().isSubset());
+            Invariants.requireArgument(local.epoch == global.epoch);
             this.curShardSyncComplete = new BitSet(global.shards.length);
             if (!global().isEmpty())
                 this.syncTracker = new QuorumTracker(new Single(sorter, global()));
@@ -383,32 +383,21 @@ public class TopologyManager
         public void syncComplete(Id node, long epoch)
         {
             Invariants.requireArgument(epoch > 0);
+            int i = indexOf(epoch);
             if (epoch > currentEpoch)
             {
                 pending(epoch).syncComplete.add(node);
-            }
-            else
-            {
-                int i = indexOf(epoch);
-                if (i < 0)
+                if (epochs.length == 0)
                     return;
-
-                EpochState.NodeSyncStatus status = epochs[i].recordSyncComplete(node);
-                switch (status)
-                {
-                    case Complete:
-                        i++;
-                        for (; i < epochs.length && epochs[i].recordSyncCompleteFromFuture(); i++) {}
-                        break;
-                    case Untracked:
-                        // don't have access to TopologyManager.this.node to check if the nodes match... this state should not happen unless it is the same node
-                    case NoUpdate:
-                    case ShardUpdate:
-                        break;
-                    default:
-                        throw new UnsupportedOperationException("Unknown status " + status);
-                }
+                i = 0;
             }
+            else if (i < 0)
+            {
+                Invariants.require(epoch < minEpoch(), "Could not find epoch %d. Min: %d, current: %d", epoch, minEpoch(), currentEpoch);
+                return;
+            }
+
+            recordSyncComplete(epochs, i, node);
         }
 
         /**
@@ -417,23 +406,16 @@ public class TopologyManager
          */
         public Ranges epochClosed(Ranges ranges, long epoch)
         {
-            if (epochs.length == 0)
-                return ranges;
-
             Invariants.requireArgument(epoch > 0);
-            int i;
+            int i = indexOf(epoch);
             if (epoch > currentEpoch)
             {
-                Notifications notifications = pending(epoch);
-                notifications.closed = notifications.closed.union(MERGE_ADJACENT, ranges);
+                pending(epoch).closed.union(MERGE_ADJACENT, ranges);
+                if (epochs.length == 0)
+                    return ranges;
                 i = 0;
             }
-            else
-            {
-                i = indexOf(epoch);
-            }
-
-            if (i == -1)
+            else if (i < 0)
             {
                 Invariants.require(epoch < minEpoch(), "Could not find epoch %d. Min: %d, current: %d", epoch, minEpoch(), currentEpoch);
                 return Ranges.EMPTY; // notification came for an already truncated epoch
@@ -451,25 +433,20 @@ public class TopologyManager
          */
         public Ranges epochRetired(Ranges ranges, long epoch)
         {
-            if (epochs.length == 0)
-                return ranges;
-
-            Invariants.requireArgument(epoch > 0);
-            int retiredIdx;
+            int i = indexOf(epoch);
             if (epoch > currentEpoch)
             {
-                Notifications notifications = pending(epoch);
-                notifications.retired = notifications.retired.union(MERGE_ADJACENT, ranges);
-                retiredIdx = 0; // record these ranges as complete for all earlier epochs as well
+                pending(epoch).retired.union(MERGE_ADJACENT, ranges);
+                if (epochs.length == 0)
+                    return ranges;
+                i = 0;
             }
-            else
+            else if (i < 0)
             {
-                retiredIdx = indexOf(epoch);
-                if (retiredIdx < 0)
-                    return Ranges.EMPTY;
+                Invariants.require(epoch < minEpoch(), "Could not find epoch %d. Min: %d, current: %d", epoch, minEpoch(), currentEpoch);
+                return Ranges.EMPTY; // notification came for an already truncated epoch
             }
 
-            int i = retiredIdx;
             Ranges report = ranges = epochs[i++].recordRetired(ranges);
             while (!ranges.isEmpty() && i < epochs.length)
                 ranges = epochs[i++].recordRetired(ranges);
@@ -502,6 +479,25 @@ public class TopologyManager
                 return -1;
 
             return (int) (currentEpoch - epoch);
+        }
+    }
+
+    private static void recordSyncComplete(EpochState[] epochs, int i, Id node)
+    {
+        EpochState.NodeSyncStatus status = epochs[i].recordSyncComplete(node);
+        switch (status)
+        {
+            case Complete:
+                i++;
+                for (; i < epochs.length && epochs[i].recordSyncCompleteFromFuture(); i++) {}
+                break;
+            case Untracked:
+                // don't have access to TopologyManager.this.node to check if the nodes match... this state should not happen unless it is the same node
+            case NoUpdate:
+            case ShardUpdate:
+                break;
+            default:
+                throw new UnsupportedOperationException("Unknown status " + status);
         }
     }
 
@@ -729,17 +725,23 @@ public class TopologyManager
             prev = epochs;
             Invariants.requireArgument(topology.epoch == prev.nextEpoch() || epochs.epochs.length == 0,
                                        "Expected topology update %d to be %d", topology.epoch, prev.nextEpoch());
-            EpochState[] nextEpochs = new EpochState[prev.epochs.length + 1];
-            List<Epochs.Notifications> pending = new ArrayList<>(prev.pending);
-            Epochs.Notifications notifications = pending.isEmpty() ? new Epochs.Notifications() : pending.remove(0);
-
-            System.arraycopy(prev.epochs, 0, nextEpochs, 1, prev.epochs.length);
 
             Ranges prevAll = prev.epochs.length == 0 ? Ranges.EMPTY : prev.epochs[0].global.ranges;
+            List<Epochs.Notifications> pending = prev.pending.size() <= 1 ? new ArrayList<>() : new ArrayList<>(prev.pending.subList(1, prev.pending.size()));
+
+            EpochState[] nextEpochs = new EpochState[prev.epochs.length + 1];
+            System.arraycopy(prev.epochs, 0, nextEpochs, 1, prev.epochs.length);
             nextEpochs[0] = new EpochState(self, topology, sorter.get(topology), prevAll);
-            notifications.syncComplete.forEach(nextEpochs[0]::recordSyncComplete);
-            nextEpochs[0].recordClosed(notifications.closed);
-            nextEpochs[0].recordRetired(notifications.retired);
+            if (!prev.pending.isEmpty())
+            {
+                // TODO (expected): we should invoke the same code as we do when receiving normally, to prevent divergence
+                prev.pending.get(0).syncComplete.forEach(id -> recordSyncComplete(nextEpochs, 0, id));
+                for (Epochs.Notifications notifications : prev.pending)
+                {
+                    nextEpochs[0].recordClosed(notifications.closed);
+                    nextEpochs[0].recordRetired(notifications.retired);
+                }
+            }
 
             List<FutureEpoch> futureEpochs = new ArrayList<>(prev.futureEpochs);
             notifyDone = !futureEpochs.isEmpty() ? futureEpochs.remove(0) : null;
@@ -939,8 +941,6 @@ public class TopologyManager
             for (int i = 0; i < topologies.size() && count > 0; i++, count--)
             {
                 Topology topology = topologies.get(i);
-                Invariants.require(i > 0 || topology.epoch() == minEpoch || firstNonEmpty == topology.epoch(),
-                                   "Min epoch: %d. Range: %s", minEpoch, this);
                 forEach.accept(topology);
             }
         }

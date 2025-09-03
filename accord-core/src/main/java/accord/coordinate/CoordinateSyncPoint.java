@@ -105,14 +105,14 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
-        TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain(), cardinality(keysOrRanges));
+        TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, keysOrRanges.domain(), cardinality(keysOrRanges));
         return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, keysOrRanges, adapter)).beginAsResult();
     }
 
     public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
-        TxnId txnId = node.nextTxnId(kind, route.domain(), cardinality(route));
+        TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, route.domain(), cardinality(route));
         return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, route, adapter)).beginAsResult();
     }
 

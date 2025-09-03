@@ -276,7 +276,7 @@ public class Topology
     {
         NodeInfo info = nodeLookup.get(node.id);
         if (info == null)
-            return Topology.EMPTY;
+            return Topology.EMPTY.withEpoch(epoch);
 
         SortedArrayList<Id> nodeIds = new SortedArrayList<>(new Id[] { node });
         return new Topology(global(), epoch, shards, ranges, removedIds, staleIds, nodeIds, nodeLookup, info.ranges, info.supersetIndexes);

@@ -690,63 +690,36 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         messageSink.reply(replyingToNode, replyContext, send);
     }
 
-    public TxnId nextTxnId(Txn.Kind rw, Domain domain)
+    public TxnId nextTxnIdWithDefaultFlags(Txn.Kind rw, Domain domain)
     {
-        return nextTxnId(rw, domain, Any, defaultMediumPath().bit());
+        return nextTxnIdWithFlags(rw, domain, Any, defaultMediumPath().bit());
     }
 
-    public TxnId nextTxnId(Timestamp min, Txn.Kind rw, Domain domain)
+    public TxnId nextStaleTxnIdWithDefaultFlags(long minEpoch, long minHlc, Txn.Kind rw, Domain domain)
     {
-        return nextTxnId(min, rw, domain, Any, defaultMediumPath().bit());
+        return nextStaleTxnIdWithFlags(minEpoch, minHlc, rw, domain, Any, defaultMediumPath().bit());
     }
 
-    public TxnId nextStaleTxnId(long minEpoch, long minHlc, Txn.Kind rw, Domain domain)
+    public TxnId nextTxnIdWithDefaultFlags(Txn.Kind rw, Domain domain, Cardinality cardinality)
     {
-        return nextStaleTxnId(minEpoch, minHlc, rw, domain, Any, defaultMediumPath().bit());
+        return nextTxnIdWithFlags(rw, domain, cardinality, defaultMediumPath().bit());
     }
 
-    public TxnId nextTxnId(Txn.Kind rw, Domain domain, Cardinality cardinality)
+    public TxnId nextTxnIdWithDefaultFlags(long minEpoch, long minHlc, Txn.Kind rw, Domain domain, Cardinality cardinality)
     {
-        return nextTxnId(rw, domain, cardinality, defaultMediumPath().bit());
-    }
-
-    public TxnId nextTxnId(long minHlc, Txn.Kind rw, Domain domain, Cardinality cardinality)
-    {
-        return newTxnId(epoch(), uniqueNow(minHlc), rw, domain, cardinality, defaultMediumPath().bit(), id);
-    }
-
-    public TxnId nextTxnId(Timestamp min, Txn.Kind rw, Domain domain, Cardinality cardinality)
-    {
-        return nextTxnId(min, rw, domain, cardinality, defaultMediumPath().bit());
-    }
-
-    public TxnId nextTxnId(Txn.Kind rw, Domain domain, int flags)
-    {
-        return nextTxnId(rw, domain, Any, flags);
-    }
-
-    public TxnId nextTxnId(Timestamp min, Txn.Kind rw, Domain domain, int flags)
-    {
-        return nextTxnId(min, rw, domain, Any, flags);
+        return newTxnId(Math.max(minEpoch, epoch()), uniqueNow(minHlc), rw, domain, cardinality, defaultMediumPath().bit(), id);
     }
 
     /**
      * TODO (required): Make sure we cannot re-issue the same txnid on startup
      * TODO (required): Don't use a new epoch for the TxnId at least until we know its definition
      */
-    public TxnId nextTxnId(Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
+    public TxnId nextTxnIdWithFlags(Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
     {
         return newTxnId(epoch(), uniqueNow(), rw, domain, cardinality, flags, id);
     }
 
-    public TxnId nextTxnId(Timestamp min, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
-    {
-        long epoch = min == null ? epoch() : Math.max(min.epoch(), epoch());
-        long hlc = uniqueNow(min == null ? 0 : min.hlc());
-        return newTxnId(epoch, hlc, rw, domain, cardinality, flags, id);
-    }
-
-    public TxnId nextStaleTxnId(long minEpoch, long minHlc, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
+    public TxnId nextStaleTxnIdWithFlags(long minEpoch, long minHlc, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
     {
         long epoch = Math.max(minEpoch, epoch());
         long hlc = uniqueStale(minHlc);
@@ -764,26 +737,31 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public TxnId nextTxnId(Txn txn)
     {
-        Seekables<?, ?> keys = txn.keys();
-        Txn.Kind kind = txn.kind();
-        return nextTxnId(keys, kind);
+        return nextTxnId(0, 0, txn);
     }
 
-    public TxnId nextTxnId(Seekables<?, ?> keys, Txn.Kind kind)
+    public TxnId nextTxnId(long minEpoch, long minHlc, Txn txn)
     {
-        return nextTxnId(null, keys, kind);
+        Seekables<?, ?> keys = txn.keys();
+        Txn.Kind kind = txn.kind();
+        return nextTxnId(minEpoch, minHlc, keys, kind);
     }
 
     public TxnId nextTxnId(@Nullable Timestamp min, Seekables<?, ?> keys, Txn.Kind kind)
+    {
+        return nextTxnId(min == null ? 0 : min.epoch(), min == null ? 0 : min.hlc(), keys, kind);
+    }
+
+    public TxnId nextTxnId(long minEpoch, long minHlc, Seekables<?, ?> keys, Txn.Kind kind)
     {
         Domain domain = keys.domain();
         Cardinality cardinality = cardinality(domain, keys);
 
         if (!usePrivilegedCoordinator() || (kind != Read && kind != Write))
-            return nextTxnId(min, kind, domain, cardinality);
+            return nextTxnIdWithDefaultFlags(minEpoch, minHlc, kind, domain, cardinality);
 
-        long epoch = min == null ? epoch() : Math.max(min.epoch(), epoch());
-        long hlc = uniqueNow(min == null ? 0 : min.hlc());
+        long epoch = Math.max(minEpoch, epoch());
+        long hlc = uniqueNow(minHlc);
         int flags = computeBestDefaultTxnIdFlags(keys, epoch);
         TxnId txnId = new TxnId(epoch, hlc, flags, kind, domain, cardinality, id);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);

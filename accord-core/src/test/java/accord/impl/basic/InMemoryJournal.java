@@ -233,21 +233,9 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public Iterator<TopologyUpdate> replayTopologies()
+    public List<TopologyUpdate> replayTopologies()
     {
-        return new Iterator<>()
-        {
-            int current = 0;
-            public boolean hasNext()
-            {
-                return current < topologyUpdates.size();
-            }
-
-            public TopologyUpdate next()
-            {
-                return topologyUpdates.get(current++);
-            }
-        };
+        return new ArrayList<>(topologyUpdates);
     }
 
     @Override

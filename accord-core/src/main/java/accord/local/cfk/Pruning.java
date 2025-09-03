@@ -603,7 +603,7 @@ public class Pruning
                 TxnInfo txn = newById[i];
                 TxnId[] missing = txn.missing();
                 if (missing == NO_TXNIDS) continue;
-                missing = removeRedundantMissing(missing, newRedundantBefore, newById, newAppliedBeforeIndex);
+                missing = removeRedundantMissing(missing, newRedundantBefore, newAppliedBefore, newAppliedBeforeIndex, newById);
                 newById[i] = txn.withMissing(missing);
             }
         }

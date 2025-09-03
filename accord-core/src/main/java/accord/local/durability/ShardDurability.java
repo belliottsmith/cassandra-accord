@@ -369,7 +369,7 @@ public class ShardDurability
                 }
             }
             minHlc = Math.max(minHlc, node.agent().minStaleHlc(node, activeRequest != null));
-            TxnId staleId = node.nextStaleTxnId(minEpoch, minHlc, kind, Domain.Range);
+            TxnId staleId = node.nextStaleTxnIdWithDefaultFlags(minEpoch, minHlc, kind, Domain.Range);
             if (activeRequest != null) logger.info("Initiating RX requested by {} for {} with TxnId {}. Remaining: {}.", activeRequest.requestedBy, ranges, staleId, active);
             else logger.debug("Initiating RX for durability of {} with TxnId {}.", ranges, staleId);
 

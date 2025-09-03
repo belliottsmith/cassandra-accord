@@ -22,7 +22,6 @@ import java.util.Arrays;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.local.RedundantBefore.QuickBounds;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -361,7 +360,7 @@ class Utils
         return newMissing;
     }
 
-    static TxnId[] removeRedundantMissing(TxnId[] missing, TxnId removeBefore, TxnInfo[] newById, int appliedBeforeIndex)
+    static TxnId[] removeRedundantMissing(TxnId[] missing, TxnId removeBefore, TxnId appliedBefore, int appliedBeforeIndex, TxnInfo[] newById)
     {
         if (missing == NO_TXNIDS)
             return NO_TXNIDS;
@@ -373,20 +372,20 @@ class Utils
             if (j == missing.length) return NO_TXNIDS;
             missing = Arrays.copyOfRange(missing, j, missing.length);
         }
+
         if (appliedBeforeIndex < 0)
             return missing;
 
+        int maybeRemovedBefore = Arrays.binarySearch(missing, appliedBefore);
+        if (maybeRemovedBefore < 0) maybeRemovedBefore = -1 - maybeRemovedBefore;
+        if (maybeRemovedBefore == 0)
+            return missing;
+
         int removed = 0;
+        int i = 0;
         j = SortedArrays.binarySearch(newById, 0, appliedBeforeIndex, missing[0], TxnId::compareTo, FAST);
-        if (j >= 0) ++j;
-        else
+        while (true)
         {
-            ++removed;
-            j = -1 - j;
-        }
-        for (int i = 1 ; i < missing.length ; ++i)
-        {
-            j = SortedArrays.exponentialSearch(newById, j, appliedBeforeIndex, missing[i], TxnId::compareTo, FAST);
             if (j < 0)
             {
                 ++removed;
@@ -396,10 +395,21 @@ class Utils
             {
                 missing[i - removed] = missing[i];
             }
+            if (++i == maybeRemovedBefore)
+                break;
+            j = SortedArrays.exponentialSearch(newById, j, appliedBeforeIndex, missing[i], TxnId::compareTo, FAST);
         }
+
         if (removed == 0) return missing;
         else if (removed == missing.length) return NO_TXNIDS;
-        else return Arrays.copyOf(missing, missing.length - removed);
+        else if (i == missing.length) return Arrays.copyOf(missing, missing.length - removed);
+        else
+        {
+            TxnId[] newMissing = new TxnId[missing.length - removed];
+            System.arraycopy(missing, 0, newMissing, 0, i - removed);
+            System.arraycopy(missing, i, newMissing, i - removed, missing.length - i);
+            return newMissing;
+        }
     }
 
     static TxnId[] ensureOneMissing(TxnId txnId, TxnId[] oneMissing)
