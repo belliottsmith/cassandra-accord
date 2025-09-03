@@ -118,7 +118,7 @@ class Bootstrap
                 return;
             }
 
-            globalSyncId = node.nextTxnId(ExclusiveSyncPoint, Routable.Domain.Range);
+            globalSyncId = node.nextTxnIdWithDefaultFlags(ExclusiveSyncPoint, Routable.Domain.Range);
             Invariants.requireArgument(epoch <= globalSyncId.epoch(), "Attempting to use local epoch %d which is larger than global epoch %d", epoch, globalSyncId.epoch());
 
             if (!node.topology().hasEpoch(globalSyncId.epoch()))

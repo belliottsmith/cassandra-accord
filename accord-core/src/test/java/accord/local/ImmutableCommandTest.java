@@ -158,7 +158,7 @@ public class ImmutableCommandTest
         CommandStoreSupport support = new CommandStoreSupport();
         Node node = createNode(ID1, support);
         CommandStore commands = node.unsafeByIndex(0);
-        TxnId txnId = node.nextTxnId(Write, Key);
+        TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Key);
         ((MockCluster.Clock)node.time()).increment(10);
         Keys keys = Keys.of(KEY);
         Txn txn = writeTxn(keys);

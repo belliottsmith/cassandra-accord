@@ -64,7 +64,7 @@ public interface Journal
     // TODO (required): propagate exceptions
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
-    Iterator<? extends TopologyUpdate> replayTopologies();
+    List<? extends TopologyUpdate> replayTopologies();
     void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush);
 
     void purge(CommandStores commandStores, EpochSupplier minEpoch);

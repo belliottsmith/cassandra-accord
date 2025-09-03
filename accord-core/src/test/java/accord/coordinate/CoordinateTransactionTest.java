@@ -63,7 +63,7 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId txnId = node.nextTxnId(Write, Key);
+            TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Key);
             Keys keys = keys(10);
             Txn txn = writeTxn(keys);
             FullKeyRoute route = keys.toRoute(keys.get(0).toUnseekable());
@@ -80,7 +80,7 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId txnId = node.nextTxnId(Read, Range);
+            TxnId txnId = node.nextTxnIdWithDefaultFlags(Read, Range);
             Ranges keys = ranges(range(1, 2));
             Txn txn = writeTxn(keys);
             FullRangeRoute route = keys.toRoute(keys.get(0).someIntersectingRoutingKey(null));
@@ -97,8 +97,8 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId oldId1 = node.nextTxnId(Write, Key);
-            TxnId oldId2 = node.nextTxnId(Write, Key);
+            TxnId oldId1 = node.nextTxnIdWithDefaultFlags(Write, Key);
+            TxnId oldId2 = node.nextTxnIdWithDefaultFlags(Write, Key);
 
             getUninterruptibly(CoordinateSyncPoint.exclusive(node, ranges(range(0, 1))));
             try
@@ -139,7 +139,7 @@ public class CoordinateTransactionTest
 
     private TxnId coordinate(Node node, long clock, Keys keys) throws Throwable
     {
-        TxnId txnId = node.nextTxnId(Write, Key);
+        TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Key);
         txnId = new TxnId(txnId.epoch(), txnId.hlc() + clock, 0, Write, Key, txnId.node);
         Txn txn = writeTxn(keys);
         Result result = getUninterruptibly(CoordinateTransaction.coordinate(node, node.computeRoute(txnId, txn.keys()), txnId, txn));
@@ -203,7 +203,7 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId txnId = node.nextTxnId(Write, Key);
+            TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Key);
             Keys oneKey = keys(10);
             Keys twoKeys = keys(10, 20);
             Txn txn = new Txn.InMemory(oneKey, MockStore.read(oneKey), MockStore.QUERY, MockStore.update(twoKeys));

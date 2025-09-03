@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -177,6 +178,15 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         public boolean isEmpty()
         {
             return lastReceived == 0;
+        }
+
+        @Nullable
+        synchronized EpochState getIfExists(long epoch)
+        {
+            if (epoch < minEpoch() || epoch > lastReceived)
+                return null;
+
+            return getOrCreate(epoch);
         }
 
         synchronized EpochState getOrCreate(long epoch)
@@ -350,6 +360,14 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
     public Topology getTopologyForEpoch(long epoch)
     {
         return epochs.topologyFor(epoch);
+    }
+
+    protected Topology getTopologyIfExists(long epoch)
+    {
+        EpochState state = epochs.getIfExists(epoch);
+        if (state != null)
+            return state.topology;
+        return null;
     }
 
     @Override

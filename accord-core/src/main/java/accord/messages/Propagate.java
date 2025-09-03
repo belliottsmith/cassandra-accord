@@ -319,7 +319,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             case Invalidated:
                 if (tracing != null)
                     tracing.trace(safeStore.commandStore(), "Invalidating");
-                Commands.commitInvalidate(safeStore, safeCommand, route);
+                Commands.commitInvalidate(safeStore, safeCommand, participants.route());
                 break;
 
             case Applied:
@@ -328,13 +328,13 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
                     tracing.trace(safeStore.commandStore(), "Applying");
                 Invariants.require(committedExecuteAt != null);
                 // we must use the remote executeAt, as it might have a uniqueHlc we aren't aware of at commit
-                confirm(Commands.apply(safeStore, safeCommand, participants, Ballot.ZERO, txnId, route, committedExecuteAt, stableDeps, partialTxn, writes, result));
+                confirm(Commands.apply(safeStore, safeCommand, participants, Ballot.ZERO, txnId, participants.route(), committedExecuteAt, stableDeps, partialTxn, writes, result));
                 break;
 
             case Stable:
                 if (tracing != null)
                     tracing.trace(safeStore.commandStore(), "Committing as stable");
-                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, acceptedOrCommitted, txnId, route, partialTxn, executeAtIfKnown, stableDeps, null));
+                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, acceptedOrCommitted, txnId, participants.route(), partialTxn, executeAtIfKnown, stableDeps, null));
                 break;
 
             case Committed:

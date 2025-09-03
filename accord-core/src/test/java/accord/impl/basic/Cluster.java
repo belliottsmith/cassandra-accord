@@ -788,11 +788,10 @@ public class Cluster
 
                 // Replay journal
                 Journal journal = journalMap.get(id);
-                Iterator<? extends Journal.TopologyUpdate> iter = journal.replayTopologies();
+                List<? extends Journal.TopologyUpdate> list = journal.replayTopologies();
                 Journal.TopologyUpdate lastUpdate = null;
-                while (iter.hasNext())
+                for (Journal.TopologyUpdate update : list)
                 {
-                    Journal.TopologyUpdate update = iter.next();
                     Invariants.require(lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch());
                     lastUpdate = update;
                 }
