@@ -18,19 +18,20 @@
 
 package accord.utils;
 
-public interface SimpleBitSet
+public final class SimpleBitSets
 {
-    boolean get(int i);
-    boolean set(int i);
-    boolean unset(int i);
-    void clear();
-    boolean isEmpty();
-    int nextSetBit(int fromIndex);
-    int getSetBitCount();
+    private SimpleBitSets() {}
 
-    static SimpleBitSet allocate(int size)
+    public static SimpleBitSet allSet(int bits)
     {
-        if (size <= 64) return new SmallBitSet();
-        else return new LargeBitSet(size);
+        SimpleBitSet set = SimpleBitSet.allocate(bits);
+        for (int i = 0; i < bits; i++)
+            set.set(i);
+        return set;
+    }
+
+    public static SimpleBitSet allUnset(int bits)
+    {
+        return SimpleBitSet.allocate(bits);
     }
 }

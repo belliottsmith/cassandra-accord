@@ -26,6 +26,20 @@ public class SmallBitSet implements SimpleBitSet
 {
     private long bits;
 
+    public SmallBitSet()
+    {
+    }
+
+    public SmallBitSet(long bits)
+    {
+        this.bits = bits;
+    }
+
+    public long bits()
+    {
+        return bits;
+    }
+
     public boolean set(int i)
     {
         long bit = bit(i);
@@ -69,4 +83,15 @@ public class SmallBitSet implements SimpleBitSet
         return numberOfTrailingZeros(bits);
     }
 
+    @Override
+    public int getSetBitCount()
+    {
+        return Long.bitCount(bits);
+    }
+
+    @Override
+    public boolean equals(Object that)
+    {
+        return that instanceof SmallBitSet && this.bits == ((SmallBitSet) that).bits;
+    }
 }

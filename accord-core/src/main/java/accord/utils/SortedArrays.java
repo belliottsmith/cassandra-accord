@@ -50,6 +50,8 @@ import static accord.utils.SortedArrays.Search.FAST;
 //        - Exploit exponentialSearch in union/intersection/etc
 public class SortedArrays
 {
+    private static final int[] NO_INTS = new int[0];
+
     public static class SortedArrayList<T extends Comparable<? super T>> extends AbstractList<T> implements SortedList<T>
     {
         final T[] array;
@@ -443,6 +445,187 @@ public class SortedArrays
                 else if (cmp < 0)
                 {
                     leftIdx++;
+                    minKey = leftKey;
+                }
+                else
+                {
+                    rightIdx++;
+                    minKey = rightKey;
+                }
+                result[resultSize++] = minKey;
+            }
+
+            while (leftIdx < leftEnd)
+                result[resultSize++] = left[leftIdx++];
+
+            while (rightIdx < rightEnd)
+                result[resultSize++] = right[rightIdx++];
+
+            return buffers.completeAndDiscard(result, resultSize);
+        }
+        catch (Throwable t)
+        {
+            buffers.discard(result, resultSize);
+            throw t;
+        }
+    }
+
+    /**
+     * A linear intersection where we only want results from the left inputs, and the right inputs may either be a different type or otherwise only used for filtering
+     */
+    public static int[] linearIntersection(int[] left, int leftStart, int leftEnd, int[] right, int rightStart, int rightEnd, ArrayBuffers.IntBuffers buffers)
+    {
+        if (leftEnd - leftStart > rightEnd - rightStart)
+        {
+            int[] tmp = left;
+            int tmpStart = leftStart, tmpEnd = leftEnd;
+            left = right;
+            leftStart = rightStart;
+            leftEnd = rightEnd;
+            right = tmp;
+            rightStart = tmpStart;
+            rightEnd = tmpEnd;
+        }
+
+        int leftIdx = leftStart;
+        int rightIdx = rightStart;
+
+        int[] result = null;
+        int resultSize = 0;
+
+        boolean hasMatch = false;
+        {
+            while (leftIdx < leftEnd && rightIdx < rightEnd)
+            {
+                int leftKey = left[leftIdx];
+                int rightKey = right[rightIdx];
+                int cmp = Integer.compare(leftKey, rightKey);
+
+                if (cmp >= 0)
+                {
+                    rightIdx += 1;
+                    leftIdx += cmp == 0 ? 1 : 0;
+                    if (cmp == 0)
+                        hasMatch = true;
+                }
+                else
+                {
+                    resultSize = leftIdx++;
+                    result = buffers.getInts(resultSize + Math.min(leftEnd - leftIdx, rightEnd - rightIdx));
+                    System.arraycopy(left, 0, result, 0, resultSize);
+                    break;
+                }
+            }
+
+            if (result == null)
+            {
+                if (!hasMatch)
+                    return left.length == 0 ? left : NO_INTS;
+                if (leftStart == 0 && leftEnd == left.length)
+                    return left;
+                return Arrays.copyOfRange(left, leftStart, leftEnd);
+            }
+        }
+
+        try
+        {
+            while (leftIdx < leftEnd && rightIdx < rightEnd)
+            {
+                int leftKey = left[leftIdx];
+                int rightKey = right[rightIdx];
+                int cmp = Integer.compare(leftKey, rightKey);
+
+                if (cmp == 0)
+                {
+                    leftIdx++;
+                    rightIdx++;
+                    result[resultSize++] = leftKey;
+                }
+                else if (cmp < 0) leftIdx++;
+                else rightIdx++;
+            }
+
+            return buffers.complete(result, resultSize);
+        }
+        finally
+        {
+            buffers.discard(result, resultSize);
+        }
+    }
+
+    public static int[] linearUnion(int[] left, int leftStart, int leftEnd, int[] right, int rightStart, int rightEnd, ArrayBuffers.IntBuffers buffers)
+    {
+        if (leftEnd - leftStart < rightEnd - rightStart)
+        {
+            int[] tmp = left;
+            int tmpStart = leftStart, tmpEnd = leftEnd;
+            left = right;
+            leftStart = rightStart;
+            leftEnd = rightEnd;
+            right = tmp;
+            rightStart = tmpStart;
+            rightEnd = tmpEnd;
+        }
+
+        int leftIdx = leftStart;
+        int rightIdx = rightStart;
+
+        int[] result;
+        int resultSize;
+
+        // first, pick the superset candidate and merge the two until we find the first missing item
+        // if none found, return the superset candidate
+        {
+            int cmp;
+            boolean unfinished;
+            while (unfinished = (leftIdx < leftEnd && rightIdx < rightEnd))
+            {
+                int leftKey = left[leftIdx];
+                int rightKey = right[rightIdx];
+
+                cmp = Integer.compare(leftKey, rightKey);
+                if (cmp > 0) break;
+
+                leftIdx += 1;
+                rightIdx += cmp == 0 ? 1 : 0;
+            }
+
+            if (unfinished)
+            {
+                resultSize = leftIdx - leftStart;
+                result = buffers.getInts(resultSize + (leftEnd - leftIdx) + (rightEnd - (rightIdx - 1)));
+                System.arraycopy(left, leftStart, result, 0, resultSize);
+                result[resultSize++] = right[rightIdx++];
+            }
+            else
+            {
+                if (rightIdx == rightEnd) // all elements matched, so can return the other array
+                {
+                    if (leftStart == 0 && leftEnd == left.length)
+                        return left;
+
+                    return Arrays.copyOfRange(left, leftStart, leftEnd);
+                }
+                // no elements matched or only a subset matched
+                result = buffers.getInts((leftEnd - leftStart) + (rightEnd - rightIdx));
+                resultSize = leftIdx - leftStart;
+                System.arraycopy(left, leftStart, result, 0, resultSize);
+            }
+        }
+
+        try
+        {
+            while (leftIdx < leftEnd && rightIdx < rightEnd)
+            {
+                int leftKey = left[leftIdx];
+                int rightKey = right[rightIdx];
+                int cmp = Integer.compare(leftKey, rightKey);
+
+                int minKey;
+                if (cmp <= 0)
+                {
+                    leftIdx++;
+                    rightIdx += cmp == 0 ? 1 : 0;
                     minKey = leftKey;
                 }
                 else
@@ -1093,6 +1276,36 @@ public class SortedArrays
             }
 
             ai = exponentialSearch(input, ai, input.length, subtract[ri], cmp2, Search.FLOOR) + 1;
+        }
+    }
+
+    public static boolean hasIntersection(int[] left, int[] right)
+    {
+        return hasIntersection(left, 0, left.length, right, 0, right.length);
+    }
+
+    public static boolean hasIntersection(int[] left, int leftIndex, int leftEnd, int[] right, int rightIndex, int rightEnd)
+    {
+        if (leftIndex == leftEnd || rightIndex == rightEnd)
+            return false;
+
+        while (true)
+        {
+            leftIndex = SortedArrays.exponentialSearch(left, leftIndex, leftEnd, right[rightIndex]);
+            if (leftIndex >= 0)
+                return true;
+
+            leftIndex = -1 - leftIndex;
+            if (leftIndex == leftEnd)
+                return false;
+
+            rightIndex = SortedArrays.exponentialSearch(right, rightIndex, rightEnd, left[leftIndex]);
+            if (rightIndex >= 0)
+                return true;
+
+            rightIndex = -1 - rightIndex;
+            if (rightIndex == rightEnd)
+                return false;
         }
     }
 
