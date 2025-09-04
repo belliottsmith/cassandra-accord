@@ -83,4 +83,9 @@ public class SmallBitSet implements SimpleBitSet
         return numberOfTrailingZeros(bits);
     }
 
+    @Override
+    public int getSetBitCount()
+    {
+        return Long.bitCount(bits);
+    }
 }

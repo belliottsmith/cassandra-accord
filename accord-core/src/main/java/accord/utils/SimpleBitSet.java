@@ -26,6 +26,7 @@ public interface SimpleBitSet
     void clear();
     boolean isEmpty();
     int nextSetBit(int fromIndex);
+    int getSetBitCount();
 
     static SimpleBitSet allocate(int size)
     {

@@ -159,6 +159,12 @@ class SimpleBitSetTest
         }
 
         @Override
+        public int getSetBitCount()
+        {
+            return sut.getSetBitCount();
+        }
+
+        @Override
         public String toString()
         {
             return sut.getClass().getSimpleName();
