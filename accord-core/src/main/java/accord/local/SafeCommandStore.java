@@ -483,9 +483,9 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
             safeStore = safeStore;
             CommandStore unsafeStore = safeStore.commandStore();
-            AsyncChain<Void> submit = unsafeStore.build(context, safeStore0 -> { updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys() , txnId, mode); });
+            AsyncChain<Void> submit = unsafeStore.chain(context, safeStore0 -> { updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys() , txnId, mode); });
             if (next.txnId().is(Range))
-                submit = submit.flatMap(success -> unsafeStore.build((PreLoadContext.Empty) () -> "Register Transitive Dependencies", safeStore0 -> { registerTransitiveRangeDeps(safeStore0, txnId, next); }));
+                submit = submit.flatMap(success -> unsafeStore.chain((PreLoadContext.Empty) () -> "Register Transitive Dependencies", safeStore0 -> { registerTransitiveRangeDeps(safeStore0, txnId, next); }));
             submit.begin(safeStore.commandStore().agent);
         }
     }
@@ -526,12 +526,12 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             PreLoadContext context = PreLoadContext.contextFor(txnId, "Register Transitive Range Deps");
             Ranges ranges = rangeDeps.ranges(txnId);
             if (safeStore.canExecuteWith(context)) registerTransitive(safeStore, txnId, ranges);
-            else async.add(safeStore.commandStore().build(context, safeStore0 -> {
+            else async.add(safeStore.commandStore().chain(context, safeStore0 -> {
                 registerTransitive(safeStore0, txnId, ranges);
             }));
         });
 
-        AsyncChains.ofRunnable(Runnable::run, () -> commandStore.markSyncing(syncId, waitingOn))
+        AsyncChains.ofRunnable(() -> commandStore.markSyncing(syncId, waitingOn))
                    .flatMap(ignore -> AsyncChains.reduce(async, Reduce.toNull(), null))
                    .begin((success, fail) -> {
                        if (fail == null) commandStore.execute((PreLoadContext.Empty)() -> "Mark Synced", safeStore0 -> commandStore.markSynced(safeStore0, syncId, waitingOn));

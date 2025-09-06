@@ -18,7 +18,6 @@
 
 package accord.messages;
 
-import java.util.concurrent.CancellationException;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 

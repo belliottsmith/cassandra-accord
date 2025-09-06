@@ -59,17 +59,17 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     final Txn txn;
     boolean fastPathEnabled = true;
 
-    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<T, Throwable> callback)
+    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<? super T, Throwable> callback)
     {
         this(node, executor, txnId, txn, route, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
     }
 
-    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiConsumer<T, Throwable> callback)
+    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiConsumer<? super T, Throwable> callback)
     {
         this(node, executor, txnId, txn, route, topologies, FastPathTracker::new, callback);
     }
 
-    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiFunction<Topologies, TxnId, PreAcceptTracker<?>> trackerFactory, BiConsumer<T, Throwable> callback)
+    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiFunction<Topologies, TxnId, PreAcceptTracker<?>> trackerFactory, BiConsumer<? super T, Throwable> callback)
     {
         super(node, executor, route, txnId, topologies, callback);
         this.tracker = trackerFactory.apply(topologies, txnId);

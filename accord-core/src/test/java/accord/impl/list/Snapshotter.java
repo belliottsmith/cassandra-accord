@@ -82,7 +82,7 @@ public class Snapshotter<S>
         pendingSnapshots.add(new PendingSnapshot(runBeforeRestart, delay, (continuation) -> {
             if (continuation != null)
             {
-                snapshot.begin((success, fail) -> {
+                snapshot.invoke((success, fail) -> {
                     if (fail != null) result.setFailure(fail);
                     else
                     {

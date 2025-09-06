@@ -23,6 +23,9 @@ import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.Data;
 import accord.api.Result;
 import accord.api.Timeouts;
@@ -93,6 +96,8 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 // TODO (expected): by default, if we can execute locally, never contact a remote replica regardless of local outcome
 public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 {
+    private static final Logger logger = LoggerFactory.getLogger(ExecuteTxn.class);
+
     class StableTracker extends QuorumIdTracker implements Callback<ReadReply>
     {
         private boolean isDone;
@@ -490,7 +495,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
                 slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
                 {
-                    @Override public void timeout() { executor.maybeExecuteImmediately(() -> {
+                    @Override public void timeout() { executor.executeMaybeImmediately(() -> {
                         onSlowResponse(node.id());
                         slowTimeout = null;
                     }); }

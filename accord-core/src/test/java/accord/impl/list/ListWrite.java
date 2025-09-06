@@ -59,7 +59,7 @@ public class ListWrite extends TreeMap<Key, int[]> implements Write.InMemoryWrit
     {
         ListStore dataStore = (ListStore) unsafeStore.unsafeGetDataStore();
         logger.trace("submitting WRITE on {} at {} key:{}", dataStore.node, executeAt, key);
-        return executor.apply(unsafeStore).build(() -> {
+        return executor.apply(unsafeStore).chain(() -> {
             applySync(unsafeStore, key, txnId, executeAt, txn);
             return null;
         });

@@ -21,6 +21,8 @@ package accord.coordinate;
 import java.util.List;
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,9 +47,9 @@ import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
-import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults;
-import accord.utils.async.AsyncResults.SettableByCallback;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
+import accord.utils.async.Cancellable;
 
 import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;
 import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
@@ -71,75 +73,81 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
 
     final CoordinationAdapter<R> adapter;
 
-    private CoordinateSyncPoint(Node node, SequentialAsyncExecutor executor, TxnId txnId, Topologies topologies, Txn txn, FullRoute<?> route, SyncPointAdapter<R> adapter, BiConsumer<R, Throwable> callback)
+    private CoordinateSyncPoint(Node node, SequentialAsyncExecutor executor, TxnId txnId, Topologies topologies, Txn txn, FullRoute<?> route, SyncPointAdapter<R> adapter, BiConsumer<? super R, Throwable> callback)
     {
         super(node, executor, txnId, txn, route, topologies, adapter.preacceptTrackerFactory, callback);
         this.adapter = adapter;
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusive(Node node, Unseekables<U> keysOrRanges)
+    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> exclusive(Node node, Unseekables<U> keysOrRanges)
     {
         return coordinate(node, ExclusiveSyncPoint, keysOrRanges, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusive(Node node, TxnId txnId, Unseekables<U> keysOrRanges)
+    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> exclusive(Node node, TxnId txnId, Unseekables<U> keysOrRanges)
     {
         return coordinate(node, txnId, keysOrRanges, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> exclusive(Node node, TxnId txnId, FullRoute<U> route)
+    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> exclusive(Node node, TxnId txnId, FullRoute<U> route)
     {
         return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> executeAtQuorum(Node node, Unseekables<U> keysOrRanges)
+    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> executeAtQuorum(Node node, Unseekables<U> keysOrRanges)
     {
         return coordinate(node, ExclusiveSyncPoint, keysOrRanges, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> executeAtQuorum(Node node, TxnId txnId, FullRoute<U> route)
+    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> executeAtQuorum(Node node, TxnId txnId, FullRoute<U> route)
     {
         return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
+    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, keysOrRanges.domain(), cardinality(keysOrRanges));
-        return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, keysOrRanges, adapter)).beginAsResult();
+        return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, keysOrRanges, adapter));
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
+    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, route.domain(), cardinality(route));
-        return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, route, adapter)).beginAsResult();
+        return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, route, adapter));
     }
 
-    private static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, TxnId txnId, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
+    private static <U extends Unseekable> AsyncChain<SyncPoint<U>> coordinate(Node node, TxnId txnId, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(txnId.isSyncPoint());
         FullRoute<U> route = (FullRoute<U>) node.computeRoute(txnId, keysOrRanges);
         return coordinate(node, txnId, route, adapter);
     }
 
-    private static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, TxnId txnId, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
+    private static <U extends Unseekable> AsyncChain<SyncPoint<U>> coordinate(Node node, TxnId txnId, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
-        Invariants.requireArgument(txnId.isSyncPoint());
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
-        if (mismatch != null)
-            return AsyncResults.failure(mismatch);
-
         try
         {
-            SettableByCallback<SyncPoint<U>> result = new SettableByCallback<>();
-            CoordinateSyncPoint<SyncPoint<U>> coordinate = new CoordinateSyncPoint<>(node, node.someSequentialExecutor(), txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter, result);
-            coordinate.start();
-            return result;
+            Invariants.requireArgument(txnId.isSyncPoint());
+            TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
+            if (mismatch != null)
+                throw mismatch;
+
+            return new AsyncChains.Head<>()
+            {
+                @Override
+                protected @Nullable Cancellable start(BiConsumer<? super SyncPoint<U>, Throwable> callback)
+                {
+                    new CoordinateSyncPoint<>(node, node.someSequentialExecutor(), txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter, callback)
+                    .start();
+                    return null;
+                }
+            };
         }
         catch (Throwable t)
         {
-            return AsyncResults.failure(t);
+            return AsyncChains.failure(t);
         }
     }
 

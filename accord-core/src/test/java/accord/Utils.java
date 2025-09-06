@@ -73,7 +73,7 @@ import accord.utils.ThreadPoolScheduler;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ThrowingRunnable;
 
-import static accord.utils.async.AsyncChains.awaitUninterruptibly;
+import static accord.utils.async.AsyncChainUtils.awaitUninterruptibly;
 
 public class Utils
 {
@@ -176,7 +176,7 @@ public class Utils
 
     public static Node createNode(Id nodeId, Topology topology, MessageSink messageSink, MockCluster.Clock clock)
     {
-        return createNode(nodeId, topology, messageSink, clock, new TestAgent());
+        return createNode(nodeId, topology, messageSink, clock, new TestAgent(clock));
     }
 
     public static Node createNode(Node.Id nodeId, Topology topology, MessageSink messageSink, MockCluster.Clock clock, Agent agent)
@@ -209,7 +209,7 @@ public class Utils
     public static TopologyManager testTopologyManager(TopologySorter.Supplier sorter, Id node)
     {
         TimeService time = new MockCluster.Clock(0);
-        return new TopologyManager(sorter, new TestAgent.RethrowAgent(), node, time, new DefaultTimeouts(time));
+        return new TopologyManager(sorter, new TestAgent.RethrowAgent(time), node, time, new DefaultTimeouts(time));
     }
 
     public static void spinUntilSuccess(ThrowingRunnable runnable)

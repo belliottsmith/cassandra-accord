@@ -474,9 +474,13 @@ public interface Txn
         {
             case 0:
             {
-                return read().readDirect(commandStore, null, executeAt).map(i -> {
-                    Invariants.nonNull(i, "Read.readDirect is not allowed to return null");
-                    return i;
+                return read().readDirect(commandStore, null, executeAt).then(head -> new AsyncChains.MapLink<>(head){
+                    @Override
+                    public Data apply(Data data)
+                    {
+                        Invariants.nonNull(data, "Read.readDirect is not allowed to return null");
+                        return data;
+                    }
                 });
             }
             case 1: return read().readDirect(commandStore, keys.get(0), executeAt);

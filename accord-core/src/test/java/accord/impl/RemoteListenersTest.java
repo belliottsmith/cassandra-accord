@@ -412,10 +412,11 @@ public class RemoteListenersTest
 
         @Override protected void ensureDurable(Ranges ranges, RedundantBefore onCommandStoreDurable) {}
         @Override public boolean inStore() { return false; }
-        @Override public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
-        @Override public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
+        @Override public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
+        @Override public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
         @Override public void shutdown() {}
-        @Override public <T> AsyncChain<T> build(Callable<T> task) { return null; }
+        @Override public <T> AsyncChain<T> chain(Callable<T> call) { return null; }
+        @Override public void execute(Runnable run) { throw new UnsupportedOperationException(); }
     }
 
     static class TestSafeCommandStore extends SafeCommandStore

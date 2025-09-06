@@ -24,7 +24,6 @@ import accord.api.Agent;
 import accord.api.CoordinatorEventListener;
 import accord.api.ProgressLog;
 import accord.api.Result;
-import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;

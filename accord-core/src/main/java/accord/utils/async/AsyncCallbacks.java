@@ -18,22 +18,115 @@
 
 package accord.utils.async;
 
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executor;
 import java.util.function.BiConsumer;
-
-import accord.utils.Invariants;
+import java.util.function.Consumer;
 
 public class AsyncCallbacks
 {
-    public static <T> BiConsumer<? super T, Throwable> inExecutorService(BiConsumer<? super T, Throwable> callback, ExecutorService es)
+    // a runnable interface that may be directly failed
+    public interface RunOrFail extends Runnable
     {
-        // Checking for shutdown once here for the other `inExecutorService` as well as `AsyncChain.addCallback`
-        // So we don't repeat the check
-        Invariants.requireArgument(!es.isShutdown(), "ExecutorService is shutdown");
-        return (result, throwable) -> {
+        void run();
+        void fail(Throwable fail);
+    }
+
+    public static class RunAndCallback implements RunOrFail
+    {
+        final Runnable run;
+        final BiConsumer<? super Void, Throwable> callback;
+
+        public RunAndCallback(Runnable run, BiConsumer<? super Void, Throwable> callback)
+        {
+            this.run = run;
+            this.callback = callback;
+        }
+
+        @Override
+        public void run()
+        {
+            runAndCallback(run, callback);
+        }
+
+        @Override
+        public void fail(Throwable fail)
+        {
+            callback.accept(null, fail);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "[Run " + run.toString() + "; callback " + callback + ']';
+        }
+    }
+
+    public static class CallAndCallback<V> implements RunOrFail
+    {
+        final Callable<? extends V> call;
+        final BiConsumer<? super V, Throwable> callback;
+
+        public CallAndCallback(Callable<? extends V> call, BiConsumer<? super V, Throwable> callback)
+        {
+            this.call = call;
+            this.callback = callback;
+        }
+
+        @Override
+        public void run()
+        {
+            callAndCallback(call, callback);
+        }
+
+        @Override
+        public void fail(Throwable fail)
+        {
+            callback.accept(null, fail);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "[Call " + call.toString() + "; callback " + callback + ']';
+        }
+    }
+
+    public static class FlatCallAndCallback<V> implements RunOrFail
+    {
+        final Callable<? extends AsyncChain<V>> call;
+        final BiConsumer<? super V, Throwable> callback;
+
+        public FlatCallAndCallback(Callable<? extends AsyncChain<V>> call, BiConsumer<? super V, Throwable> callback)
+        {
+            this.call = call;
+            this.callback = callback;
+        }
+
+        @Override
+        public void run()
+        {
+            flatCallAndCallback(call, callback);
+        }
+
+        @Override
+        public void fail(Throwable fail)
+        {
+            callback.accept(null, fail);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "[FlatCall " + call.toString() + "; callback " + callback + ']';
+        }
+    }
+    public static <T> BiConsumer<? super T, Throwable> inExecutor(BiConsumer<? super T, Throwable> callback, Executor executor)
+    {
+        return (success, fail) -> {
             try
             {
-                es.execute(() -> callback.accept(result, throwable));
+                executor.execute(() -> callback.accept(success, fail));
             }
             catch (Throwable t)
             {
@@ -42,13 +135,70 @@ public class AsyncCallbacks
         };
     }
 
-
-    public static <T> BiConsumer<? super T, Throwable> inExecutorService(Runnable runnable, ExecutorService es)
+    public static <T> BiConsumer<T, Throwable> always(Runnable run)
     {
-        return inExecutorService(toCallback(runnable), es);
+        return (success, fail) -> run.run();
     }
 
-    public static <T> BiConsumer<T, Throwable> toCallback(Runnable runnable) {
-        return (s, f) -> runnable.run();
+    public static <T> BiConsumer<T, Throwable> ifSuccess(Runnable run)
+    {
+        return (success, fail) -> {
+            if (fail == null)
+                run.run();
+        };
     }
+
+    public static <T> BiConsumer<T, Throwable> ifSuccess(Consumer<T> consumer)
+    {
+        return (success, fail) -> {
+            if (fail == null)
+                consumer.accept(success);
+        };
+    }
+
+    public static void runAndCallback(Runnable run, BiConsumer<? super Void, Throwable> receiver)
+    {
+        try
+        {
+            run.run();
+        }
+        catch (Throwable t)
+        {
+            receiver.accept(null, t);
+            return;
+        }
+        receiver.accept(null, null);
+    }
+
+    public static <V> void callAndCallback(Callable<V> call, BiConsumer<? super V, Throwable> receiver)
+    {
+        V v;
+        try
+        {
+            v = call.call();
+        }
+        catch (Throwable t)
+        {
+            receiver.accept(null, t);
+            return;
+        }
+        receiver.accept(v, null);
+    }
+
+    public static <V> void flatCallAndCallback(Callable<? extends AsyncChain<V>> call, BiConsumer<? super V, Throwable> receiver)
+    {
+        AsyncChain<V> v;
+        try
+        {
+            v = call.call();
+        }
+        catch (Throwable t)
+        {
+            receiver.accept(null, t);
+            return;
+        }
+        v.begin(receiver);
+    }
+
+
 }

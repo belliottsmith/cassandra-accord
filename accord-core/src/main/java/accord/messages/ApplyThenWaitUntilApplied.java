@@ -18,8 +18,6 @@
 
 package accord.messages;
 
-import java.util.concurrent.CancellationException;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,10 +38,10 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import accord.utils.UnhandledEnum;
 
 import static accord.messages.MessageType.StandardMessage.APPLY_THEN_WAIT_UNTIL_APPLIED_REQ;
 import static accord.messages.TxnRequest.computeScope;
-import static accord.utils.Invariants.illegalState;
 
 /*
  * Used by local and global inclusive sync points to effect the sync point at each node
@@ -122,7 +120,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
         switch (applyReply.kind)
         {
             default:
-                throw illegalState("Unexpected ApplyReply");
+                throw UnhandledEnum.unknown(applyReply.kind);
             case Insufficient:
             case InsufficientEpochs:
                 // Ignore here, the read in super.apply will return the CommitOrReadNack.Insufficient response we need to get the maximal apply

@@ -20,6 +20,8 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
 import accord.coordinate.Recover.InferredFastPath;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -33,8 +35,9 @@ import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
-import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
+import accord.utils.async.Cancellable;
 
 import static accord.coordinate.Recover.InferredFastPath.Accept;
 import static accord.coordinate.Recover.InferredFastPath.Reject;
@@ -54,7 +57,7 @@ public class SynchronousRecoverAwait extends ReadCoordinator<InferredFastPath, R
 
     private InferredFastPath outcome = Unknown;
     private Participants<?> waitingOn;
-    public SynchronousRecoverAwait(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Participants<?> participants, Await.Until until, boolean notifyProgressLog, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
+    public SynchronousRecoverAwait(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Participants<?> participants, Await.Until until, boolean notifyProgressLog, TxnId recoverId, BiConsumer<? super InferredFastPath, Throwable> callback)
     {
         super(node, executor, topologies, txnId, callback);
         this.participants = participants;
@@ -64,18 +67,24 @@ public class SynchronousRecoverAwait extends ReadCoordinator<InferredFastPath, R
         this.waitingOn = participants;
     }
 
-    public static SynchronousRecoverAwait awaitAny(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Await.Until until, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
+    public static SynchronousRecoverAwait awaitAny(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Await.Until until, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId, BiConsumer<? super InferredFastPath, Throwable> callback)
     {
         SynchronousRecoverAwait result = new SynchronousRecoverAwait(node, executor, topologies, txnId, participants, until, notifyProgressLog, recoverId, callback);
         result.start();
         return result;
     }
 
-    public static AsyncResult<InferredFastPath> awaitAny(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Await.Until until, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId)
+    public static AsyncChain<InferredFastPath> awaitAny(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Await.Until until, boolean notifyProgressLog, Participants<?> participants, TxnId recoverId)
     {
-        AsyncResult.Settable<InferredFastPath> result = AsyncResults.settable();
-        awaitAny(node, executor, topologies, txnId, until, notifyProgressLog, participants, recoverId, result.settingCallback());
-        return result;
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super InferredFastPath, Throwable> callback)
+            {
+                awaitAny(node, executor, topologies, txnId, until, notifyProgressLog, participants, recoverId, callback);
+                return null;
+            }
+        };
     }
 
     @Override

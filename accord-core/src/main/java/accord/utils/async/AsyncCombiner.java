@@ -18,30 +18,58 @@
 
 package accord.utils.async;
 
-import accord.utils.Invariants;
-
 import java.util.List;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.BiConsumer;
 
-public abstract class AsyncChainCombiner<I, O> extends AsyncChains.Head<O>
+import accord.utils.Invariants;
+
+public abstract class AsyncCombiner<A, I, O> extends AsyncChains.Head<O>
 {
-    private static final AtomicIntegerFieldUpdater<AsyncChainCombiner> REMAINING = AtomicIntegerFieldUpdater.newUpdater(AsyncChainCombiner.class, "remaining");
+    public static abstract class ChainCombiner<I, O> extends AsyncCombiner<AsyncChain<? extends I>, I, O>
+    {
+        public ChainCombiner(List<? extends AsyncChain<? extends I>> inputs)
+        {
+            super(inputs);
+        }
+
+        @Override
+        protected Cancellable begin(AsyncChain<? extends I> input, BiConsumer<I, Throwable> callback)
+        {
+            return input.begin(callback);
+        }
+    }
+
+    public static abstract class ResultCombiner<I, O> extends AsyncCombiner<AsyncResult<? extends I>, I, O>
+    {
+        public ResultCombiner(List<? extends AsyncResult<? extends I>> inputs)
+        {
+            super(inputs);
+        }
+
+        @Override
+        protected Cancellable begin(AsyncResult<? extends I> input, BiConsumer<I, Throwable> callback)
+        {
+            input.invoke(callback);
+            return null;
+        }
+    }
+
+    private static final AtomicIntegerFieldUpdater<AsyncCombiner> REMAINING = AtomicIntegerFieldUpdater.newUpdater(AsyncCombiner.class, "remaining");
     private volatile Object state;
     private volatile BiConsumer<? super O, Throwable> callback;
     private volatile int remaining;
 
-    public AsyncChainCombiner(List<? extends AsyncChain<? extends I>> inputs)
+    public AsyncCombiner(List<? extends A> inputs)
     {
-        Invariants.requireArgument(!inputs.isEmpty(), "No inputs defined");
         this.state = inputs;
     }
 
-    List<AsyncChain<? extends I>> inputs()
+    List<A> inputs()
     {
         Object current = state;
         Invariants.require(current instanceof List, "Expected state to be List but was %s", (current == null ? null : current.getClass()));
-        return (List<AsyncChain<? extends I>>) current;
+        return (List<A>) current;
     }
 
     private I[] results()
@@ -79,16 +107,21 @@ public abstract class AsyncChainCombiner<I, O> extends AsyncChains.Head<O>
     @Override
     protected Cancellable start(BiConsumer<? super O, Throwable> callback)
     {
-        List<? extends AsyncChain<? extends I>> chains = inputs();
+        List<? extends A> chains = inputs();
         state = new Object[chains.size()];
 
         int size = chains.size();
         this.callback = callback;
         this.remaining = size;
+        if (size == 0)
+        {
+            callback.accept(process(results()), null);
+            return null;
+        }
         Cancellable cancellable = null;
         for (int i=0; i<size; i++)
         {
-            Cancellable next = chains.get(i).begin(callbackFor(i));
+            Cancellable next = begin(chains.get(i), callbackFor(i));
             if (next != null)
             {
                 Cancellable prev = cancellable;
@@ -98,4 +131,6 @@ public abstract class AsyncChainCombiner<I, O> extends AsyncChains.Head<O>
         }
         return cancellable;
     }
+
+    protected abstract Cancellable begin(A input, BiConsumer<I, Throwable> callback);
 }

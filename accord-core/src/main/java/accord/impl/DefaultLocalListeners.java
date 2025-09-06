@@ -98,7 +98,7 @@ public class DefaultLocalListeners implements LocalListeners
                 safeStore = safeStore; // prevent use in lambda
                 TxnId updatedId = safeCommand.txnId();
                 PreLoadContext context = PreLoadContext.contextFor(listenerId, updatedId, "Notify");
-                safeStore.commandStore().execute(context, safeStore0 -> notify(safeStore0, listenerId, updatedId), safeStore.agent());
+                safeStore.commandStore().execute(context, safeStore0 -> { notify(safeStore0, listenerId, updatedId); }, safeStore.agent());
             }
         }
 

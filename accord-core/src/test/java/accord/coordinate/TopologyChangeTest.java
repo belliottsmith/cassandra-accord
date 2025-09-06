@@ -30,7 +30,9 @@ import accord.primitives.*;
 import accord.topology.Topology;
 import accord.utils.EpochFunction;
 import accord.utils.async.AsyncChain;
-import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncChainUtils;
+import accord.utils.async.AsyncResult;
+
 import com.google.common.base.Predicates;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -47,7 +49,7 @@ import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
 
 import static accord.local.PreLoadContext.contextFor;
-import static accord.utils.async.AsyncChains.getUninterruptibly;
+import static accord.utils.async.AsyncChainUtils.getUninterruptibly;
 
 public class TopologyChangeTest
 {
@@ -149,11 +151,16 @@ public class TopologyChangeTest
         }
     }
 
+    private static <V> V getUncheckedTimeout(AsyncResult<V> result, long timeout, TimeUnit unit)
+    {
+        return getUncheckedTimeout(result.chain(), timeout, unit);
+    }
+
     private static <V> V getUncheckedTimeout(AsyncChain<V> chain, long timeout, TimeUnit unit)
     {
         try
         {
-            return AsyncChains.getUninterruptibly(chain, timeout, unit);
+            return AsyncChainUtils.getUninterruptibly(chain, timeout, unit);
         }
         catch (ExecutionException | TimeoutException e)
         {
@@ -215,7 +222,7 @@ public class TopologyChangeTest
             // but if it tries to coordinate a txn with a txnid from epoch2 it should be rejected by the other nodes in the cluster
             try
             {
-                AsyncChains.getUninterruptibly(node4.coordinate(epoch2txnId, writeTxn(keys)), 5, TimeUnit.SECONDS);
+                AsyncChainUtils.getUninterruptibly(node4.coordinate(epoch2txnId, writeTxn(keys)), 5, TimeUnit.SECONDS);
                 Assertions.fail("Expected to be invalidated");
             }
             catch (ExecutionException e)
@@ -251,7 +258,7 @@ public class TopologyChangeTest
                 MockConfigurationService configService = (MockConfigurationService) node.configService();
                 try
                 {
-                    AsyncChains.getUninterruptibly(configService.ackFor(2).coordinate, 5, TimeUnit.SECONDS);
+                    AsyncChainUtils.getUninterruptibly(configService.ackFor(2).coordinate, 5, TimeUnit.SECONDS);
                     Assertions.fail("Expected to timeout on node " + node.id());
                 }
                 catch (ExecutionException e)

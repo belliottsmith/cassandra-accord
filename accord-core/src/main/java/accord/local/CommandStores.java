@@ -779,10 +779,10 @@ public abstract class CommandStores implements AsyncExecutorFactory
         Supplier<EpochReady> bootstrap = bootstrapUpdates.isEmpty() ? () -> done(epoch) : () -> {
             List<EpochReady> list = bootstrapUpdates.stream().map(Supplier::get).collect(toList());
             return new EpochReady(epoch,
-                AsyncChains.reduce(list.stream().map(b -> b.metadata).collect(toList()), Reduce.toNull()).beginAsResult(),
-                AsyncChains.reduce(list.stream().map(b -> b.coordinate).collect(toList()), Reduce.toNull()).beginAsResult(),
-                AsyncChains.reduce(list.stream().map(b -> b.data).collect(toList()), Reduce.toNull()).beginAsResult(),
-                AsyncChains.reduce(list.stream().map(b -> b.reads).collect(toList()), Reduce.toNull()).beginAsResult()
+                AsyncResults.reduce(list.stream().map(b -> b.metadata).collect(toList()), Reduce.toNull()),
+                AsyncResults.reduce(list.stream().map(b -> b.coordinate).collect(toList()), Reduce.toNull()),
+                AsyncResults.reduce(list.stream().map(b -> b.data).collect(toList()), Reduce.toNull()),
+                AsyncResults.reduce(list.stream().map(b -> b.reads).collect(toList()), Reduce.toNull())
             );
         };
         return new TopologyUpdate(new Snapshot(result.toArray(new ShardHolder[0]), newLocalTopology, newTopology), bootstrap);
@@ -829,7 +829,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         List<AsyncChain<Void>> list = new ArrayList<>();
         Snapshot snapshot = current;
         for (ShardHolder shard : snapshot.shards)
-            list.add(shard.store.build(context, forEach));
+            list.add(shard.store.chain(context, forEach));
         return AsyncChains.reduce(list, Reduce.toNull(), null);
     }
 
@@ -937,7 +937,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     public <O> AsyncChain<O> mapReduce(PreLoadContext context, Unseekables<?> unseekables, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
         // TODO (desired): we shouldn't need to allocate a new lambda here
-        return mapReduce(CommandStore::build, context, mapReduce, mapReduce, unseekables, minEpoch, maxEpoch);
+        return mapReduce(CommandStore::chain, context, mapReduce, mapReduce, unseekables, minEpoch, maxEpoch);
     }
 
     public <O> Cancellable mapReduceConsume(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<O, O> reduce, BiConsumer<? super O, Throwable> consume)
@@ -958,7 +958,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public <O> AsyncChain<O> mapReduce(PreLoadContext context, StoreSelector selector, MapReduce<? super SafeCommandStore, O> mapReduce)
     {
-        return mapReduce(selector, CommandStore::build, context, mapReduce, mapReduce);
+        return mapReduce(selector, CommandStore::chain, context, mapReduce, mapReduce);
     }
 
     public <O, P1, P2> AsyncChain<O> mapReduce(StoreSelector selector, TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<O, O> reducer)
@@ -992,7 +992,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         for (ShardHolder shardHolder : current.shards)
         {
             CommandStore commandStore = shardHolder.store;
-            AsyncChain<O> next = commandStore.build(context, mapReduce);
+            AsyncChain<O> next = commandStore.chain(context, mapReduce);
             chain = chain != null ? AsyncChains.reduce(chain, next, mapReduce) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
@@ -1005,7 +1005,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         List<AsyncChain<O>> results = new ArrayList<>(shards.length);
 
         for (ShardHolder shard : shards)
-            results.add(shard.store.build(context, mapper));
+            results.add(shard.store.chain(context, mapper));
 
         return AsyncChains.allOf(results);
     }
@@ -1015,13 +1015,15 @@ public abstract class CommandStores implements AsyncExecutorFactory
         // TODO (low priority, efficiency): avoid using an array, or use a scratch buffer
         int[] ids = commandStoreIds.toArray();
         if (ids.length == 1)
-            return forId(ids[0]).build(context, map).map(Collections::singletonList);
+        {
+            return forId(ids[0]).chain(context, map.andThen(Collections::singletonList));
+        }
 
         List<AsyncChain<O>> list = new ArrayList<>(ids.length);
         for (int id : ids)
         {
             CommandStore commandStore = forId(id);
-            AsyncChain<O> next = commandStore.build(context, map);
+            AsyncChain<O> next = commandStore.chain(context, map);
             list.add(next);
         }
 
@@ -1062,10 +1064,10 @@ public abstract class CommandStores implements AsyncExecutorFactory
             return () -> {
                 EpochReady ready = update.bootstrap.get();
                 return new EpochReady(ready.epoch,
-                                      flush.flatMap(ignore -> ready.metadata).beginAsResult(),
-                                      flush.flatMap(ignore -> ready.coordinate).beginAsResult(),
-                                      flush.flatMap(ignore -> ready.data).beginAsResult(),
-                                      flush.flatMap(ignore -> ready.reads).beginAsResult());
+                                      flush.flatMap(ignore -> ready.metadata),
+                                      flush.flatMap(ignore -> ready.coordinate),
+                                      flush.flatMap(ignore -> ready.data),
+                                      flush.flatMap(ignore -> ready.reads));
             };
         }
         return update.bootstrap;
