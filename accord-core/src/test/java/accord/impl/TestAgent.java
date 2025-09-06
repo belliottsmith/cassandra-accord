@@ -88,12 +88,6 @@ public class TestAgent implements Agent
     }
 
     @Override
-    public void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next)
-    {
-        throw new AssertionError();
-    }
-
-    @Override
     public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
     {
         retry.run();

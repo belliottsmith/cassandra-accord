@@ -45,6 +45,7 @@ import accord.local.CommandSummaries.ComputeIsDep;
 import accord.local.CommandSummaries.TestStartedAt;
 import accord.primitives.Deps;
 import accord.primitives.Deps.DepRelationList;
+import accord.primitives.Participants;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -2462,13 +2463,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (!reportLinearizabilityViolations)
             return;
 
-        String message = "Linearizability violation on key " + key + ": "
-                         + notWitnessed + " is committed to execute (at " + notWitnessedExecuteAt + ") before "
-                         + by + " that should witness it but has already applied (at " + byExecuteAt + ")";
-
         ViolationHandler agent = ViolationHandlerHolder.get();
-        if (agent == null) logger.error(message);
-        else agent.onViolation(message, RoutingKeys.of(key), notWitnessed, notWitnessedExecuteAt, by, byExecuteAt);
+        agent.onDependencyViolation(RoutingKeys.of(key), notWitnessed, notWitnessedExecuteAt, by, byExecuteAt);
     }
 
     public static void enableLinearizabilityViolationsReporting()

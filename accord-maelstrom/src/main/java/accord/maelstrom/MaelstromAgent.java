@@ -65,12 +65,6 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener
     }
 
     @Override
-    public void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next)
-    {
-        throw new AssertionError();
-    }
-
-    @Override
     public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
     {
         throw new AssertionError();

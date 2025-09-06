@@ -1023,12 +1023,6 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
         {
             throw new UnsupportedOperationException();

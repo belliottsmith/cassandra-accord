@@ -115,7 +115,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
         Writes writes = this.writes;
         Result result = this.result;
         if (!isPending())
-            throw new CancellationException();
+            return null; // we can't throw an exception here else we override any non-exceptional reply informing the reason
 
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch(), txnId, executeAtEpoch);
         ApplyReply applyReply = Apply.apply(safeStore, participants, Ballot.ZERO, txn, txnId, executeAt, deps, route, writes, result);
