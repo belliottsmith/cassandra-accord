@@ -393,7 +393,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     @Override
     public void start()
     {
-        commandStore.maybeExecuteImmediately(() -> {
+        commandStore.executeMaybeImmediately(() -> {
             stopped = false;
             accept(null);
         });

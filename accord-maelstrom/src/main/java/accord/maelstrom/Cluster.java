@@ -362,7 +362,7 @@ public class Cluster implements Scheduler
                                           new CoordinationAdapter.DefaultFactory(), DurableBefore.NOOP_PERSISTER, new NoOpJournal()));
             }
 
-            AsyncResult<?> startup = AsyncChains.reduce(lookup.values().stream().map(Node::unsafeStart).collect(toList()), (a, b) -> null).beginAsResult();
+            AsyncResult<?> startup = AsyncChains.reduce(lookup.values().stream().map(Node::unsafeStart).map(AsyncResult::chain).collect(toList()), (a, b) -> null).beginAsResult();
             while (sinks.processPending());
             if (!startup.isDone()) throw new AssertionError();
 

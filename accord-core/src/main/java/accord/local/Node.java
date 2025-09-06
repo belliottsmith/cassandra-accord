@@ -22,7 +22,6 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.NavigableSet;
-import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
@@ -331,7 +330,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public AsyncResult<?> markDurable(DurableBefore addDurableBefore)
     {
-        return withEpochExact(addDurableBefore.maxEpoch(), (Executor)null, () -> persistDurableBefore.mergeAndUpdate(addDurableBefore))
+        return withEpochExact(addDurableBefore.maxEpoch(), (AsyncExecutor)null, () -> persistDurableBefore.mergeAndUpdate(addDurableBefore).chain())
                .beginAsResult();
     }
 
@@ -359,7 +358,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         if (previous.coordinate.isDone()) return next;
         return new EpochReady(next.epoch,
                               next.metadata,
-                              previous.coordinate.flatMap(ignore -> next.coordinate).beginAsResult(),
+                              previous.coordinate.flatMap(ignore -> next.coordinate),
                               next.data,
                               next.reads);
     }
@@ -371,7 +370,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             return AsyncResults.success(null);
         EpochReady ready = onTopologyUpdateInternal(topology, startSync);
         long epoch = topology.epoch();
-        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, epoch)).begin(agent);
+        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, epoch)).invoke(agent);
         configService.acknowledgeEpoch(ready, startSync);
         return ready.coordinate;
     }
@@ -397,7 +396,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     // TODO (required): audit use of withEpochAtLeast vs withEpochExact
     // TODO (required): audit error handling, as the refactor to provide epoch timeouts appears to have broken a number of coordination
     // TODO (expected): provide a deadline
-    public void withEpochAtLeast(EpochSupplier epochSupplier, @Nullable Executor executor, BiConsumer<Void, Throwable> callback)
+    public void withEpochAtLeast(EpochSupplier epochSupplier, @Nullable AsyncExecutor executor, BiConsumer<Void, Throwable> callback)
     {
         if (epochSupplier == null)
             callback.accept(null, null);
@@ -405,7 +404,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
             withEpochAtLeast(epochSupplier.epoch(), executor, callback);
     }
 
-    public void withEpochAtLeast(long epoch, @Nullable Executor ifAsync, BiConsumer<Void, Throwable> callback)
+    public void withEpochAtLeast(long epoch, @Nullable AsyncExecutor ifAsync, BiConsumer<Void, Throwable> callback)
     {
         if (topology.hasAtLeastEpoch(epoch))
         {
@@ -418,7 +417,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public Object withEpochAtLeast(long epoch, @Nullable Executor ifAsync, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
+    public Object withEpochAtLeast(long epoch, @Nullable AsyncExecutor ifAsync, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
     {
         if (topology.hasAtLeastEpoch(epoch))
         {
@@ -435,7 +434,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
     }
 
-    public void withEpochExact(long epoch, @Nullable Executor ifAsync, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
+    public void withEpochExact(long epoch, @Nullable AsyncExecutor ifAsync, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
     {
         if (epoch < topology.minEpoch())
         {
@@ -456,7 +455,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     @Inline
-    public <T> AsyncChain<T> withEpochExact(long epoch, @Nullable Executor executor, Supplier<? extends AsyncChain<T>> supplier)
+    public <T> AsyncChain<T> withEpochExact(long epoch, @Nullable AsyncExecutor executor, Supplier<? extends AsyncChain<T>> supplier)
     {
         if (epoch < topology.minEpoch())
         {
@@ -468,14 +467,14 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            AsyncChain<T> res = topology.awaitEpoch(epoch, executor).flatMap(ignore -> supplier.get());
+            AsyncChain<T> res = topology.awaitEpoch(epoch, executor).flatMapOverride(supplier);
             configService.fetchTopologyForEpoch(epoch);
             return res;
         }
     }
 
     @Inline
-    public <T> AsyncChain<T> withEpochAtLeast(long epoch, @Nullable Executor executor, Supplier<? extends AsyncChain<T>> supplier)
+    public <T> AsyncChain<T> withEpochAtLeast(long epoch, @Nullable AsyncExecutor executor, Supplier<? extends AsyncChain<T>> supplier)
     {
         if (topology.hasAtLeastEpoch(epoch))
         {
@@ -483,13 +482,13 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            AsyncChain<T> res = topology.awaitEpoch(epoch, executor).flatMap(ignore -> supplier.get());
+            AsyncChain<T> res = topology.awaitEpoch(epoch, executor).flatMapOverride(supplier);
             configService.fetchTopologyForEpoch(epoch);
             return res;
         }
     }
 
-    public void withEpochAtLeast(long epoch, @Nullable Executor ifAsync, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
+    public void withEpochAtLeast(long epoch, @Nullable AsyncExecutor ifAsync, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
     {
         if (topology.hasAtLeastEpoch(epoch))
         {
@@ -793,24 +792,24 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return newTxnId(epoch, now, kind, domain, cardinality, fastPath.bits | mediumPath.bit(), id);
     }
 
-    public AsyncResult<Result> coordinate(Txn txn)
+    public AsyncChain<Result> coordinate(Txn txn)
     {
         TxnId txnId = nextTxnId(txn);
         return coordinate(txnId, txn);
     }
 
-    public AsyncResult<Result> coordinate(TxnId txnId, Txn txn)
+    public AsyncChain<Result> coordinate(TxnId txnId, Txn txn)
     {
         return coordinate(txnId, txn, txnId.epoch(), Long.MAX_VALUE);
     }
 
     // TODO (required): plumb deadlineNanos in (perhaps on integration side, but maybe introduce some context we can pass through for the MessageSink)
-    public AsyncResult<Result> coordinate(TxnId txnId, Txn txn, long minEpoch, long deadlineNanos)
+    public AsyncChain<Result> coordinate(TxnId txnId, Txn txn, long minEpoch, long deadlineNanos)
     {
-        return withEpochExact(Math.max(txnId.epoch(), minEpoch), (Executor) null, () -> initiateCoordination(txnId, txn)).beginAsResult();
+        return withEpochExact(Math.max(txnId.epoch(), minEpoch), (AsyncExecutor) null, () -> initiateCoordination(txnId, txn));
     }
 
-    private AsyncResult<Result> initiateCoordination(TxnId txnId, Txn txn)
+    private AsyncChain<Result> initiateCoordination(TxnId txnId, Txn txn)
     {
         if (txnId.kind() == Txn.Kind.EphemeralRead)
         {
@@ -847,24 +846,18 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return keysOrRanges.get(random.nextInt(keysOrRanges.size())).someIntersectingRoutingKey(null);
     }
 
-    static class RecoverFuture<T> extends AsyncResults.SettableResult<T> implements BiConsumer<T, Throwable>
-    {
-        @Override
-        public void accept(T success, Throwable fail)
-        {
-            if (fail != null) tryFailure(fail);
-            else trySuccess(success);
-        }
-    }
-
-    public AsyncResult<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, LatentStoreSelector reportTo, @Nullable Tracing tracing)
+    public AsyncChain<? extends Outcome> recover(TxnId txnId, InvalidIf invalidIf, FullRoute<?> route, LatentStoreSelector reportTo, @Nullable Tracing tracing)
     {
         SequentialAsyncExecutor executor = someSequentialExecutor();
-        return withEpochExact(txnId.epoch(), executor, () -> {
-            RecoverFuture<Outcome> future = new RecoverFuture<>();
-            PrepareRecovery.recover(this, executor, txnId, invalidIf, route, null, reportTo, future, tracing);
-            return future;
-        }).beginAsResult();
+        return withEpochExact(txnId.epoch(), executor, () -> new AsyncChains.Head<>()
+        {
+            @Override
+            protected Cancellable start(BiConsumer<? super Outcome, Throwable> callback)
+            {
+                PrepareRecovery.recover(Node.this, executor, txnId, invalidIf, route, null, reportTo, callback, tracing);
+                return null;
+            }
+        });
     }
 
     public void receive(Request request, Id from, ReplyContext replyContext)

@@ -74,7 +74,7 @@ public class ListRead implements Read
 
         ListStore s = (ListStore)safeStore.dataStore();
         logger.trace("submitting READ on {} at {} key:{}", s.node, executeAt, key);
-        return executor.apply(safeStore.commandStore()).build(() -> {
+        return executor.apply(safeStore.commandStore()).chain(() -> {
             Ranges unavailable = safeStore.unsafeToReadAt(executeAt);
             ListData result = new ListData();
             switch (key.domain())
@@ -105,7 +105,7 @@ public class ListRead implements Read
         
         ListStore s = (ListStore)unsafeStore.unsafeGetDataStore();
         logger.trace("submitting READ on {} at {} key:{}", unsafeStore.node(), executeAt, key);
-        return executor.apply(unsafeStore).build(() -> {
+        return executor.apply(unsafeStore).chain(() -> {
             Ranges unavailable = unsafeStore.unsafeGetRangesForEpoch().allAt(executeAt.epoch())
                                             .without(unsafeStore.unsafeGetSafeToRead().lowerEntry(executeAt).getValue());
             ListData result = new ListData();

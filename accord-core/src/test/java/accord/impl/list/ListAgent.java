@@ -274,7 +274,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
             return AsyncChains.success(staleId);
         AsyncResult.Settable<TxnId> result = AsyncResults.settable();
         node.scheduler().selfRecurring(() -> result.setSuccess(staleId), wait, MILLISECONDS);
-        return result;
+        return result.chain();
     }
 
     public long minStaleHlc(Node node, boolean isRequested)
@@ -299,8 +299,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     {
         Snapshotter<Snapshot> snapshotter = snapshotters.computeIfAbsent(commandStore.id(), ignore -> new Snapshotter<>(scheduler, rnd));
         return commandStore.submit((PreLoadContext.Empty)() -> "Snapshot", safeStore -> snapshotter.snapshot(false, Snapshot.snapshot(commandStore)))
-                           .flatMap(Function.identity())
-                           .beginAsResult();
+                           .flatMap(Function.identity());
     }
 
     public void restore(InMemoryCommandStore commandStore)

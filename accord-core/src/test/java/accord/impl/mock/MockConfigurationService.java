@@ -24,7 +24,6 @@ import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.topology.Topology;
 import accord.utils.EpochFunction;
-import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
@@ -125,7 +124,7 @@ public class MockConfigurationService implements TestableConfigurationService
 
         AsyncResult<Void> result = futures.isEmpty()
            ? AsyncResults.success(null)
-           : AsyncChains.reduce(futures, (a, b) -> null).beginAsResult();
+           : AsyncResults.reduce(futures, (a, b) -> null);
 
         syncs.add(result);
     }

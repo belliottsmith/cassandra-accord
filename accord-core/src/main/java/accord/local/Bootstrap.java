@@ -137,17 +137,17 @@ class Bootstrap
             safeStore = safeStore;
             CommandStore commandStore = safeStore.commandStore();
             CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges)
-                               .flatMap(success -> commandStore.build((PreLoadContext.Empty) () -> "Mark Bootstrapping", safeStore0 -> {
+                               .flatMap(success -> commandStore.chain((PreLoadContext.Empty) () -> "Mark Bootstrapping", safeStore0 -> {
                                    // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
                                    store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
                                    return success;
                                }))
-                               .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> store.build((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
+                               .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> store.chain((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
                                    if (valid.isEmpty()) // we've lost ownership of the range
                                        return AsyncResults.success(Ranges.EMPTY);
                                    return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
                                })))
-                               .flatMap(i -> i)
+                               .flatMapResult(i -> i)
                                .begin(this);
         }
 
@@ -273,7 +273,7 @@ class Bootstrap
 
             store.agent().onFailedBootstrap(attempt, "PartialFetch", newFailures, () -> {
                 node.scheduler().selfRecurring(() -> {
-                    store.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> restart(safeStore, newFailures.slice(allValid, Minimal), attempt + 1), store.agent());
+                    store.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> { restart(safeStore, newFailures.slice(allValid, Minimal), attempt + 1); }, store.agent());
                 }, 0L, TimeUnit.NANOSECONDS);
             }, failure);
             Invariants.require(!newFailures.intersects(fetchedAndSafeToRead));
@@ -349,7 +349,7 @@ class Bootstrap
             {
                 store.agent().onFailedBootstrap(attempt, "Fetch", retry, () -> {
                     node.scheduler().selfRecurring(() -> {
-                        store.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> restart(safeStore, retry, attempt + 1), node.agent());
+                        store.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> { restart(safeStore, retry, attempt + 1); }, node.agent());
                     }, 0L, TimeUnit.NANOSECONDS);
                 }, fetchOutcome);
             }

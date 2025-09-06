@@ -18,39 +18,37 @@
 
 package accord.utils.async;
 
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
 import java.util.function.BiConsumer;
-import java.util.function.BooleanSupplier;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
+import accord.api.AsyncExecutor;
+import accord.utils.TriFunction;
+
+import static accord.utils.async.AsyncCallbacks.ifSuccess;
+
 public interface AsyncChain<V>
 {
-    <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper);
-
-    default <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper, Executor executor)
+    // a marker interface for the start of a chain, that is bubbled up through a chain until the chain is ready and started with begin()
+    interface Head<V> extends AsyncChain<V>, BiConsumer<V, Throwable>
     {
-        return AsyncChains.map(this, mapper, executor);
+        Cancellable begin();
     }
 
-    <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper);
+    <OV, OC extends AsyncChain<OV> & BiConsumer<? super V, Throwable>> AsyncChain<OV> then(Function<Head<?>, OC> then);
 
-    default <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper, Executor executor)
+    default <P, OV, OC extends AsyncChain<OV> & BiConsumer<? super V, Throwable>> AsyncChain<OV> then(BiFunction<Head<?>, P, OC> then, P p)
     {
-        return AsyncChains.flatMap(this, mapper, executor);
+        return then(head -> then.apply(head, p));
     }
 
-    default <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper, BooleanSupplier inExecutor, Executor executor)
+    default <P1, P2, OV, OC extends AsyncChain<OV> & BiConsumer<? super V, Throwable>> AsyncChain<OV> then(TriFunction<Head<?>, P1, P2, OC> then, P1 p1, P2 p2)
     {
-        return flatMap(input -> {
-            if (inExecutor.getAsBoolean())
-                return AsyncChains.success(mapper.apply(input));
-            else
-                return AsyncChains.ofCallable(executor, () -> mapper.apply(input));
-        });
+        return then(head -> then.apply(head, p1, p2));
     }
 
     /**
@@ -68,62 +66,95 @@ public interface AsyncChain<V>
      * }).flatMap(f -> f); // "flatten" from CompletableFuture<CompletableFuture<V>> to CompletableFuture<V>
      * }
      */
-    AsyncChain<V> recover(Function<? super Throwable, ? extends AsyncChain<V>> mapper);
-
-    default AsyncChain<V> invokeIfSuccess(Consumer<? super V> action)
+    default AsyncChain<V> recover(Function<? super Throwable, ? extends AsyncChain<V>> mapper)
     {
-        return map(r -> {
-            action.accept(r);
-            return r;
-        });
+        return then(AsyncChains.MapRecover::new, mapper);
     }
 
-    default AsyncChain<V> invokeIfSuccess(Runnable runnable, Executor executor)
+    default <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper)
     {
-        return map(r -> {
-            runnable.run();
-            return r;
-        }, executor);
+        return then(AsyncChains.Map::new, mapper);
     }
 
-    default AsyncChain<V> invokeIfSuccess(Consumer<? super V> action, Executor executor)
+    default <T> AsyncChain<T> mapToNull()
     {
-        return map(r -> {
-            action.accept(r);
-            return r;
-        }, executor);
+        return map(ignore -> null);
     }
 
-    default AsyncChain<V> withExecutor(Executor e)
+    default <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper)
     {
+        return then(AsyncChains.FlatMap::new, mapper);
+    }
+
+    default AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback)
+    {
+        return then(AsyncChains.Callback::new, callback);
+    }
+
+    default <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper, AsyncExecutor executor)
+    {
+        return then(AsyncChains.AsyncMap::new, mapper, executor);
+    }
+
+    default <T> AsyncChain<T> flatMapOverride(Supplier<? extends AsyncChain<T>> override)
+    {
+        return then(AsyncChains.FlatMapOverride::new, override);
+    }
+
+    default <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper, AsyncExecutor executor)
+    {
+        return then(AsyncChains.AsyncFlatMap::new, mapper, executor);
+    }
+
+    default <T> AsyncChain<T> flatMapResult(Function<? super V, ? extends AsyncResult<T>> mapper)
+    {
+        return then(AsyncChains.FlatMapResult::new, mapper);
+    }
+
+    default AsyncChain<V> withExecutor(@Nullable AsyncExecutor executor)
+    {
+        if (executor == null)
+            return this;
+
         // since a chain runs as a sequence of callbacks, by adding a callback that moves to this executor any new actions
         // will be run on that desired executor.
-        return map(a -> a, e);
+        return map(a -> a, executor);
     }
-
-    AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback);
 
     /**
      * Adds a callback that fires on success only
      */
-    default AsyncChain<V> invokeIfSuccess(Runnable runnable)
+    default AsyncChain<V> invokeIfSuccess(Runnable run)
     {
-        return invoke((success, fail) -> {
-            if (fail == null) runnable.run();
-        });
+        return invoke(ifSuccess(run));
+    }
+
+    default AsyncChain<V> invokeIfSuccess(Consumer<? super V> consumer)
+    {
+        return invoke(ifSuccess(consumer));
+    }
+
+    default AsyncChain<V> invokeIfSuccess(Runnable run, AsyncExecutor executor)
+    {
+        return invoke(ifSuccess(run), executor);
+    }
+
+    default AsyncChain<V> invokeIfSuccess(Consumer<? super V> consume, AsyncExecutor executor)
+    {
+        return invoke(ifSuccess(consume), executor);
     }
 
     /**
      * Adds a callback that fires on either success or failure
      */
-    default AsyncChain<V> invoke(Runnable runnable)
+    default AsyncChain<V> invoke(Runnable run)
     {
-        return invoke((success, fail) -> runnable.run());
+        return invoke(AsyncCallbacks.always(run));
     }
 
-    default AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback, ExecutorService es)
+    default AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback, AsyncExecutor executor)
     {
-        return invoke(AsyncCallbacks.inExecutorService(callback, es));
+        return then(AsyncChains.AsyncCallback::new, callback, executor);
     }
 
     /**

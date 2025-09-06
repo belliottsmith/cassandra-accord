@@ -36,7 +36,6 @@ import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.topology.Topology;
 import accord.utils.Invariants;
-import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
@@ -383,9 +382,9 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         if (epochs.wasTruncated(ready.epoch))
             return;
 
-        ready.metadata.invokeIfSuccess(() -> epochs.acknowledge(ready)).begin(agent);
-        ready.coordinate.invokeIfSuccess(() -> localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync)).begin(agent);
-        ready.reads.invokeIfSuccess(() ->  localBootstrapsComplete(epochs.getOrCreate(ready.epoch).topology)).begin(agent);
+        ready.metadata.invokeIfSuccess(() -> epochs.acknowledge(ready)).invoke(agent);
+        ready.coordinate.invokeIfSuccess(() -> localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync)).invoke(agent);
+        ready.reads.invokeIfSuccess(() ->  localBootstrapsComplete(epochs.getOrCreate(ready.epoch).topology)).invoke(agent);
     }
 
     protected void topologyUpdatePostListenerNotify(Topology topology) {}
@@ -406,7 +405,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             logger.debug("Epoch {} received; waiting to receive {} before reporting", topology.epoch(), lastReceived + 1);
             epochs.receiveFuture(lastReceived + 1)
                   .invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync), executor())
-                  .begin(agent);
+                  .invoke(agent);
             fetchTopologyForEpoch(lastReceived + 1);
             return;
         }
@@ -417,7 +416,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), epochs.minEpoch());
             epochs.acknowledgeFuture(epochs.minEpoch())
                   .invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync), executor())
-                  .begin(agent);
+                  .invoke(agent);
             return;
         }
 
@@ -426,7 +425,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), lastAcked + 1);
             epochs.acknowledgeFuture(lastAcked + 1)
                   .invokeIfSuccess(() -> reportTopology(topology, isLoad, startSync), executor())
-                  .begin(agent);
+                  .invoke(agent);
             return;
         }
 
@@ -484,7 +483,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
     }
 
     // synchronized because state.reads is written
-    public AsyncChain<Void> epochReady(long epoch)
+    public AsyncResult<Void> epochReady(long epoch)
     {
         synchronized (this)
         {

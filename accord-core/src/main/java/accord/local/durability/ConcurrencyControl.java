@@ -76,7 +76,7 @@ class ConcurrencyControl implements BiConsumer<Object, Throwable>
             {
                 Pending<V> newPending = new Pending<>(supplier);
                 pending.add(newPending);
-                return newPending.result;
+                return newPending.result.chain();
             }
             ++inflight;
         }

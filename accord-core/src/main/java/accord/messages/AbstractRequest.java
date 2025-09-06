@@ -18,6 +18,7 @@
 
 package accord.messages;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import javax.annotation.Nullable;
@@ -28,6 +29,7 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
+import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.Cancellable;
 
@@ -64,6 +66,7 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
     protected transient Node node;
     protected transient Node.Id replyTo;
     protected transient ReplyContext replyContext;
+    private boolean hasSentFinalReply;
 
     private transient volatile Cancellation cancellation;
     private static final AtomicReferenceFieldUpdater<AbstractRequest, Cancellation> cancellationUpdater = AtomicReferenceFieldUpdater.newUpdater(AbstractRequest.class, Cancellation.class, "cancellation");
@@ -119,6 +122,11 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
 
     protected void acceptInternal(R reply, Throwable failure)
     {
+        if (failure != null || reply.isFinal())
+        {
+            Invariants.require(!hasSentFinalReply);
+            hasSentFinalReply = true;
+        }
         node.reply(replyTo, replyContext, reply, failure);
     }
 

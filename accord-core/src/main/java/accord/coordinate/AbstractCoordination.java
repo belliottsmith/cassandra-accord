@@ -165,7 +165,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
 
     void contact(Function<Node.Id, Request> request, @Nullable Predicate<Node.Id> include)
     {
-        executor.maybeExecuteImmediately(() -> {
+        executor.executeMaybeImmediately(() -> {
             for (int i = 0; i < nodes.size() ; ++i)
             {
                 Node.Id to = nodes.get(i);
@@ -174,6 +174,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
                     Invariants.require(replyState[i] == null);
                     expectingReply.set(i);
                     replyState[i] = node.send(to, request.apply(to), executor, this);
+                    Invariants.require(expectingReply.get(i) || replyState[i] == null);
                 }
             }
         });

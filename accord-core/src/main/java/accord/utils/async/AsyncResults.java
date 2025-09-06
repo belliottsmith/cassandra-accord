@@ -18,24 +18,25 @@
 
 package accord.utils.async;
 
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
-import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.VisibleForImplementation;
 import accord.utils.Invariants;
+import accord.utils.Reduce;
 
 import static accord.utils.Invariants.createIllegalState;
 
 public class AsyncResults
 {
     private static final Logger logger = LoggerFactory.getLogger(AsyncResults.class);
-    public static final AsyncResult SUCCESS_NULL = new Immediate<>(null);
+    public static final AsyncResult SUCCESS_NULL = new ImmediateSuccess<>(null);
 
     private AsyncResults() {}
 
@@ -130,19 +131,6 @@ public class AsyncResults
             return trySetResult(null, throwable);
         }
 
-        private AsyncChain<V> newChain()
-        {
-            return new AsyncChains.Head<>()
-            {
-                @Override
-                protected Cancellable start(BiConsumer<? super V, Throwable> callback)
-                {
-                    AbstractResult.this.invoke(callback);
-                    return null;
-                }
-            };
-        }
-
         void setResult(V result, Throwable failure)
         {
             if (!trySetResult(result, failure))
@@ -152,24 +140,6 @@ public class AsyncResults
                     f.addSuppressed(failure);
                 throw f;
             }
-        }
-
-        @Override
-        public <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper)
-        {
-            return newChain().map(mapper);
-        }
-
-        @Override
-        public <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper)
-        {
-            return newChain().flatMap(mapper);
-        }
-
-        @Override
-        public AsyncChain<V> recover(Function<? super Throwable, ? extends AsyncChain<V>> mapper)
-        {
-            return newChain().recover(mapper);
         }
 
         @Override
@@ -298,59 +268,20 @@ public class AsyncResults
         }
     }
 
-    static class Immediate<V> implements AsyncResult<V>
+    static abstract class AbstractImmediate<V> implements AsyncResult<V>
     {
-        private final V value;
-        private final Throwable failure;
-
-        Immediate(V value)
+        @Override
+        public AsyncChain<V> chain()
         {
-            this.value = value;
-            this.failure = null;
-        }
-
-        Immediate(Throwable failure)
-        {
-            this.value = null;
-            this.failure = failure;
-        }
-
-        private AsyncChain<V> newChain()
-        {
-            return new AsyncChains.Head<V>()
+            return new AsyncChains.Head<>()
             {
                 @Override
                 protected Cancellable start(BiConsumer<? super V, Throwable> callback)
                 {
-                    AsyncResults.Immediate.this.invoke(callback);
+                    AbstractImmediate.this.invoke(callback);
                     return null;
                 }
             };
-        }
-
-        @Override
-        public <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper)
-        {
-            return newChain().map(mapper);
-        }
-
-        @Override
-        public <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper)
-        {
-            return newChain().flatMap(mapper);
-        }
-
-        @Override
-        public AsyncChain<V> recover(Function<? super Throwable, ? extends AsyncChain<V>> mapper)
-        {
-            return newChain().recover(mapper);
-        }
-
-        @Override
-        public AsyncResult<V> invoke(BiConsumer<? super V, Throwable> callback)
-        {
-            callback.accept(value, failure);
-            return this;
         }
 
         @Override
@@ -358,17 +289,63 @@ public class AsyncResults
         {
             return true;
         }
+    }
+
+    static class ImmediateSuccess<V> extends AbstractImmediate<V>
+    {
+        private final V success;
+
+        ImmediateSuccess(V success)
+        {
+            this.success = success;
+        }
+
+        @Override
+        public AsyncResult<V> invoke(BiConsumer<? super V, Throwable> callback)
+        {
+            callback.accept(success, null);
+            return this;
+        }
 
         @Override
         public boolean isSuccess()
         {
-            return failure == null;
+            return true;
         }
 
         @Override
         public String toString()
         {
-            return "Immediate{" + (isSuccess() ? "success" : "failure") + "}";
+            return "ImmediateSuccess{" + success + "}";
+        }
+    }
+
+    static class ImmediateFailure<V> extends AbstractImmediate<V>
+    {
+        private final Throwable failure;
+
+        ImmediateFailure(Throwable failure)
+        {
+            this.failure = failure;
+        }
+
+        @Override
+        public AsyncResult<V> invoke(BiConsumer<? super V, Throwable> callback)
+        {
+            callback.accept(null, failure);
+            return this;
+        }
+
+        @Override
+        public boolean isSuccess()
+        {
+            return false;
+        }
+
+        @Override
+        public String toString()
+        {
+            return "ImmediateFailure{" + failure + "}";
         }
     }
 
@@ -385,12 +362,12 @@ public class AsyncResults
         if (value == null)
             return SUCCESS_NULL;
 
-        return new Immediate<>(value);
+        return new ImmediateSuccess<>(value);
     }
 
     public static <V> AsyncResult<V> failure(Throwable failure)
     {
-        return new Immediate<>(failure);
+        return new ImmediateFailure<>(failure);
     }
 
     public static <V> AsyncResult.Settable<V> settable()
@@ -442,6 +419,25 @@ public class AsyncResults
             runnable.run();
             return null;
         });
+    }
+
+
+    public static <V> AsyncResult<V> reduce(List<? extends AsyncResult<? extends V>> results, Reduce<V, V> reducer)
+    {
+        if (results.size() == 1)
+            return (AsyncResult<V>) results.get(0);
+
+        return new AsyncCombiner.ResultCombiner<V, V>(results)
+        {
+            @Override
+            V process(V[] inputs)
+            {
+                V result = inputs[0];
+                for (int i = 1; i < inputs.length ; ++i)
+                    result = reducer.reduce(result, inputs[i]);
+                return result;
+            }
+        }.beginAsResult();
     }
 
 }

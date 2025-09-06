@@ -101,27 +101,8 @@ public abstract class TaskExecutorService extends AbstractExecutorService implem
     }
 
     @Override
-    public Task<Void> build(Runnable task)
-    {
-        return (Task<Void>) super.submit(task);
-    }
-
-    @Override
-    public <T> Task<T> build(Runnable task, T result)
-    {
-        return (Task<T>) super.submit(task, result);
-    }
-
-    @Override
-    public <T> Task<T> build(Callable<T> task)
-    {   // TODO (required): we should be returning an AsyncChain here, not a Task, so we can simulate correctly.
-        return (Task<T>) super.submit(task);
-    }
-
-    @Override
     public void shutdown()
     {
-
     }
 
     @Override

@@ -156,6 +156,27 @@ public class Apply extends TxnRequest<ApplyReply>
         super.acceptInternal(reply, failure);
     }
 
+    class ApplyLink extends AsyncChains.FlatMapLink<Void, ApplyReply>
+    {
+        final CommandStore commandStore;
+        final StoreParticipants participants;
+
+        protected ApplyLink(Head<?> head, CommandStore commandStore, StoreParticipants participants)
+        {
+            super(head);
+            this.commandStore = commandStore;
+            this.participants = participants;
+        }
+
+        @Override
+        public AsyncChain<ApplyReply> apply(Void o)
+        {
+            return commandStore.chain(Apply.this, safeStore -> {
+                return Apply.apply(Applied, safeStore, participants, ballot, txn, txnId, executeAt, deps, participants.route(), writes, result);
+            });
+        }
+    }
+
     // TODO (desired): always applyDirect reads, whether or not the replica is ready, as reads are no-ops (note: affects linearizability warnings)
     private AsyncChain<ApplyReply> applyDirect(CommandStore commandStore)
     {
@@ -166,9 +187,7 @@ public class Apply extends TxnRequest<ApplyReply>
         AsyncChain<Void> written = writes == null ? AsyncChains.success(null)
                                                   : writes.applyDirect(commandStore, participants.executes(), txn);
 
-        return written.flatMap(ignore -> commandStore.build(this, safeStore -> {
-            return apply(Applied, safeStore, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
-        }));
+        return written.then(head -> new ApplyLink(head, commandStore, participants));
     }
 
     public ApplyReply apply(SafeCommandStore safeStore, StoreParticipants participants)

@@ -25,6 +25,7 @@ import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
@@ -57,8 +58,6 @@ import accord.topology.Topology;
 import accord.utils.DefaultRandom;
 import accord.utils.ThreadPoolScheduler;
 import accord.utils.async.Cancellable;
-
-import static accord.utils.async.AsyncChains.awaitUninterruptibly;
 
 public class Main
 {
@@ -189,7 +188,8 @@ public class Main
                           DefaultRemoteListeners::new, DefaultTimeouts::new, DefaultProgressLogs::new, DefaultLocalListeners.Factory::new,
                           InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
                           DurableBefore.NOOP_PERSISTER, journal);
-            awaitUninterruptibly(on.unsafeStart());
+            CountDownLatch latch = new CountDownLatch(1);
+            on.unsafeStart().invoke(latch::countDown);
             err.println("Initialized node " + init.self);
             err.flush();
             sink.send(packet.src, new Body(Type.init_ok, Body.SENTINEL_MSG_ID, init.msg_id));

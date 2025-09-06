@@ -54,6 +54,7 @@ import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
@@ -365,7 +366,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
             return partialTxn.readDirect(unsafeStore, executeAt, read)
                              .invoke(readCallback(unsafeStore, unavailable))
-                             .map(i -> null);
+                             .then(AsyncChains.MapToNull::new);
         }
     }
 

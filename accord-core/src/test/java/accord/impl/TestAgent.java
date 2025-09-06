@@ -54,6 +54,16 @@ public class TestAgent implements Agent
 
     public static class RethrowAgent extends TestAgent implements CoordinatorEventListener
     {
+        public RethrowAgent()
+        {
+            super();
+        }
+
+        public RethrowAgent(TimeService clock)
+        {
+            super(clock);
+        }
+
         @Override
         public CoordinatorEventListener coordinatorEvents()
         {
@@ -85,6 +95,17 @@ public class TestAgent implements Agent
         {
             throw new AssertionError("Unexpected exception", t);
         }
+    }
+
+    final TimeService clock;
+    public TestAgent()
+    {
+        this(null);
+    }
+
+    public TestAgent(TimeService clock)
+    {
+        this.clock = clock;
     }
 
     @Override
@@ -197,19 +218,19 @@ public class TestAgent implements Agent
     @Override
     public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
-        return unit.convert(100L, MICROSECONDS);
+        return clock.elapsed(unit) + unit.convert(100L, MICROSECONDS);
     }
 
     @Override
     public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
     {
-        return unit.convert(1L, SECONDS);
+        return clock.elapsed(unit) + unit.convert(1L, SECONDS);
     }
 
     @Override
     public long expiresAt(ReplyContext replyContext, TimeUnit unit)
     {
-        return 0;
+        return -1;
     }
 
     @Override

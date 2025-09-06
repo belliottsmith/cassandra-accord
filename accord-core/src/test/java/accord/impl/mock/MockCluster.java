@@ -73,7 +73,7 @@ import static accord.Utils.idList;
 import static accord.local.TimeService.elapsedWrapperFromNonMonotonicSource;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.utils.async.AsyncChains.awaitUninterruptibly;
+import static accord.utils.async.AsyncChainUtils.awaitUninterruptibly;
 
 public class MockCluster implements Network, AutoCloseable, Iterable<Node>
 {
@@ -112,8 +112,8 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
     public void close()
     {
         nodes.values().forEach(n -> {
-            n.shutdown();
             ((ThreadPoolScheduler)n.scheduler()).stop();
+            n.shutdown();
         });
 
     }
@@ -133,7 +133,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         MockStore store = new MockStore();
         MessageSink messageSink = messageSinkFactory.apply(id, this);
         MockConfigurationService configurationService = new MockConfigurationService(messageSink, onFetchTopology, topology);
-        Agent agent = new TestAgent();
+        Agent agent = new TestAgent(time);
         Journal journal = new InMemoryJournal(id, random.fork());
         ThreadPoolScheduler scheduler = new ThreadPoolScheduler();
         Node node = new Node(id,
@@ -197,7 +197,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
             if (callback != null)
                 new SafeCallback(executor, callback).timeout(to);
             logger.info("discarding filtered message from {} to {}: {}", from, to, request);
-            return () -> {};
+            return null;
         }
 
         long messageId = nextMessageId();

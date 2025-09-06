@@ -20,32 +20,102 @@ package accord.api;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
+import accord.utils.async.AsyncCallbacks;
+import accord.utils.async.AsyncCallbacks.RunOrFail;
 import accord.utils.async.AsyncChain;
-import accord.utils.async.RunnableWithResult;
+import accord.utils.async.AsyncChains;
+import accord.utils.async.Cancellable;
 
 public interface AsyncExecutor extends Executor
 {
-    default AsyncChain<Void> build(Runnable task)
+    // unlike execute, throws no exceptions, nor will not wrap the runnable
+    default Cancellable execute(RunOrFail run)
     {
-        return build(new RunnableWithResult<>(task, null));
+        return execute(this, run);
     }
-    default <T> AsyncChain<T> build(Runnable task, T result)
-    {
-        return build(new RunnableWithResult<>(task, result));
-    }
-    <T> AsyncChain<T> build(Callable<T> task);
 
-    default void execute(Runnable command, BiConsumer<Object, Throwable> callback)
+    default boolean tryExecuteImmediately(Runnable run) { return false; }
+
+    default AsyncChain<Void> chain(Runnable run)
     {
-        build(command).begin(callback);
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super Void, Throwable> callback)
+            {
+                return execute(new AsyncCallbacks.RunAndCallback(run, callback));
+            }
+        };
+    }
+
+    default <V> AsyncChain<V> chain(Callable<V> call)
+    {
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super V, Throwable> callback)
+            {
+                return execute(new AsyncCallbacks.CallAndCallback<>(call, callback));
+            }
+        };
+    }
+
+    default <V> AsyncChain<V> flatChain(Callable<? extends AsyncChain<V>> call)
+    {
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super V, Throwable> callback)
+            {
+                return execute(new AsyncCallbacks.FlatCallAndCallback<>(call, callback));
+            }
+        };
     }
 
     // Depending on this implementation this method may queue-jump, i.e. task submission order is not guaranteed.
     // Make sure this is semantically safe at all call-sites.
-    default void maybeExecuteImmediately(Runnable command)
+    default void executeMaybeImmediately(Runnable run)
     {
-        execute(command);
+        if (!tryExecuteImmediately(run))
+            execute(run);
+    }
+
+    static <V> AsyncChain<V> chain(Executor executor, Callable<V> call)
+    {
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super V, Throwable> callback)
+            {
+                return execute(executor, new AsyncCallbacks.CallAndCallback<>(call, callback));
+            }
+        };
+    }
+
+    static Cancellable execute(Executor executor, RunOrFail runOrFail)
+    {
+        try
+        {
+            if (executor instanceof ExecutorService)
+            {
+                Future<?> future = ((ExecutorService) executor).submit(runOrFail);
+                return () -> future.cancel(false);
+            }
+            else
+            {
+                executor.execute(runOrFail);
+            }
+        }
+        catch (Throwable t)
+        {
+            runOrFail.fail(t);
+        }
+        return null;
     }
 }

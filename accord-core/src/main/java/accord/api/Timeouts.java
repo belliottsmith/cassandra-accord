@@ -32,6 +32,7 @@ public interface Timeouts
 
     interface RegisteredTimeout extends Cancellable
     {
+        @Override
         void cancel();
     }
 

@@ -54,9 +54,8 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 import accord.utils.SortedListMap;
-import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults;
-import accord.utils.async.AsyncResults.SettableByCallback;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
 import static accord.coordinate.CoordinateTransaction.LocalExecuteState.PENDING;
@@ -81,28 +80,44 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
  */
 public class CoordinateTransaction extends CoordinatePreAccept<Result>
 {
-    private CoordinateTransaction(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<Result, Throwable> callback)
+    private CoordinateTransaction(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<? super Result, Throwable> callback)
     {
         super(node, executor, txnId, txn, route, callback);
     }
 
-    public static AsyncResult<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
+    public static AsyncChain<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
+    {
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            public @Nullable Cancellable start(BiConsumer<? super Result, Throwable> callback)
+            {
+                coordinate(node, route, txnId, txn, callback);
+                return null;
+            }
+        };
+    }
+
+    public static void coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
     {
         TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), txn.keys());
         if (mismatch != null)
-            return AsyncResults.failure(mismatch);
+        {
+            callback.accept(null, mismatch);
+            return;
+        }
 
+        CoordinateTransaction coordinate;
         try
         {
-            SettableByCallback<Result> result = new SettableByCallback<>();
-            CoordinateTransaction coordinate = new CoordinateTransaction(node, node.someSequentialExecutor(), txnId, txn, route, result);
-            coordinate.start();
-            return result;
+            coordinate = new CoordinateTransaction(node, node.someSequentialExecutor(), txnId, txn, route, callback);
         }
         catch (Throwable t)
         {
-            return AsyncResults.failure(t);
+            callback.accept(null, t);
+            return;
         }
+        coordinate.start();
     }
 
     @Override
@@ -224,7 +239,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         public void accept(PreAcceptReply result, Throwable failure)
         {
             success();
-            executor.maybeExecuteImmediately(() -> {
+            executor.executeMaybeImmediately(() -> {
                 if (failure != null)
                 {
                     finishWithFailureOverride(failure);

@@ -18,8 +18,6 @@
 
 package accord.impl.list;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.Function;
 
 import accord.api.Data;
@@ -38,12 +36,10 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.async.AsyncChain;
-import accord.utils.async.AsyncResult;
 
 public class ListFetchCoordinator extends AbstractFetchCoordinator
 {
     private final ListStore listStore;
-    final List<AsyncResult<Void>> persisting = new ArrayList<>();
 
     public ListFetchCoordinator(Node node, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore, ListStore listStore)
     {
@@ -64,9 +60,9 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
             return;
 
         ListData listData = (ListData) data;
-        persisting.add(commandStore.build((PreLoadContext.Empty) () -> "List Fetch", safeStore -> {
+        persisting.add(commandStore.chain((PreLoadContext.Empty) () -> "List Fetch", safeStore -> {
             listData.forEach((key, value) -> listStore.writeUnsafe(key, value));
-        }).flatMap(ignore -> listStore.snapshot(true)).invoke((success, fail) -> {
+        }).flatMapResult(ignore -> listStore.snapshot(true)).invoke((success, fail) -> {
             if (fail == null) success(from, received);
             else fail(from, received, fail);
         }).beginAsResult());

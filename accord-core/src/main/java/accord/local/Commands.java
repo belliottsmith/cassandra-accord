@@ -686,6 +686,42 @@ public class Commands
         return safeStore.ranges().allAt(executeAt.epoch());
     }
 
+    private static class PostApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, PreLoadContext
+    {
+        final CommandStore commandStore;
+        final TxnId txnId;
+        final Participants<?> participants;
+        final long startedApplyAt;
+        final boolean force;
+
+        protected PostApply(Head<?> head, CommandStore commandStore, TxnId txnId, Participants<?> participants, long startedApplyAt, boolean force)
+        {
+            super(head);
+            this.commandStore = commandStore;
+            this.txnId = txnId;
+            this.participants = participants;
+            this.startedApplyAt = startedApplyAt;
+            this.force = force;
+        }
+
+        @Override
+        public AsyncChain<Void> apply(V v)
+        {
+            return commandStore.chain(this, this);
+        }
+
+        @Override
+        public void accept(SafeCommandStore safeStore)
+        {
+            postApply(safeStore, txnId, startedApplyAt, force);
+        }
+
+        @Override public TxnId primaryTxnId() { return txnId; }
+        @Override public Unseekables<?> keys() { return participants; }
+        @Override public LoadKeys loadKeys() { return SYNC; }
+        @Override public String reason() { return "Post Apply"; }
+    }
+
     public static AsyncChain<Void> applyChain(SafeCommandStore safeStore, Command.Executed command)
     {
         // TODO (required): make sure we are correctly handling (esp. C* side with validation logic) executing a transaction
@@ -697,13 +733,11 @@ public class Commands
         // TODO (required): this is anyway non-monotonic and milliseconds granularity
         long startedApplyAt = safeStore.node().elapsed(MICROSECONDS);
         TxnId txnId = command.txnId();
+        safeStore = safeStore; // disable reuse
         Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
-        return command.writes().apply(safeStore, executes, command.partialTxn())
-                      // TODO (expected): once we guarantee execution order KeyHistory can be ASYNC
-               .flatMap(unused -> unsafeStore.build(contextFor(txnId, executes, SYNC, WRITE, "Post Apply"), ss -> {
-                   postApply(ss, txnId, startedApplyAt, false);
-                   return null;
-               }));
+        return command.writes()
+                      .apply(safeStore, executes, command.partialTxn())
+                      .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, startedApplyAt, false));
     }
 
     @VisibleForImplementation
@@ -717,10 +751,7 @@ public class Commands
 
         TxnId txnId = command.txnId();
         return command.writes().apply(safeStore, executes, command.partialTxn())
-                      .flatMap(unused -> unsafeStore.build(context, ss -> {
-                          postApply(ss, txnId, -1, true);
-                          return null;
-                      }));
+                      .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, -1, true));
     }
 
     public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, boolean alwaysNotifyListeners, boolean notifyWaitingOn)

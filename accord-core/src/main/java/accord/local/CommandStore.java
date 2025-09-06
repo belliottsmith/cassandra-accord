@@ -57,6 +57,7 @@ import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 import org.agrona.collections.LongHashSet;
 
 import static accord.api.ConfigurationService.EpochReady.DONE;
@@ -268,46 +269,37 @@ public abstract class CommandStore implements SequentialAsyncExecutor
 
     public abstract boolean inStore();
 
-    public void maybeExecuteImmediately(Runnable task)
+    public boolean tryExecuteImmediately(Runnable run)
     {
-        if (inStore())
-        {
-            try { task.run(); }
-            catch (Throwable t) { agent.onUncaughtException(t); }
-        }
-        else
-        {
-            execute(task);
-        }
+        if (!inStore())
+            return false;
+
+        try { run.run(); }
+        catch (Throwable t) { agent.onUncaughtException(t); }
+        return true;
     }
 
-    public abstract AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
-    public abstract <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
+    public abstract AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
+    public abstract <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
 
-    @Override
-    public void execute(Runnable command)
+    public Cancellable execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
     {
-        execute(command, agent);
-    }
-
-    public void execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
-    {
-        build(context, consumer).begin(callback);
+        return chain(context, consumer).begin(callback);
     }
 
     public AsyncResult<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
     {
-        return build(context, consumer).beginAsResult();
+        return chain(context, consumer).beginAsResult();
     }
 
-    public <T> void submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply, BiConsumer<? super T, Throwable> callback)
+    public <T> Cancellable execute(PreLoadContext context, Function<? super SafeCommandStore, T> apply, BiConsumer<? super T, Throwable> callback)
     {
-        build(context, apply).begin(callback);
+        return chain(context, apply).begin(callback);
     }
 
     public <T> AsyncResult<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply)
     {
-        return build(context, apply).beginAsResult();
+        return chain(context, apply).beginAsResult();
     }
 
     public abstract void shutdown();
@@ -539,10 +531,10 @@ public abstract class CommandStore implements SequentialAsyncExecutor
             });
 
             AsyncResult<Void> readyToCoordinate = readyToCoordinate(newRanges, epoch);
-            return new EpochReady(epoch, metadata.<Void>map(ignore -> null).beginAsResult(),
-                readyToCoordinate.beginAsResult(),
-                metadata.flatMap(e -> e.data).beginAsResult(),
-                metadata.flatMap(e -> e.reads).beginAsResult());
+            return new EpochReady(epoch, metadata.map(ignore -> null),
+                readyToCoordinate,
+                metadata.flatMap(e -> e.data),
+                metadata.flatMap(e -> e.reads));
         };
     }
 
@@ -581,7 +573,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     {
         TxnId minForEpoch = TxnId.minForEpoch(epoch);
         node.durability().close("[" + this + " Epoch " + epoch + ']', VisibilitySyncPoint, minForEpoch, ranges, 1, TimeUnit.HOURS)
-            .begin((success, fail) -> {
+            .invoke((success, fail) -> {
                 if (fail != null)
                 {
                     Ranges notRetired = redundantBefore.removeRetired(ranges);
