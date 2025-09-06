@@ -18,10 +18,10 @@
 
 package accord.impl.progresslog;
 
-import java.util.concurrent.Executor;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.api.AsyncExecutor;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Tracing;
 import accord.coordinate.AsynchronousAwait;
@@ -921,7 +921,7 @@ abstract class WaitingState extends BaseTxnState
         Await.Until awaitUntil = blockedUntil.toAwait();
         // we MUST allocate the invoker before invoking withEpoch as this may be asynchronous and we must first register our callback for cancellation
         CallbackInvoker<BlockedUntil, AsynchronousAwait.SynchronousResult> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, callback);
-        owner.start(invoker, owner.node().withEpochAtLeast(epoch, (Executor)null, invoker, () -> {
+        owner.start(invoker, owner.node().withEpochAtLeast(epoch, (AsyncExecutor)null, invoker, () -> {
             AsynchronousAwait.awaitAny(owner.node(), contact(owner, route, epoch), txnId, route, awaitUntil, callbackId, invoker);
         }));
     }

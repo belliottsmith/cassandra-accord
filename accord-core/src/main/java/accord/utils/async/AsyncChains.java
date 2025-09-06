@@ -23,35 +23,25 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+import accord.api.AsyncExecutor;
 import accord.utils.Invariants;
 import accord.utils.Reduce;
+import accord.utils.TriFunction;
+import accord.utils.async.AsyncCombiner.ChainCombiner;
 
-import static accord.utils.Invariants.illegalState;
-
-public abstract class AsyncChains<V> implements AsyncChain<V>
+public class AsyncChains
 {
-    private static final Logger logger = LoggerFactory.getLogger(AsyncChains.class);
-
     static class ImmediateSuccess<V> extends AsyncChains.Head<V>
     {
         final private V success;
@@ -78,7 +68,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    public abstract static class Head<V> extends AsyncChains<V> implements BiConsumer<V, Throwable>
+    public abstract static class Head<V> extends AbstractChain<V> implements AsyncChain.Head<V>
     {
         protected Head()
         {
@@ -96,7 +86,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
             return start(callback);
         }
 
-        Cancellable begin()
+        public Cancellable begin()
         {
             Invariants.requireArgument(next != null);
             BiConsumer<? super V, Throwable> next = this.next;
@@ -112,7 +102,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    static abstract class Link<I, O> extends AsyncChains<O> implements BiConsumer<I, Throwable>
+    public static abstract class Link<I, O> extends AbstractChain<O> implements BiConsumer<I, Throwable>
     {
         protected Link(Head<?> head)
         {
@@ -130,9 +120,10 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    public static abstract class Map<I, O> extends Link<I, O> implements Function<I, O>
+    // TODO (desired): for efficiency common call-sites should directly use Map
+    public static abstract class MapLink<I, O> extends Link<I, O> implements Function<I, O>
     {
-        Map(Head<?> head)
+        protected MapLink(Head<?> head)
         {
             super(head);
         }
@@ -158,11 +149,25 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    static class EncapsulatedMap<I, O> extends Map<I, O>
+    public static class MapToNull<I, O> extends MapLink<I, O>
+    {
+        public MapToNull(Head<?> head)
+        {
+            super(head);
+        }
+
+        @Override
+        public O apply(I i)
+        {
+            return null;
+        }
+    }
+
+    public static class Map<I, O> extends MapLink<I, O>
     {
         final Function<? super I, ? extends O> map;
 
-        EncapsulatedMap(Head<?> head, Function<? super I, ? extends O> map)
+        Map(Head<?> head, Function<? super I, ? extends O> map)
         {
             super(head);
             this.map = map;
@@ -175,9 +180,29 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    public static abstract class FlatMap<I, O> extends Link<I, O> implements Function<I, AsyncChain<O>>
+    public static class AsyncMap<I, O> extends FlatMapLink<I, O>
     {
-        FlatMap(Head<?> head)
+        final Function<? super I, ? extends O> map;
+        final AsyncExecutor executor;
+
+        AsyncMap(Head<?> head, Function<? super I, ? extends O> map, AsyncExecutor executor)
+        {
+            super(head);
+            this.map = map;
+            this.executor = executor;
+        }
+
+        @Override
+        public AsyncChain<O> apply(I i)
+        {
+            // TODO (desired): have executor specialisations for map.apply
+            return executor.chain(() -> map.apply(i));
+        }
+    }
+
+    public static abstract class FlatMapLink<I, O> extends Link<I, O> implements Function<I, AsyncChain<O>>
+    {
+        protected FlatMapLink(Head<?> head)
         {
             super(head);
         }
@@ -190,11 +215,11 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    static class EncapsulatedFlatMap<I, O> extends FlatMap<I, O>
+    public static class FlatMap<I, O> extends FlatMapLink<I, O>
     {
         final Function<? super I, ? extends AsyncChain<O>> map;
 
-        EncapsulatedFlatMap(Head<?> head, Function<? super I, ? extends AsyncChain<O>> map)
+        FlatMap(Head<?> head, Function<? super I, ? extends AsyncChain<O>> map)
         {
             super(head);
             this.map = map;
@@ -203,20 +228,84 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         @Override
         public AsyncChain<O> apply(I i)
         {
-            try
-            {
-                return map.apply(i);
-            }
-            catch (Throwable t)
-            {
-                return AsyncChains.failure(t);
-            }
+            try { return map.apply(i); }
+            catch (Throwable t) { return AsyncChains.failure(t); }
         }
     }
 
-    public static abstract class Recover<I> extends Link<I, I> implements Function<Throwable, AsyncChain<I>>
+    public static class AsyncFlatMap<I, O> extends FlatMapLink<I, O>
     {
-        Recover(Head<?> head)
+        final Function<? super I, ? extends AsyncChain<O>> map;
+        final AsyncExecutor executor;
+
+        AsyncFlatMap(Head<?> head, Function<? super I, ? extends AsyncChain<O>> map, AsyncExecutor executor)
+        {
+            super(head);
+            this.map = map;
+            this.executor = executor;
+        }
+
+        @Override
+        public AsyncChain<O> apply(I in)
+        {
+            return executor.flatChain(() -> map.apply(in));
+        }
+    }
+
+    public static class FlatMapOverride<I, O> extends FlatMapLink<I, O>
+    {
+        final Supplier<? extends AsyncChain<O>> override;
+
+        public FlatMapOverride(Head<?> head, Supplier<? extends AsyncChain<O>> override)
+        {
+            super(head);
+            this.override = override;
+        }
+
+        @Override
+        public AsyncChain<O> apply(I i)
+        {
+            try { return override.get(); }
+            catch (Throwable t) { return AsyncChains.failure(t); }
+        }
+    }
+
+    public static abstract class FlatMapResultLink<I, O> extends Link<I, O> implements Function<I, AsyncResult<O>>
+    {
+        protected FlatMapResultLink(Head<?> head)
+        {
+            super(head);
+        }
+
+        @Override
+        public void accept(I i, Throwable throwable)
+        {
+            if (throwable != null) next.accept(null, throwable);
+            else apply(i).invoke(next);
+        }
+    }
+
+    public static class FlatMapResult<I, O> extends FlatMapResultLink<I, O>
+    {
+        final Function<? super I, ? extends AsyncResult<O>> map;
+
+        FlatMapResult(Head<?> head, Function<? super I, ? extends AsyncResult<O>> map)
+        {
+            super(head);
+            this.map = map;
+        }
+
+        @Override
+        public AsyncResult<O> apply(I i)
+        {
+            try { return map.apply(i); }
+            catch (Throwable t) { return AsyncResults.failure(t); }
+        }
+    }
+
+    public static abstract class MapRecoverLink<I> extends Link<I, I> implements Function<Throwable, AsyncChain<I>>
+    {
+        MapRecoverLink(Head<?> head)
         {
             super(head);
         }
@@ -235,11 +324,11 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    static class EncapsulatedRecover<I> extends Recover<I>
+    public static class MapRecover<I> extends MapRecoverLink<I>
     {
         private final Function<? super Throwable, ? extends AsyncChain<I>> map;
 
-        public EncapsulatedRecover(Head<?> head, Function<? super Throwable, ? extends AsyncChain<I>> function)
+        public MapRecover(Head<?> head, Function<? super Throwable, ? extends AsyncChain<I>> function)
         {
             super(head);
             this.map = function;
@@ -260,9 +349,9 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     }
 
     // if extending Callback, be sure to invoke super.accept()
-    static class Callback<I> extends Link<I, I>
+    public static class CallbackLink<I> extends Link<I, I>
     {
-        Callback(Head<?> head)
+        CallbackLink(Head<?> head)
         {
             super(head);
         }
@@ -274,11 +363,11 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    static class EncapsulatedCallback<I> extends Callback<I>
+    static class Callback<I> extends CallbackLink<I>
     {
         final BiConsumer<? super I, Throwable> callback;
 
-        EncapsulatedCallback(Head<?> head, BiConsumer<? super I, Throwable> callback)
+        Callback(Head<?> head, BiConsumer<? super I, Throwable> callback)
         {
             super(head);
             this.callback = callback;
@@ -291,6 +380,65 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
             super.accept(i, throwable);
         }
     }
+
+    public static class AsyncCallback<I> extends Link<I, I>
+    {
+        final BiConsumer<? super I, Throwable> callback;
+        final AsyncExecutor executor;
+
+        AsyncCallback(Head<?> head, BiConsumer<? super I, Throwable> callback, AsyncExecutor executor)
+        {
+            super(head);
+            this.callback = callback;
+            this.executor = executor;
+        }
+
+        @Override
+        public void accept(I success, Throwable fail)
+        {
+            executor.execute(() -> {
+                callback.accept(success, fail);
+                next.accept(success, fail);
+            });
+        }
+    }
+
+    static class AccumulatingReducer<V> extends ChainCombiner<V, V>
+    {
+        private final Reduce<V, V> reducer;
+
+        private AccumulatingReducer(Reduce<V, V> reducer)
+        {
+            super(new ArrayList<>());
+            this.reducer = reducer;
+        }
+
+        public void add(AsyncChain<V> add)
+        {
+            inputs().add(add);
+        }
+
+        @VisibleForTesting
+        public int size()
+        {
+            return inputs().size();
+        }
+
+        public static <V> boolean match(AsyncChain<V> accum, Reduce<? super V, ? extends V> reducer)
+        {
+            return accum instanceof AccumulatingReducer && ((AccumulatingReducer<?>) accum).reducer == reducer;
+        }
+
+        @Override
+        V process(V[] inputs)
+        {
+            V result = inputs[0];
+            for (int i = 1; i < inputs.length; i++)
+                result = reducer.reduce(result, inputs[i]);
+            return result;
+        }
+    }
+
 
     private static class DetectLeak extends AsyncChains.Head<Void>
     {
@@ -322,195 +470,80 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         }
     }
 
-    @VisibleForTesting
-    static abstract class AbstractReducingAsyncChain<I, O> extends AsyncChainCombiner<I, O>
+    public static abstract class AbstractChain<V> implements AsyncChain<V>
     {
-        private AbstractReducingAsyncChain(AsyncChain<I> accum, AsyncChain<I> add)
+        // either the thing we start, or the thing we do in follow-up
+        BiConsumer<? super V, Throwable> next;
+        AbstractChain(AsyncChain.Head<?> head)
         {
-            super(list(accum, add));
-        }
-
-        private AbstractReducingAsyncChain(List<? extends AsyncChain<? extends I>> list)
-        {
-            super(list);
-        }
-
-        private static <V> List<AsyncChain<V>> list(AsyncChain<V> accum, AsyncChain<V> add)
-        {
-            List<AsyncChain<V>> list = new ArrayList<>(2);
-            list.add(accum);
-            list.add(add);
-            return list;
-        }
-
-        void add(AsyncChain<I> a)
-        {
-            inputs().add(a);
-        }
-
-        @VisibleForTesting
-        int size()
-        {
-            return inputs().size();
-        }
-    }
-
-    @VisibleForTesting
-    static class ReducingFunctionAsyncChain<V> extends AbstractReducingAsyncChain<V, V>
-    {
-        private final BiFunction<? super V, ? super V, ? extends V> reducer;
-
-        private ReducingFunctionAsyncChain(AsyncChain<V> accum, AsyncChain<V> add, BiFunction<? super V, ? super V, ? extends V> reducer)
-        {
-            super(accum, add);
-            this.reducer = reducer;
-        }
-
-        private ReducingFunctionAsyncChain(List<? extends AsyncChain<? extends V>> list, BiFunction<? super V, ? super V, ? extends V> reducer)
-        {
-            super(list);
-            this.reducer = reducer;
-        }
-
-        private static <V> boolean match(AsyncChain<V> accum, BiFunction<? super V, ? super V, ? extends V> reducer)
-        {
-            return accum instanceof ReducingFunctionAsyncChain && ((ReducingFunctionAsyncChain<?>) accum).reducer == reducer;
+            this.next = (BiConsumer) head;
         }
 
         @Override
-        V process(V[] inputs)
+        public <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper)
         {
-            V result = inputs[0];
-            for (int i = 1; i < inputs.length; i++)
-                result = reducer.apply(result, inputs[i]);
-            return result;
-        }
-    }
-
-    @VisibleForTesting
-    static class ReducingAsyncChain<V> extends AbstractReducingAsyncChain<V, V>
-    {
-        private final Reduce<V, V> reducer;
-
-        private ReducingAsyncChain(List<? extends AsyncChain<? extends V>> list, Reduce<V, V> reducer)
-        {
-            super(list);
-            this.reducer = reducer;
-        }
-
-        private ReducingAsyncChain(AsyncChain<V> accum, AsyncChain<V> add, Reduce<V, V> reducer)
-        {
-            super(accum, add);
-            this.reducer = reducer;
-        }
-
-        private static <V> boolean match(AsyncChain<V> accum, Reduce<? super V, ? extends V> reducer)
-        {
-            return accum instanceof ReducingAsyncChain && ((ReducingAsyncChain<?>) accum).reducer == reducer;
+            return then(Map::new, mapper);
         }
 
         @Override
-        V process(V[] inputs)
+        public <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper)
         {
-            V result = inputs[0];
-            for (int i = 1; i < inputs.length; i++)
-                result = reducer.reduce(result, inputs[i]);
+            return then(FlatMap::new, mapper);
+        }
+
+        @Override
+        public AsyncChain<V> recover(Function<? super Throwable, ? extends AsyncChain<V>> mapper)
+        {
+            return then(MapRecover::new, mapper);
+        }
+
+        @Override
+        public AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback)
+        {
+            return then(Callback::new, callback);
+        }
+
+        // can be used by transformations that want efficiency, and can directly extend Link, FlatMap or Callback
+        // (or perhaps some additional helper implementations that permit us to simply implement apply for Map and FlatMap)
+        public <O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> then(Function<AsyncChain.Head<?>, T> factory)
+        {
+            checkNextIsHead();
+            Head<?> head = (Head<?>) next;
+            T result = factory.apply(head);
+            next = result;
             return result;
         }
-    }
 
-    // either the thing we start, or the thing we do in follow-up
-    BiConsumer<? super V, Throwable> next;
-    AsyncChains(Head<?> head)
-    {
-        this.next = (BiConsumer) head;
-    }
+        @Override
+        public <P, O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> then(BiFunction<AsyncChain.Head<?>, P, T> factory, P param)
+        {
+            checkNextIsHead();
+            Head<?> head = (Head<?>) next;
+            T result = factory.apply(head, param);
+            next = result;
+            return result;
+        }
 
-    @Override
-    public <T> AsyncChain<T> map(Function<? super V, ? extends T> mapper)
-    {
-        return add(EncapsulatedMap::new, mapper);
-    }
+        @Override
+        public <P1, P2, O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> then(TriFunction<Head<?>, P1, P2, T> factory, P1 p1, P2 p2)
+        {
+            checkNextIsHead();
+            Head<?> head = (Head<?>) next;
+            T result = factory.apply(head, p1, p2);
+            next = result;
+            return result;
+        }
 
-    @Override
-    public <T> AsyncChain<T> flatMap(Function<? super V, ? extends AsyncChain<T>> mapper)
-    {
-        return add(EncapsulatedFlatMap::new, mapper);
-    }
-
-    @Override
-    public AsyncChain<V> recover(Function<? super Throwable, ? extends AsyncChain<V>> mapper)
-    {
-        return add(EncapsulatedRecover::new, mapper);
-    }
-
-    @Override
-    public AsyncChain<V> invoke(BiConsumer<? super V, Throwable> callback)
-    {
-        return add(EncapsulatedCallback::new, callback);
-    }
-
-    // can be used by transformations that want efficiency, and can directly extend Link, FlatMap or Callback
-    // (or perhaps some additional helper implementations that permit us to simply implement apply for Map and FlatMap)
-    <O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> add(Function<Head<?>, T> factory)
-    {
-        checkNextIsHead();
-        Head<?> head = (Head<?>) next;
-        T result = factory.apply(head);
-        next = result;
-        return result;
-    }
-
-    <P, O, T extends AsyncChain<O> & BiConsumer<? super V, Throwable>> AsyncChain<O> add(BiFunction<Head<?>, P, T> factory, P param)
-    {
-        checkNextIsHead();
-        Head<?> head = (Head<?>) next;
-        T result = factory.apply(head, param);
-        next = result;
-        return result;
-    }
-
-    protected void checkNextIsHead()
-    {
-        Invariants.require(next != null, "Begin was called multiple times");
-        Invariants.require(next instanceof Head<?>, "Next is not an instance of AsyncChains.Head (it is %s); was map/flatMap called on the same object multiple times?", next.getClass());
+        protected void checkNextIsHead()
+        {
+            Invariants.require(next != null, "Begin was called multiple times");
+            Invariants.require(next instanceof Head<?>, "Next is not an instance of AsyncChains.Head (it is %s); was map/flatMap called on the same object multiple times?", next.getClass());
+        }
     }
 
     public static AsyncChain<?> detectLeak(Consumer<Throwable> onLeak, Runnable onCall)
     {
         return new DetectLeak(onLeak, onCall);
-    }
-
-    private static <V> Runnable encapsulate(Callable<V> callable, BiConsumer<? super V, Throwable> receiver)
-    {
-        return () -> {
-            try
-            {
-                V result = callable.call();
-                receiver.accept(result, null);
-            }
-            catch (Throwable t)
-            {
-                logger.trace("AsyncChain Callable threw an Exception", t);
-                receiver.accept(null, t);
-            }
-        };
-    }
-
-    private static Runnable encapsulate(Runnable runnable, BiConsumer<? super Void, Throwable> receiver)
-    {
-        return () -> {
-            try
-            {
-                runnable.run();
-                receiver.accept(null, null);
-            }
-            catch (Throwable t)
-            {
-                logger.debug("AsyncChain Runnable threw an Exception", t);
-                receiver.accept(null, t);
-            }
-        };
     }
 
     public static <V> AsyncChain<V> success(V success)
@@ -523,109 +556,35 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         return new ImmediateFailure<>(failure);
     }
 
-    public static <V, T> AsyncChain<T> map(AsyncChain<V> chain, Function<? super V, ? extends T> mapper, Executor executor)
+    public static AsyncChain<Void> ofRunnable(Runnable run)
     {
-        // type parameter needed for compilation for some reason on some JDKs
-        return chain.flatMap(v -> new Head<T>()
+        return new Head<>()
         {
             @Override
-            protected Cancellable start(BiConsumer<? super T, Throwable> callback)
+            protected Cancellable start(BiConsumer<? super Void, Throwable> callback)
             {
-                return AsyncChains.submit(executor, callback, () -> {
-                    T value;
-                    try
-                    {
-                        value = mapper.apply(v);
-                    }
-                    catch (Throwable t)
-                    {
-                        callback.accept(null, t);
-                        return;
-                    }
-                    callback.accept(value, null);
-                });
-            }
-        });
-    }
-
-    public static <V, T> AsyncChain<T> flatMap(AsyncChain<V> chain, Function<? super V, ? extends AsyncChain<T>> mapper, Executor executor)
-    {
-        return chain.flatMap(v -> new Head<T>()
-        {
-            @Override
-            protected Cancellable start(BiConsumer<? super T, Throwable> callback)
-            {
-                return AsyncChains.submit(executor, callback, () -> {
-                    try
-                    {
-                        mapper.apply(v).begin(callback);
-                    }
-                    catch (Throwable t)
-                    {
-                        callback.accept(null, t);
-                    }
-                });
-            }
-        });
-    }
-
-    private static Cancellable submit(Executor executor, BiConsumer<?, Throwable> callback, Runnable run)
-    {
-        try
-        {
-            if (executor instanceof ExecutorService)
-            {
-                Future<?> future = ((ExecutorService) executor).submit(run);
-                return () -> future.cancel(true);
-            }
-            else
-            {
-                executor.execute(run);
+                AsyncCallbacks.runAndCallback(run, callback);
                 return null;
             }
-        }
-        catch (Throwable t)
-        {
-            // TODO (low priority, correctness): If the executor is shutdown then the callback may run in an unexpected thread, which may not be thread safe
-            callback.accept(null, t);
-            return null;
-        }
+        };
     }
 
-    public static <V> AsyncChain<V> ofCallable(Executor executor, Callable<V> callable)
-    {
-        return ofCallable(executor, callable, AsyncChains::encapsulate);
-    }
-
-    public static <V> AsyncChain<V> ofCallable(Executor executor,
-                                               Callable<V> callable,
-                                               BiFunction<Callable<V>, BiConsumer<? super V, Throwable>, Runnable> encapsulator)
+    public static <V> AsyncChain<V> ofCallable(Callable<V> call)
     {
         return new Head<>()
         {
             @Override
             protected Cancellable start(BiConsumer<? super V, Throwable> callback)
             {
-                return AsyncChains.submit(executor, callback, encapsulator.apply(callable, callback));
-            }
-        };
-    }
-
-    public static AsyncChain<Void> ofRunnable(Executor executor, Runnable runnable)
-    {
-        return new Head<Void>()
-        {
-            @Override
-            protected Cancellable start(BiConsumer<? super Void, Throwable> callback)
-            {
-                return AsyncChains.submit(executor, callback, encapsulate(runnable, callback));
+                AsyncCallbacks.callAndCallback(call, callback);
+                return null;
             }
         };
     }
 
     public static <V> AsyncChain<List<V>> allOf(List<? extends AsyncChain<? extends V>> chains)
     {
-        return new AsyncChainCombiner<>(chains) {
+        return new ChainCombiner<>(chains) {
 
             @Override
             List<V> process(V[] inputs)
@@ -639,7 +598,18 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
     {
         if (chains.size() == 1)
             return (AsyncChain<V>) chains.get(0);
-        return new ReducingAsyncChain<>(chains, reducer);
+
+        return new ChainCombiner<>(chains)
+        {
+            @Override
+            V process(V[] inputs)
+            {
+                V result = inputs[0];
+                for (int i = 1; i < inputs.length ; ++i)
+                    result = reducer.reduce(result, inputs[i]);
+                return result;
+            }
+        };
     }
 
     public static <I, O> AsyncChain<O> reduce(List<? extends AsyncChain<? extends I>> chains, Reduce<I, O> reducer, O identity)
@@ -649,7 +619,7 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
             case 0: return AsyncChains.success(identity);
             case 1: return chains.get(0).map(a -> reducer.reduce(identity, a));
         }
-        return new AbstractReducingAsyncChain<>(chains)
+        return new ChainCombiner<>(chains)
         {
             @Override
             O process(I[] inputs)
@@ -662,169 +632,16 @@ public abstract class AsyncChains<V> implements AsyncChain<V>
         };
     }
 
-    public static <V> AsyncChain<V> reduce(AsyncChain<V> accum, AsyncChain<V> add, Reduce<V, V> reducer)
+    public static <V> AsyncChain<V> reduce(AsyncChain<V> accum, AsyncChain<V> add, Reduce<V, V> reduce)
     {
-        if (ReducingAsyncChain.match(accum, reducer))
+        if (AccumulatingReducer.match(accum, reduce))
         {
-            ((ReducingAsyncChain<V>) accum).add(add);
+            ((AccumulatingReducer<V>) accum).add(add);
             return accum;
         }
-        return new ReducingAsyncChain<>(accum, add, reducer);
-    }
-
-    // TODO (expected): move this methods to test-only; in Cassandra we should not be using these as not simulator safe
-    public static <V> V getBlocking(AsyncChain<V> chain) throws InterruptedException, ExecutionException
-    {
-        try
-        {
-            return getBlocking(chain, 0, TimeUnit.DAYS);
-        }
-        catch (TimeoutException e)
-        {
-            throw illegalState("Should not throw timeout exception e");
-        }
-    }
-
-    public static <V> V getBlockingAndRethrow(AsyncChain<V> chain)
-    {
-        class Result
-        {
-            final V result;
-            final Throwable failure;
-
-            public Result(V result, Throwable failure)
-            {
-                this.result = result;
-                this.failure = failure;
-            }
-        }
-
-        AtomicReference<Result> callbackResult = new AtomicReference<>();
-        CountDownLatch latch = new CountDownLatch(1);
-
-        chain.begin((result, failure) -> {
-            callbackResult.set(new Result(result, failure));
-            latch.countDown();
-        });
-
-        try
-        {
-            latch.await();
-        }
-        catch (InterruptedException e)
-        {
-            throw new RuntimeException(e);
-        }
-
-        Result result = callbackResult.get();
-        if (result.failure == null) return result.result;
-        else throw new RuntimeException(result.failure);
-    }
-
-    public static <V> V getBlocking(AsyncChain<V> chain, long timeout, TimeUnit unit) throws InterruptedException, TimeoutException, ExecutionException
-    {
-        class Result
-        {
-            final V result;
-            final Throwable failure;
-
-            public Result(V result, Throwable failure)
-            {
-                this.result = result;
-                this.failure = failure;
-            }
-        }
-
-        AtomicReference<Result> callbackResult = new AtomicReference<>();
-        CountDownLatch latch = new CountDownLatch(1);
-
-        chain.begin((result, failure) -> {
-            callbackResult.set(new Result(result, failure));
-            latch.countDown();
-        });
-
-        if (timeout > 0)
-        {
-            if (!latch.await(timeout, unit))
-                throw new TimeoutException();
-        }
-        else
-            latch.await();
-
-        Result result = callbackResult.get();
-        if (result.failure == null) return result.result;
-        else throw new ExecutionException(result.failure);
-    }
-
-    public static <V> V getUninterruptibly(AsyncChain<V> chain) throws ExecutionException
-    {
-        try
-        {
-            return getUninterruptibly(chain, 0, TimeUnit.DAYS);
-        }
-        catch (TimeoutException e)
-        {
-            throw illegalState("Should not throw timeout exception e");
-        }
-    }
-
-    public static <V> V getUninterruptibly(AsyncChain<V> chain, long time, TimeUnit unit) throws ExecutionException, TimeoutException
-    {
-        boolean interrupted = false;
-        try
-        {
-            while (true)
-            {
-                try
-                {
-                    return getBlocking(chain, time, unit);
-                }
-                catch (InterruptedException e)
-                {
-                    interrupted = true;
-                }
-            }
-        }
-        finally
-        {
-            if (interrupted)
-                Thread.currentThread().interrupt();
-        }
-    }
-
-    public static <V> V getUnchecked(AsyncChain<V> chain)
-    {
-        try
-        {
-            return getUninterruptibly(chain);
-        }
-        catch (ExecutionException e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static void awaitUninterruptibly(AsyncChain<?> chain)
-    {
-        try
-        {
-            getUninterruptibly(chain);
-        }
-        catch (ExecutionException e)
-        {
-            // ignore
-        }
-    }
-
-    public static void awaitUninterruptiblyAndRethrow(AsyncChain<?> chain)
-    {
-        try
-        {
-            getUninterruptibly(chain);
-        }
-        catch (ExecutionException e)
-        {
-            throw new RuntimeException(e.getCause());
-        }
+        AccumulatingReducer<V> reducer = new AccumulatingReducer<>(reduce);
+        reducer.add(accum);
+        reducer.add(add);
+        return reducer;
     }
 }

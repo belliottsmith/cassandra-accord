@@ -45,7 +45,6 @@ import accord.local.CommandSummaries.ComputeIsDep;
 import accord.local.CommandSummaries.TestStartedAt;
 import accord.primitives.Deps;
 import accord.primitives.Deps.DepRelationList;
-import accord.primitives.Participants;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;

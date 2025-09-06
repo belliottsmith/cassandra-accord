@@ -27,6 +27,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import javax.annotation.Nonnull;
@@ -88,7 +89,9 @@ import accord.utils.DefaultRandom;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 
 import static accord.local.Command.Executed.executed;
 import static accord.local.Command.NotDefined.notDefined;
@@ -941,7 +944,7 @@ public class CommandsForKeyTest
 
     private static class TestCommandStore extends CommandStore implements Agent
     {
-        class Task extends AsyncResults.AbstractResult<Void>
+        static class Task extends AsyncResults.AbstractResult<Void>
         {
             final Consumer<? super SafeCommandStore> consumer;
             Task(Consumer<? super SafeCommandStore> consumer)
@@ -997,15 +1000,28 @@ public class CommandsForKeyTest
         @Override protected void ensureDurable(Ranges ranges, RedundantBefore onDataStoreDurable) {}
 
         @Override
-        public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
-            Task task = new Task(consumer);
-            queue.add(task);
-            return task;
+            return new AsyncChains.Head<>()
+            {
+                @Override
+                protected @Nullable Cancellable start(BiConsumer<? super Void, Throwable> callback)
+                {
+                    Task task = new Task(consumer);
+                    queue.add(task);
+                    return null;
+                }
+            };
         }
 
         @Override
-        public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> apply)
+        public void execute(Runnable run)
+        {
+            queue.add(new Task(ignore -> run.run()));
+        }
+
+        @Override
+        public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply)
         {
             throw new UnsupportedOperationException();
         }
@@ -1017,7 +1033,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public <T> AsyncChain<T> build(Callable<T> task)
+        public <T> AsyncChain<T> chain(Callable<T> call)
         {
             throw new UnsupportedOperationException();
         }

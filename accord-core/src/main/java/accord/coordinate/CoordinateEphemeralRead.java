@@ -20,6 +20,8 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
 import accord.api.Result;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
@@ -36,8 +38,9 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
-import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults.SettableByCallback;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
+import accord.utils.async.Cancellable;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owned;
@@ -61,11 +64,17 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
  */
 public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result, GetEphemeralReadDepsOk, GetEphemeralReadDepsOk>
 {
-    public static AsyncResult<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
+    public static AsyncChain<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
     {
-        SettableByCallback<Result> result = new SettableByCallback<>();
-        coordinate(node, route, txnId, txn, result);
-        return result;
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            public @Nullable Cancellable start(BiConsumer<? super Result, Throwable> callback)
+            {
+                coordinate(node, route, txnId, txn, callback);
+                return null;
+            }
+        };
     }
 
     public static void coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)

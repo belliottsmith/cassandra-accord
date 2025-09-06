@@ -68,8 +68,8 @@ import static accord.Utils.writeTxn;
 import static accord.impl.InMemoryCommandStore.inMemory;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.utils.async.AsyncChains.awaitUninterruptibly;
-import static accord.utils.async.AsyncChains.getUninterruptibly;
+import static accord.utils.async.AsyncChainUtils.getUninterruptibly;
+import static accord.utils.async.AsyncChainUtils.awaitUninterruptibly;
 
 public class ImmutableCommandTest
 {
@@ -103,7 +103,7 @@ public class ImmutableCommandTest
     private static Node createNode(Id id, CommandStoreSupport storeSupport)
     {
         MockCluster.Clock clock = new MockCluster.Clock(100);
-        Agent agent = new TestAgent();
+        Agent agent = new TestAgent(clock);
         RandomSource random = new DefaultRandom();
         Node node = new Node(id, null, new MockConfigurationService(null, (epoch, service) -> { }, storeSupport.local.get()),
                              clock, new AtomicUniqueTime(clock),
@@ -113,7 +113,7 @@ public class ImmutableCommandTest
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
                              new InMemoryJournal(id, random.fork()));
-        awaitUninterruptibly(node.unsafeStart());
+        awaitUninterruptibly(node.unsafeStart().chain());
         node.onTopologyUpdate(storeSupport.local.get(), false, true);
         return node;
     }
@@ -174,11 +174,11 @@ public class ImmutableCommandTest
         setTopologyEpoch(support.local, 2);
         ((TestableConfigurationService)node.configService()).reportTopology(TopologyUtils.withEpoch(support.local.get(), 2));
         Timestamp expectedTimestamp = Timestamp.fromValues(2, 110, ID1);
-        getUninterruptibly(commands.build(context, (Consumer<? super SafeCommandStore>) safeStore -> {
+        getUninterruptibly(commands.chain(context, (Consumer<? super SafeCommandStore>) safeStore -> {
             StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, 2);
             Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txn.slice(FULL_RANGES, true), null, false);
         }));
-        commands.build(PreLoadContext.contextFor(txnId, "Test"), safeStore -> {
+        commands.chain(PreLoadContext.contextFor(txnId, "Test"), safeStore -> {
             Command command = safeStore.get(txnId).current();
             Assertions.assertEquals(Status.PreAccepted, command.status());
             Assertions.assertEquals(expectedTimestamp, command.executeAt());

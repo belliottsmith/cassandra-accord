@@ -198,7 +198,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
                 long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
                 slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
                 {
-                    @Override public void timeout() { executor.maybeExecuteImmediately(() -> {
+                    @Override public void timeout() { executor.executeMaybeImmediately(() -> {
                         onSlowResponse(node.id());
                         slowTimeout = null;
                     }); }

@@ -30,7 +30,6 @@ import java.util.NavigableMap;
 import java.util.Queue;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -338,14 +337,17 @@ public abstract class InMemoryCommandStore extends CommandStore
         if (!CommandsForKey.reportLinearizabilityViolations())
             return;
 
-        ((InMemoryAgent)agent).snapshot(this).begin((success, fail) -> {
-            if (fail == null)
-            {
-                execute((Empty)() -> "Report CommandStore Durable", safeStore -> {
-                    safeStore.upsertRedundantBefore(onCommandStoreDurable);
-                }).begin(agent);
-            }
-        });
+        if (agent instanceof InMemoryAgent)
+        {
+            ((InMemoryAgent)agent).snapshot(this).invoke((success, fail) -> {
+                if (fail == null)
+                {
+                    execute((Empty)() -> "Report CommandStore Durable", safeStore -> {
+                        safeStore.upsertRedundantBefore(onCommandStoreDurable);
+                    });
+                }
+            });
+        }
     }
 
     @Override
@@ -367,19 +369,22 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
         }
         TxnId clearProgressLogBefore = unsafeGetRedundantBefore().minShardAndLocallyAppliedBefore();
-        List<TxnId> clearing = ((DefaultProgressLog) progressLog).activeBefore(clearProgressLogBefore);
-        for (TxnId txnId : clearing)
+        if (progressLog instanceof DefaultProgressLog)
         {
-            GlobalCommand globalCommand = commands.get(txnId);
-            Invariants.require(globalCommand != null && !globalCommand.isEmpty());
-            Command command = globalCommand.value();
-            StoreParticipants participants = command.participants().filter(LOAD, safeStore, txnId, command.executeAtIfKnown());
-            Cleanup cleanup = Cleanup.shouldCleanup(FULL, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
-            Invariants.require(command.hasBeen(Applied)
-                               || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
-                               || (durableBefore().min(txnId) != Universal &&
-                                      ((command.participants().stillExecutes() != null && command.participants().stillExecutes().isEmpty())
-                                      || !Route.isFullRoute(command.route()))));
+            List<TxnId> clearing = ((DefaultProgressLog) progressLog).activeBefore(clearProgressLogBefore);
+            for (TxnId txnId : clearing)
+            {
+                GlobalCommand globalCommand = commands.get(txnId);
+                Invariants.require(globalCommand != null && !globalCommand.isEmpty());
+                Command command = globalCommand.value();
+                StoreParticipants participants = command.participants().filter(LOAD, safeStore, txnId, command.executeAtIfKnown());
+                Cleanup cleanup = Cleanup.shouldCleanup(FULL, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
+                Invariants.require(command.hasBeen(Applied)
+                                   || cleanup.compareTo(Cleanup.TRUNCATE) >= 0
+                                   || (durableBefore().min(txnId) != Universal &&
+                                          ((command.participants().stillExecutes() != null && command.participants().stillExecutes().isEmpty())
+                                          || !Route.isFullRoute(command.route()))));
+            }
         }
         super.updatedRedundantBefore(safeStore, added);
     }
@@ -973,13 +978,13 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
-            return build(context, i -> { consumer.accept(i); return null; });
+            return chain(context, i -> { consumer.accept(i); return null; });
         }
 
         @Override
-        public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
         {
             return new AsyncChains.Head<T>()
             {
@@ -992,30 +997,13 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public <T> AsyncChain<T> build(Callable<T> task)
-        {
-            return new AsyncChains.Head<T>()
-            {
-                @Override
-                protected Cancellable start(BiConsumer<? super T, Throwable> callback)
-                {
-                    return enqueueAndRun(() -> {
-                        try
-                        {
-                            callback.accept(task.call(), null);
-                        }
-                        catch (Throwable t)
-                        {
-                            logger.error("Uncaught exception", t);
-                            callback.accept(null, t);
-                        }
-                    });
-                }
-            };
-        }
+        public void shutdown() {}
 
         @Override
-        public void shutdown() {}
+        public void execute(Runnable run)
+        {
+            enqueueAndRun(run);
+        }
     }
 
     public static class SingleThread extends InMemoryCommandStore
@@ -1028,7 +1016,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder, journal);
             this.executor = Executors.newSingleThreadExecutor(r -> {
                 Thread thread = new Thread(r);
-                thread.setName(CommandStore.class.getSimpleName() + '[' + time.id() + ']');
+                thread.setName(CommandStore.class.getSimpleName() + '[' + id + ',' + time.id() + ']');
                 return thread;
             });
             // "this" is leaked before constructor is completed, but since all fields are "final" and set before "this"
@@ -1053,27 +1041,27 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
-            return build(context, i -> { consumer.accept(i); return null; });
+            return chain(context, i -> { consumer.accept(i); return null; });
         }
 
         @Override
-        public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
         {
-            return AsyncChains.ofCallable(executor, () -> executeInContext(this, context, function));
-        }
-
-        @Override
-        public <T> AsyncChain<T> build(Callable<T> task)
-        {
-            return AsyncChains.ofCallable(executor, task);
+            return chain(() -> executeInContext(SingleThread.this, context, function));
         }
 
         @Override
         public void shutdown()
         {
             executor.shutdownNow();
+        }
+
+        @Override
+        public void execute(Runnable run)
+        {
+            executor.execute(run);
         }
     }
 

@@ -49,7 +49,7 @@ public class TimeoutUtils
         t.start();
         try
         {
-            AsyncChains.getBlocking(promise, timeout.toNanos(), TimeUnit.NANOSECONDS);
+            AsyncChainUtils.getBlocking(promise.chain(), timeout.toNanos(), TimeUnit.NANOSECONDS);
         }
         catch (InterruptedException e)
         {

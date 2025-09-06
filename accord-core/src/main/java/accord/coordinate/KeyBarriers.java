@@ -18,6 +18,8 @@
 
 package accord.coordinate;
 
+import java.util.function.BiConsumer;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,8 +41,8 @@ import accord.topology.Topologies;
 import accord.utils.MapReduce;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 
 import javax.annotation.Nullable;
 
@@ -147,20 +149,25 @@ public class KeyBarriers
         }
     }
 
-    public static AsyncResult<Void> awaitLocal(Node node, TxnId txnId, RoutingKey key)
+    public static AsyncChain<Void> awaitLocal(Node node, TxnId txnId, RoutingKey key)
     {
-        AsyncResult.Settable<Void> result = AsyncResults.settable();
-        Await await = new Await(txnId, RoutingKeys.of(key), IsApplied, txnId.epoch(), txnId.epoch(), -1, true)
+        return new AsyncChains.Head<>()
         {
             @Override
-            protected void reply(AwaitOk reply, Throwable failure)
+            protected @Nullable Cancellable start(BiConsumer<? super Void, Throwable> callback)
             {
-                if (failure == null) result.trySuccess(null);
-                else result.tryFailure(failure);
+                Await await = new Await(txnId, RoutingKeys.of(key), IsApplied, txnId.epoch(), txnId.epoch(), -1, true)
+                {
+                    @Override
+                    protected void reply(AwaitOk reply, Throwable failure)
+                    {
+                        callback.accept(null, failure);
+                    }
+                };
+                await.process(node, null, null);
+                return null;
             }
         };
-        await.process(node, null, null);
-        return result;
     }
 
     public static AsyncChain<Boolean> await(Node node, SequentialAsyncExecutor executor, Found found, SyncLocal syncLocal, SyncRemote syncRemote)
@@ -169,7 +176,8 @@ public class KeyBarriers
             return AsyncChains.success(false);
 
         if (found.knownLocal.compareTo(syncLocal) < 0)
-            return awaitLocal(node, found.txnId, found.key).flatMap(ignore -> awaitRemote(node, executor, found, syncRemote));
+            return awaitLocal(node, found.txnId, found.key)
+                   .flatMap(ignore -> awaitRemote(node, executor, found, syncRemote));
 
         if (found.knownRemote.compareTo(syncRemote) < 0)
             return awaitRemote(node, executor, found.txnId, found.key);

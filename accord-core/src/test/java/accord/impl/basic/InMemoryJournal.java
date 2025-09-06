@@ -62,7 +62,7 @@ import accord.utils.Invariants;
 import accord.utils.PersistentField;
 import accord.utils.RandomSource;
 import accord.utils.UnhandledEnum;
-import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncChainUtils;
 import accord.utils.async.AsyncResult;
 import org.agrona.collections.Int2ObjectHashMap;
 
@@ -615,7 +615,7 @@ public class InMemoryJournal implements Journal
                 if (e.getValue().isEmpty()) continue;
 
                 AsyncResult<?> res = replayer.replay(e.getKey()).beginAsResult();
-                AsyncChains.getUnchecked(res);
+                AsyncChainUtils.getUnchecked(res);
             }
 
         }

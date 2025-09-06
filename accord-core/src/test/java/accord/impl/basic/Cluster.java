@@ -113,8 +113,8 @@ import accord.utils.ReflectionUtils;
 import accord.utils.Timestamped;
 import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
-import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
@@ -741,7 +741,7 @@ public class Cluster
             schemaApply.onUpdate(topology);
 
             Pending.Global.setNoActiveOrigin();
-            AsyncResult<?> startup = AsyncChains.reduce(nodeMap.values().stream().map(Node::unsafeStart).collect(toList()), (a, b) -> null).beginAsResult();
+            AsyncResult<?> startup = AsyncResults.reduce(nodeMap.values().stream().map(Node::unsafeStart).collect(toList()), (a, b) -> null);
             Pending.Global.clearActiveOrigin();
 
             while (sinks.processPending());

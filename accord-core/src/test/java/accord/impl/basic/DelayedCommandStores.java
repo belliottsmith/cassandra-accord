@@ -171,14 +171,14 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
     {
         public class DelayedTask<T> extends Task<T>
         {
-            private DelayedTask(Callable<T> fn)
+            private DelayedTask(Callable<T> call)
             {
-                super(fn);
+                super(call);
             }
 
-            private DelayedTask(Callable<T> fn, Pending origin)
+            private DelayedTask(Callable<T> call, Pending origin)
             {
-                super(fn, origin);
+                super(call, origin);
             }
 
             public DelayedCommandStore owner()
@@ -315,21 +315,39 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
 
         @Override
-        public AsyncChain<Void> build(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
             return submit(newTask(context, i -> { consumer.accept(i); return null; }));
         }
 
         @Override
-        public <T> AsyncChain<T> build(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
         {
             return submit(newTask(context, function));
         }
 
         @Override
-        public <T> AsyncChain<T> build(Callable<T> fn)
+        public <T> AsyncChain<T> chain(Callable<T> call)
         {
-            return submit(new DelayedTask<>(fn));
+            return submit(new DelayedTask<>(call));
+        }
+
+        @Override
+        public void execute(Runnable run)
+        {
+            execute(new DelayedTask<>(() -> {
+                run.run();
+                return null;
+            }));
+        }
+
+        private void execute(DelayedTask<?> task)
+        {
+            boolean wasEmpty = pending.isEmpty();
+            executor.preregister(task);
+            pending.add(task);
+            if (wasEmpty)
+                runNextTask();
         }
 
         private <T> DelayedTask<T> newTask(PreLoadContext context, Function<? super SafeCommandStore, T> function)
@@ -349,21 +367,17 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                     pending.add(task);
                     if (wasEmpty)
                         runNextTask();
-                }).flatMap(ignore -> task);
+                }).flatMap(ignore -> task.chain());
             }
             else
             {
-                return new AsyncChains.Head<T>()
+                return new AsyncChains.Head<>()
                 {
                     @Override
                     protected Cancellable start(BiConsumer<? super T, Throwable> callback)
                     {
-                        boolean wasEmpty = pending.isEmpty();
-                        executor.preregister(task);
-                        pending.add(task);
-                        if (wasEmpty)
-                            runNextTask();
-                        task.begin(callback);
+                        execute(task);
+                        task.invoke(callback);
                         return () -> {
                             if (pending.peek() != task)
                             {
@@ -376,8 +390,6 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 };
             }
         }
-
-
 
         private void runNextTask()
         {

@@ -45,12 +45,12 @@ import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.topology.TopologyUtils;
 import accord.utils.SortedArrays.SortedArrayList;
-import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncChainUtils;
 import org.junit.jupiter.api.Test;
+
+import accord.utils.async.AsyncResult;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
-
-import java.util.function.Function;
 
 import static java.util.Collections.emptySet;
 
@@ -106,15 +106,15 @@ class CoordinateSyncPointTest
                                                         // the test uses an executor that runs everything right away, so this gets called outside the CommandStore
                                                {
                                                    CommandStore store = node.commandStores().forId(0);
-                                                   return store.build(() -> {
+                                                   return store.chain(() -> {
                                                        ExecuteSyncPoint execute = new ExecuteSyncPoint(node, syncPoint, emptySet(), store, 1, new ExecuteSyncPoint.DurabilityResults());
                                                        execute.start();
                                                        return execute.onDone();
                                                    });
                                                }
-                                               ).flatMap(Function.identity()).beginAsResult();
+                                               ).flatMap(AsyncResult::chain).beginAsResult();
 
-        return AsyncChains.getUnchecked(await).syncPoint;
+        return AsyncChainUtils.getUnchecked(await).syncPoint;
     }
 
     private static MessageSink happyPathMessaging()

@@ -67,9 +67,7 @@ import accord.utils.SortedListMap;
 import accord.utils.UnhandledEnum;
 import accord.utils.WrappableException;
 import accord.utils.async.AsyncChain;
-import accord.utils.async.AsyncChainCombiner;
 import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncResult;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
@@ -440,7 +438,7 @@ public class Recover extends AbstractCoordination<Outcome, RecoverReply, Recover
                     // we have to be certain these commands have not successfully committed without witnessing us (thereby
                     // ruling out a fast path decision for us and changing our recovery decision).
                     // So, we wait for these commands to commit and recompute supersedingRejects for them.
-                    awaitToFinish(AsyncChainCombiner.reduce(awaitEarlier(node, earlierWait, HasCommittedDeps),
+                    awaitToFinish(AsyncChains.reduce(awaitEarlier(node, earlierWait, HasCommittedDeps),
                                               awaitLater(node, laterWitnessedCoordRejects, CommittedOrNotFastPathCommit, extraCoordVotes),
                                               InferredFastPath::merge)
                                       .invokeIfSuccess((inferred) -> {
@@ -633,7 +631,7 @@ public class Recover extends AbstractCoordination<Outcome, RecoverReply, Recover
             }
             if (requests.isEmpty())
                 return AsyncChains.success(InferredFastPath.Accept);
-            return AsyncChainCombiner.reduce(requests, InferredFastPath::merge);
+            return AsyncChains.reduce(requests, InferredFastPath::merge);
         });
     }
 
@@ -686,7 +684,7 @@ public class Recover extends AbstractCoordination<Outcome, RecoverReply, Recover
         long requireEpoch = waitOn.maxTxnId(txnId).epoch();
         return node.withEpochExact(requireEpoch, executor, () -> {
             TxnId recoverId = this.txnId;
-            List<AsyncResult<InferredFastPath>> requests = new ArrayList<>();
+            List<AsyncChain<InferredFastPath>> requests = new ArrayList<>();
             for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
             {
                 TxnId awaitId = waitOn.txnId(i);
@@ -704,7 +702,7 @@ public class Recover extends AbstractCoordination<Outcome, RecoverReply, Recover
             }
             if (requests.isEmpty())
                 return AsyncChains.success(InferredFastPath.Accept);
-            return AsyncChainCombiner.reduce(requests, InferredFastPath::merge);
+            return AsyncChains.reduce(requests, InferredFastPath::merge);
         });
     }
 

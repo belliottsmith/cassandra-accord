@@ -67,7 +67,7 @@ public class SafeCallback<T extends Reply>
     private <P> void safeCall(Node.Id from, P param, SafeCall<T, P> call)
     {
         // TODO (low priority, correctness): if the executor is shutdown this propgates the exception to the network stack
-        executor.maybeExecuteImmediately(() -> {
+        executor.executeMaybeImmediately(() -> {
             try
             {
                 call.accept(callback, from, param);

@@ -70,6 +70,7 @@ public interface Scheduler
 
     interface Scheduled extends Cancellable
     {
+        @Override
         void cancel();
         boolean isDone();
     }

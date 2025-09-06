@@ -23,7 +23,6 @@ import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 
 import accord.api.ProgressLog.BlockedUntil;
-import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;

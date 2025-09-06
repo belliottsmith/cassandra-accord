@@ -29,10 +29,10 @@ import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 import com.google.common.collect.Lists;
-import com.google.common.util.concurrent.MoreExecutors;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import accord.api.AsyncExecutor;
 import accord.utils.Reduce;
 import org.assertj.core.api.AbstractThrowableAssert;
 import org.mockito.ArgumentCaptor;
@@ -73,14 +73,6 @@ public class AsyncChainsTest
             Assertions.assertTrue(result.failure == null);
             return result.value;
         }
-
-        public Throwable failure()
-        {
-            Result<V> result = state.get();
-            Assertions.assertTrue(result != null);
-            Assertions.assertTrue(result.failure != null);
-            return result.failure;
-        }
     }
 
     @Test
@@ -89,10 +81,11 @@ public class AsyncChainsTest
         ResultCallback<Integer> finalCallback = new ResultCallback<>();
         ResultCallback<Integer> intermediateCallback = new ResultCallback<>();
 
-        AsyncChain<Integer> chain = AsyncChains.ofCallable(MoreExecutors.directExecutor(), () -> 5);
+        AsyncChain<Integer> chain = AsyncChains.ofCallable(() -> 5);
         chain = chain.invoke(intermediateCallback);
 
         chain = chain.map(i -> i + 2);
+
         chain.begin(finalCallback);
 
         Assertions.assertEquals(5, intermediateCallback.value());
@@ -100,27 +93,23 @@ public class AsyncChainsTest
     }
 
     /**
-     * Test immediate chains can be reused
+     * Test immediate chains cannot be reused
      */
     @Test
     void immediateTest()
     {
         AsyncChain<Integer> success = AsyncChains.success(5);
-        AsyncChain<Integer> chain1 = success.map(i -> i + 2);
-        AsyncChain<Integer> chain2 = success.map(i -> i + 2);
-        chain2 = chain2.map(i -> i + 2);
-
-        ResultCallback<Integer> firstCallback = new ResultCallback<>();
-        ResultCallback<Integer> secondCallback = new ResultCallback<>();
-        ResultCallback<Integer> immediateCallback = new ResultCallback<>();
-
-        chain1.begin(firstCallback);
-        chain2.begin(secondCallback);
-        success.begin(immediateCallback);
-
-        Assertions.assertEquals(firstCallback.value(), 7);
-        Assertions.assertEquals(secondCallback.value(), 9);
-        Assertions.assertEquals(immediateCallback.value(), 5);
+        success.map(i -> i + 2);
+        boolean failed = false;
+        try
+        {
+            success.map(i -> i + 2);
+        }
+        catch (Throwable t)
+        {
+            failed = true;
+        }
+        Assertions.assertTrue(failed);
     }
 
     @Test
@@ -150,41 +139,20 @@ public class AsyncChainsTest
     @Test
     void beginSeesException()
     {
-        AsyncChains.ofCallable(ignore -> {
-                    throw new RejectedExecutionException();
-                }, () -> 42)
+        AsyncExecutor rejecting = ignore -> { throw new RejectedExecutionException(); };
+        rejecting.chain(() -> 42)
                 .map(i -> i + 1)
                 .begin((success, failure) -> {
                     if (failure == null)
                         throw illegalState("Should see failure");
                 });
 
-        AsyncChains.ofRunnable(ignore -> {
-                    throw new RejectedExecutionException();
-                }, () -> {})
+        rejecting.chain(() -> {})
                 .map(ignore -> 1)
                 .beginAsResult()
                 .invoke((success, failure) -> {
                     if (failure == null)
                         throw illegalState("Expected to fail");
-                });
-
-        AsyncChains.<Integer>ofCallable(fn -> fn.run(), () -> {
-                    throw new RuntimeException("Unchecked");
-                }).map(i -> i + 1).map(i -> i + 1)
-                .begin((success, failure) -> {
-                    if (failure == null)
-                        throw illegalState("Should see failure");
-                });
-
-        AsyncChains.ofCallable(fn -> fn.run(), () -> 42
-                ).map(i -> i + 1)
-                .map(ignore -> {
-                    throw new RuntimeException("Unchecked");
-                })
-                .begin((success, failure) -> {
-                    if (failure == null)
-                        throw illegalState("Should see failure");
                 });
     }
 
@@ -244,7 +212,7 @@ public class AsyncChainsTest
         AsyncChains.failure(new NullPointerException("just kidding"))
                 .beginAsResult()
                 .invokeIfSuccess(() -> sawCallback.set(true))
-                .begin((success, failure) -> {
+                .invoke((success, failure) -> {
                     if (failure != null) sawFailure.set(true);
                     else sawFailure.set(false);
                 });
@@ -267,13 +235,13 @@ public class AsyncChainsTest
                      .map(i -> i + 4)
                      .map(i -> i + 5);
 
-        Assertions.assertEquals(15, AsyncChains.getBlocking(chain));
+        Assertions.assertEquals(15, AsyncChainUtils.getBlocking(chain));
     }
 
     private static void assertCombinerSize(int size, AsyncChain<?> chain)
     {
-        Assertions.assertTrue(chain instanceof AsyncChains.ReducingAsyncChain, () -> String.format("%s is not an instance of AsyncChainCombiner", chain));
-        AsyncChains.ReducingAsyncChain<?> combiner = (AsyncChains.ReducingAsyncChain<?>) chain;
+        Assertions.assertTrue(chain instanceof AsyncChains.AccumulatingReducer, () -> String.format("%s is not an instance of AsyncChains.AccumulatingReducer", chain));
+        AsyncChains.AccumulatingReducer<?> combiner = (AsyncChains.AccumulatingReducer<?>) chain;
         Assertions.assertEquals(size, combiner.size());
     }
 
@@ -331,7 +299,7 @@ public class AsyncChainsTest
         topLevel.add(() -> {
             AsyncResult.Settable<Integer> settable = AsyncResults.settable();
             settable.setSuccess(42);
-            return settable;
+            return settable.chain();
         });
         topLevel.add(() -> AsyncChains.allOf(Arrays.asList(AsyncChains.success(0), AsyncChains.success(0), AsyncChains.success(42))));
         topLevel.add(() -> AsyncChains.reduce(AsyncChains.success(1), AsyncChains.success(1), (a, b) -> a + b));

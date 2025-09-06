@@ -30,8 +30,6 @@ import accord.messages.ReadData;
 import accord.primitives.Participants;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import accord.api.Data;
 import accord.api.DataStore;
@@ -51,7 +49,6 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
-import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
@@ -69,8 +66,6 @@ import static accord.primitives.Routables.Slice.Minimal;
 
 public abstract class AbstractFetchCoordinator extends FetchCoordinator
 {
-    private static final Logger logger = LoggerFactory.getLogger(AbstractFetchCoordinator.class);
-
     static class FetchResult extends AsyncResults.SettableResult<Ranges> implements DataStore.FetchResult
     {
         final AbstractFetchCoordinator coordinator;
@@ -118,7 +113,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     final CommandStore commandStore;
     final Map<Key, DataStore.StartingRangeFetch> inflight = new HashMap<>();
     final FetchResult result = new FetchResult(this);
-    final List<AsyncResult<Void>> persisting = new ArrayList<>();
+    protected final List<AsyncResult<Void>> persisting = new ArrayList<>();
 
     protected AbstractFetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore)
     {
@@ -212,8 +207,8 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     {
         if (failure != null || success.isEmpty()) result.setFailure(failure);
         else if (persisting.isEmpty()) result.setSuccess(Ranges.EMPTY);
-        else AsyncChains.reduce(persisting, (a, b) -> null)
-                        .begin((s, f) -> {
+        else AsyncResults.reduce(persisting, (a, b) -> null)
+                        .invoke((s, f) -> {
                             if (f == null) result.setSuccess(ranges);
                             else result.setFailure(f);
                         });

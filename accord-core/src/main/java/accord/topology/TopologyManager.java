@@ -28,7 +28,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongConsumer;
@@ -42,6 +41,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
+import accord.api.AsyncExecutor;
 import accord.api.ConfigurationService;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.ProtocolModifiers.QuorumEpochIntersections.Include;
@@ -759,15 +759,14 @@ public class TopologyManager
         return ready;
     }
 
-    public AsyncChain<Void> awaitEpoch(long epoch, @Nullable Executor executor)
+    public AsyncChain<Void> awaitEpoch(long epoch, @Nullable AsyncExecutor ifAsync)
     {
         FutureEpoch futureEpoch;
         synchronized (this)
         {
             futureEpoch = epochs.awaitEpoch(epoch, this);
         }
-        AsyncResult<Void> result = futureEpoch.waiting();
-        return executor == null || result.isDone() ? result : result.withExecutor(executor);
+        return futureEpoch.waiting().chainImmediatelyElse(ifAsync);
     }
 
     public synchronized boolean hasReachedQuorum(long epoch)

@@ -176,7 +176,7 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
         // TODO (required): we need a more general Replaying state
         if (!CommandsForKey.reportLinearizabilityViolations())
             return;
-        snapshot(false).begin((success, fail) -> {
+        snapshot(false).invoke((success, fail) -> {
             if (fail == null) commandStore.execute((PreLoadContext.Empty)()->"Report DataStore Durable", safeStore -> safeStore.upsertRedundantBefore(onSuccess));
         });
     }
