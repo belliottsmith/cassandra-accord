@@ -133,12 +133,6 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     }
 
     @Override
-    public void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next)
-    {
-        throw new AssertionError("Inconsistent execution timestamp detected for command " + command + ": " + prev + " != " + next);
-    }
-
-    @Override
     public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
     {
         retryBootstrap.accept(retry);

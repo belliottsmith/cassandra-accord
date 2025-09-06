@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.IntFunction;
+import java.util.function.Predicate;
 
 import accord.api.Timeouts;
 import accord.local.TimeService;
@@ -50,35 +51,32 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
             @Override
             public void cancel()
             {
-                if (!isInHeap())
-                    return;
-
-                lock.lock();
-                try
-                {
-                    if (isInHeap())
-                        timeouts.remove(this);
-                }
-                finally
-                {
-                    lock.unlock();
-                }
+                tryCancel(lock -> { lock.lock(); return true; });
             }
 
             protected void tryCancel()
             {
-                if (lock.tryLock())
+                tryCancel(ReentrantLock::tryLock);
+            }
+
+            protected void tryCancel(Predicate<ReentrantLock> tryLock)
+            {
+                if (!isInHeap())
+                    return;
+
+                if (tryLock.test(lock))
                 {
-                    try
-                    {
-                        if (isInHeap())
-                            timeouts.remove(this);
-                    }
-                    finally
-                    {
-                        lock.unlock();
-                    }
+                    try { cancelWithLock(); }
+                    finally { lock.unlock(); }
                 }
+            }
+
+            protected boolean cancelWithLock()
+            {
+                if (!isInHeap())
+                    return false;
+                timeouts.remove(this);
+                return true;
             }
         }
 

@@ -31,6 +31,8 @@ import org.slf4j.LoggerFactory;
 import accord.api.ProtocolModifiers.Toggles.DependencyElision;
 import accord.api.Result;
 import accord.api.RoutingKey;
+import accord.api.ViolationHandler;
+import accord.api.ViolationHandler.ViolationHandlerHolder;
 import accord.api.VisibleForImplementation;
 import accord.local.Command.WaitingOn;
 import accord.local.Command.WaitingOn.Update;
@@ -358,7 +360,7 @@ public class Commands
             if (!curStatus.is(Truncated))
             {
                 if (!executeAt.equals(command.executeAt()) || curStatus.status == Invalidated)
-                    safeStore.agent().onInconsistentTimestamp(command, (curStatus.status == Invalidated ? Timestamp.NONE : command.executeAt()), executeAt);
+                    ViolationHandlerHolder.get().onTimestampViolation(safeStore, command, participants, executeAt);
             }
 
             if (curStatus.compareTo(newSaveStatus) > 0 || curStatus.hasBeen(Stable))
@@ -432,7 +434,7 @@ public class Commands
                 if (executeAt.equals(command.executeAt()) && command.status() != Invalidated)
                     return CommitOutcome.Redundant;
 
-                safeStore.agent().onInconsistentTimestamp(command, (command.status() == Invalidated ? Timestamp.NONE : command.executeAt()), executeAt);
+                ViolationHandlerHolder.get().onTimestampViolation(safeStore, command, participants, executeAt);
             }
         }
 
@@ -479,7 +481,7 @@ public class Commands
         safeCommand.set(erased(txnId));
     }
 
-    public static void commitInvalidate(SafeCommandStore safeStore, SafeCommand safeCommand, Unseekables<?> scope)
+    public static void commitInvalidate(SafeCommandStore safeStore, SafeCommand safeCommand, Participants<?> scope)
     {
         final Command command = safeCommand.current();
         if (command.hasBeen(PreCommitted))
@@ -492,7 +494,7 @@ public class Commands
             {
                 logger.trace("{}: skipping commit invalidated - already committed ({})", safeCommand.txnId(), command.status());
                 if (!command.is(Invalidated) && !(command.is(Truncated) && command.executeAt().equals(Timestamp.NONE)))
-                    safeStore.agent().onInconsistentTimestamp(command, Timestamp.NONE, command.executeAt());
+                    ViolationHandlerHolder.get().onTimestampViolation(safeStore, command, scope, null, Timestamp.NONE);
             }
             return;
         }
@@ -553,14 +555,14 @@ public class Commands
                 case ExecuteAtUnknown:
             }
             if (inconsistent)
-                safeStore.agent().onInconsistentTimestamp(command, command.executeAt(), executeAt);
+                ViolationHandlerHolder.get().onTimestampViolation(safeStore, command, participants, executeAt);
             return ApplyOutcome.Redundant;
         }
         else if (command.hasBeen(PreCommitted) && !executeAt.equals(command.executeAt()))
         {
             if (command.is(Truncated) && command.executeAt() == null)
                 return ApplyOutcome.Redundant;
-            safeStore.agent().onInconsistentTimestamp(command, command.executeAt(), executeAt);
+            ViolationHandlerHolder.get().onTimestampViolation(safeStore, command, participants, executeAt);
         }
 
         participants = participants.filter(UPDATE, safeStore, txnId, executeAt);
@@ -1119,7 +1121,7 @@ public class Commands
         Command updated = supplementParticipants(safeStore, safeCommand, participants);
         participants = updated.participants();
         if (executeAt != null && command.status().hasBeen(Committed) && !command.executeAt().equals(executeAt))
-            safeStore.agent().onInconsistentTimestamp(command, command.asCommitted().executeAt(), executeAt);
+            ViolationHandlerHolder.get().onTimestampViolation(safeStore, command, participants, executeAt);
 
         updated = safeCommand.update(safeStore, updated.updateDurability(newDurability));
         TxnId txnId = command.txnId();
